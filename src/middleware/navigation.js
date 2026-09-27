@@ -5,13 +5,19 @@ const navigationByRole = {
     { id: 'student-records', label: 'Student records', href: '/records' },
     { id: 'documents', label: 'Documents', href: '/documents' },
     { id: 'subjects', label: 'Subject catalog', href: '/records/subjects' },
+    { id: 'teacher-assignments', label: 'Teacher assignments', href: '/records/teacher-assignments' },
     { id: 'finance', label: 'Finance', href: '/finance' }
   ],
   registrar: [
     { id: 'overview', label: 'Overview', href: '/dashboard' },
     { id: 'student-records', label: 'Student records', href: '/records' },
     { id: 'documents', label: 'Documents', href: '/documents' },
-    { id: 'subjects', label: 'Subject catalog', href: '/records/subjects' }
+    { id: 'subjects', label: 'Subject catalog', href: '/records/subjects' },
+    { id: 'teacher-assignments', label: 'Teacher assignments', href: '/records/teacher-assignments' },
+    { id: 'grade-submissions', label: 'Grade submissions', href: '/registrar/grade-submissions' }
+  ],
+  teacher: [
+    { id: 'teacher-workspace', label: 'My classes', href: '/teacher/grades' }
   ],
   finance: [
     { id: 'finance', label: 'Finance workspace', href: '/finance' }
@@ -36,6 +42,12 @@ function buildNavigation(role, currentPath = '') {
       current = path === '/records' || (path.startsWith('/records/') && !path.startsWith('/records/subjects'));
     } else if (item.id === 'subjects') {
       current = path === '/records/subjects' || path.startsWith('/records/subjects/');
+    } else if (item.id === 'teacher-assignments') {
+      current = path === '/records/teacher-assignments' || path.startsWith('/records/teacher-assignments/');
+    } else if (item.id === 'grade-submissions') {
+      current = path === '/registrar/grade-submissions' || path.startsWith('/registrar/grade-submissions/');
+    } else if (item.id === 'teacher-workspace') {
+      current = path === '/dashboard/teacher' || path.startsWith('/teacher/grades');
     } else if (item.id === 'finance') {
       current = path === '/finance' || path.startsWith('/finance/');
     } else if (item.id === 'documents') {

@@ -14,8 +14,8 @@ const DOCUMENT_TYPES = [
   { value: 'form_137', label: 'Form 137' },
   { value: 'psa_birth_certificate', label: 'PSA birth certificate' }
 ];
-const STUDENT_DOCUMENT_TYPES = DOCUMENT_TYPES.slice(0, 2);
-const STAFF_UPLOAD_DOCUMENT_TYPES = DOCUMENT_TYPES.filter(({ value }) => value !== 'form_137');
+const STUDENT_DOCUMENT_TYPES = DOCUMENT_TYPES.filter(({ value }) => ['good_moral', 'psa_birth_certificate'].includes(value));
+const STAFF_UPLOAD_DOCUMENT_TYPES = DOCUMENT_TYPES.filter(({ value }) => !['form_137', 'report_card'].includes(value));
 
 function configuredMaxBytes(environment) {
   const maxMb = Number(environment?.upload?.maxMb ?? 10);
@@ -32,7 +32,8 @@ function documentTypeLabel(value) {
   return DOCUMENT_TYPES.find((documentType) => documentType.value === value)?.label || 'Document';
 }
 
-function documentStatusLabel(status, latestDecisionType, latestReviewAction) {
+function documentStatusLabel(status, latestDecisionType, latestReviewAction, documentType) {
+  if (documentType === 'report_card') return 'Historical archive';
   if (status === 'valid') return 'Verified after staff source inspection';
   if (status === 'rejected') return 'Rejected after staff review';
   if (status === 'failed') return 'OCR could not process; staff review required';
@@ -287,7 +288,7 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
           : req.query.notice === 'reviewRequested'
             ? 'Document sent for staff review.'
           : req.query.notice === 'correctionRequested'
-            ? 'Correction instructions sent to the student.'
+            ? 'Correction request recorded.'
             : req.query.notice === 'decisionRecorded'
               ? 'Staff decision recorded.'
               : null,

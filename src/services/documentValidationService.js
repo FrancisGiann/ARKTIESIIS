@@ -66,17 +66,14 @@ function findPossibleSchoolNames(extractedText) {
 }
 
 function advisoryChecks(documentType, extractedText, student) {
+  if (!['good_moral', 'psa_birth_certificate'].includes(documentType)) return [];
   const checks = [{
     key: 'linked_student_name',
     label: 'Possible linked student-name match',
     found: linkedStudentNameFound(extractedText, student)
   }];
 
-  if (documentType === 'report_card') {
-    checks.push(
-      { key: 'possible_school_name', label: 'Possible school name', found: possibleSchoolNameFound(extractedText), candidates: findPossibleSchoolNames(extractedText) }
-    );
-  } else if (documentType === 'good_moral') {
+  if (documentType === 'good_moral') {
     checks.push({ key: 'possible_school_name', label: 'Possible school name', found: possibleSchoolNameFound(extractedText), candidates: findPossibleSchoolNames(extractedText) });
   }
 

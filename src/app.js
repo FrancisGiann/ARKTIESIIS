@@ -10,7 +10,7 @@ const { errorHandler } = require('./middleware/errorHandler');
 
 const projectRoot = path.resolve(__dirname, '..');
 
-function createApp({ databasePool = getPool, environment = env, twoFactorService, adminService, studentRecordsService, academicRecordsService, gradeImportService, financeService, documentService, documentProcessingService, form137ScanService } = {}) {
+function createApp({ databasePool = getPool, environment = env, twoFactorService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, documentService, documentProcessingService, form137ScanService } = {}) {
   const app = express();
 
   app.set('view engine', 'ejs');
@@ -34,7 +34,7 @@ function createApp({ databasePool = getPool, environment = env, twoFactorService
     }
   }));
 
-  app.use(createRouter({ getPool: databasePool, environment, twoFactorService, adminService, studentRecordsService, academicRecordsService, gradeImportService, financeService, documentService, documentProcessingService, form137ScanService }));
+  app.use(createRouter({ getPool: databasePool, environment, twoFactorService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, documentService, documentProcessingService, form137ScanService }));
 
   app.use((req, res) => {
     res.status(404).render('error', {

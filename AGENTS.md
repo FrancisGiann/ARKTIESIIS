@@ -18,6 +18,7 @@ Do not replace the stack unless the user explicitly approves it.
 ## Main roles
 - `database_admin`
 - `registrar`
+- `teacher`
 - `finance`
 - `student`
 
@@ -43,7 +44,9 @@ OCR runs locally through installed native tools; no cloud document-processing se
 
 ## Document access rules
 - Students may only access their own permitted documents.
-- Students may upload Good Moral Certificates and report cards.
+- Students may upload Good Moral Certificates and PSA birth certificates only for their own linked student record. Teachers submit corrected SSHS E-Class Record workbooks for assigned term/section/subject contexts to the registrar; grades are written only after registrar approval.
+- Students may not access report cards, including historical report-card records. Existing report cards remain a staff-only archive for registrars and database administrators; no new report-card document upload, correction, or OCR is allowed.
+- Students may view/download their own PSA submissions and staff-uploaded PSA files, and may re-upload only a student-origin PSA after staff requests a correction. Staff-origin PSA correction instructions and reasons remain staff-only.
 - Form 137 is restricted to authorized staff such as registrar/database admin.
 - Database admin may oversee stored documents and validation results.
 - Registrar may manage academic records and review permitted documents.
@@ -65,7 +68,7 @@ OCR runs locally through installed native tools; no cloud document-processing se
 ## Database baseline and migrations
 - `database/schema.sql` is a one-time baseline for a fresh database and records version `001` in `dbo.schema_migrations`.
 - Apply later schema changes through new, numbered, forward-only migration scripts. Do not edit or rerun the baseline to update an initialized database, and do not rewrite migrations that have already been applied.
-- The schema allows the `psa_birth_certificate` document type, but server routes must restrict it to registrar and database administrator users.
+- The schema retains `psa_birth_certificate` and legacy `report_card` document types. Students may upload PSA only for their own linked record. New report-card document uploads and corrections are blocked; only registrar/database administrator users may read/download existing archived report-card rows. Keep Form 137 restricted to authorized staff.
 
 ## Development workflow
 For every requested phase:

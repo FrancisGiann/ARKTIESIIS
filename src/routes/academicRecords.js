@@ -10,6 +10,7 @@ const {
   isUniqueConflict
 } = require('../services/academicRecordsService');
 const { GradeImportError, createGradeImportService } = require('../services/gradeImportService');
+const { TeacherGradeSubmissionError, createTeacherGradeSubmissionService } = require('../services/teacherGradeSubmissionService');
 
 const notices = {
   subjectCreated: 'Subject created.',
@@ -26,10 +27,11 @@ function subjectValues(input = {}) {
   };
 }
 
-function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, gradeImportService } = {}) {
+function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, gradeImportService, teacherGradeSubmissionService } = {}) {
   const router = express.Router();
   const service = academicRecordsService || createAcademicRecordsService({ getPool, sql });
   const importService = gradeImportService || createGradeImportService({ getPool, sql });
+  const teacherService = teacherGradeSubmissionService || createTeacherGradeSubmissionService({ getPool, sql });
   const workbookUpload = multer({
     storage: multer.memoryStorage(),
     limits: { files: 1, fileSize: 5 * 1024 * 1024, fields: 3, parts: 4 }
@@ -176,6 +178,55 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, gra
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The subject catalog could not be loaded.' });
     }
   }
+
+  async function renderTeacherAssignments(req, res, { status = 200, error = null, values = {} } = {}) {
+    try {
+      const options = await teacherService.listAssignmentOptions(req.authUser.id);
+      return res.status(status).render('records/teacher-assignments', {
+        title: 'Teacher Assignments', csrfToken: ensureCsrfToken(req), currentUser: req.authUser,
+        ...options, values, error,
+        notice: req.query.notice === 'assignmentCreated' ? 'Teacher assignment created.'
+          : req.query.notice === 'assignmentRevoked' ? 'Teacher assignment revoked.' : null
+      });
+    } catch {
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'Teacher assignments are temporarily unavailable.' });
+    }
+  }
+
+  router.get('/teacher-assignments', (req, res) => renderTeacherAssignments(req, res));
+
+  router.post('/teacher-assignments', requireRole('database_admin', 'registrar'), async (req, res) => {
+    if (!hasValidCsrfToken(req)) {
+      return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    }
+    const values = {
+      teacherId: typeof req.body?.teacherId === 'string' ? req.body.teacherId : '',
+      academicTermId: typeof req.body?.academicTermId === 'string' ? req.body.academicTermId : '',
+      sectionId: typeof req.body?.sectionId === 'string' ? req.body.sectionId : '',
+      subjectId: typeof req.body?.subjectId === 'string' ? req.body.subjectId : ''
+    };
+    try {
+      await teacherService.createAssignment(req.authUser.id, values);
+      return res.redirect(303, '/records/teacher-assignments?notice=assignmentCreated');
+    } catch (error) {
+      if (error instanceof TeacherGradeSubmissionError) return renderTeacherAssignments(req, res, { status: error.status, error: error.message, values });
+      if (isUniqueConflict(error)) return renderTeacherAssignments(req, res, { status: 409, error: 'That class context already has an active teacher assignment.', values });
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The teacher assignment could not be created.' });
+    }
+  });
+
+  router.post('/teacher-assignments/:id/revoke', requireRole('database_admin', 'registrar'), async (req, res) => {
+    if (!hasValidCsrfToken(req)) {
+      return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    }
+    try {
+      await teacherService.revokeAssignment(req.authUser.id, req.params.id);
+      return res.redirect(303, '/records/teacher-assignments?notice=assignmentRevoked');
+    } catch (error) {
+      if (error instanceof TeacherGradeSubmissionError) return renderTeacherAssignments(req, res, { status: error.status, error: error.message });
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The teacher assignment could not be revoked.' });
+    }
+  });
 
   async function renderAcademicRecord(req, res, studentId, { status = 200, error = null } = {}) {
     try {

@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const path = require('node:path');
 const defaultEnvironment = require('../config/environment');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 const readExcelFile = require('read-excel-file/node').default;
@@ -193,6 +194,13 @@ function createGradeImportService({
     return actor.recordset[0];
   }
 
+  async function requireImporter(request, actorId) {
+    const actor = await request.input('actorId', sql.Int, actorId)
+      .query('SELECT id, role FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE id = @actorId AND is_active = 1 AND role IN (N\'registrar\', N\'teacher\')');
+    if (!actor.recordset?.length) throw new GradeImportError('Grade-import access is no longer active. Sign in again.', 403);
+    return actor.recordset[0];
+  }
+
   async function removeExpired(pool) {
     await pool.request().query('DELETE FROM dbo.grade_import_previews WHERE expires_at <= SYSUTCDATETIME()');
   }
@@ -200,30 +208,51 @@ function createGradeImportService({
   async function listImportContexts(actorId) {
     const pool = await getPool();
     await removeExpired(pool);
-    await requireRegistrar(pool.request(), actorId);
+    const actor = await requireImporter(pool.request(), actorId);
     const result = await pool.request()
       .input('schoolYear', sql.NVarChar(20), SCHOOL_YEAR)
-      .query(`SELECT DISTINCT term.school_year, sec.grade_level, sec.name AS section_name,
+      .input('actorId', sql.Int, actor.id)
+      .input('actorRole', sql.NVarChar(30), actor.role)
+      .query(`SELECT DISTINCT term.school_year, term.id AS academic_term_id, term.term,
+          sec.grade_level, sec.name AS section_name,
           sub.id AS subject_id, sub.subject_code, sub.subject_name
-        FROM dbo.students AS st
-        INNER JOIN dbo.enrollments AS e ON e.student_id = st.id AND e.enrollment_status = N'enrolled'
-        INNER JOIN dbo.academic_terms AS term ON term.id = e.academic_term_id AND term.school_year = @schoolYear
-        INNER JOIN dbo.sections AS sec ON sec.id = e.section_id AND sec.academic_term_id = e.academic_term_id
-        INNER JOIN dbo.student_subjects AS ss ON ss.enrollment_id = e.id
-        INNER JOIN dbo.subjects AS sub ON sub.id = ss.subject_id
-        WHERE st.status = N'active'
+        FROM dbo.academic_terms AS term
+        INNER JOIN dbo.sections AS sec ON sec.academic_term_id = term.id
+        INNER JOIN dbo.subjects AS sub ON 1 = 1
+        WHERE term.school_year = @schoolYear AND (
+          (@actorRole = N'registrar' AND EXISTS (
+            SELECT 1 FROM dbo.enrollments AS e
+            INNER JOIN dbo.students AS st ON st.id = e.student_id AND st.status = N'active'
+            INNER JOIN dbo.student_subjects AS ss ON ss.enrollment_id = e.id AND ss.subject_id = sub.id
+            WHERE e.academic_term_id = term.id AND e.section_id = sec.id AND e.enrollment_status = N'enrolled'))
+          OR EXISTS (
+            SELECT 1 FROM dbo.teacher_assignments AS ta
+            WHERE ta.teacher_id = @actorId AND ta.is_active = 1 AND ta.academic_term_id = term.id
+              AND ta.section_id = sec.id AND ta.subject_id = sub.id AND @actorRole = N'teacher'))
+          AND EXISTS (SELECT 1 FROM dbo.users AS current_actor WHERE current_actor.id = @actorId
+            AND current_actor.is_active = 1 AND current_actor.role = @actorRole)
         ORDER BY sec.grade_level, sec.name, sub.subject_code`);
     return (result.recordset || []).map((context) => ({
       ...context,
       key: crypto.createHash('sha256').update(JSON.stringify([
-        context.school_year, context.grade_level, context.section_name, context.subject_id
+        context.academic_term_id ?? null, context.school_year, context.grade_level, context.section_name, context.subject_id
       ])).digest('hex')
     }));
   }
 
-  async function createPreview({ actorId, sessionId, buffer, contextKey }) {
+  async function createPreview({ actorId, sessionId, buffer, contextKey, originalFilename = null }) {
     if (!Buffer.isBuffer(buffer) || buffer.length < 4 || buffer.length > 5 * 1024 * 1024) {
       throw new GradeImportError('Choose an XLSX workbook no larger than 5 MB.');
+    }
+    let storedOriginalFilename = null;
+    if (originalFilename !== null && originalFilename !== undefined) {
+      if (typeof originalFilename !== 'string') throw new GradeImportError('The workbook filename is invalid.');
+      storedOriginalFilename = path.basename(originalFilename.replaceAll('\\', '/'))
+        .replace(/[\u0000-\u001f\u007f]/g, '').trim();
+      if (!storedOriginalFilename || storedOriginalFilename.length > 255
+        || path.extname(storedOriginalFilename).toLowerCase() !== '.xlsx') {
+        throw new GradeImportError('The workbook filename must end in .xlsx and be 255 characters or fewer.');
+      }
     }
     let workbook;
     try {
@@ -241,12 +270,13 @@ function createGradeImportService({
     const rows = parseWorkbookRows(input, finalGrades);
     const pool = await getPool();
     await removeExpired(pool);
-    const actor = await requireRegistrar(pool.request(), actorId);
+    const actor = await requireImporter(pool.request(), actorId);
     const availableContexts = await listImportContexts(actor.id);
     const selected = availableContexts.find(({ key }) => key === contextKey);
     if (!selected) throw new GradeImportError('Choose an existing school-year, section, grade-level, and subject context.');
     const subject = { id: selected.subject_id, subject_name: selected.subject_name };
     const context = {
+      academicTermId: selected.academic_term_id ?? null,
       schoolYear: selected.school_year,
       gradeLevel: selected.grade_level,
       sectionName: selected.section_name,
@@ -263,7 +293,10 @@ function createGradeImportService({
     if (validLrns.length) {
       const request = pool.request()
         .input('subjectId', sql.Int, subject.id)
-        .input('schoolYear', sql.NVarChar(20), context.schoolYear);
+        .input('schoolYear', sql.NVarChar(20), context.schoolYear)
+        .input('academicTermId', sql.Int, context.academicTermId)
+        .input('originalFilename', sql.NVarChar(255), storedOriginalFilename)
+        .input('teacherId', sql.Int, actor.role === 'teacher' ? actor.id : null);
       const parameters = validLrns.map((lrn, index) => {
         const name = `lrn${index}`;
         request.input(name, sql.NVarChar(12), lrn);
@@ -276,16 +309,25 @@ function createGradeImportService({
         FROM dbo.students AS st
         LEFT JOIN (
           SELECT en.id, en.student_id, en.enrollment_status, term.school_year,
-            sec.name AS section_name, sec.grade_level
+            sec.name AS section_name, sec.grade_level, en.academic_term_id, en.section_id
           FROM dbo.enrollments AS en
           INNER JOIN dbo.academic_terms AS term ON term.id = en.academic_term_id
           LEFT JOIN dbo.sections AS sec ON sec.id = en.section_id AND sec.academic_term_id = en.academic_term_id
           WHERE term.school_year = @schoolYear
+            AND (@academicTermId IS NULL OR en.academic_term_id = @academicTermId)
         ) AS e ON e.student_id = st.id
         LEFT JOIN dbo.student_subjects AS ss ON ss.enrollment_id = e.id AND ss.subject_id = @subjectId
         LEFT JOIN dbo.grades AS g ON g.student_subject_id = ss.id
           AND g.grading_period IN (N'Term 1', N'Term 2', N'Term 3', N'Final Grade')
-        WHERE st.lrn IN (${parameters.join(', ')})`);
+        WHERE st.lrn IN (${parameters.join(', ')})
+          AND (@teacherId IS NULL OR (
+            EXISTS (SELECT 1 FROM dbo.users AS active_teacher WHERE active_teacher.id = @teacherId
+              AND active_teacher.role = N'teacher' AND active_teacher.is_active = 1)
+            AND EXISTS (
+              SELECT 1 FROM dbo.teacher_assignments AS teacher_assignment
+              WHERE teacher_assignment.teacher_id = @teacherId AND teacher_assignment.is_active = 1
+                AND teacher_assignment.academic_term_id = e.academic_term_id
+                AND teacher_assignment.section_id = e.section_id AND teacher_assignment.subject_id = @subjectId)))`);
       studentRows.push(...(result.recordset || []));
     }
     const recordsByLrn = new Map();
@@ -344,12 +386,32 @@ function createGradeImportService({
     try {
       await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
       started = true;
-      await requireRegistrar(transaction.request(), actor.id);
+      const currentActor = await requireImporter(transaction.request(), actor.id);
+      if (currentActor.role === 'teacher') {
+        const assignment = await transaction.request()
+          .input('teacherId', sql.Int, currentActor.id)
+          .input('academicTermId', sql.Int, context.academicTermId)
+          .input('schoolYear', sql.NVarChar(20), context.schoolYear)
+          .input('sectionName', sql.NVarChar(100), context.sectionName)
+          .input('gradeLevel', sql.NVarChar(50), context.gradeLevel)
+          .input('subjectId', sql.Int, subject.id)
+          .query(`SELECT a.id FROM dbo.teacher_assignments AS a WITH (UPDLOCK, HOLDLOCK)
+            INNER JOIN dbo.academic_terms AS term ON term.id = a.academic_term_id
+            INNER JOIN dbo.sections AS sec ON sec.id = a.section_id AND sec.academic_term_id = a.academic_term_id
+            INNER JOIN dbo.subjects AS sub ON sub.id = a.subject_id
+            WHERE a.teacher_id = @teacherId AND a.is_active = 1
+              AND a.academic_term_id = @academicTermId AND a.subject_id = @subjectId
+              AND term.school_year = @schoolYear AND sec.name = @sectionName AND sec.grade_level = @gradeLevel`);
+        if (!assignment.recordset?.length) {
+          throw new GradeImportError('This class is no longer assigned to your account. Upload the workbook again.', 403);
+        }
+      }
       await transaction.request()
         .input('previewId', sql.UniqueIdentifier, previewId)
         .input('actorId', sql.Int, actor.id)
         .input('sessionFingerprint', sql.Char(64), fingerprint)
         .input('schoolYear', sql.NVarChar(20), context.schoolYear)
+        .input('academicTermId', sql.Int, context.academicTermId)
         .input('gradeLevel', sql.NVarChar(50), context.gradeLevel)
         .input('sectionName', sql.NVarChar(100), context.sectionName)
         .input('subjectId', sql.Int, subject.id)
@@ -361,8 +423,10 @@ function createGradeImportService({
         .input('expiresAt', sql.DateTime2, expiresAt)
         .query(`INSERT INTO dbo.grade_import_previews
           (id, uploaded_by, session_fingerprint, school_year, grade_level, section_name, subject_id, subject_name,
+            academic_term_id, original_filename,
             workbook_grade_level, workbook_section_name, workbook_subject_name, context_mismatch, expires_at)
           VALUES (@previewId, @actorId, @sessionFingerprint, @schoolYear, @gradeLevel, @sectionName, @subjectId, @subjectName,
+            @academicTermId, @originalFilename,
             @workbookGradeLevel, @workbookSectionName, @workbookSubjectName, @contextMismatch, @expiresAt)`);
       for (const row of rows) {
         const inserted = await transaction.request()
@@ -410,21 +474,35 @@ function createGradeImportService({
   async function getPreview({ actorId, sessionId, previewId }) {
     const pool = await getPool();
     await removeExpired(pool);
+    const actor = await requireImporter(pool.request(), actorId);
     const result = await pool.request()
       .input('previewId', sql.UniqueIdentifier, previewId)
       .input('actorId', sql.Int, actorId)
+      .input('actorRole', sql.NVarChar(30), actor.role)
       .input('sessionFingerprint', sql.Char(64), digestSession(secret, sessionId))
-      .query(`SELECT p.id, p.school_year, p.grade_level, p.section_name, p.subject_name,
+      .query(`SELECT p.id, p.academic_term_id, p.original_filename, term.term, p.school_year, p.grade_level, p.section_name, p.subject_name,
           p.workbook_grade_level, p.workbook_section_name, p.workbook_subject_name, p.context_mismatch, p.expires_at,
           r.id AS preview_row_id, r.source_row, r.student_id, r.enrollment_id, r.student_subject_id, r.student_no,
           r.workbook_name, r.student_name, r.name_mismatch, r.issue,
           g.grading_period, g.grade_value, g.existing_grade_id, g.existing_grade_value
         FROM dbo.grade_import_previews AS p
+        LEFT JOIN dbo.academic_terms AS term ON term.id = p.academic_term_id
         LEFT JOIN dbo.grade_import_preview_rows AS r ON r.preview_id = p.id
         LEFT JOIN dbo.grade_import_preview_grades AS g ON g.preview_row_id = r.id
         WHERE p.id = @previewId AND p.uploaded_by = @actorId
           AND p.session_fingerprint = @sessionFingerprint AND p.status = N'ready'
           AND p.expires_at > SYSUTCDATETIME()
+          AND EXISTS (SELECT 1 FROM dbo.users AS current_actor WHERE current_actor.id = @actorId
+            AND current_actor.is_active = 1 AND current_actor.role = @actorRole)
+          AND (@actorRole = N'registrar' OR EXISTS (
+            SELECT 1 FROM dbo.teacher_assignments AS ta
+            INNER JOIN dbo.academic_terms AS assigned_term ON assigned_term.id = ta.academic_term_id
+            INNER JOIN dbo.sections AS assigned_section ON assigned_section.id = ta.section_id
+              AND assigned_section.academic_term_id = ta.academic_term_id
+            WHERE ta.teacher_id = @actorId AND ta.is_active = 1
+              AND ta.academic_term_id = p.academic_term_id AND ta.subject_id = p.subject_id
+              AND assigned_term.school_year = p.school_year AND assigned_section.grade_level = p.grade_level
+              AND assigned_section.name = p.section_name))
         ORDER BY r.source_row, g.id`);
     if (!result.recordset?.length) throw new GradeImportError('This grade preview has expired or is no longer available. Upload the workbook again.', 404);
     const header = result.recordset[0];
@@ -469,6 +547,9 @@ function createGradeImportService({
     });
     return {
       id: header.id,
+      academicTermId: header.academic_term_id,
+      originalFilename: header.original_filename,
+      term: header.term,
       schoolYear: header.school_year,
       gradeLevel: header.grade_level,
       sectionName: header.section_name,
@@ -497,8 +578,11 @@ function createGradeImportService({
     return reason;
   }
 
-  async function confirmPreview({ actorId, sessionId, previewId, decisions = [] }) {
+  async function confirmPreview({ actorId, sessionId, previewId, submissionId, decisions = [] }) {
     if (!Array.isArray(decisions)) throw new GradeImportError('The grade confirmation choices are invalid.');
+    if (submissionId && !/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(submissionId)) {
+      throw new GradeImportError('Grade submission not found.', 404);
+    }
     const pool = await getPool();
     await removeExpired(pool);
     const transaction = transactionFactory(pool);
@@ -507,23 +591,41 @@ function createGradeImportService({
       await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
       started = true;
       const actor = await requireRegistrar(transaction.request(), actorId);
-      const headerResult = await transaction.request()
-        .input('previewId', sql.UniqueIdentifier, previewId)
-        .input('actorId', sql.Int, actor.id)
-        .input('sessionFingerprint', sql.Char(64), digestSession(secret, sessionId))
-        .query(`SELECT id, school_year, grade_level, section_name, subject_id, subject_name, context_mismatch
+      const headerRequest = transaction.request().input('actorId', sql.Int, actor.id);
+      if (submissionId) headerRequest.input('submissionId', sql.UniqueIdentifier, submissionId);
+      else headerRequest.input('previewId', sql.UniqueIdentifier, previewId)
+        .input('sessionFingerprint', sql.Char(64), digestSession(secret, sessionId));
+      const headerResult = await headerRequest.query(submissionId
+        ? `SELECT s.id, a.academic_term_id, s.school_year, s.grade_level, s.section_name, s.subject_id, s.subject_name, s.context_mismatch
+          FROM dbo.teacher_grade_submissions AS s WITH (UPDLOCK, HOLDLOCK)
+          INNER JOIN dbo.teacher_assignments AS a WITH (UPDLOCK, HOLDLOCK) ON a.id = s.assignment_id
+          WHERE s.id = @submissionId AND s.status = N'pending' AND a.is_active = 1
+            AND a.teacher_id = s.submitted_by
+            AND EXISTS (SELECT 1 FROM dbo.users AS submitter WHERE submitter.id = s.submitted_by
+              AND submitter.role = N'teacher')`
+        : `SELECT id, academic_term_id, school_year, grade_level, section_name, subject_id, subject_name, context_mismatch
           FROM dbo.grade_import_previews WITH (UPDLOCK, HOLDLOCK)
           WHERE id = @previewId AND uploaded_by = @actorId
             AND session_fingerprint = @sessionFingerprint AND status = N'ready'
             AND expires_at > SYSUTCDATETIME()`);
       const header = headerResult.recordset?.[0];
-      if (!header) throw new GradeImportError('This grade preview has expired or was already confirmed.', 409);
+      if (!header) throw new GradeImportError(submissionId
+        ? 'This submission has already been reviewed or its teacher assignment is no longer valid.'
+        : 'This grade preview has expired or was already confirmed.', 409);
       if (header.context_mismatch) {
         throw new GradeImportError('The workbook context differs from the selected enrollment context. Correct the roster or workbook, then upload it again.', 409);
       }
-      const previewRowsResult = await transaction.request()
-        .input('previewId', sql.UniqueIdentifier, previewId)
-        .query(`SELECT r.id, r.source_row, r.student_id, r.enrollment_id, r.student_subject_id, r.student_no,
+      const previewRowsRequest = transaction.request();
+      if (submissionId) previewRowsRequest.input('submissionId', sql.UniqueIdentifier, submissionId);
+      else previewRowsRequest.input('previewId', sql.UniqueIdentifier, previewId);
+      const previewRowsResult = await previewRowsRequest.query(submissionId
+        ? `SELECT r.id, r.source_row, r.student_id, r.enrollment_id, r.student_subject_id, r.student_no,
+            r.workbook_name, r.student_name, r.lrn_fingerprint, r.name_mismatch, r.issue,
+            g.grading_period, g.grade_value, g.existing_grade_id, g.existing_grade_value
+          FROM dbo.teacher_grade_submission_rows AS r WITH (UPDLOCK, HOLDLOCK)
+          LEFT JOIN dbo.teacher_grade_submission_grades AS g WITH (UPDLOCK, HOLDLOCK) ON g.submission_row_id = r.id
+          WHERE r.submission_id = @submissionId ORDER BY r.source_row, g.id`
+        : `SELECT r.id, r.source_row, r.student_id, r.enrollment_id, r.student_subject_id, r.student_no,
             r.workbook_name, r.student_name, r.lrn_fingerprint, r.name_mismatch, r.issue,
             g.grading_period, g.grade_value, g.existing_grade_id, g.existing_grade_value
           FROM dbo.grade_import_preview_rows AS r WITH (UPDLOCK, HOLDLOCK)
@@ -595,11 +697,15 @@ function createGradeImportService({
         acceptedRows.push({ ...row, grades: selectedGrades });
       }
 
+      if (submissionId && acceptedRows.length === 0) {
+        throw new GradeImportError('Select at least one eligible learner row before approving this workbook.');
+      }
       if (acceptedRows.length) {
         const request = transaction.request()
           .input('schoolYear', sql.NVarChar(20), header.school_year)
           .input('gradeLevel', sql.NVarChar(50), header.grade_level)
           .input('sectionName', sql.NVarChar(100), header.section_name)
+          .input('academicTermId', sql.Int, header.academic_term_id ?? null)
           .input('subjectId', sql.Int, header.subject_id);
         const pairs = acceptedRows.map((row, index) => {
           request.input(`student${index}`, sql.Int, row.student_id)
@@ -621,7 +727,7 @@ function createGradeImportService({
           INNER JOIN dbo.subjects AS sub WITH (UPDLOCK, HOLDLOCK) ON sub.id = ss.subject_id
           LEFT JOIN dbo.grades AS g WITH (UPDLOCK, HOLDLOCK) ON g.student_subject_id = ss.id
             AND g.grading_period IN (N'Term 1', N'Term 2', N'Term 3', N'Final Grade')
-          WHERE ${pairs.join(' OR ')}`);
+          WHERE (${pairs.join(' OR ')}) AND (@academicTermId IS NULL OR e.academic_term_id = @academicTermId)`);
         const currentByAssignment = new Map();
         for (const current of currentResult.recordset || []) {
           const list = currentByAssignment.get(current.student_subject_id) || [];
@@ -678,28 +784,56 @@ function createGradeImportService({
           }
         }
       }
+      const sourceId = submissionId || previewId;
+      const auditDetails = {
+        schoolYear: header.school_year,
+        gradeLevel: header.grade_level,
+        sectionName: header.section_name,
+        subjectName: header.subject_name,
+        rowsProcessed: acceptedRows.length,
+        rowsExcluded: excludedRows,
+        gradesInserted: inserted,
+        gradesReplaced: replaced,
+        gradesUnchanged: unchangedGrades,
+        gradeConflictsSkipped: skippedGrades
+      };
+      if (submissionId) {
+        auditDetails.nameMismatchOverrides = decisionAudit.filter(({ action }) => action === 'name_mismatch_override').length;
+        auditDetails.gradeReplacementReasons = decisionAudit.filter(({ action }) => action !== 'name_mismatch_override').length;
+      } else {
+        auditDetails.decisions = decisionAudit;
+      }
       await transaction.request()
         .input('actorId', sql.Int, actor.id)
         .input('action', sql.NVarChar(100), 'registrar.grade_import_completed')
-        .input('entityId', sql.NVarChar(100), String(previewId))
-        .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify({
-          schoolYear: header.school_year,
-          gradeLevel: header.grade_level,
-          sectionName: header.section_name,
-          subjectName: header.subject_name,
-          rowsProcessed: acceptedRows.length,
-          rowsExcluded: excludedRows,
-          gradesInserted: inserted,
-          gradesReplaced: replaced,
-          gradesUnchanged: unchangedGrades,
-          gradeConflictsSkipped: skippedGrades,
-          decisions: decisionAudit
-        }))
+        .input('entityId', sql.NVarChar(100), String(sourceId))
+        .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify(auditDetails))
         .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
           VALUES (@actorId, @action, N'grade_import', @entityId, @detailsJson)`);
-      await transaction.request()
-        .input('previewId', sql.UniqueIdentifier, previewId)
-        .query('DELETE FROM dbo.grade_import_previews WHERE id = @previewId');
+      if (submissionId) {
+        await transaction.request()
+          .input('submissionId', sql.UniqueIdentifier, submissionId).input('actorId', sql.Int, actor.id)
+          .query(`UPDATE dbo.teacher_grade_submissions SET status = N'approved', decided_by = @actorId,
+            decided_at = SYSUTCDATETIME(), decision_reason = NULL WHERE id = @submissionId AND status = N'pending'`);
+        await transaction.request()
+          .input('submissionId', sql.UniqueIdentifier, submissionId).input('actorId', sql.Int, actor.id)
+          .query(`INSERT INTO dbo.teacher_grade_submission_events (submission_id, actor_id, event_type)
+            VALUES (@submissionId, @actorId, N'approved')`);
+        await transaction.request()
+          .input('actorId', sql.Int, actor.id)
+          .input('action', sql.NVarChar(100), 'registrar.grade_workbook_approved')
+          .input('entityId', sql.NVarChar(100), submissionId)
+          .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify({
+            rowsProcessed: acceptedRows.length, rowsExcluded: excludedRows, gradesInserted: inserted,
+            gradesReplaced: replaced, gradesUnchanged: unchangedGrades, gradeConflictsSkipped: skippedGrades
+          }))
+          .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
+            VALUES (@actorId, @action, N'teacher_grade_submission', @entityId, @detailsJson)`);
+      } else {
+        await transaction.request()
+          .input('previewId', sql.UniqueIdentifier, previewId)
+          .query('DELETE FROM dbo.grade_import_previews WHERE id = @previewId');
+      }
       await transaction.commit();
       started = false;
       return { inserted, replaced, skipped: skippedGrades, excluded: excludedRows, rowsProcessed: acceptedRows.length };

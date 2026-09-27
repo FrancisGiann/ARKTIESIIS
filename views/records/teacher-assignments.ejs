@@ -1,0 +1,40 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page admin-page records-page" id="main-content">
+  <a class="context-back" href="/dashboard">Back to workspace</a>
+  <section class="dashboard-heading"><div><h1>Teacher assignments</h1><p>Assign one teacher to a term, section, and subject context.</p></div></section>
+  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <section class="admin-section" aria-labelledby="create-teacher-assignment-title">
+    <div class="admin-section__heading"><div><h2 id="create-teacher-assignment-title">Create assignment</h2><p>Only active teacher accounts can receive new assignments. Revoke an active assignment before transferring a class context.</p></div></div>
+    <% if (teachers.length && terms.length && sections.length && subjects.length) { %>
+      <form class="form-stack records-compact-form" method="post" action="/records/teacher-assignments">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <div class="admin-form-grid">
+          <div class="field"><label for="teacher-id">Teacher</label><select id="teacher-id" name="teacherId" required><option value="">Choose teacher</option><% for (const teacher of teachers) { %><option value="<%= teacher.id %>" <%= String(values.teacherId || '') === String(teacher.id) ? 'selected' : '' %>><%= teacher.last_name %>, <%= teacher.first_name %> · <%= teacher.email %></option><% } %></select></div>
+          <div class="field"><label for="term-id">Academic term</label><select id="term-id" name="academicTermId" required><option value="">Choose term</option><% for (const term of terms) { %><option value="<%= term.id %>" <%= String(values.academicTermId || '') === String(term.id) ? 'selected' : '' %>><%= term.school_year %> · <%= term.term %></option><% } %></select></div>
+          <div class="field"><label for="section-id">Section</label><select id="section-id" name="sectionId" required><option value="">Choose section</option><% for (const section of sections) { %><option value="<%= section.id %>" <%= String(values.sectionId || '') === String(section.id) ? 'selected' : '' %>><%= section.school_year %> · <%= section.term %> · Grade <%= section.grade_level %> · <%= section.name %></option><% } %></select></div>
+          <div class="field"><label for="subject-id">Subject</label><select id="subject-id" name="subjectId" required><option value="">Choose subject</option><% for (const subject of subjects) { %><option value="<%= subject.id %>" <%= String(values.subjectId || '') === String(subject.id) ? 'selected' : '' %>><%= subject.subject_code %> · <%= subject.subject_name %></option><% } %></select></div>
+        </div>
+        <button class="button button--primary button--align-start" type="submit">Assign teacher</button>
+      </form>
+    <% } else { %><p class="empty-state">Add an active teacher account, academic term, section, and subject before creating assignments.</p><% } %>
+  </section>
+  <section class="admin-section" aria-labelledby="teacher-assignment-list-title">
+    <div class="admin-section__heading"><div><h2 id="teacher-assignment-list-title">Assignment history</h2><p>Pending workbooks must be reviewed before an assignment can be revoked.</p></div></div>
+    <% if (assignments.length) { %>
+      <div class="table-scroll" tabindex="0" aria-label="Teacher assignment history"><table class="admin-table">
+        <caption class="visually-hidden">Term-specific teacher assignments and current status</caption>
+        <thead><tr><th scope="col">Context</th><th scope="col">Teacher</th><th scope="col">Roster</th><th scope="col">Assignment</th><th scope="col">Workbook</th><th scope="col">Action</th></tr></thead>
+        <tbody><% for (const assignment of assignments) { %><tr>
+          <td data-label="Context"><strong><%= assignment.school_year %> · <%= assignment.term %></strong><br>Grade <%= assignment.grade_level %> · <%= assignment.section_name %><br><%= assignment.subject_code %> · <%= assignment.subject_name %></td>
+          <td data-label="Teacher"><%= assignment.first_name %> <%= assignment.last_name %></td>
+          <td data-label="Roster"><%= assignment.roster_count %> active students</td>
+          <td data-label="Assignment"><span class="record-status <%= assignment.is_active ? 'record-status--valid' : 'record-status--archived' %>"><%= assignment.is_active ? 'Active' : 'Revoked' %></span></td>
+          <td data-label="Workbook"><%= assignment.latest_submission_status ? assignment.latest_submission_status.replaceAll('_', ' ') : 'No submission' %></td>
+          <td data-label="Action"><% if (assignment.is_active) { %><form method="post" action="/records/teacher-assignments/<%= assignment.id %>/revoke"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><button class="button button--secondary" type="submit">Revoke</button></form><% } else { %>—<% } %></td>
+        </tr><% } %></tbody>
+      </table></div>
+    <% } else { %><p class="empty-state">No teacher assignments have been created.</p><% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

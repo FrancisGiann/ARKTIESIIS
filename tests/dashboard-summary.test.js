@@ -38,6 +38,8 @@ test('student dashboard summary is parameterized and tied to the authenticated s
   assert.match(call.statement, /id = @actorId AND role = 'student' AND is_active = 1/);
   assert.match(call.statement, /s\.user_id = @actorId/);
   assert.match(call.statement, /psa_birth_certificate/);
+  assert.match(call.statement, /d\.document_type IN \('good_moral', 'psa_birth_certificate'\)/);
+  assert.doesNotMatch(call.statement, /d\.upload_source IN/);
   assert.doesNotMatch(call.statement, /extracted_text|validation_json/);
 });
 

@@ -95,9 +95,10 @@ test('grade-level context treats numeric, Grade, and G labels as equivalent only
   assert.notEqual(normalizeGradeLevel('11'), normalizeGradeLevel('Grade 12'));
 });
 
-function makePreviewHarness({ studentName = 'Jamie Garza', sectionName = 'STEM A' } = {}) {
+function makePreviewHarness({ studentName = 'Jamie Garza', sectionName = 'STEM A', actorRole = 'registrar', teacherAssignmentActive = true } = {}) {
   const state = { queries: [], header: null, rows: [], grades: [], commits: 0, rollbacks: 0, nextRowId: 1 };
   const context = {
+    academic_term_id: actorRole === 'teacher' ? 3 : null,
     school_year: '2026-2027', grade_level: 'Grade 11', section_name: sectionName,
     subject_id: 77, subject_code: 'ENG11', subject_name: 'Oral Communication'
   };
@@ -110,7 +111,7 @@ function makePreviewHarness({ studentName = 'Jamie Garza', sectionName = 'STEM A
   function poolRequest() {
     return requestFor(async (statement, values) => {
       state.queries.push({ statement, values });
-      if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: 'registrar' }] };
+      if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: actorRole }] };
       if (statement.includes('SELECT DISTINCT term.school_year')) return { recordset: [context] };
       if (statement.includes('WHERE st.lrn IN')) return { recordset: [student] };
       if (statement.includes('FROM dbo.grade_import_previews AS p')) {
@@ -140,7 +141,11 @@ function makePreviewHarness({ studentName = 'Jamie Garza', sectionName = 'STEM A
   const transactionFactory = () => ({
     request() {
       return requestFor(async (statement, values) => {
-        if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: 'registrar' }] };
+        if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: actorRole }] };
+        if (statement.includes('FROM dbo.teacher_assignments AS a WITH')) {
+          state.assignmentChecks = (state.assignmentChecks || 0) + 1;
+          return { recordset: teacherAssignmentActive ? [{ id: 12 }] : [] };
+        }
         if (statement.includes('INSERT INTO dbo.grade_import_previews')) {
           state.header = {
             id: values.previewId, schoolYear: values.schoolYear, gradeLevel: values.gradeLevel,
@@ -201,6 +206,21 @@ test('preview matches by LRN, displays database identity, and flags a name misma
   assert.equal(state.commits, 1);
 });
 
+test('teacher preview persistence rechecks the active assignment inside its serializable transaction', async () => {
+  const { service, state } = makePreviewHarness({ actorRole: 'teacher', teacherAssignmentActive: false });
+  const [context] = await service.listImportContexts(7);
+
+  await assert.rejects(service.createPreview({
+    actorId: 7, sessionId: 'session-a', contextKey: context.key, buffer: fs.readFileSync(FIXTURE)
+  }), (error) => error instanceof GradeImportError && error.status === 403);
+
+  assert.equal(state.assignmentChecks, 1);
+  assert.equal(state.header, null, 'a revoked class cannot leave a persisted preview');
+  assert.equal(state.rows.length, 0);
+  assert.equal(state.commits, 0);
+  assert.equal(state.rollbacks, 1);
+});
+
 test('preview always supplies four table cells when a cached grade is absent', async () => {
   const records = [
     { grading_period: 'Term 1', grade_value: 89 },
@@ -225,20 +245,21 @@ test('preview always supplies four table cells when a cached grade is absent', a
   ]);
 });
 
-function confirmationHarness({ existingGrades = [], nameMismatch = false, failAtInsert = 0, omitGradePeriod = null } = {}) {
+function confirmationHarness({ existingGrades = [], nameMismatch = false, failAtInsert = 0, omitGradePeriod = null,
+  currentRecordsOverride = null, submissionMode = false, activeAssignment = true, submitterIsTeacher = true } = {}) {
   const state = {
     commits: 0, rollbacks: 0, previewExists: true, inserts: 0, replaces: 0, audits: [],
-    persistedInserts: 0, persistedReplaces: 0, transactionQueue: Promise.resolve()
+    persistedInserts: 0, persistedReplaces: 0, transactionQueue: Promise.resolve(), queries: []
   };
-  const currentRecords = existingGrades.map((grade) => ({
+  const currentRecords = (currentRecordsOverride || existingGrades.map((grade) => ({
     student_id: 44, lrn: LRN, student_no: 'S-0044', first_name: 'Jamie', middle_name: null,
     last_name: 'Garcia', suffix: null, student_status: 'active', enrollment_id: 66,
     enrollment_status: 'enrolled', school_year: '2026-2027', section_name: 'STEM A',
     grade_level: 'Grade 11', student_subject_id: 88, subject_id: 77,
     subject_name: 'Oral Communication', grade_id: grade.id, grading_period: grade.period,
     grade_value: grade.value
-  }));
-  if (!currentRecords.length) currentRecords.push({
+  }))).map((record) => ({ ...record }));
+  if (currentRecordsOverride === null && !currentRecords.length) currentRecords.push({
     student_id: 44, lrn: LRN, student_no: 'S-0044', first_name: 'Jamie', middle_name: null,
     last_name: 'Garcia', suffix: null, student_status: 'active', enrollment_id: 66,
     enrollment_status: 'enrolled', school_year: '2026-2027', section_name: 'STEM A',
@@ -256,7 +277,8 @@ function confirmationHarness({ existingGrades = [], nameMismatch = false, failAt
     };
   });
   const header = {
-    id: 'f53eb245-6ad6-4a91-8aa4-e32dbbafc4ef', school_year: '2026-2027', grade_level: 'Grade 11',
+    id: 'f53eb245-6ad6-4a91-8aa4-e32dbbafc4ef', academic_term_id: 3,
+    school_year: '2026-2027', grade_level: 'Grade 11',
     section_name: 'STEM A', subject_id: 77, subject_name: 'Oral Communication', context_mismatch: false
   };
   const row = {
@@ -280,9 +302,14 @@ function confirmationHarness({ existingGrades = [], nameMismatch = false, failAt
       },
       request() {
         return requestFor(async (statement, values) => {
+          state.queries.push({ statement, values });
           if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: 'registrar' }] };
           if (statement.includes('FROM dbo.grade_import_previews WITH')) return state.previewExists ? { recordset: [header] } : { recordset: [] };
-          if (statement.includes('FROM dbo.grade_import_preview_rows AS r')) {
+          if (statement.includes('FROM dbo.teacher_grade_submissions AS s WITH')) {
+            return submissionMode && activeAssignment && submitterIsTeacher ? { recordset: [header] } : { recordset: [] };
+          }
+          if (statement.includes('FROM dbo.grade_import_preview_rows AS r')
+            || statement.includes('FROM dbo.teacher_grade_submission_rows AS r')) {
             return { recordset: grades.filter((grade) => grade.grading_period !== omitGradePeriod).map((grade) => ({ ...row, ...grade })) };
           }
           if (statement.includes('FROM dbo.students AS st WITH')) return { recordset: currentRecords };
@@ -393,6 +420,95 @@ test('concurrent confirmation imports a preview once and expires/repeats safely'
   assert.equal(state.persistedInserts, 4);
   assert.equal(state.commits, 1);
   assert.equal(state.previewExists, false);
+});
+
+test('registrar confirmation writes no grades when the roster row or a grade changed after preview', async () => {
+  const rosterChanged = confirmationHarness({ currentRecordsOverride: [] });
+  await assert.rejects(rosterChanged.service.confirmPreview({
+    actorId: 7, sessionId: 'session-a', previewId: rosterChanged.header.id,
+    decisions: [fullDecision()]
+  }), /learner or enrollment details changed after preview/);
+  assert.equal(rosterChanged.state.rollbacks, 1);
+  assert.equal(rosterChanged.state.persistedInserts, 0);
+  assert.equal(rosterChanged.state.persistedReplaces, 0);
+  assert.equal(rosterChanged.state.audits.length, 0);
+
+  const gradeChanged = confirmationHarness({ currentRecordsOverride: [{
+    student_id: 44, lrn: LRN, student_no: 'S-0044', first_name: 'Jamie', middle_name: null,
+    last_name: 'Garcia', suffix: null, student_status: 'active', enrollment_id: 66,
+    enrollment_status: 'enrolled', school_year: '2026-2027', section_name: 'STEM A',
+    grade_level: 'Grade 11', student_subject_id: 88, subject_id: 77,
+    subject_name: 'Oral Communication', grade_id: 501, grading_period: 'Term 1', grade_value: 85
+  }] });
+  await assert.rejects(gradeChanged.service.confirmPreview({
+    actorId: 7, sessionId: 'session-a', previewId: gradeChanged.header.id,
+    decisions: [fullDecision()]
+  }), /grade changed after preview/);
+  assert.equal(gradeChanged.state.rollbacks, 1);
+  assert.equal(gradeChanged.state.persistedInserts, 0);
+  assert.equal(gradeChanged.state.persistedReplaces, 0);
+  assert.equal(gradeChanged.state.audits.length, 0);
+});
+
+test('submission approval requires an active teacher assignment, while an inactive submitter does not cancel registrar review', async () => {
+  const revoked = confirmationHarness({ submissionMode: true, activeAssignment: false });
+  await assert.rejects(revoked.service.confirmPreview({
+    actorId: 7, submissionId: revoked.header.id, decisions: [fullDecision()]
+  }), /teacher assignment is no longer valid/);
+  assert.equal(revoked.state.rollbacks, 1);
+  assert.equal(revoked.state.persistedInserts, 0);
+  assert.equal(revoked.state.queries.some(({ statement }) => statement.includes('FROM dbo.students AS st WITH')), false);
+
+  const reassigned = confirmationHarness({ submissionMode: true, activeAssignment: true, submitterIsTeacher: false });
+  await assert.rejects(reassigned.service.confirmPreview({
+    actorId: 7, submissionId: reassigned.header.id, decisions: [fullDecision()]
+  }), /teacher assignment is no longer valid/);
+  assert.equal(reassigned.state.rollbacks, 1);
+  assert.equal(reassigned.state.persistedInserts, 0);
+  assert.equal(reassigned.state.queries.some(({ statement }) => statement.includes('FROM dbo.students AS st WITH')), false);
+
+  const deactivatedSubmitter = confirmationHarness({ submissionMode: true, activeAssignment: true });
+  const result = await deactivatedSubmitter.service.confirmPreview({
+    actorId: 7, submissionId: deactivatedSubmitter.header.id,
+    decisions: [fullDecision({ overrideName: true, nameReason: 'verified workbook name' })]
+  });
+  assert.equal(result.inserted, 4, 'the active registrar can approve the saved review snapshot even if its submitter later becomes inactive');
+  assert.equal(deactivatedSubmitter.state.persistedInserts, 4);
+  const submissionHeader = deactivatedSubmitter.state.queries.find(({ statement }) => statement.includes('FROM dbo.teacher_grade_submissions AS s WITH'));
+  assert.match(submissionHeader.statement, /s\.status = N'pending' AND a\.is_active = 1/);
+  assert.match(submissionHeader.statement, /a\.teacher_id = s\.submitted_by[\s\S]*?submitter\.role = N'teacher'/);
+  assert.doesNotMatch(submissionHeader.statement, /submitter\.is_active = 1/,
+    'the registrar may finish review when the original teacher account is deactivated but the assignment remains active');
+  const approvalAuditDetails = deactivatedSubmitter.state.queries
+    .filter(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs'))
+    .map(({ values }) => values.detailsJson).join(' ');
+  assert.doesNotMatch(approvalAuditDetails, /studentId|verified workbook name|123456789012|"89"/);
+
+  const rosterChanged = confirmationHarness({ submissionMode: true, currentRecordsOverride: [] });
+  await assert.rejects(rosterChanged.service.confirmPreview({
+    actorId: 7, submissionId: rosterChanged.header.id, decisions: [fullDecision()]
+  }), /learner or enrollment details changed after preview/);
+  assert.equal(rosterChanged.state.rollbacks, 1);
+  assert.equal(rosterChanged.state.persistedInserts, 0);
+  assert.equal(rosterChanged.state.persistedReplaces, 0);
+
+  const gradeChanged = confirmationHarness({
+    submissionMode: true,
+    existingGrades: [{ id: 101, period: 'Term 1', value: 80 }],
+    currentRecordsOverride: [{
+      student_id: 44, lrn: LRN, student_no: 'S-0044', first_name: 'Jamie', middle_name: null,
+      last_name: 'Garcia', suffix: null, student_status: 'active', enrollment_id: 66,
+      enrollment_status: 'enrolled', school_year: '2026-2027', section_name: 'STEM A',
+      grade_level: 'Grade 11', student_subject_id: 88, subject_id: 77,
+      subject_name: 'Oral Communication', grade_id: 501, grading_period: 'Term 1', grade_value: 85
+    }]
+  });
+  await assert.rejects(gradeChanged.service.confirmPreview({
+    actorId: 7, submissionId: gradeChanged.header.id, decisions: [fullDecision()]
+  }), /grade changed after preview/);
+  assert.equal(gradeChanged.state.rollbacks, 1);
+  assert.equal(gradeChanged.state.persistedInserts, 0);
+  assert.equal(gradeChanged.state.persistedReplaces, 0);
 });
 
 test('confirm rechecks registrar access and four complete cached grades before accepting a row', async () => {
@@ -509,4 +625,18 @@ test('migration 007 contains LRN constraints and private preview tables', () => 
   assert.match(migration, /CREATE TABLE dbo\.grade_import_previews/);
   assert.match(migration, /CREATE TABLE dbo\.grade_import_preview_rows/);
   assert.match(migration, /CREATE TABLE dbo\.grade_import_preview_grades/);
+});
+
+test('migration 009 adds forward-only teacher grade submission schema without deleting legacy rows', () => {
+  const migration = fs.readFileSync(path.join(__dirname, '../database/migrations/009_teacher_grade_submissions.sql'), 'utf8');
+  assert.match(migration, /'teacher'/);
+  assert.match(migration, /ALTER TABLE dbo\.grade_import_previews\s+ADD academic_term_id INT NULL/);
+  for (const table of [
+    'teacher_assignments', 'teacher_grade_submissions', 'teacher_grade_submission_rows',
+    'teacher_grade_submission_grades', 'teacher_grade_submission_events'
+  ]) assert.match(migration, new RegExp(`CREATE TABLE dbo\\.${table}\\b`));
+  assert.match(migration, /UX_teacher_assignment_active_context[\s\S]*?WHERE is_active = 1/);
+  assert.match(migration, /UX_teacher_grade_submission_pending_assignment[\s\S]*?WHERE status = N'pending'/);
+  assert.match(migration, /N'pending', N'approved', N'correction_requested', N'rejected'/);
+  assert.doesNotMatch(migration, /DROP\s+TABLE|DELETE\s+FROM\s+dbo\.documents/i);
 });

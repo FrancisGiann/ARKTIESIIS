@@ -1,0 +1,42 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page admin-page records-page" id="main-content">
+  <a class="context-back" href="/registrar/grade-submissions">Back to pending submissions</a>
+  <section class="dashboard-heading"><div><h1>Review teacher grade workbook</h1><p><%= submission.school_year %> · <%= submission.term %> · Grade <%= submission.grade_level %> · <%= submission.section_name %> · <%= submission.subject_name %></p></div></section>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <p>Submitted by <%= [submission.teacher_first_name, submission.teacher_last_name].filter(Boolean).join(' ') || 'Teacher' %> on <%= new Date(submission.submitted_at).toLocaleString() %> · Revision <%= submission.revision_number %> · <%= submission.counts.eligible %> eligible · <%= submission.counts.unresolved %> unresolved · <%= submission.counts.conflicts %> conflicts</p>
+  <p><a class="button button--secondary" href="/registrar/grade-submissions/<%= submission.id %>/workbook">Download original workbook</a></p>
+  <% if (submission.contextMismatch) { %><p class="form-alert" role="alert">Workbook context is different from the assigned class. Approval is disabled; request a corrected workbook or reject this submission.</p><% } %>
+  <section class="admin-section" aria-labelledby="parsed-grades-title"><div class="admin-section__heading"><div><h2 id="parsed-grades-title">Parsed grade preview</h2><p>Rows with validation issues cannot be imported. Name mismatches and conflicting grades require separate registrar review and reasons.</p></div></div>
+    <form class="form-stack" method="post" action="/registrar/grade-submissions/<%= submission.id %>/decision" data-submitting-message="Recording the review decision. Please wait.">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <div class="table-scroll grade-import-preview__table-scroll" tabindex="0" aria-label="Parsed grade values and review decisions"><table class="admin-table grade-import-preview__table"><caption class="visually-hidden">Teacher workbook matches, grades, and current grade conflicts</caption>
+        <thead><tr><th scope="col">Workbook row</th><th scope="col">Student match</th><th scope="col">Workbook name</th><th scope="col">Term 1</th><th scope="col">Term 2</th><th scope="col">Term 3</th><th scope="col">Final</th><th scope="col">Review and include</th></tr></thead><tbody>
+          <% for (const row of submission.rows) { %><tr>
+            <td><%= row.sourceRow %></td><td><%= row.studentId ? `${row.studentNo} · ${row.studentName}` : 'No assigned-roster match' %></td><td><%= row.workbookName || '—' %></td>
+            <% for (const grade of row.grades) { const key = grade.gradingPeriod === 'Term 1' ? 'term1' : grade.gradingPeriod === 'Term 2' ? 'term2' : grade.gradingPeriod === 'Term 3' ? 'term3' : 'final'; %>
+              <td><strong><%= grade.gradeValue ?? '—' %></strong>
+                <% if (grade.gradeValue == null) { %><small class="field-help">Missing cached grade</small>
+                <% } else if (grade.existingGradeId && Number(grade.existingGradeValue) === Number(grade.gradeValue)) { %><small class="field-help">Already matches</small>
+                <% } else if (grade.existingGradeId) { %><small class="field-help">Existing: <%= grade.existingGradeValue ?? 'blank' %></small>
+                  <label class="visually-hidden" for="action-<%= row.sourceRow %>-<%= key %>">Conflict action for <%= grade.gradingPeriod %></label><select id="action-<%= row.sourceRow %>-<%= key %>" name="action_<%= row.sourceRow %>_<%= key %>"><option value="skip">Keep existing</option><option value="replace">Replace existing</option></select>
+                  <label class="visually-hidden" for="reason-<%= row.sourceRow %>-<%= key %>">Replacement reason for <%= grade.gradingPeriod %></label><input id="reason-<%= row.sourceRow %>-<%= key %>" name="reason_<%= row.sourceRow %>_<%= key %>" maxlength="500" placeholder="Reason if replacing">
+                <% } else { %><small class="field-help">New grade</small><% } %>
+              </td>
+            <% } %>
+            <td><% if (row.issue) { %><span class="record-status record-status--archived">Excluded</span><p><%= row.issue %></p><% } else { %>
+              <% if (row.nameMismatch) { %><p class="form-alert">The LRN matched but the names differ. Database name: <%= row.studentName %>.</p><label class="checkbox-field"><input name="overrideName_<%= row.sourceRow %>" value="yes" type="checkbox"><span>I reviewed this name difference.</span></label><label class="visually-hidden" for="name-reason-<%= row.sourceRow %>">Name difference override reason</label><input id="name-reason-<%= row.sourceRow %>" name="nameReason_<%= row.sourceRow %>" maxlength="500" placeholder="Reason if including">
+              <% } %><label class="checkbox-field"><input name="includeRow_<%= row.sourceRow %>" value="yes" type="checkbox"><span>Include these grades</span></label><% } %></td>
+          </tr><% } %>
+        </tbody></table></div>
+      <div class="admin-section__heading"><div><h2>Review decision</h2><p>Approval requires at least one eligible learner. Correction requests and rejections require instructions or a reason.</p></div></div>
+      <div class="field"><label for="decision-reason">Correction instructions or rejection reason</label><textarea id="decision-reason" name="reason" maxlength="500" rows="3" placeholder="Required for a correction request or rejection"></textarea></div>
+      <div class="admin-form-actions">
+        <button class="button button--primary" type="submit" name="decision" value="approve" <%= submission.contextMismatch || !submission.counts.eligible ? 'disabled' : '' %>>Approve and import selected grades</button>
+        <button class="button button--secondary" type="submit" name="decision" value="correction_requested">Request correction</button>
+        <button class="button button--secondary" type="submit" name="decision" value="rejected">Reject workbook</button>
+      </div>
+    </form>
+  </section>
+  <section class="admin-section" aria-labelledby="submission-history-title"><div class="admin-section__heading"><div><h2 id="submission-history-title">Immutable review history</h2></div></div><ol><% for (const event of submission.history) { %><li><%= event.event_type.replaceAll('_', ' ') %> · <%= new Date(event.created_at).toLocaleString() %><% if (event.first_name) { %> · <%= event.first_name %> <%= event.last_name %><% } %><% if (event.reason) { %><p><%= event.reason %></p><% } %></li><% } %></ol></section>
+</main>
+<%- include('../partials/foot') %>

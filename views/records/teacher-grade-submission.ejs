@@ -1,0 +1,17 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page admin-page records-page" id="main-content">
+  <a class="context-back" href="/dashboard/teacher">Back to my classes</a>
+  <section class="dashboard-heading"><div><h1>My grade workbook</h1><p><%= submission.school_year %> · <%= submission.term %> · Grade <%= submission.grade_level %> · <%= submission.section_name %> · <%= submission.subject_name %></p></div></section>
+  <p class="record-status <%= submission.status === 'approved' ? 'record-status--valid' : submission.status === 'pending' ? 'record-status--pending' : 'record-status--archived' %>">Status: <%= submission.status.replaceAll('_', ' ') %> · Revision <%= submission.revision_number %></p>
+  <% if (submission.decision_reason) { %><div class="form-alert"><strong>Registrar instructions</strong><p><%= submission.decision_reason %></p></div><% } %>
+  <p><a class="button button--secondary" href="/teacher/grades/submissions/<%= submission.id %>/workbook">Download submitted workbook</a></p>
+  <section class="admin-section" aria-labelledby="submission-history-title"><div class="admin-section__heading"><div><h2 id="submission-history-title">Submission history</h2></div></div>
+    <ol><% for (const event of submission.history) { %><li><%= event.event_type.replaceAll('_', ' ') %> · <%= new Date(event.created_at).toLocaleString() %><% if (event.first_name) { %> · <%= event.first_name %> <%= event.last_name %><% } %><% if (event.reason) { %><p><%= event.reason %></p><% } %></li><% } %></ol>
+  </section>
+  <section class="admin-section" aria-labelledby="submission-preview-title"><div class="admin-section__heading"><div><h2 id="submission-preview-title">Validated grade preview</h2><p><%= submission.counts.eligible %> matched rows · <%= submission.counts.unresolved %> rows with issues · <%= submission.counts.conflicts %> grade conflicts</p></div></div>
+    <div class="table-scroll" tabindex="0" aria-label="Submitted grade preview"><table class="admin-table"><caption class="visually-hidden">Persisted parsed values for your submitted workbook</caption><thead><tr><th scope="col">Student</th><th scope="col">Workbook name</th><th scope="col">Term 1</th><th scope="col">Term 2</th><th scope="col">Term 3</th><th scope="col">Final</th><th scope="col">Validation</th></tr></thead><tbody>
+      <% for (const row of submission.rows) { %><tr><td><%= row.studentNo ? `${row.studentNo} · ${row.studentName}` : 'No assigned-roster match' %></td><td><%= row.workbookName || '—' %></td><% for (const grade of row.grades) { %><td><%= grade.gradeValue ?? '—' %></td><% } %><td><%= row.issue || (row.nameMismatch ? 'Name differs from student record.' : 'Matched') %></td></tr><% } %>
+    </tbody></table></div>
+  </section>
+</main>
+<%- include('../partials/foot') %>

@@ -23,7 +23,7 @@ function fakeSql() {
   };
 }
 
-function documentHarness({ status = 'pending', storedFilename, mimeType, documentType = 'report_card' } = {}) {
+function documentHarness({ status = 'pending', storedFilename, mimeType, documentType = 'good_moral' } = {}) {
   const state = {
     document: {
       id: 84,
@@ -70,7 +70,7 @@ function documentHarness({ status = 'pending', storedFilename, mimeType, documen
               return { recordset: latestDecision ? [{ decision_type: latestDecision.decisionType }] : [] };
             }
             if (statement.includes("SET status = 'processing'")) {
-              if (transaction.localDocument.status !== 'pending' || transaction.localDocument.document_type === 'form_137') return { recordset: [] };
+            if (transaction.localDocument.status !== 'pending' || ['form_137', 'report_card'].includes(transaction.localDocument.document_type)) return { recordset: [] };
               transaction.localDocument.status = 'processing';
               transaction.localDocument.processing_started_at = 'started';
               return { recordset: [{ ...transaction.localDocument }] };
@@ -123,7 +123,7 @@ function documentHarness({ status = 'pending', storedFilename, mimeType, documen
               return { recordset: [{ id: transaction.localDocument.id }] };
             }
             if (statement.includes('SELECT s.first_name, s.last_name')) return { recordset: [{ first_name: 'Test', last_name: 'Student' }] };
-            if (statement.includes('FROM dbo.documents WITH')) return { recordset: [{ id: 84, student_id: 44, document_type: 'report_card' }] };
+            if (statement.includes('FROM dbo.documents WITH')) return { recordset: [{ id: 84, student_id: 44, document_type: transaction.localDocument.document_type }] };
             if (statement.includes('INSERT INTO dbo.document_review_events')) return { recordset: [] };
             if (statement.includes("SET status = CASE WHEN status = 'processing'")) {
               if (transaction.localDocument.status !== 'processing') transaction.localDocument.status = 'needs_review';
@@ -219,7 +219,7 @@ test('native digital upload is processed from private storage and its OCR text i
     });
     const uploaded = await documentService.upload(7, {
       studentId: '44',
-      documentType: 'report_card'
+      documentType: 'good_moral'
     }, {
       originalname: 'synthetic-report.png',
       mimetype: 'image/png',
@@ -266,7 +266,7 @@ test('native digital upload is processed from private storage and its OCR text i
               return { recordset: [{
                 id: uploaded.id,
                 student_id: 44,
-                document_type: 'report_card',
+                document_type: 'good_moral',
                 original_filename: 'synthetic-report.png',
                 stored_filename: harness.state.document.stored_filename,
                 mime_type: 'image/png',
@@ -499,7 +499,7 @@ test('a manual decision cannot overlap an OCR lease and stays final after the wo
     await job;
     assert.equal(harness.state.document.status, 'needs_review');
     assert.equal(harness.state.validations.length, 1);
-    const verificationChecklist = Object.fromEntries(verificationChecklistItems('report_card').map(({ key }) => [key, 'yes']));
+    const verificationChecklist = Object.fromEntries(verificationChecklistItems('good_moral').map(({ key }) => [key, 'yes']));
     await review.decideDocument(7, '84', 'verified', 'Source document inspected by registrar.', verificationChecklist);
     assert.equal(harness.state.document.status, 'valid');
     assert.equal(harness.state.decisionEvents.length, 1);
@@ -517,18 +517,20 @@ test('a manual decision cannot overlap an OCR lease and stays final after the wo
   }
 });
 
-test('Form 137 submissions are excluded from direct OCR processing', async () => {
+test('Form 137 and historical report-card submissions are excluded from direct OCR processing', async () => {
   const storageDirectory = await temporaryStorage();
   try {
-    const harness = documentHarness({ documentType: 'form_137' });
-    let calls = 0;
-    const service = makeService(harness, storageDirectory, {
-      localOcr: { async processDocument() { calls += 1; return { text: 'must not process' }; } }
-    });
-    assert.deepEqual(await service.processPendingDocument(84), { documentId: 84, status: 'not_pending' });
-    assert.equal(calls, 0);
-    assert.equal(harness.state.document.status, 'pending');
-    assert.ok(harness.state.queries.some(({ statement }) => statement.includes("document_type <> 'form_137'")));
+    for (const documentType of ['form_137', 'report_card']) {
+      const harness = documentHarness({ documentType });
+      let calls = 0;
+      const service = makeService(harness, storageDirectory, {
+        localOcr: { async processDocument() { calls += 1; return { text: 'must not process' }; } }
+      });
+      assert.deepEqual(await service.processPendingDocument(84), { documentId: 84, status: 'not_pending' });
+      assert.equal(calls, 0);
+      assert.equal(harness.state.document.status, 'pending');
+      assert.ok(harness.state.queries.some(({ statement }) => statement.includes("document_type NOT IN ('form_137', 'report_card')")));
+    }
   } finally {
     await fs.rm(storageDirectory, { recursive: true, force: true });
   }
@@ -628,7 +630,7 @@ test('parallel queue workers claim distinct submissions at bounded per-service c
     status: 'pending',
     stored_filename: `${String(id).padStart(8, '0')}-aaaa-4bbb-8ccc-000000000000.pdf`,
     mime_type: 'application/pdf',
-    document_type: 'report_card'
+    document_type: 'good_moral'
   }));
   const state = { documents, claimed: [], validationRows: [], claimIsolation: [] };
   const transactionFactory = () => ({

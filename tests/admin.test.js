@@ -125,6 +125,49 @@ test('admin account input validation rejects invalid email, role, names, student
   assert.throws(() => validateUpdateUser({ email: 'a@example.edu', role: 'finance', isActive: '1', firstName: 'bad\nname', lastName: 'B' }), /First and last names/);
 });
 
+test('teacher account creation and editing accept staff profile fields', () => {
+  assert.deepEqual(validateCreateUser({
+    email: 'teacher@example.edu', role: 'teacher', password: 'a-valid-teacher-password',
+    firstName: 'Taylor', lastName: 'Teacher', department: 'English'
+  }), {
+    email: 'teacher@example.edu', role: 'teacher', password: 'a-valid-teacher-password',
+    firstName: 'Taylor', lastName: 'Teacher', department: 'English'
+  });
+  assert.deepEqual(validateUpdateUser({
+    email: 'teacher@example.edu', role: 'teacher', isActive: '1',
+    firstName: 'Taylor', lastName: 'Teacher', department: 'English'
+  }), {
+    email: 'teacher@example.edu', role: 'teacher', isActive: true,
+    firstName: 'Taylor', lastName: 'Teacher', department: 'English'
+  });
+});
+
+test('editing a user to teacher updates the account and staff profile in one transaction', async () => {
+  const { service, log } = transactionalService(({ statement }) => {
+    if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
+    if (statement.includes('SELECT id, email, role, is_active FROM dbo.users')) {
+      return { recordset: [{ id: 11, email: 'staff@example.edu', role: 'registrar', is_active: true }] };
+    }
+    if (statement.includes('SELECT id FROM dbo.staff_profiles')) return { recordset: [{ id: 33 }] };
+    if (statement.startsWith('UPDATE dbo.users') || statement.startsWith('UPDATE dbo.students')
+      || statement.startsWith('UPDATE dbo.staff_profiles') || statement.includes('INSERT INTO dbo.audit_logs')) {
+      return { recordset: [] };
+    }
+    throw new Error(`Unexpected query: ${statement}`);
+  });
+
+  await service.updateUser(7, 11, {
+    email: 'teacher@example.edu', role: 'teacher', isActive: '1',
+    firstName: 'Taylor', lastName: 'Teacher', department: 'English'
+  });
+  assert.equal(log.committed, true);
+  const userUpdate = log.queries.find(({ statement }) => statement.startsWith('UPDATE dbo.users'));
+  const profileUpdate = log.queries.find(({ statement }) => statement.startsWith('UPDATE dbo.staff_profiles'));
+  assert.equal(userUpdate.values.role, 'teacher');
+  assert.equal(profileUpdate.values.firstName, 'Taylor');
+  assert.equal(profileUpdate.values.lastName, 'Teacher');
+});
+
 test('user search binds an escaped email/student-number pattern and validates its length', async () => {
   const calls = [];
   const pool = {

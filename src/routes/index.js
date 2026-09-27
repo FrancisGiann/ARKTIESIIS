@@ -18,10 +18,13 @@ const { createAdminRouter } = require('./admin');
 const { createStudentRecordsRouter } = require('./studentRecords');
 const { createAcademicRecordsRouter } = require('./academicRecords');
 const { createFinanceRouter } = require('./finance');
+const { createTeacherGradeSubmissionRouter, createRegistrarGradeSubmissionRouter } = require('./teacherGradeSubmissions');
 const { createDocumentsRouter } = require('./documents');
 const { createStudentRecordsService } = require('../services/studentRecordsService');
 const { createAcademicRecordsService } = require('../services/academicRecordsService');
 const { createFinanceService } = require('../services/financeService');
+const { createTeacherGradeSubmissionService } = require('../services/teacherGradeSubmissionService');
+const { createGradeImportService } = require('../services/gradeImportService');
 
 const credentialError = 'Invalid email or password.';
 // Fixed cost-12 hash for timing equalization; no account uses its discarded random source value.
@@ -29,6 +32,7 @@ const DUMMY_PASSWORD_HASH = '$2b$12$2GN3Hm/rogpWV12Ve9rA..0pPmX1b0nzDXo16QFiqYwS
 const dashboardViews = {
   database_admin: { path: '/admin', view: 'dashboards/database-admin', title: 'Database Admin Dashboard' },
   registrar: { path: '/dashboard/registrar', view: 'dashboards/registrar', title: 'Registrar Dashboard' },
+  teacher: { path: '/dashboard/teacher', view: 'dashboards/teacher', title: 'Teacher Dashboard' },
   finance: { path: '/finance', title: 'Finance Workspace' },
   student: { path: '/dashboard/student', view: 'dashboards/student', title: 'Student Dashboard' }
 };
@@ -48,11 +52,13 @@ async function verifyPassword(user, password, comparePassword = bcrypt.compare) 
   return Boolean(active && passwordMatches);
 }
 
-function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment = defaultEnvironment, twoFactorService = twoFactor, adminService, studentRecordsService, academicRecordsService, gradeImportService, financeService, documentService, documentProcessingService, form137ScanService } = {}) {
+function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment = defaultEnvironment, twoFactorService = twoFactor, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, documentService, documentProcessingService, form137ScanService } = {}) {
   const router = express.Router();
   const requireAuth = createRequireAuth({ getPool, sql, environment });
   const recordsService = studentRecordsService || createStudentRecordsService({ getPool, sql });
   const academicsService = academicRecordsService || createAcademicRecordsService({ getPool, sql });
+  const gradeImports = gradeImportService || createGradeImportService({ getPool, sql });
+  const teacherSubmissions = teacherGradeSubmissionService || createTeacherGradeSubmissionService({ getPool, sql, storageDirectory: environment.upload?.storageDirectory });
   const financesService = financeService || createFinanceService({ getPool, sql });
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -117,7 +123,9 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   router.use('/finance', requireAuth, requireRole('finance', 'database_admin'), createFinanceRouter({ getPool, sql, financeService: financesService }));
   router.use('/admin', requireAuth, requireRole('database_admin'), createAdminRouter({ getPool, sql, adminService }));
   router.use('/records', requireAuth, requireRole('database_admin', 'registrar'), createStudentRecordsRouter({ getPool, sql, studentRecordsService: recordsService }));
-  router.use('/records', requireAuth, requireRole('database_admin', 'registrar'), createAcademicRecordsRouter({ getPool, sql, academicRecordsService: academicsService, gradeImportService }));
+  router.use('/records', requireAuth, requireRole('database_admin', 'registrar'), createAcademicRecordsRouter({ getPool, sql, academicRecordsService: academicsService, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
+  router.use('/teacher/grades', requireAuth, requireRole('teacher'), createTeacherGradeSubmissionRouter({ getPool, sql, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
+  router.use('/registrar/grade-submissions', requireAuth, requireRole('registrar'), createRegistrarGradeSubmissionRouter({ getPool, sql, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
   router.use('/documents', requireAuth, createDocumentsRouter({ getPool, sql, environment, documentService, documentProcessingService, form137ScanService }));
 
   router.get('/', (req, res) => {
@@ -331,6 +339,19 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   router.get('/dashboard/database-admin', requireAuth, requireRole('database_admin'), (req, res) => res.redirect(303, '/admin'));
   router.get('/dashboard/finance', requireAuth, requireRole('finance'), (req, res) => res.redirect(303, '/finance'));
 
+  router.get('/dashboard/teacher', requireAuth, requireRole('teacher'), async (req, res) => {
+    try {
+      const assignments = await teacherSubmissions.listTeacherAssignments(req.authUser.id);
+      return res.render('dashboards/teacher', {
+        title: dashboardViews.teacher.title,
+        csrfToken: ensureCsrfToken(req),
+        assignments
+      });
+    } catch {
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'Teacher assignments are temporarily unavailable.' });
+    }
+  });
+
   router.get('/dashboard/student', requireAuth, requireRole('student'), async (req, res) => {
     try {
       const [ownRecords, summary] = await Promise.all([
@@ -352,7 +373,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   });
 
   for (const [role, dashboard] of Object.entries(dashboardViews)) {
-    if (role === 'database_admin' || role === 'finance' || role === 'student') continue;
+    if (role === 'database_admin' || role === 'finance' || role === 'student' || role === 'teacher') continue;
     router.get(dashboard.path, requireAuth, requireRole(role), async (req, res) => {
       try {
         const summary = await recordsService.getRegistrarDashboardSummary?.(req.authUser.id) || null;

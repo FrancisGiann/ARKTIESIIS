@@ -4,8 +4,9 @@ This implementation adds compact count summaries to the existing role workspaces
 
 ## Dashboard summaries
 
-- **Student:** own enrollment records, grade entries, permitted documents, and permitted documents still in processing or review. Every student count is scoped through `students.user_id = @actorId`; the document count includes Good Moral Certificates, report cards, and staff-uploaded PSA birth certificates. Form 137 remains a physical status workflow and is not counted as a stored document.
-- **Registrar:** active and archived student records, current enrolled records, documents awaiting staff review (`needs_review` or `failed`), and documents queued or processing OCR (`pending` or `processing`).
+- **Student:** own enrollment records, grade entries, permitted documents, and permitted documents still in processing or review. Every student count is scoped through `students.user_id = @actorId`; the document count includes only Good Moral Certificates and PSA birth certificates. Report cards are not student-accessible; legacy rows remain staff archive records. Form 137 remains a physical status workflow and is not counted as a stored document.
+- **Registrar:** active and archived student records, current enrolled records, documents awaiting staff review (`needs_review` or `failed`), documents queued or processing OCR (`pending` or `processing`), and pending teacher grade workbooks.
+- **Teacher:** assigned term/section/subject contexts, current enrolled roster counts, and each assignment's latest submission status.
 - **Finance:** financial account counts by positive, zero, and negative balance, plus recorded charge and payment counts. The existing finance route permits `finance` and `database_admin` roles; the service query checks the active actor against those same roles.
 - **Database administrator:** active/inactive user accounts, active/archived student records, and documents awaiting staff review. The summary query checks for an active `database_admin` actor.
 

@@ -17,18 +17,20 @@
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
   <section class="admin-section" aria-labelledby="submission-title">
-    <div class="admin-section__heading"><div><h2 id="submission-title">Submission</h2><p><% if (document.document_type === 'form_137') { %>This is a historical Form 137 file. New records use a separate physical status workflow; authorized staff may scan the paper for temporary local OCR suggestions. Scans and OCR results are not retained in that workflow.<% } else { %>The uploader selected the document type. OCR suggestions are advisory, and a registrar or database administrator must inspect the source file before making a decision.<% } %></p></div></div>
+    <div class="admin-section__heading"><div><h2 id="submission-title">Submission</h2><p><% if (document.isArchivedReportCard) { %>This historical report card is retained as a read-only archive file. New grades use the teacher workbook review workflow.<% } else if (document.document_type === 'form_137') { %>This is a historical Form 137 file. New records use a separate physical status workflow; authorized staff may scan the paper for temporary local OCR suggestions. Scans and OCR results are not retained in that workflow.<% } else { %>The uploader selected the document type. OCR suggestions are advisory, and a registrar or database administrator must inspect the source file before making a decision.<% } %></p></div></div>
     <dl class="student-profile-grid">
       <div><dt>File name</dt><dd><%= document.original_filename %></dd></div>
       <div><dt>File type</dt><dd><%= document.mime_type %></dd></div>
       <div><dt>File size</dt><dd><%= (Number(document.file_size_bytes) / 1048576).toFixed(2) %> MB</dd></div>
-      <div><dt>Status</dt><dd><%= documentStatusLabel(document.status, latestDecision?.decision_type, document.reviewEvents?.[0]?.action_type) %></dd></div>
+      <div><dt>Status</dt><dd><%= documentStatusLabel(document.status, latestDecision?.decision_type, document.reviewEvents?.[0]?.action_type, document.document_type) %></dd></div>
       <div><dt>Uploaded</dt><dd><%= document.created_at ? new Date(document.created_at).toLocaleString() : '—' %></dd></div>
       <div><dt>Submission version</dt><dd><%= document.supersedes_document_id ? `Corrected from submission #${document.supersedes_document_id}` : 'Original submission' %></dd></div>
     </dl>
   </section>
 
-  <% if (isStaff && document.document_type !== 'form_137') { %>
+  <% if (document.isArchivedReportCard) { %>
+    <section class="admin-section"><p class="muted-copy">This historical report card can be read and downloaded by authorized staff. It does not enter current OCR or document-review workflows.</p></section>
+  <% } else if (isStaff && document.document_type !== 'form_137') { %>
     <section class="admin-section" aria-labelledby="ocr-result-title">
       <div class="admin-section__heading"><div><h2 id="ocr-result-title">OCR result</h2><p>Extracted text is restricted to registrar and database administrator users. OCR does not determine document authenticity.</p></div></div>
       <% if (document.validation) { %>
@@ -54,7 +56,7 @@
     <section class="admin-section"><p class="muted-copy">This historical Form 137 file is available to authorized staff. Current status history is stored separately; temporary staff scan suggestions are returned only for inspection and are not saved as OCR data.</p></section>
   <% } %>
 
-  <% if (isStaff && document.document_type !== 'form_137' && ['needs_review', 'failed'].includes(document.status) && !['verified', 'rejected'].includes(latestDecision?.decision_type)) { %>
+  <% if (isStaff && !document.isArchivedReportCard && document.document_type !== 'form_137' && ['needs_review', 'failed'].includes(document.status) && !['verified', 'rejected'].includes(latestDecision?.decision_type)) { %>
     <section class="admin-section" aria-labelledby="review-actions-title">
       <div class="admin-section__heading"><div><h2 id="review-actions-title">Staff review decision</h2><p>Inspect the source document, then complete the checklist to record verification, request a corrected upload, or reject it. The checklist records staff observations and does not determine authenticity. <% if (document.validation?.requiresOverrideReason) { %>A reason is required to verify despite an OCR warning or failure.<% } %></p></div></div>
       <div class="document-review-actions">
@@ -76,7 +78,7 @@
         </form>
         <form class="form-stack document-review-action document-review-action--correction" method="post" action="/documents/<%= document.id %>/correction" data-submitting-message="Sending the correction instruction. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-          <div class="field"><label for="correction-instruction">Correction instruction <%= document.document_type === 'psa_birth_certificate' ? 'for staff' : 'for the student' %></label><textarea id="correction-instruction" name="instruction" rows="4" maxlength="1000" required></textarea></div>
+          <div class="field"><label for="correction-instruction">Correction instruction <%= document.document_type === 'report_card' || (document.document_type === 'psa_birth_certificate' && document.upload_source !== 'student') ? 'for staff' : 'for the student' %></label><textarea id="correction-instruction" name="instruction" rows="4" maxlength="1000" required></textarea></div>
           <button class="button button--secondary button--align-start" type="submit">Request correction</button>
         </form>
         <form class="form-stack document-review-action document-review-action--rejection" method="post" action="/documents/<%= document.id %>/decision" data-submitting-message="Recording the staff decision. Please wait.">
@@ -97,7 +99,8 @@
         </form>
       </section>
     <% } %>
-  <% } else if (correctionRequested && document.document_type !== 'psa_birth_certificate') { %>
+
+  <% } else if (!document.isArchivedReportCard && correctionRequested && (document.document_type !== 'psa_birth_certificate' || document.upload_source === 'student')) { %>
     <section class="admin-section" aria-labelledby="correction-title">
       <div class="admin-section__heading"><div><h2 id="correction-title">Correction requested</h2><p>Follow the instruction from staff, then upload the corrected file as a new submission.</p></div></div>
       <p class="form-alert" role="status"><%= latestDecision?.reason || document.reviewEvents[0]?.instruction %></p>
@@ -119,7 +122,7 @@
           <tbody><% for (const item of document.history) { %><tr>
             <td data-label="Submission">#<%= item.id %><% if (item.id === document.id) { %> · Current<% } else if (item.id === document.supersedes_document_id) { %> · Previous version<% } %></td>
             <td data-label="File"><%= item.original_filename %></td>
-            <td data-label="Status"><%= documentStatusLabel(item.status, item.latest_decision_type, item.latest_review_action) %></td>
+            <td data-label="Status"><%= documentStatusLabel(item.status, item.latest_decision_type, item.latest_review_action, document.document_type) %></td>
             <td data-label="Date"><%= item.created_at ? new Date(item.created_at).toLocaleString() : '—' %></td>
             <td data-label="Actions"><a class="table-action" href="/documents/<%= item.id %>">View</a> · <a class="table-action" href="/documents/<%= item.id %>/download">Download</a></td>
           </tr><% } %></tbody>
@@ -128,7 +131,7 @@
     <% } else { %><p class="empty-state">No related submissions are available.</p><% } %>
   </section>
 
-  <section class="admin-section" aria-labelledby="review-history-title">
+  <% if (!document.isArchivedReportCard) { %><section class="admin-section" aria-labelledby="review-history-title">
     <div class="admin-section__heading"><div><h2 id="review-history-title">Review history</h2><p>Handoffs, source inspection decisions, and correction instructions recorded for this submission.</p></div></div>
     <% if (document.decisions.length || document.reviewEvents.length) { %>
       <ul class="document-review-history">
@@ -145,6 +148,6 @@
         <% } %>
       </ul>
     <% } else { %><p class="empty-state">No review events have been recorded.</p><% } %>
-  </section>
+  </section><% } %>
 </main>
 <%- include('../partials/foot') %>

@@ -2,7 +2,7 @@ const bcrypt = require('bcrypt');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 
 const PASSWORD_HASH_ROUNDS = 12;
-const STAFF_ROLES = new Set(['database_admin', 'registrar', 'finance']);
+const STAFF_ROLES = new Set(['database_admin', 'registrar', 'finance', 'teacher']);
 const ROLES = new Set([...STAFF_ROLES, 'student']);
 
 class AdminServiceError extends Error {

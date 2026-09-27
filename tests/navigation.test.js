@@ -39,6 +39,9 @@ function createAuthPool(role) {
 
 function services({ ownStudentRecords = null } = {}) {
   return {
+    teacherGradeSubmissionService: {
+      async listTeacherAssignments() { return []; }
+    },
     adminService: {
       async listDashboard() {
         return {
@@ -136,8 +139,9 @@ function navigationLabels(html) {
 
 test('authenticated navigation only exposes destinations available to each role', async () => {
   const cases = [
-    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Audit activity', 'Student records', 'Documents', 'Subject catalog', 'Finance'], forbidden: [] },
-    { role: 'registrar', path: '/dashboard/registrar', labels: ['Overview', 'Student records', 'Documents', 'Subject catalog'], forbidden: ['/finance', '/admin'] },
+    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Audit activity', 'Student records', 'Documents', 'Subject catalog', 'Teacher assignments', 'Finance'], forbidden: [] },
+    { role: 'registrar', path: '/dashboard/registrar', labels: ['Overview', 'Student records', 'Documents', 'Subject catalog', 'Teacher assignments', 'Grade submissions'], forbidden: ['/finance', '/admin'] },
+    { role: 'teacher', path: '/dashboard/teacher', labels: ['My classes'], forbidden: ['/records', '/registrar/grade-submissions', '/finance', '/admin'] },
     { role: 'finance', path: '/finance', labels: ['Finance workspace'], forbidden: ['/records', '/documents', '/admin'] },
     { role: 'student', path: '/dashboard/student', labels: ['My record', 'My documents'], forbidden: ['/records', '/finance', '/admin'] }
   ];
@@ -172,6 +176,11 @@ test('authenticated navigation only exposes destinations available to each role'
         assert.match(html, /href="\/records"/);
         assert.match(html, /href="\/documents"/);
         assert.match(html, /href="\/records\/subjects"/);
+        assert.match(html, /href="\/registrar\/grade-submissions"/);
+      }
+      if (scenario.role === 'teacher') {
+        assert.match(html, /id="assigned-classes-title"/);
+        assert.match(html, /href="\/teacher\/grades"/);
       }
       if (scenario.role === 'finance') {
         assert.match(html, /class="finance-panel finance-overview-panel"/);

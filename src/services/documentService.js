@@ -6,8 +6,8 @@ const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database
 
 const ID_PATTERN = /^\d{1,10}$/;
 const STAFF_ROLES = new Set(['registrar', 'database_admin']);
-const STUDENT_DOCUMENT_TYPES = new Set(['good_moral', 'report_card']);
-const UPLOAD_DOCUMENT_TYPES = new Set(['good_moral', 'report_card', 'psa_birth_certificate']);
+const STUDENT_UPLOAD_DOCUMENT_TYPES = new Set(['good_moral', 'psa_birth_certificate']);
+const UPLOAD_DOCUMENT_TYPES = new Set(['good_moral', 'psa_birth_certificate']);
 const FORM137_STATUSES = new Set(['pending', 'received', 'verified', 'correction', 'rejected']);
 const MIME_BY_EXTENSION = new Map([
   ['.pdf', 'application/pdf'],
@@ -30,7 +30,6 @@ const OCR_MESSAGES = new Map([
   ['processor_error', 'The local OCR tools could not process this file. Staff review is required.']
 ]);
 const ADVISORY_KEYS_BY_TYPE = new Map([
-  ['report_card', ['linked_student_name', 'possible_school_name']],
   ['good_moral', ['linked_student_name', 'possible_school_name']],
   ['psa_birth_certificate', ['linked_student_name']]
 ]);
@@ -52,7 +51,6 @@ const ALL_PAGES_ITEM_V1 = {
 };
 const VERIFICATION_CHECKLIST_VERSION = 1;
 const VERIFICATION_CHECKLIST_ITEMS_V1 = new Map([
-  ['report_card', [LINKED_STUDENT_NAME_ITEM_V1, SCHOOL_NAME_ITEM_V1, DOCUMENT_TYPE_ITEM_V1, ALL_PAGES_ITEM_V1]],
   ['good_moral', [LINKED_STUDENT_NAME_ITEM_V1, SCHOOL_NAME_ITEM_V1, DOCUMENT_TYPE_ITEM_V1, ALL_PAGES_ITEM_V1]],
   ['psa_birth_certificate', [LINKED_STUDENT_NAME_ITEM_V1, DOCUMENT_TYPE_ITEM_V1, ALL_PAGES_ITEM_V1]]
 ]);
@@ -320,9 +318,9 @@ function createDocumentService({
   }
 
   function studentTypeAllowed(actor, documentType) {
-    if (documentType === 'form_137') return false;
+    if (documentType === 'form_137' || documentType === 'report_card') return false;
     return actor.role === 'student'
-      ? STUDENT_DOCUMENT_TYPES.has(documentType)
+      ? STUDENT_UPLOAD_DOCUMENT_TYPES.has(documentType)
       : UPLOAD_DOCUMENT_TYPES.has(documentType);
   }
 
@@ -368,9 +366,11 @@ function createDocumentService({
       if (!studentTypeAllowed(actor, documentType)) {
         const message = documentType === 'form_137'
           ? 'Form 137 is recorded as a physical document status and cannot be uploaded.'
+          : documentType === 'report_card'
+            ? 'Report cards are a historical archive. Submit new grades through the teacher workbook review workflow.'
           : actor.role === 'student'
-            ? 'Students may upload only Good Moral Certificates and report cards.'
-            : 'Staff may upload Good Moral Certificates, report cards, and PSA birth certificates.';
+            ? 'Students may upload Good Moral Certificates and PSA birth certificates for their own linked record. Report cards must be submitted by staff.'
+            : 'Staff may upload Good Moral Certificates and PSA birth certificates.';
         throw new DocumentServiceError(message, 403);
       }
 
@@ -404,18 +404,23 @@ function createDocumentService({
       const previousResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
         .input('actorId', sql.Int, actor.id)
-        .query(`SELECT d.id, d.student_id, d.document_type, d.status, s.user_id AS student_user_id
+        .query(`SELECT d.id, d.student_id, d.document_type, d.upload_source, d.status, s.user_id AS student_user_id
           FROM dbo.documents AS d WITH (UPDLOCK, HOLDLOCK)
           INNER JOIN dbo.students AS s WITH (UPDLOCK, HOLDLOCK) ON s.id = d.student_id
           WHERE d.id = @documentId`);
       const previous = previousResult.recordset?.[0];
       if (!previous) throw new DocumentServiceError('Document not found.', 404);
       if (actor.role === 'student'
-        && (previous.student_user_id !== actor.id || !STUDENT_DOCUMENT_TYPES.has(previous.document_type))) {
+        && (previous.student_user_id !== actor.id
+          || (previous.document_type === 'psa_birth_certificate' && previous.upload_source !== 'student')
+          || !STUDENT_UPLOAD_DOCUMENT_TYPES.has(previous.document_type))) {
         throw new DocumentServiceError('Document not found.', 404);
       }
       if (previous.document_type === 'form_137') {
         throw new DocumentServiceError('Form 137 is tracked through its physical status history; files cannot be re-uploaded.', 403);
+      }
+      if (previous.document_type === 'report_card') {
+        throw new DocumentServiceError('Historical report cards cannot be corrected or re-uploaded.', 403);
       }
 
       const decisionResult = await transaction.request()
@@ -468,7 +473,10 @@ function createDocumentService({
       .query(`SELECT TOP (200) d.id, d.student_id, d.document_type, d.original_filename,
           d.mime_type, d.file_size_bytes, d.status, d.supersedes_document_id, d.created_at,
           s.student_no, s.first_name, s.middle_name, s.last_name,
-          latest.action_type AS latest_review_action, latest.instruction AS latest_review_instruction,
+          latest.action_type AS latest_review_action,
+          CASE WHEN EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+              OR d.document_type <> 'psa_birth_certificate' OR d.upload_source = 'student'
+            THEN latest.instruction ELSE NULL END AS latest_review_instruction,
           latest.created_at AS latest_review_at, latest_decision.decision_type AS latest_decision_type
         FROM dbo.documents AS d
         INNER JOIN dbo.students AS s ON s.id = d.student_id
@@ -491,8 +499,7 @@ function createDocumentService({
         ) OR (
           EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role = 'student')
           AND s.user_id = @actorId AND (
-            d.document_type IN ('good_moral', 'report_card')
-            OR (d.document_type = 'psa_birth_certificate' AND d.upload_source IN ('registrar', 'database_admin'))
+            d.document_type IN ('good_moral', 'psa_birth_certificate')
           )
         )
         ORDER BY d.created_at DESC, d.id DESC`);
@@ -584,14 +591,12 @@ function createDocumentService({
         WHERE d.id = @documentId
           AND (EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
             OR (EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role = 'student')
-              AND s.user_id = @actorId AND (
-                d.document_type IN ('good_moral', 'report_card')
-                OR (d.document_type = 'psa_birth_certificate' AND d.upload_source IN ('registrar', 'database_admin'))
-              )))`);
+              AND s.user_id = @actorId AND d.document_type IN ('good_moral', 'psa_birth_certificate')))`);
     const document = documentResult.recordset?.[0];
     if (!document) return null;
 
-    const validationPromise = STAFF_ROLES.has(actor.role) && document.document_type !== 'form_137'
+    const archivedReportCard = document.document_type === 'report_card';
+    const validationPromise = STAFF_ROLES.has(actor.role) && document.document_type !== 'form_137' && !archivedReportCard
       ? pool.request()
         .input('documentId', sql.Int, documentId)
         .input('actorId', sql.Int, actor.id)
@@ -605,7 +610,9 @@ function createDocumentService({
     const visibleReviewer = STAFF_ROLES.has(actor.role)
       ? "COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(p.first_name, N' ', p.last_name))), N''), CONCAT(N'Staff ', e.reviewer_id))"
       : 'CAST(NULL AS NVARCHAR(201))';
-    const reviewHistorySql = STAFF_ROLES.has(actor.role)
+    const reviewHistorySql = archivedReportCard
+      ? 'SELECT CAST(NULL AS INT) AS id WHERE 1 = 0'
+      : STAFF_ROLES.has(actor.role)
       ? `SELECT e.id, e.action_type, e.instruction, e.created_at,
           e.reviewer_id, COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(p.first_name, N' ', p.last_name))), N''), CONCAT(N'Staff ', e.reviewer_id)) AS reviewer_name
         FROM dbo.document_review_events AS e
@@ -615,15 +622,19 @@ function createDocumentService({
           CAST(NULL AS INT) AS reviewer_id, CAST(NULL AS NVARCHAR(201)) AS reviewer_name
         FROM dbo.document_review_events AS e
         WHERE e.document_id = @documentId AND e.action_type = 'correction_requested'
-          AND @documentType <> 'psa_birth_certificate'
+          AND (@documentType <> 'psa_birth_certificate' OR @uploadSource = 'student')
         ORDER BY e.created_at DESC, e.id DESC`;
-    const decisionHistorySql = STAFF_ROLES.has(actor.role)
+    const decisionHistorySql = archivedReportCard
+      ? 'SELECT CAST(NULL AS INT) AS id WHERE 1 = 0'
+      : STAFF_ROLES.has(actor.role)
       ? `SELECT e.id, e.decision_type, e.reason, e.verification_checklist_json, e.created_at, ${visibleReviewer} AS reviewer_name
         FROM dbo.document_decision_events AS e
         LEFT JOIN dbo.staff_profiles AS p ON p.user_id = e.reviewer_id
         WHERE e.document_id = @documentId ORDER BY e.created_at DESC, e.id DESC`
       : `SELECT e.id, e.decision_type,
-          CASE WHEN e.decision_type = 'correction_requested' AND @documentType <> 'psa_birth_certificate' THEN e.reason ELSE NULL END AS reason,
+          CASE WHEN e.decision_type = 'correction_requested'
+              AND (@documentType <> 'psa_birth_certificate' OR @uploadSource = 'student')
+            THEN e.reason ELSE NULL END AS reason,
           CAST(NULL AS NVARCHAR(500)) AS verification_checklist_json,
           e.created_at,
           CAST(NULL AS NVARCHAR(201)) AS reviewer_name
@@ -652,18 +663,21 @@ function createDocumentService({
             ORDER BY latest_decision_event.created_at DESC, latest_decision_event.id DESC
           ) AS latest_decision
           WHERE history_document.student_id = @studentId AND history_document.document_type = @documentType
-            AND (history_document.document_type <> 'psa_birth_certificate'
-              OR EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND role IN ('registrar', 'database_admin'))
-              OR history_document.upload_source IN ('registrar', 'database_admin'))
+            AND (EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+              OR EXISTS (SELECT 1 FROM dbo.students AS history_student
+                WHERE history_student.id = history_document.student_id AND history_student.user_id = @actorId
+                  AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role = 'student')))
           ORDER BY history_document.created_at DESC, history_document.id DESC`),
       pool.request()
         .input('documentId', sql.Int, documentId)
         .input('documentType', sql.NVarChar(50), document.document_type)
+        .input('uploadSource', sql.NVarChar(30), document.upload_source)
         .query(reviewHistorySql),
       validationPromise,
       pool.request()
         .input('documentId', sql.Int, documentId)
         .input('documentType', sql.NVarChar(50), document.document_type)
+        .input('uploadSource', sql.NVarChar(30), document.upload_source)
         .query(decisionHistorySql)
     ]);
     const validationRow = validationResult.recordset?.[0];
@@ -702,6 +716,7 @@ function createDocumentService({
       reviewEvents: eventsResult.recordset || [],
       decisions,
       validation,
+      isArchivedReportCard: archivedReportCard,
       isStaff: STAFF_ROLES.has(actor.role)
     };
   }
@@ -727,6 +742,9 @@ function createDocumentService({
       if (!document) throw new DocumentServiceError('Document not found.', 404);
       if (document.document_type === 'form_137') {
         throw new DocumentServiceError('Form 137 uses the physical status workflow.', 409);
+      }
+      if (document.document_type === 'report_card') {
+        throw new DocumentServiceError('Historical report cards are read-only archive records.', 409);
       }
       await transaction.request()
         .input('documentId', sql.Int, documentId)
@@ -777,6 +795,9 @@ function createDocumentService({
       if (!document) throw new DocumentServiceError('Document not found.', 404);
       if (document.document_type === 'form_137') {
         throw new DocumentServiceError('Form 137 uses the physical status workflow.', 409);
+      }
+      if (document.document_type === 'report_card') {
+        throw new DocumentServiceError('Historical report cards are read-only archive records.', 409);
       }
       if (!['needs_review', 'failed'].includes(document.status)) {
         throw new DocumentServiceError('The document must finish OCR before staff review.', 409);

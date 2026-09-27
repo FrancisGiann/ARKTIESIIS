@@ -4,13 +4,8 @@ const { advisoryChecks } = require('../src/services/documentValidationService');
 
 const student = { first_name: 'Jamie', last_name: 'Garcia' };
 
-test('report card OCR retains linked-name and possible-school suggestions without grade-entry suggestions', () => {
-  const checks = advisoryChecks('report_card', 'JAMIE GARCIA\nOther Academy\nMathematics 150\nScience B+', student);
-  assert.deepEqual(checks.map(({ key, found }) => [key, found]), [
-    ['linked_student_name', true],
-    ['possible_school_name', true]
-  ]);
-  assert.deepEqual(checks[1].candidates, ['Other Academy']);
+test('legacy report cards have no active OCR advisory checks', () => {
+  assert.deepEqual(advisoryChecks('report_card', 'JAMIE GARCIA\nOther Academy\nMathematics 150', student), []);
 });
 
 test('Good Moral and PSA checks are limited to their leader-directed advisory clues', () => {
@@ -24,7 +19,7 @@ test('Good Moral and PSA checks are limited to their leader-directed advisory cl
 });
 
 test('digital document name clues compare linked first and last names on one OCR line', () => {
-  for (const documentType of ['report_card', 'good_moral', 'psa_birth_certificate']) {
+  for (const documentType of ['good_moral', 'psa_birth_certificate']) {
     const getNameMatch = (text) => advisoryChecks(documentType, text, student)
       .find(({ key }) => key === 'linked_student_name').found;
 
@@ -39,7 +34,7 @@ test('digital document name clues compare linked first and last names on one OCR
 
 test('school-name candidate lines are capped and bounded before staff views render them', () => {
   const longLine = `Private School ${'x'.repeat(500)}`;
-  const checks = advisoryChecks('report_card', `Jamie Garcia\n${longLine}\nAnother College\nThird Institute\nFourth Academy\nMathematics 150`, student);
+  const checks = advisoryChecks('good_moral', `Jamie Garcia\n${longLine}\nAnother College\nThird Institute\nFourth Academy\nMathematics 150`, student);
   assert.equal(checks[1].candidates.length, 3);
   assert.ok(checks[1].candidates.every((candidate) => candidate.length <= 200));
 });

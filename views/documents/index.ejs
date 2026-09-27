@@ -3,7 +3,7 @@
   <section class="dashboard-heading">
     <div>
       <h1><%= isStaff ? 'Document management' : 'My documents' %></h1>
-      <p><%= isStaff ? 'Search submissions and open a student record to upload or review documents.' : 'View document status and upload Good Moral Certificates or report cards for your own record.' %></p>
+      <p><%= isStaff ? 'Search submissions and open a student record to upload or review documents.' : 'Upload Good Moral Certificates or a PSA birth certificate for your own record.' %></p>
     </div>
     <% if (isStaff) { %><a class="button button--primary" href="/records">Find a student</a><% } %>
   </section>
@@ -65,7 +65,7 @@
                 <% if (isStaff) { %><td data-label="Student"><%= document.student_no %> · <%= [document.first_name, document.middle_name, document.last_name].filter(Boolean).join(' ') %></td><% } %>
                 <td data-label="Document"><%= documentTypeLabel(document.document_type) %><% if (document.supersedes_document_id) { %><br><span class="muted-copy">Corrected submission</span><% } %></td>
                 <td data-label="File"><%= document.original_filename %></td>
-                <td data-label="Status"><%= documentStatusLabel(document.status, document.latest_decision_type, document.latest_review_action) %></td>
+                <td data-label="Status"><%= documentStatusLabel(document.status, document.latest_decision_type, document.latest_review_action, document.document_type) %></td>
                 <td data-label="Submitted"><%= document.created_at ? new Date(document.created_at).toLocaleString() : '—' %></td>
                 <td data-label="Actions"><a class="table-action" href="/documents/<%= document.id %>">View details</a></td>
               </tr>

@@ -325,15 +325,11 @@ function createStudentRecordsService({
           (SELECT COUNT_BIG(*) FROM dbo.documents AS d
             INNER JOIN dbo.students AS s ON s.id = d.student_id
             WHERE s.user_id = @actorId
-              AND (d.document_type IN ('good_moral', 'report_card')
-                OR (d.document_type = 'psa_birth_certificate'
-                  AND d.upload_source IN ('registrar', 'database_admin')))) AS document_count,
+              AND d.document_type IN ('good_moral', 'psa_birth_certificate')) AS document_count,
           (SELECT COUNT_BIG(*) FROM dbo.documents AS d
             INNER JOIN dbo.students AS s ON s.id = d.student_id
             WHERE s.user_id = @actorId
-              AND (d.document_type IN ('good_moral', 'report_card')
-                OR (d.document_type = 'psa_birth_certificate'
-                  AND d.upload_source IN ('registrar', 'database_admin')))
+              AND d.document_type IN ('good_moral', 'psa_birth_certificate')
               AND d.status IN ('pending', 'processing', 'needs_review', 'failed')) AS documents_in_progress_count
         WHERE EXISTS (SELECT 1 FROM dbo.users
           WHERE id = @actorId AND role = 'student' AND is_active = 1)`);

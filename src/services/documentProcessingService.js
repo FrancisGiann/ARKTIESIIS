@@ -124,7 +124,7 @@ function createDocumentProcessingService({
           SET status = 'processing', processing_started_at = SYSUTCDATETIME()
           OUTPUT INSERTED.id AS id, INSERTED.stored_filename AS stored_filename,
             INSERTED.mime_type AS mime_type, INSERTED.document_type AS document_type
-          WHERE id = @documentId AND status = 'pending' AND document_type <> 'form_137'`);
+          WHERE id = @documentId AND status = 'pending' AND document_type NOT IN ('form_137', 'report_card')`);
       const document = result.recordset?.[0];
       if (!document) return null;
       return loadStudentName(transaction, document);
@@ -146,7 +146,7 @@ function createDocumentProcessingService({
         .query(`;WITH next_pending AS (
             SELECT TOP (1) id
             FROM dbo.documents WITH (UPDLOCK, READPAST, READCOMMITTEDLOCK)
-            WHERE status = 'pending' AND document_type <> 'form_137'
+            WHERE status = 'pending' AND document_type NOT IN ('form_137', 'report_card')
             ORDER BY created_at, id
           )
           UPDATE d
@@ -290,7 +290,7 @@ function createDocumentProcessingService({
           ;WITH stale_documents AS (
             SELECT TOP (@batchSize) id
             FROM dbo.documents WITH (UPDLOCK, HOLDLOCK, ROWLOCK)
-            WHERE status = 'processing' AND document_type <> 'form_137'
+            WHERE status = 'processing' AND document_type NOT IN ('form_137', 'report_card')
               AND (processing_started_at IS NULL
                 OR processing_started_at < DATEADD(MILLISECOND, -@staleAfterMs, SYSUTCDATETIME()))
             ORDER BY CASE WHEN processing_started_at IS NULL THEN 0 ELSE 1 END,
