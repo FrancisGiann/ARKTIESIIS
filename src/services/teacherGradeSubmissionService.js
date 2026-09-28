@@ -26,7 +26,7 @@ function normalizeId(value) {
 }
 
 function normalizeUuid(value) {
-  return typeof value === 'string' && UUID_PATTERN.test(value) ? value : null;
+  return typeof value === 'string' && UUID_PATTERN.test(value) ? value.toLowerCase() : null;
 }
 
 function cleanFilename(value) {
@@ -156,19 +156,51 @@ function createTeacherGradeSubmissionService({
     }));
   }
 
-  async function listAssignmentOptions(actorId) {
+  async function listAssignmentOptions(actorId, filterInput = {}) {
     const pool = await getPool();
     await requireActor(pool.request(), actorId, ['database_admin', 'registrar']);
-    const [terms, sections, subjects, teachers, assignments] = await Promise.all([
-      pool.request().query('SELECT id, school_year, term FROM dbo.academic_terms ORDER BY school_year DESC, term'),
-      pool.request().query(`SELECT sec.id, sec.academic_term_id, sec.name, sec.grade_level, term.school_year, term.term
-        FROM dbo.sections AS sec INNER JOIN dbo.academic_terms AS term ON term.id = sec.academic_term_id
-        ORDER BY term.school_year DESC, term.term, sec.grade_level, sec.name`),
+    const filters = typeof filterInput === 'string' ? { termId: filterInput } : filterInput || {};
+    const termInput = filters.termId ?? '';
+    const sectionInput = filters.sectionId ?? '';
+    const requestedTermId = termInput === '' ? null : normalizeId(termInput);
+    const requestedSectionId = sectionInput === '' ? null : normalizeId(sectionInput);
+    if ((termInput !== '' && !requestedTermId) || (sectionInput !== '' && !requestedSectionId)) {
+      throw new TeacherGradeSubmissionError('Choose a valid term and section filter.');
+    }
+    const termsResult = await pool.request().query(`SELECT id, school_year, term, is_current
+      FROM dbo.academic_terms ORDER BY is_current DESC, id DESC`);
+    const terms = termsResult.recordset || [];
+    if (requestedTermId && !terms.some((term) => Number(term.id) === requestedTermId)) {
+      throw new TeacherGradeSubmissionError('Choose a valid academic term.');
+    }
+    const selectedTermId = requestedTermId
+      || terms.find((term) => term.is_current === true || term.is_current === 1)?.id
+      || terms[0]?.id
+      || null;
+    const [sectionResult, subjects, teachers] = await Promise.all([
+      selectedTermId
+        ? pool.request().input('termId', sql.Int, selectedTermId).query(`SELECT sec.id, sec.academic_term_id,
+            sec.name, sec.grade_level, term.school_year, term.term
+          FROM dbo.sections AS sec INNER JOIN dbo.academic_terms AS term ON term.id = sec.academic_term_id
+          WHERE sec.academic_term_id = @termId ORDER BY sec.grade_level, sec.name`)
+        : Promise.resolve({ recordset: [] }),
       pool.request().query('SELECT id, subject_code, subject_name FROM dbo.subjects ORDER BY subject_code'),
       pool.request().query(`SELECT u.id, u.email, sp.first_name, sp.last_name
         FROM dbo.users AS u INNER JOIN dbo.staff_profiles AS sp ON sp.user_id = u.id
-        WHERE u.role = N'teacher' AND u.is_active = 1 ORDER BY sp.last_name, sp.first_name`),
-      pool.request().query(`SELECT a.id, a.teacher_id, a.academic_term_id, a.section_id, a.subject_id,
+        WHERE u.role = N'teacher' AND u.is_active = 1 ORDER BY sp.last_name, sp.first_name`)
+    ]);
+    const sections = sectionResult.recordset || [];
+    const selectedSection = requestedSectionId
+      ? sections.find((section) => Number(section.id) === requestedSectionId)
+      : null;
+    const selectedSectionId = selectedSection?.id || null;
+    const sectionFilterNotice = requestedSectionId && !selectedSection
+      ? 'That section belongs to a different term. Choose a section from the selected term.'
+      : null;
+    const assignmentsResult = await pool.request()
+      .input('termId', sql.Int, selectedTermId)
+      .input('sectionId', sql.Int, selectedSectionId)
+      .query(`SELECT a.id, a.teacher_id, a.academic_term_id, a.section_id, a.subject_id,
           a.is_active, a.created_at, a.revoked_at, t.school_year, t.term, sec.name AS section_name,
           sec.grade_level, sub.subject_code, sub.subject_name, sp.first_name, sp.last_name,
           (SELECT COUNT_BIG(*) FROM dbo.enrollments AS e
@@ -183,11 +215,11 @@ function createTeacherGradeSubmissionService({
         INNER JOIN dbo.sections AS sec ON sec.id = a.section_id AND sec.academic_term_id = a.academic_term_id
         INNER JOIN dbo.subjects AS sub ON sub.id = a.subject_id
         INNER JOIN dbo.staff_profiles AS sp ON sp.user_id = a.teacher_id
-        ORDER BY a.is_active DESC, t.school_year DESC, t.term, sec.grade_level, sec.name, sub.subject_code`)
-    ]);
+        WHERE a.academic_term_id = @termId AND (@sectionId IS NULL OR a.section_id = @sectionId)
+        ORDER BY a.is_active DESC, t.school_year DESC, t.term, sec.grade_level, sec.name, sub.subject_code`);
     return {
-      terms: terms.recordset || [], sections: sections.recordset || [], subjects: subjects.recordset || [],
-      teachers: teachers.recordset || [], assignments: assignments.recordset || []
+      terms, sections, subjects: subjects.recordset || [], teachers: teachers.recordset || [],
+      assignments: assignmentsResult.recordset || [], selectedTermId, selectedSectionId, sectionFilterNotice
     };
   }
 
@@ -404,6 +436,17 @@ function createTeacherGradeSubmissionService({
         } else if (previousSubmissionId) {
           throw new TeacherGradeSubmissionError('The selected correction request is no longer available.', 409);
         }
+        const storedRowsResult = await transaction.request()
+          .input('previewId', sql.UniqueIdentifier, preview.id)
+          .query(`SELECT source_row, lrn_fingerprint
+            FROM dbo.grade_import_preview_rows WITH (UPDLOCK, HOLDLOCK)
+            WHERE preview_id = @previewId`);
+        const fingerprintBySourceRow = new Map((storedRowsResult.recordset || [])
+          .map((row) => [row.source_row, row.lrn_fingerprint]));
+        if (fingerprintBySourceRow.size !== preview.rows.length
+          || preview.rows.some((row) => row.studentId && !fingerprintBySourceRow.get(row.sourceRow))) {
+          throw new TeacherGradeSubmissionError('This workbook preview is incomplete. Upload the workbook again.', 409);
+        }
         const workbookContext = {
           gradeLevel: preview.workbookGradeLevel,
           sectionName: preview.workbookSectionName,
@@ -446,7 +489,7 @@ function createTeacherGradeSubmissionService({
             .input('studentNo', sql.NVarChar(50), row.studentNo || null)
             .input('workbookName', sql.NVarChar(200), row.workbookName || null)
             .input('studentName', sql.NVarChar(200), row.studentName || null)
-            .input('lrnFingerprint', sql.Char(64), row.lrnFingerprint || null)
+            .input('lrnFingerprint', sql.Char(64), fingerprintBySourceRow.get(row.sourceRow) || null)
             .input('nameMismatch', sql.Bit, Boolean(row.nameMismatch))
             .input('issue', sql.NVarChar(500), row.issue || null)
             .query(`INSERT INTO dbo.teacher_grade_submission_rows

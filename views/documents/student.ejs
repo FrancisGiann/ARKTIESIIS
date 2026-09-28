@@ -1,5 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page records-page" id="main-content">
+  <% const blockedNewOriginalTypeSet = new Set(blockedNewOriginalTypes || []); %>
+  <% const availableDocumentTypes = documentTypes.filter(({ value }) => !blockedNewOriginalTypeSet.has(value)); %>
   <section class="dashboard-heading">
     <div>
       <h1>Documents · <%= student.student_no %></h1>
@@ -8,11 +10,37 @@
     <a class="button button--secondary" href="/documents">All documents</a>
   </section>
 
-  <% if (notice) { %><p class="form-success" role="status"><%= notice === 'form137StatusRecorded' ? 'Form 137 status recorded.' : notice %></p><% } %>
+  <% if (notice) { %><p class="form-success" role="status"><%= notice === 'form137StatusRecorded' ? 'Form 137 status recorded.' : notice === 'previousSchoolReportCardStatusRecorded' ? 'Previous-school report-card paper status recorded.' : notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
+  <section class="admin-section" aria-labelledby="previous-school-report-card-status-title">
+    <div class="admin-section__heading"><div><h2 id="previous-school-report-card-status-title">Previous-school report-card paper copy</h2><p>Track the separate paper copy brought to school. This does not review the uploaded scan or change current grades.</p></div></div>
+    <% const paperReportCardStatusLabels = { not_recorded: 'Not recorded', pending: 'Pending', received: 'Received', verified: 'Checked by staff', correction: 'Clearer or replacement copy requested', rejected: 'Not accepted for this requirement' }; %>
+    <p><strong>Paper-copy status:</strong> <%= paperReportCardStatusLabels[previousSchoolReportCardPhysicalStatus?.status || 'not_recorded'] || 'Not recorded' %></p>
+    <% if (previousSchoolReportCardPhysicalStatus?.instruction) { %><p class="form-alert" role="status"><%= previousSchoolReportCardPhysicalStatus.instruction %></p><% } %>
+    <% if (previousSchoolReportCardPhysicalStatus?.created_at) { %><p class="muted-copy">Updated <%= new Date(previousSchoolReportCardPhysicalStatus.created_at).toLocaleString() %></p><% } %>
+    <% if (previousSchoolReportCardPhysicalStatusHistory.length) { %>
+      <ul class="document-review-history"><% for (const item of previousSchoolReportCardPhysicalStatusHistory) { %><li>
+        <strong><%= paperReportCardStatusLabels[item.status] || 'Status updated' %></strong>
+        <span><%= item.created_at ? new Date(item.created_at).toLocaleString() : '—' %> · <%= item.recorded_by_name %></span>
+        <% if (item.instruction) { %><p><%= item.instruction %></p><% } %>
+      </li><% } %></ul>
+    <% } %>
+    <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/previous-school-report-card-status" data-submitting-message="Saving the paper-copy status. Please wait.">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <div class="admin-form-grid">
+        <div class="field"><label for="previous-school-report-card-status">Record paper-copy status</label><select id="previous-school-report-card-status" name="status" required>
+          <option value="pending">Pending</option><option value="received">Received</option><option value="verified">Checked by staff</option><option value="correction">Clearer or replacement copy needed</option><option value="rejected">Not accepted for this requirement</option>
+        </select></div>
+        <div class="field"><label for="previous-school-report-card-instruction">Staff note or instruction</label><textarea id="previous-school-report-card-instruction" name="instruction" rows="3" maxlength="1000"></textarea></div>
+      </div>
+      <p class="muted-copy">A note is required for “Clearer or replacement copy needed.” This paper record is separate from the digital upload.</p>
+      <button class="button button--secondary button--align-start" type="submit">Save paper-copy status</button>
+    </form>
+  </section>
+
   <section class="admin-section" aria-labelledby="form137-status-title">
-    <div class="admin-section__heading"><div><h2 id="form137-status-title">Form 137 physical record</h2><p>Scanning sends the paper's file bytes to this server for temporary local OCR. The temporary file is deleted after processing; neither the scan nor extracted OCR text is stored in the document record or database. Only the human-recorded status and instruction are saved. Inspect the physical paper before deciding.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="form137-status-title">Form 137 physical record</h2><p>Form 137 remains a separate staff-only physical-status workflow. Authorized staff can send a temporary scan to Google Gemini for student-name and possible school-name suggestions. The scan is processed in memory and is not stored by this application as a file or database record. Only the human-recorded status and instruction are saved. Inspect the physical paper before deciding.</p></div></div>
     <p><strong>Current status:</strong> <%= form137Status.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></p>
     <% if (form137Status.instruction) { %><p class="form-alert" role="status"><%= form137Status.instruction %></p><% } %>
     <% if (form137Status.created_at) { %><p class="muted-copy">Updated <%= new Date(form137Status.created_at).toLocaleString() %></p><% } %>
@@ -38,7 +66,7 @@
     </form>
     <% if (form137Scan) { %>
       <section class="admin-section" aria-labelledby="form137-scan-result-title">
-        <div class="admin-section__heading"><div><h3 id="form137-scan-result-title">Temporary OCR suggestions</h3><p>These suggestions come from this scan response only. They do not prove authenticity, completeness, or acceptance. Inspect the paper original and record a human status above.</p></div></div>
+        <div class="admin-section__heading"><div><h3 id="form137-scan-result-title">Temporary Gemini suggestions</h3><p>These suggestions come from this scan response only. They do not prove authenticity, completeness, or acceptance. Inspect the paper original and record a human status above.</p></div></div>
         <% if (form137Scan.status === 'completed') { %><p class="form-success" role="status"><%= form137Scan.message %></p>
           <ul class="document-review-history"><% for (const suggestion of form137Scan.suggestions) { %><li>
             <strong><%= suggestion.label %></strong>
@@ -51,19 +79,20 @@
     <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/form137-scan" enctype="multipart/form-data" data-submitting-message="Processing this temporary scan for suggestions. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="field"><label for="form137-scan-file">Temporary scan of the physical Form 137</label><input id="form137-scan-file" name="form137Scan" type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" aria-describedby="form137-scan-help" required></div>
-      <p class="muted-copy" id="form137-scan-help">Accepted formats: PDF, JPEG, and PNG. Maximum size: <%= uploadMaxMb %> MB. A PDF may contain up to <%= typeof ocrMaxPdfPages === 'number' ? ocrMaxPdfPages : 20 %> pages.</p>
-      <button class="button button--secondary button--align-start" type="submit">Scan temporarily for suggestions</button>
+      <p class="muted-copy" id="form137-scan-help">Accepted formats: PDF, JPEG, and PNG. Maximum size: <%= uploadMaxMb %> MB. File bytes are sent to Google Gemini for field suggestions and are not retained by this application.</p>
+      <button class="button button--secondary button--align-start" type="submit">Send temporary scan for suggestions</button>
     </form>
   </section>
 
   <section class="admin-section" aria-labelledby="upload-title">
-    <div class="admin-section__heading"><div><h2 id="upload-title">Upload a document</h2><p id="upload-format-help">Accepted file formats: PDF, JPEG, and PNG. Maximum size: <%= uploadMaxMb %> MB.</p></div></div>
+        <div class="admin-section__heading"><div><h2 id="upload-title">Upload a digital document</h2><p id="upload-format-help">Accepted file formats: PDF, JPEG, and PNG. Maximum size: <%= uploadMaxMb %> MB. Good Moral and PSA files receive configured field prechecks. A previous-school report-card scan receives a limited visible-name and file-format precheck, then staff review for the enrollment requirement; grades are not extracted or changed. The paper-copy status above is recorded separately. Upload a correction when staff requests one. If staff rejects the latest submission, you can start a new original submission; earlier submissions stay in the student’s history.</p></div></div>
+    <% if (availableDocumentTypes.length) { %>
     <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>" enctype="multipart/form-data" data-submitting-message="Uploading the document. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="admin-form-grid">
         <div class="field">
           <label for="document-type">Document type</label>
-          <select id="document-type" name="documentType" aria-describedby="upload-format-help" required><option value="">Choose a document type</option><% for (const type of documentTypes) { %><option value="<%= type.value %>"><%= type.label %></option><% } %></select>
+          <select id="document-type" name="documentType" aria-describedby="upload-format-help" required><option value="">Choose a document type</option><% for (const type of availableDocumentTypes) { %><option value="<%= type.value %>"><%= type.label %></option><% } %></select>
         </div>
         <div class="field">
           <label for="document-file">File</label>
@@ -72,6 +101,9 @@
       </div>
       <button class="button button--primary button--align-start" type="submit">Upload document</button>
     </form>
+    <% } else { %>
+      <p class="empty-state">Each allowed document type has a latest submission that was not rejected. Open it to review its status or upload a correction requested by staff.</p>
+    <% } %>
   </section>
 
   <section class="admin-section" aria-labelledby="history-title">
@@ -83,7 +115,7 @@
           <tbody><% for (const document of documents) { %><tr>
             <td data-label="Document"><%= documentTypeLabel(document.document_type) %><% if (document.supersedes_document_id) { %><br><span class="muted-copy">Corrected submission</span><% } %></td>
             <td data-label="File"><%= document.original_filename %></td>
-            <td data-label="Status"><%= documentStatusLabel(document.status, document.latest_decision_type, document.latest_review_action, document.document_type) %></td>
+            <td data-label="Status"><%= documentStatusLabel(document.status, document.latest_decision_type, document.latest_review_action, document.document_type, document.is_legacy_archive) %></td>
             <td data-label="Submitted"><%= document.created_at ? new Date(document.created_at).toLocaleString() : '—' %></td>
             <td data-label="Actions"><a class="table-action" href="/documents/<%= document.id %>">View details</a></td>
           </tr><% } %></tbody>

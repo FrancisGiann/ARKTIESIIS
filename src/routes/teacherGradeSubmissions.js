@@ -46,8 +46,8 @@ function createTeacherGradeSubmissionRouter({ gradeImportService, teacherGradeSu
   router.get('/', async (req, res) => {
     try {
       const assignments = await service.listTeacherAssignments(req.authUser.id);
-      return res.render('dashboards/teacher', {
-        title: 'Teacher Dashboard', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), assignments
+      return res.render('records/teacher-grade-assignment-list', {
+        title: 'Submit grades', currentUser: req.authUser, assignments
       });
     } catch {
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'Teacher assignments are temporarily unavailable.' });

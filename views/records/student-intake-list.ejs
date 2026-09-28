@@ -1,0 +1,36 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page admin-page records-page" id="main-content">
+  <a class="context-back" href="/registrar/records">Back to student records</a>
+  <section class="dashboard-heading">
+    <div><h1>Student enrollment intake</h1><p>Review each pending enrollment and finalize it after finance clears that enrollment.</p></div>
+    <div class="admin-heading-actions"><a class="button button--primary" href="/registrar/intake/new">Start new intake</a></div>
+  </section>
+  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+
+  <section class="admin-section" aria-labelledby="pending-intakes-title">
+    <div class="admin-section__heading"><div><h2 id="pending-intakes-title">Pending enrollments</h2><p>Finance clearance status is shown without finance transaction details.</p></div></div>
+    <% if (pendingIntakes.length) { %>
+      <div class="table-scroll" tabindex="0" aria-label="Pending student enrollments">
+        <table class="admin-table">
+          <thead><tr><th scope="col">Student</th><th scope="col">Contact email</th><th scope="col">Term and section</th><th scope="col">Finance clearance</th><th scope="col"><span class="visually-hidden">Action</span></th></tr></thead>
+          <tbody><% for (const intake of pendingIntakes) { %><tr>
+            <td data-label="Student"><strong><%= [intake.first_name, intake.middle_name, intake.last_name, intake.suffix].filter(Boolean).join(' ') %></strong><br><%= intake.student_no %></td>
+            <td data-label="Contact email"><%= intake.email %></td>
+            <td data-label="Term and section"><%= intake.school_year %> · <%= intake.term %><br><%= intake.section_name || 'No section' %></td>
+            <td data-label="Finance clearance"><%= intake.clearance_status === 'cleared' ? 'Cleared' : 'Pending' %></td>
+            <td data-label="Action">
+              <% if (intake.clearance_status === 'cleared') { %>
+                <form method="post" action="/registrar/intake/<%= intake.enrollment_id %>/finalize" data-submitting-message="Finalizing enrollment and preparing the private enrollment form. Please wait.">
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                  <button class="table-action table-button" type="submit">Finalize and print form</button>
+                </form>
+              <% } else { %><span class="muted-copy">Awaiting finance</span><% } %>
+            </td>
+          </tr><% } %></tbody>
+        </table>
+      </div>
+    <% } else { %><p class="empty-state">There are no pending student enrollments.</p><% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

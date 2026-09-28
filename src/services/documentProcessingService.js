@@ -1,9 +1,10 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const { constants: fsConstants } = require('node:fs');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 const defaultEnvironment = require('../config/environment');
-const { createLocalOcrService } = require('./localOcrService');
-const { advisoryChecks } = require('./documentValidationService');
+const { createGeminiFieldExtractionService, MAX_INLINE_FILE_BYTES } = require('./geminiFieldExtractionService');
+const { linkedStudentNameFound } = require('./documentValidationService');
 
 const MIME_BY_EXTENSION = new Map([
   ['.pdf', 'application/pdf'],
@@ -12,12 +13,12 @@ const MIME_BY_EXTENSION = new Map([
   ['.png', 'image/png']
 ]);
 const STORED_NAME_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(pdf|jpg|jpeg|png)$/i;
-const OCR_TIMEOUT_CODE = 'OCR_TIMEOUT';
+const PROCESSING_TIMEOUT_CODE = 'DOCUMENT_PROCESSING_TIMEOUT';
 const PROCESSING_RECOVERY_GRACE_MS = 30000;
 const PROCESSING_RECOVERY_INTERVAL_MS = 30000;
 const PROCESSING_RECOVERY_BATCH_SIZE = 100;
-const PROCESSING_RECOVERY_MESSAGE = 'OCR processing did not finish within the recovery window. Staff review is required.';
-const PROCESSING_LABEL = 'Tesseract OCR';
+const PROCESSING_RECOVERY_MESSAGE = 'Gemini field extraction did not finish within the recovery window. Staff review is required.';
+const PROCESSING_LABEL = 'Gemini field extraction';
 
 class DocumentProcessingError extends Error {
   constructor(message, status = 503) {
@@ -27,23 +28,14 @@ class DocumentProcessingError extends Error {
   }
 }
 
-function normalizeOcrDocument(document) {
-  if (!document || typeof document !== 'object' || typeof document.text !== 'string') {
-    return { outcome: 'malformed_response', extractedText: null };
-  }
-  const extractedText = document.text.replaceAll('\u0000', '').replace(/\r\n?/g, '\n').trim();
-  if (!extractedText) return { outcome: 'empty_ocr', extractedText: '' };
-  return { outcome: 'extracted', extractedText };
-}
-
 function withTimeout(operation, timeoutMs) {
   const controller = new AbortController();
   let timeout;
   const timeoutPromise = new Promise((resolve, reject) => {
     timeout = setTimeout(() => {
       controller.abort();
-      const error = new Error('Local OCR processing timed out.');
-      error.code = OCR_TIMEOUT_CODE;
+      const error = new Error('Document processing timed out.');
+      error.code = PROCESSING_TIMEOUT_CODE;
       reject(error);
     }, timeoutMs);
   });
@@ -55,12 +47,12 @@ function createDocumentProcessingService({
   getPool = defaultGetPool,
   sql = defaultSql,
   transactionFactory = (pool) => new sql.Transaction(pool),
-  localOcr,
-  ocrConfig = defaultEnvironment.ocr,
+  geminiFieldExtractor,
+  geminiConfig = defaultEnvironment.gemini,
   storageDirectory = defaultEnvironment.upload.storageDirectory,
   maxFileBytes = Math.floor(defaultEnvironment.upload.maxMb * 1024 * 1024),
-  timeoutMs = defaultEnvironment.ocr.timeoutMs,
-  concurrency = defaultEnvironment.ocr.concurrency,
+  timeoutMs = defaultEnvironment.gemini.timeoutMs,
+  concurrency = defaultEnvironment.documentProcessing.concurrency,
   recoveryGraceMs = PROCESSING_RECOVERY_GRACE_MS,
   recoveryBatchSize = PROCESSING_RECOVERY_BATCH_SIZE,
   fileSystem = fs,
@@ -74,16 +66,22 @@ function createDocumentProcessingService({
   }
   const requestTimeoutMs = Number.isSafeInteger(timeoutMs) && timeoutMs >= 1000 && timeoutMs <= 120000
     ? timeoutMs
-    : 60000;
+    : 45000;
+  const fieldExtractionTimeoutMs = Number.isSafeInteger(geminiConfig?.timeoutMs)
+    && geminiConfig.timeoutMs >= 1000 && geminiConfig.timeoutMs <= 120000
+    ? geminiConfig.timeoutMs
+    : 45000;
   const workerConcurrency = Number.isSafeInteger(concurrency) && concurrency >= 1 && concurrency <= 4
     ? concurrency
     : 2;
   const uploadLimitBytes = Number.isSafeInteger(maxFileBytes) && maxFileBytes > 0 ? maxFileBytes : 10 * 1024 * 1024;
-  const ocrEngine = localOcr || createLocalOcrService({
-    ocrConfig,
-    uploadConfig: { maxMb: uploadLimitBytes / (1024 * 1024) }
+  const geminiEngine = geminiFieldExtractor || createGeminiFieldExtractionService({
+    apiKey: geminiConfig?.apiKey,
+    model: geminiConfig?.model,
+    timeoutMs: fieldExtractionTimeoutMs,
+    maxFileBytes: uploadLimitBytes
   });
-  const staleAfterMs = requestTimeoutMs + (Number.isSafeInteger(recoveryGraceMs) && recoveryGraceMs >= 1000 && recoveryGraceMs <= 300000
+  const staleAfterMs = Math.max(requestTimeoutMs, fieldExtractionTimeoutMs) + (Number.isSafeInteger(recoveryGraceMs) && recoveryGraceMs >= 1000 && recoveryGraceMs <= 300000
     ? recoveryGraceMs
     : PROCESSING_RECOVERY_GRACE_MS);
   const recoveryLimit = Number.isSafeInteger(recoveryBatchSize) && recoveryBatchSize >= 1 && recoveryBatchSize <= 1000
@@ -123,8 +121,10 @@ function createDocumentProcessingService({
         .query(`UPDATE dbo.documents
           SET status = 'processing', processing_started_at = SYSUTCDATETIME()
           OUTPUT INSERTED.id AS id, INSERTED.stored_filename AS stored_filename,
-            INSERTED.mime_type AS mime_type, INSERTED.document_type AS document_type
-          WHERE id = @documentId AND status = 'pending' AND document_type NOT IN ('form_137', 'report_card')`);
+            INSERTED.mime_type AS mime_type, INSERTED.document_type AS document_type,
+            INSERTED.is_legacy_archive AS is_legacy_archive
+          WHERE id = @documentId AND status = 'pending' AND document_type <> 'form_137'
+            AND (document_type <> 'report_card' OR is_legacy_archive = 0)`);
       const document = result.recordset?.[0];
       if (!document) return null;
       return loadStudentName(transaction, document);
@@ -134,10 +134,11 @@ function createDocumentProcessingService({
   async function loadStudentName(transaction, document) {
     const result = await transaction.request()
       .input('documentId', sql.Int, document.id)
-      .query(`SELECT s.first_name, s.last_name
+      .query(`SELECT d.original_filename, s.first_name, s.middle_name, s.last_name
         FROM dbo.documents AS d INNER JOIN dbo.students AS s ON s.id = d.student_id
         WHERE d.id = @documentId`);
-    return { ...document, student: result.recordset?.[0] || {} };
+    const linkedStudent = result.recordset?.[0] || {};
+    return { ...document, original_filename: linkedStudent.original_filename, student: linkedStudent };
   }
 
   async function claimNextPendingDocument() {
@@ -146,13 +147,15 @@ function createDocumentProcessingService({
         .query(`;WITH next_pending AS (
             SELECT TOP (1) id
             FROM dbo.documents WITH (UPDLOCK, READPAST, READCOMMITTEDLOCK)
-            WHERE status = 'pending' AND document_type NOT IN ('form_137', 'report_card')
+            WHERE status = 'pending' AND document_type <> 'form_137'
+              AND (document_type <> 'report_card' OR is_legacy_archive = 0)
             ORDER BY created_at, id
           )
           UPDATE d
           SET status = 'processing', processing_started_at = SYSUTCDATETIME()
           OUTPUT INSERTED.id AS id, INSERTED.stored_filename AS stored_filename,
-            INSERTED.mime_type AS mime_type, INSERTED.document_type AS document_type
+            INSERTED.mime_type AS mime_type, INSERTED.document_type AS document_type,
+            INSERTED.is_legacy_archive AS is_legacy_archive
           FROM dbo.documents AS d
           INNER JOIN next_pending AS pending ON pending.id = d.id`);
       const document = result.recordset?.[0];
@@ -185,63 +188,90 @@ function createDocumentProcessingService({
     return resolved;
   }
 
+  function supportedFileSignature(buffer, document) {
+    if (!Buffer.isBuffer(buffer) || typeof document.original_filename !== 'string') return false;
+    const expectedMimeType = MIME_BY_EXTENSION.get(path.extname(document.original_filename).toLowerCase());
+    if (!expectedMimeType || expectedMimeType !== document.mime_type) return false;
+    if (document.mime_type === 'application/pdf') return buffer.subarray(0, 5).toString('ascii') === '%PDF-';
+    if (document.mime_type === 'image/jpeg') return buffer.length >= 3
+      && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+    if (document.mime_type === 'image/png') return buffer.length >= 8
+      && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    return false;
+  }
+
+  function safeProcessingFailureFor(error) {
+    if (error?.code === PROCESSING_TIMEOUT_CODE || error?.code === 'ETIMEDOUT' || error?.code === 'ABORT_ERR') {
+      return { outcome: 'processor_timeout', message: 'Gemini field extraction timed out.' };
+    }
+    if (error?.code === 'ENOENT' || error?.code === 'ELOOP'
+      || (error instanceof DocumentProcessingError && error.status === 404)) {
+      return { outcome: 'stored_file_unavailable', message: 'The stored document is unavailable.' };
+    }
+    return { outcome: 'processor_error', message: 'Gemini field extraction could not be completed.' };
+  }
+
   function failureOutcome(code, message) {
     return {
       documentStatus: 'failed',
       resultStatus: 'failed',
       extractedText: null,
       code,
-      message
+      message,
+      fileFormatPassed: false,
+      gemini: { status: 'unavailable', code, fields: null, studentNameMatchesLinkedRecord: null }
     };
   }
 
-  function normalizeOutcome(document) {
-    const normalized = normalizeOcrDocument(document);
-    if (normalized.outcome === 'malformed_response') {
-      return failureOutcome('malformed_response', 'The OCR utility returned an unreadable result. Staff review is required.');
-    }
-    if (normalized.outcome === 'empty_ocr') {
+  function matchesLinkedStudent(extractedName, student = {}) {
+    if (typeof extractedName !== 'string' || extractedName.length > 240
+      || /[,;|/\n\r]|\b(?:and|&|or)\b/i.test(extractedName)) return false;
+    const normalizedTokens = extractedName.normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '').toLowerCase().match(/[a-z0-9]+/g) || [];
+    if (normalizedTokens.length < 2 || normalizedTokens.length > 8) return false;
+    return linkedStudentNameFound(extractedName, student);
+  }
+
+  function evaluateFieldExtraction(document, extraction, fileFormatPassed) {
+    if (extraction?.status !== 'extracted' || !extraction.fields) {
       return {
-        documentStatus: 'needs_review',
-        resultStatus: 'needs_review',
-        extractedText: '',
-        code: 'empty_ocr',
-        message: 'No readable text was extracted. Staff review is required.'
+        status: 'unavailable',
+        code: typeof extraction?.code === 'string' ? extraction.code.slice(0, 40) : 'unavailable',
+        fields: null,
+        studentNameMatchesLinkedRecord: null
       };
     }
+    const fields = extraction.fields;
+    const studentName = typeof fields.studentName === 'string' ? fields.studentName.slice(0, 240) : '';
+    const normalizedFields = { studentName };
+    let studentNameMatchesLinkedRecord = studentName
+      ? matchesLinkedStudent(studentName, document.student)
+      : false;
+    let requiredFieldsPresent = Boolean(studentName) && studentNameMatchesLinkedRecord;
+    if (document.document_type === 'good_moral') {
+      const issuingSchoolName = typeof fields.issuingSchoolName === 'string' ? fields.issuingSchoolName.slice(0, 240) : '';
+      const goodMoralContextEvidence = typeof fields.goodMoralContextEvidence === 'string'
+        ? fields.goodMoralContextEvidence.slice(0, 240)
+        : '';
+      const goodMoralLayoutEvidence = typeof fields.goodMoralLayoutEvidence === 'string'
+        ? fields.goodMoralLayoutEvidence.slice(0, 240)
+        : '';
+      normalizedFields.issuingSchoolName = issuingSchoolName;
+      normalizedFields.goodMoralContextEvidence = goodMoralContextEvidence;
+      normalizedFields.goodMoralLayoutEvidence = goodMoralLayoutEvidence;
+      const hasGoodMoralContext = /\b(?:good moral|moral character|good character|character certificate|good conduct)\b/i
+        .test(goodMoralContextEvidence);
+      const hasSurroundingContent = goodMoralLayoutEvidence.length >= 30;
+      requiredFieldsPresent = requiredFieldsPresent && Boolean(issuingSchoolName)
+        && hasGoodMoralContext && hasSurroundingContent;
+    }
     return {
-      documentStatus: 'needs_review',
-      resultStatus: 'needs_review',
-      extractedText: normalized.extractedText,
-      code: 'extracted',
-      message: 'OCR text was extracted. Advisory checks are available; registrar or database administrator source inspection is required.',
-      advisoryChecks: advisoryChecks(document.document_type, normalized.extractedText, document.student)
+      status: 'extracted',
+      code: requiredFieldsPresent && fileFormatPassed ? 'precheck_pass' : 'precheck_attention',
+      fields: normalizedFields,
+      studentNameMatchesLinkedRecord,
+      requiredFieldsPresent
     };
-  }
-
-  function safeFailureFor(error) {
-    if (error?.code === OCR_TIMEOUT_CODE || error?.code === 'ETIMEDOUT' || error?.code === 'ABORT_ERR') {
-      return failureOutcome('processor_timeout', 'OCR processing timed out. Staff review is required.');
-    }
-    if (error?.code === 'OCR_BINARY_UNAVAILABLE' || error?.code === 'ENOENT') {
-      return failureOutcome('processor_unavailable', 'A local OCR utility is unavailable. Staff review is required.');
-    }
-    if (error?.code === 'OCR_INVALID_DOCUMENT') {
-      return failureOutcome('malformed_document', 'The file could not be read by the local OCR tools. Submit an unprotected, readable file.');
-    }
-    if (error?.code === 'OCR_FILE_UNAVAILABLE') {
-      return failureOutcome('stored_file_unavailable', 'The stored document is unavailable. Staff review is required.');
-    }
-    if (error?.code === 'OCR_PAGE_LIMIT') {
-      return failureOutcome('page_limit', 'The PDF exceeds the configured page limit. Submit a shorter PDF.');
-    }
-    if (error?.code === 'OCR_OUTPUT_LIMIT') {
-      return failureOutcome('output_limit', 'The extracted text exceeded the supported size. Staff review is required.');
-    }
-    if (error instanceof DocumentProcessingError && error.status === 404) {
-      return failureOutcome('stored_file_unavailable', 'The stored document is unavailable. Staff review is required.');
-    }
-    return failureOutcome('processor_error', 'The local OCR tools could not process this file. Staff review is required.');
   }
 
   async function saveOutcome(documentId, outcome) {
@@ -256,9 +286,12 @@ function createDocumentProcessingService({
       if (!updateResult.recordset?.length) return false;
 
       const validationJson = JSON.stringify({
-        stage: 'ocr',
+        stage: 'gemini_precheck',
+        precheckVersion: 2,
         outcome: outcome.code,
         message: outcome.message,
+        fileFormatPassed: outcome.fileFormatPassed === true,
+        gemini: outcome.gemini || { status: 'unavailable', code: 'not_run', fields: null },
         advisoryChecks: outcome.advisoryChecks || []
       });
       await transaction.request()
@@ -282,15 +315,19 @@ function createDocumentProcessingService({
         .input('batchSize', sql.Int, recoveryLimit)
         .input('processor', sql.NVarChar(100), PROCESSING_LABEL)
         .input('validationJson', sql.NVarChar(sql.MAX), JSON.stringify({
-          stage: 'ocr',
+          stage: 'gemini_precheck',
+          precheckVersion: 2,
           outcome: 'processing_recovered',
-          message: PROCESSING_RECOVERY_MESSAGE
+          message: PROCESSING_RECOVERY_MESSAGE,
+          fileFormatPassed: false,
+          gemini: { status: 'unavailable', code: 'processing_recovered', fields: null }
         }))
         .query(`DECLARE @recovered TABLE (id INT NOT NULL PRIMARY KEY);
           ;WITH stale_documents AS (
             SELECT TOP (@batchSize) id
             FROM dbo.documents WITH (UPDLOCK, HOLDLOCK, ROWLOCK)
-            WHERE status = 'processing' AND document_type NOT IN ('form_137', 'report_card')
+            WHERE status = 'processing' AND document_type <> 'form_137'
+              AND (document_type <> 'report_card' OR is_legacy_archive = 0)
               AND (processing_started_at IS NULL
                 OR processing_started_at < DATEADD(MILLISECOND, -@staleAfterMs, SYSUTCDATETIME()))
             ORDER BY CASE WHEN processing_started_at IS NULL THEN 0 ELSE 1 END,
@@ -316,20 +353,87 @@ function createDocumentProcessingService({
 
   async function processClaimedDocument(document) {
     let outcome;
+    let fileBuffer = null;
     try {
       await ensurePrivateStorageRoot();
       const filePath = resolveStoredPath(document.stored_filename, document.mime_type);
-      const result = await withTimeout(
-        (signal) => ocrEngine.processDocument(filePath, document.mime_type, {
-          signal,
-          timeoutMs: requestTimeoutMs,
-          language: ocrConfig?.language
-        }),
-        requestTimeoutMs
-      );
-      outcome = normalizeOutcome(result);
+      const openFlags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW || 0);
+      const fileHandle = await fileSystem.open(filePath, openFlags);
+      let fileStats;
+      let fileFormatPassed = false;
+      try {
+        fileStats = await fileHandle.stat();
+        if (!fileStats.isFile() || fileStats.size < 1 || fileStats.size > uploadLimitBytes) {
+          throw new DocumentProcessingError('The stored document is unavailable.', 404);
+        }
+        const header = Buffer.alloc(Math.min(8, fileStats.size));
+        const { bytesRead: headerBytesRead } = await fileHandle.read(header, 0, header.length, 0);
+        fileFormatPassed = headerBytesRead === header.length && supportedFileSignature(header, document);
+        const inlineFileLimit = Math.min(uploadLimitBytes, MAX_INLINE_FILE_BYTES);
+        if (fileFormatPassed && fileStats.size <= inlineFileLimit) {
+          fileBuffer = Buffer.alloc(fileStats.size);
+          let offset = 0;
+          while (offset < fileBuffer.length) {
+            const { bytesRead } = await fileHandle.read(fileBuffer, offset, fileBuffer.length - offset, offset);
+            if (bytesRead < 1) throw new DocumentProcessingError('The stored document is unavailable.', 404);
+            offset += bytesRead;
+          }
+          const afterRead = await fileHandle.stat();
+          if (afterRead.size !== fileStats.size || fileBuffer.length !== fileStats.size) {
+            throw new DocumentProcessingError('The stored document is unavailable.', 404);
+          }
+        }
+      } finally {
+        await fileHandle.close();
+      }
+
+      let extraction = {
+        status: 'unavailable',
+        code: !fileFormatPassed ? 'invalid_file_format' : fileBuffer ? 'missing_api_key' : 'file_too_large',
+        fields: null
+      };
+      if (fileFormatPassed) {
+        const extractionPromise = fileBuffer
+          ? withTimeout(
+            (signal) => geminiEngine.extractDocument({
+              buffer: fileBuffer,
+              mimeType: document.mime_type,
+              documentType: document.document_type,
+              signal
+            }),
+            fieldExtractionTimeoutMs
+          ).then((result) => { extraction = result; })
+            .catch(() => { extraction = { status: 'unavailable', code: 'timeout', fields: null }; })
+          : Promise.resolve();
+        await extractionPromise;
+      }
+
+      const gemini = evaluateFieldExtraction(document, extraction, fileFormatPassed);
+      const code = !fileFormatPassed
+        ? 'invalid_file_format'
+        : gemini.status !== 'extracted' ? 'gemini_unavailable' : gemini.code;
+      const message = !fileFormatPassed
+        ? 'The stored file does not match its declared PDF, JPEG, or PNG format. Staff review is required.'
+        : gemini.status !== 'extracted'
+          ? 'Gemini field extraction is unavailable. No automated precheck pass was recorded; staff source inspection is required.'
+          : gemini.code === 'precheck_pass'
+            ? 'The linked student-name and supported file-format checks passed. A registrar or database administrator must inspect the source and make the final decision.'
+            : 'The extracted student name or supported file-format check needs source inspection.';
+      outcome = {
+        documentStatus: 'needs_review',
+        resultStatus: 'needs_review',
+        extractedText: null,
+        code,
+        message,
+        advisoryChecks: [],
+        fileFormatPassed,
+        gemini
+      };
     } catch (error) {
-      outcome = safeFailureFor(error);
+      const failure = safeProcessingFailureFor(error);
+      outcome = failureOutcome(failure.outcome, 'Document processing could not complete. Staff review is required.');
+    } finally {
+      fileBuffer?.fill(0);
     }
 
     let saved;
@@ -441,6 +545,5 @@ module.exports = {
   PROCESSING_RECOVERY_MESSAGE,
   startProcessingRecoveryScheduler,
   createDocumentProcessingService,
-  normalizeOcrDocument,
   withTimeout
 };

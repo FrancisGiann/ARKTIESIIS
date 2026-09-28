@@ -1,6 +1,8 @@
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
+const { allocateStudentNumber, StudentNumberAllocationError } = require('./studentNumberAllocator');
 
 const RECORDS_ROLES = new Set(['database_admin', 'registrar']);
+const STUDENT_PAGE_SIZE = 25;
 
 class StudentRecordsError extends Error {
   constructor(message, status = 400) {
@@ -72,8 +74,8 @@ function normalizeLrn(value, { required = true } = {}) {
   return lrn;
 }
 
-function validateStudent(input = {}, { requireLrn = true } = {}) {
-  const studentNo = requiredText(input.studentNo, 'Student number', 50);
+function validateStudent(input = {}, { requireLrn = true, requireStudentNo = true } = {}) {
+  const studentNo = requireStudentNo ? requiredText(input.studentNo, 'Student number', 50) : null;
   const firstName = requiredText(input.firstName, 'First name', 100);
   const lastName = requiredText(input.lastName, 'Last name', 100);
   const middleName = printableText(input.middleName, 100);
@@ -212,24 +214,54 @@ function createStudentRecordsService({
     return result.recordset || [];
   }
 
-  async function listWorkspace(searchInput = '', termInput = '') {
+  async function listWorkspace(searchInput = '', termInput = '', pageInput = 1) {
     const searchTerm = normalizeSearchTerm(searchInput);
     const academicTermId = normalizeOptionalId(termInput, 'academic term');
+    const requestedPage = typeof pageInput === 'number' || typeof pageInput === 'string'
+      ? Number(pageInput)
+      : 1;
+    const safeRequestedPage = Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
     const searchPattern = searchTerm ? `%${escapeLikePattern(searchTerm)}%` : null;
     const pool = await getPool();
     const [terms, sections] = await Promise.all([listTerms(pool), listSections(pool)]);
     if (academicTermId && !terms.some((term) => term.id === academicTermId)) {
       throw new StudentRecordsError('Academic term not found.', 404);
     }
-    const students = await pool.request()
+    const matchingStudents = await pool.request()
       .input('searchPattern', sql.NVarChar(204), searchPattern)
       .input('academicTermId', sql.Int, academicTermId)
       .query(`
-        SELECT TOP (250) s.id, s.student_no, s.first_name, s.middle_name,
+        SELECT COUNT_BIG(*) AS total_students
+        FROM dbo.students AS s
+        WHERE (@academicTermId IS NULL OR EXISTS (
+            SELECT 1 FROM dbo.enrollments AS filtered_enrollment
+            WHERE filtered_enrollment.student_id = s.id
+              AND filtered_enrollment.academic_term_id = @academicTermId
+          ))
+          AND (@searchPattern IS NULL
+            OR s.student_no LIKE @searchPattern ESCAPE N'~'
+            OR s.lrn LIKE @searchPattern ESCAPE N'~'
+            OR s.first_name LIKE @searchPattern ESCAPE N'~'
+            OR s.middle_name LIKE @searchPattern ESCAPE N'~'
+            OR s.last_name LIKE @searchPattern ESCAPE N'~'
+            OR CONCAT_WS(N' ', s.first_name, NULLIF(s.middle_name, N''), s.last_name) LIKE @searchPattern ESCAPE N'~')`);
+    const totalStudents = Number(matchingStudents.recordset?.[0]?.total_students || 0);
+    const totalPages = Math.max(1, Math.ceil(totalStudents / STUDENT_PAGE_SIZE));
+    const page = Math.min(safeRequestedPage, totalPages);
+    const offset = (page - 1) * STUDENT_PAGE_SIZE;
+    const students = await pool.request()
+      .input('searchPattern', sql.NVarChar(204), searchPattern)
+      .input('academicTermId', sql.Int, academicTermId)
+      .input('offset', sql.Int, offset)
+      .input('pageSize', sql.Int, STUDENT_PAGE_SIZE)
+      .query(`
+        SELECT s.id, s.student_no, s.lrn, s.first_name, s.middle_name,
           s.last_name, s.suffix, s.birth_date, s.sex, s.phone, s.status,
           s.user_id, u.is_active AS linked_account_is_active,
           e.id AS enrollment_id, e.enrollment_status,
-          t.id AS academic_term_id, t.school_year, t.term, sec.name AS section_name
+          t.id AS academic_term_id, t.school_year, t.term, sec.name AS section_name,
+          good_moral.status AS good_moral_status, psa.status AS psa_status,
+          form137.status AS form137_status
         FROM dbo.students AS s
         OUTER APPLY (
           SELECT TOP (1) en.id, en.enrollment_status, en.academic_term_id,
@@ -244,6 +276,12 @@ function createStudentRecordsService({
         LEFT JOIN dbo.users AS u ON u.id = s.user_id
         LEFT JOIN dbo.academic_terms AS t ON t.id = latest.term_id
         LEFT JOIN dbo.sections AS sec ON sec.id = latest.section_id AND sec.academic_term_id = latest.academic_term_id
+        OUTER APPLY (SELECT TOP (1) d.status FROM dbo.documents AS d
+          WHERE d.student_id = s.id AND d.document_type = 'good_moral' ORDER BY d.created_at DESC, d.id DESC) AS good_moral
+        OUTER APPLY (SELECT TOP (1) d.status FROM dbo.documents AS d
+          WHERE d.student_id = s.id AND d.document_type = 'psa_birth_certificate' ORDER BY d.created_at DESC, d.id DESC) AS psa
+        OUTER APPLY (SELECT TOP (1) e.status FROM dbo.form137_status_events AS e
+          WHERE e.student_id = s.id ORDER BY e.created_at DESC, e.id DESC) AS form137
         WHERE (@academicTermId IS NULL OR EXISTS (
             SELECT 1 FROM dbo.enrollments AS filtered_enrollment
             WHERE filtered_enrollment.student_id = s.id
@@ -251,11 +289,17 @@ function createStudentRecordsService({
           ))
           AND (@searchPattern IS NULL
             OR s.student_no LIKE @searchPattern ESCAPE N'~'
+            OR s.lrn LIKE @searchPattern ESCAPE N'~'
             OR s.first_name LIKE @searchPattern ESCAPE N'~'
             OR s.middle_name LIKE @searchPattern ESCAPE N'~'
-            OR s.last_name LIKE @searchPattern ESCAPE N'~')
-        ORDER BY s.last_name, s.first_name, s.student_no`);
-    return { students: students.recordset || [], terms, sections, searchTerm, academicTermId };
+            OR s.last_name LIKE @searchPattern ESCAPE N'~'
+            OR CONCAT_WS(N' ', s.first_name, NULLIF(s.middle_name, N''), s.last_name) LIKE @searchPattern ESCAPE N'~')
+        ORDER BY s.last_name, s.first_name, s.student_no, s.id
+        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`);
+    return {
+      students: students.recordset || [], terms, sections, searchTerm, academicTermId,
+      totalStudents, page, pageSize: STUDENT_PAGE_SIZE, totalPages
+    };
   }
 
   async function getStudent(studentId) {
@@ -266,8 +310,31 @@ function createStudentRecordsService({
       .input('studentId', sql.Int, id)
       .query(`SELECT s.id, s.user_id, s.student_no, s.lrn, s.first_name, s.middle_name, s.last_name, s.suffix,
         s.birth_date, s.sex, s.address, s.phone, s.status, s.created_at, s.updated_at,
-        u.is_active AS linked_account_is_active
-        FROM dbo.students AS s LEFT JOIN dbo.users AS u ON u.id = s.user_id WHERE s.id = @studentId`);
+        u.is_active AS linked_account_is_active,
+        good_moral.status AS good_moral_status, good_moral.created_at AS good_moral_submitted_at,
+        psa.status AS psa_status, psa.created_at AS psa_submitted_at,
+        previous_report_card.status AS previous_report_card_status,
+        previous_report_card.created_at AS previous_report_card_submitted_at,
+        previous_report_card.latest_decision_type AS previous_report_card_latest_decision_type,
+        previous_report_card_paper.status AS previous_school_report_card_physical_status,
+        form137.status AS form137_status, form137.created_at AS form137_updated_at
+        FROM dbo.students AS s LEFT JOIN dbo.users AS u ON u.id = s.user_id
+        OUTER APPLY (SELECT TOP (1) d.status, d.created_at FROM dbo.documents AS d
+          WHERE d.student_id = s.id AND d.document_type = 'good_moral' ORDER BY d.created_at DESC, d.id DESC) AS good_moral
+        OUTER APPLY (SELECT TOP (1) d.status, d.created_at FROM dbo.documents AS d
+          WHERE d.student_id = s.id AND d.document_type = 'psa_birth_certificate' ORDER BY d.created_at DESC, d.id DESC) AS psa
+        OUTER APPLY (SELECT TOP (1) d.status, d.created_at, latest.decision_type AS latest_decision_type
+          FROM dbo.documents AS d
+          OUTER APPLY (SELECT TOP (1) e.decision_type FROM dbo.document_decision_events AS e
+            WHERE e.document_id = d.id ORDER BY e.created_at DESC, e.id DESC) AS latest
+          WHERE d.student_id = s.id AND d.document_type = 'report_card'
+            AND d.is_legacy_archive = 0 AND d.upload_source = 'student'
+          ORDER BY d.created_at DESC, d.id DESC) AS previous_report_card
+        OUTER APPLY (SELECT TOP (1) e.status FROM dbo.previous_school_report_card_status_events AS e
+          WHERE e.student_id = s.id ORDER BY e.created_at DESC, e.id DESC) AS previous_report_card_paper
+        OUTER APPLY (SELECT TOP (1) e.status, e.created_at FROM dbo.form137_status_events AS e
+          WHERE e.student_id = s.id ORDER BY e.created_at DESC, e.id DESC) AS form137
+        WHERE s.id = @studentId`);
     const student = result.recordset?.[0];
     if (!student) return null;
     const [terms, sections, enrollments] = await Promise.all([
@@ -325,11 +392,13 @@ function createStudentRecordsService({
           (SELECT COUNT_BIG(*) FROM dbo.documents AS d
             INNER JOIN dbo.students AS s ON s.id = d.student_id
             WHERE s.user_id = @actorId
-              AND d.document_type IN ('good_moral', 'psa_birth_certificate')) AS document_count,
+              AND (d.document_type IN ('good_moral', 'psa_birth_certificate')
+                OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'))) AS document_count,
           (SELECT COUNT_BIG(*) FROM dbo.documents AS d
             INNER JOIN dbo.students AS s ON s.id = d.student_id
             WHERE s.user_id = @actorId
-              AND d.document_type IN ('good_moral', 'psa_birth_certificate')
+              AND (d.document_type IN ('good_moral', 'psa_birth_certificate')
+                OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'))
               AND d.status IN ('pending', 'processing', 'needs_review', 'failed')) AS documents_in_progress_count
         WHERE EXISTS (SELECT 1 FROM dbo.users
           WHERE id = @actorId AND role = 'student' AND is_active = 1)`);
@@ -362,9 +431,25 @@ function createStudentRecordsService({
   async function saveStudent(actorId, studentId, input) {
     const id = studentId === null ? null : normalizeRecordId(studentId);
     if (studentId !== null && !id) throw new StudentRecordsError('Student record not found.', 404);
-    const student = validateStudent(input, { requireLrn: id === null });
+    const student = validateStudent(input, { requireLrn: id === null, requireStudentNo: id !== null });
     return runTransaction(async (transaction) => {
       const actor = await requireAcademicActor(transaction, actorId);
+      if (id === null && actor.role !== 'database_admin') {
+        throw new StudentRecordsError('Registrars must create new student profiles through student enrollment intake.', 403);
+      }
+      if (id === null) {
+        const termResult = await transaction.request()
+          .query(`SELECT TOP (1) school_year FROM dbo.academic_terms WITH (UPDLOCK, HOLDLOCK)
+            WHERE is_current = 1 ORDER BY id DESC`);
+        const currentTerm = termResult.recordset?.[0];
+        if (!currentTerm) throw new StudentRecordsError('Set a current academic term before creating a student profile.', 409);
+        try {
+          student.studentNo = await allocateStudentNumber(transaction, sql, currentTerm.school_year);
+        } catch (error) {
+          if (error instanceof StudentNumberAllocationError) throw new StudentRecordsError(error.message, error.status);
+          throw error;
+        }
+      }
       const request = transaction.request()
         .input('studentNo', sql.NVarChar(50), student.studentNo)
         .input('lrn', sql.NVarChar(12), student.lrn)
@@ -562,6 +647,16 @@ function createStudentRecordsService({
         .query('SELECT id, status FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE id = @studentId');
       if (!student.recordset?.length) throw new StudentRecordsError('Student record not found.', 404);
       if (student.recordset[0].status === 'archived') throw new StudentRecordsError('Archived students cannot receive new enrollments.', 409);
+      const pendingIntake = await transaction.request().input('studentId', sql.Int, enrollment.studentId)
+        .query(`SELECT TOP (1) enrollment.id
+          FROM dbo.enrollments AS enrollment WITH (UPDLOCK, HOLDLOCK)
+          INNER JOIN dbo.enrollment_clearances AS clearance WITH (UPDLOCK, HOLDLOCK)
+            ON clearance.enrollment_id = enrollment.id
+          WHERE enrollment.student_id = @studentId AND enrollment.enrollment_status = N'pending_payment'
+            AND enrollment.finalized_at IS NULL AND clearance.created_for_intake = 1`);
+      if (pendingIntake.recordset?.length) {
+        throw new StudentRecordsError('This student has a pending new-student intake. Finance must clear that enrollment before it can be finalized.', 409);
+      }
       const term = await transaction.request().input('termId', sql.Int, enrollment.academicTermId)
         .query('SELECT id FROM dbo.academic_terms WITH (UPDLOCK, HOLDLOCK) WHERE id = @termId');
       if (!term.recordset?.length) throw new StudentRecordsError('Academic term not found.', 404);

@@ -1,13 +1,13 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/records">Back to student records</a>
+  <a class="context-back" href="/registrar/records">Back to student records</a>
   <section class="dashboard-heading">
     <div>
       <h1><%= student ? 'Student record' : 'Create student profile' %></h1>
-      <p><% if (student) { %>Student number <%= student.student_no %><% } else { %>Enter the student’s master record details.<% } %></p>
+      <p><% if (student) { %>Student number <%= student.student_no %><% } else { %>Enter the student’s master record details. The number is assigned automatically from the current academic year.<% } %></p>
     </div>
     <div class="admin-heading-actions">
-      <% if (student) { %><a class="button button--primary" href="/records/students/<%= student.id %>/academic">Academic record</a><% } %>
+      <% if (student) { %><a class="button button--primary" href="/registrar/records/students/<%= student.id %>/academic">Academic record</a><% } %>
     </div>
   </section>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
@@ -17,11 +17,11 @@
     <h2 id="profile-title">Profile details</h2>
     <p>Student profiles and history remain stored when a login is deactivated or the profile is archived.</p>
     <% if (student?.status === 'archived') { %><p class="form-alert" role="status">This student record is archived. Profile edits and new enrollments are disabled. Existing academic and finance history remains available for review, but cannot be changed.</p><% } %>
-    <form class="form-stack admin-form" method="post" action="<%= student ? `/records/students/${student.id}` : '/records/students' %>" data-submitting-message="Saving the student profile. Please wait.">
+    <form class="form-stack admin-form" method="post" action="<%= student ? `/registrar/records/students/${student.id}` : '/registrar/records/students' %>" data-submitting-message="Saving the student profile. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <fieldset <%= student?.status === 'archived' ? 'disabled' : '' %>>
       <div class="admin-form-grid">
-        <div class="field"><label for="student-no">Student number</label><input id="student-no" name="studentNo" type="text" maxlength="50" required value="<%= values.studentNo %>"<% if (student && currentUser.role === 'registrar') { %> readonly aria-describedby="student-number-help"<% } %>><% if (student && currentUser.role === 'registrar') { %><small id="student-number-help" class="field-help">Only a database administrator can correct a student number.</small><% } %></div>
+        <% if (student) { %><div class="field"><label for="student-no">Student number</label><input id="student-no" name="studentNo" type="text" maxlength="50" required value="<%= values.studentNo %>"<% if (currentUser.role === 'registrar') { %> readonly aria-describedby="student-number-help"<% } %>><% if (currentUser.role === 'registrar') { %><small id="student-number-help" class="field-help">Only a database administrator can correct a student number.</small><% } %></div><% } else { %><p class="field-help field--full">Student number will be generated as SHS-YYYY-0001, using the current academic year.</p><% } %>
         <div class="field"><label for="student-lrn">Learner Reference Number (LRN)</label><input id="student-lrn" name="lrn" type="text" inputmode="numeric" autocomplete="off" maxlength="12" pattern="[0-9]{12}" value="<%= values.lrn %>"<% if (!student || (student.lrn && currentUser.role === 'database_admin') || (!student.lrn && currentUser.role === 'registrar')) { %> required<% } %><% if (student?.lrn && currentUser.role === 'registrar') { %> readonly aria-describedby="student-lrn-help"<% } %>><small id="student-lrn-help" class="field-help"><% if (student?.lrn && currentUser.role === 'registrar') { %>A recorded LRN can be changed only by a database administrator.<% } else if (student && !student.lrn) { %>Enter the 12-digit LRN to backfill this existing student record.<% } else if (!student) { %>Enter the 12-digit LRN. It is used to match learners during grade import.<% } else { %>Only a database administrator can change a recorded LRN. Leave blank if this legacy record has no LRN yet.<% } %></small></div>
         <div class="field"><label for="first-name">First name</label><input id="first-name" name="firstName" type="text" maxlength="100" required value="<%= values.firstName %>"></div>
         <div class="field"><label for="middle-name">Middle name (optional)</label><input id="middle-name" name="middleName" type="text" maxlength="100" value="<%= values.middleName %>"></div>
@@ -32,7 +32,7 @@
         <div class="field"><label for="phone">Phone (optional)</label><input id="phone" name="phone" type="tel" maxlength="50" value="<%= values.phone %>"></div>
         <div class="field field--full"><label for="address">Address (optional)</label><textarea id="address" name="address" maxlength="500" rows="3"><%= values.address %></textarea></div>
       </div>
-      <div class="admin-form-actions"><button class="button button--primary" type="submit"><%= student ? 'Save profile' : 'Create profile' %></button><a class="button button--secondary" href="/records">Cancel</a></div>
+      <div class="admin-form-actions"><button class="button button--primary" type="submit"><%= student ? 'Save profile' : 'Create profile' %></button><a class="button button--secondary" href="/registrar/records">Cancel</a></div>
       </fieldset>
     </form>
   </section>
@@ -42,14 +42,14 @@
       <div class="admin-section__heading"><div><h2 id="student-access-title">Student login</h2><p>Login access is separate from the retained student profile and history.</p></div></div>
       <p>Linked account: <%= student.user_id ? (student.linked_account_is_active ? 'Active' : 'Inactive') : 'No login account linked' %></p>
       <% if (currentUser.role === 'registrar' && student.status !== 'archived' && student.user_id && student.linked_account_is_active) { %>
-        <form class="form-stack records-compact-form" method="post" action="/records/students/<%= student.id %>/login/deactivate" data-submitting-message="Deactivating the linked student login. Please wait.">
+        <form class="form-stack records-compact-form" method="post" action="/registrar/records/students/<%= student.id %>/login/deactivate" data-submitting-message="Deactivating the linked student login. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <div class="field"><label for="login-deactivate-confirmation">Type DEACTIVATE to disable this student login</label><input id="login-deactivate-confirmation" name="confirmation" type="text" maxlength="10" required autocomplete="off"></div>
           <button class="button button--secondary button--align-start" type="submit">Deactivate login</button>
         </form>
       <% } %>
       <% if (currentUser.role === 'database_admin' && student.status !== 'archived') { %>
-        <form class="form-stack records-compact-form" method="post" action="/records/students/<%= student.id %>/archive" data-submitting-message="Archiving the student record. Please wait.">
+        <form class="form-stack records-compact-form" method="post" action="/registrar/records/students/<%= student.id %>/archive" data-submitting-message="Archiving the student record. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <p>Archiving retains academic and finance history, marks the profile archived, and disables its linked student login.</p>
           <div class="field"><label for="archive-confirmation">Type <%= student.student_no %> to confirm archiving</label><input id="archive-confirmation" name="confirmation" type="text" maxlength="50" required autocomplete="off"></div>
@@ -72,13 +72,13 @@
           </tbody></table>
         </div>
       <% } else { %><p class="empty-state">This student has no enrollments.</p><% } %>
-      <% if (student.status !== 'archived') { %><form class="form-stack records-enrollment-form" method="post" action="/records/enrollments">
+      <% if (student.status !== 'archived') { %><form class="form-stack records-enrollment-form" method="post" action="/registrar/records/enrollments">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <input type="hidden" name="studentId" value="<%= student.id %>">
         <h3>Save enrollment</h3>
         <div class="admin-form-grid">
           <div class="field"><label for="enrollment-term">Academic term</label><select id="enrollment-term" name="academicTermId" required><option value="">Choose a term</option><% for (const term of terms) { %><option value="<%= term.id %>"><%= term.school_year %> · <%= term.term %></option><% } %></select></div>
-          <div class="field"><label for="enrollment-section">Section (optional)</label><select id="enrollment-section" name="sectionId"><option value="">No section assigned</option><% for (const section of sections) { %><option value="<%= section.id %>"><%= section.name %><%= section.grade_level ? ` · ${section.grade_level}` : '' %> — <%= section.school_year %> · <%= section.term %></option><% } %></select></div>
+          <div class="field"><label for="enrollment-section">Section (optional)</label><select id="enrollment-section" name="sectionId"><option value="">No section assigned</option><% for (const section of sections) { %><option value="<%= section.id %>"><%= formatStudentPlacement(section.grade_level, section.name) %> — <%= section.school_year %> · <%= section.term %></option><% } %></select></div>
         </div>
         <button class="button button--primary button--align-start" type="submit" <%= terms.length ? '' : 'disabled' %>>Save enrollment</button>
       </form><% } %>

@@ -1,28 +1,40 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page records-page" id="main-content">
+  <% const blockedNewOriginalTypeSet = new Set(blockedNewOriginalTypes || []); %>
+  <% const availableDocumentTypes = (uploadDocumentTypes || documentTypes).filter(({ value }) => !blockedNewOriginalTypeSet.has(value)); %>
   <section class="dashboard-heading">
     <div>
       <h1><%= isStaff ? 'Document management' : 'My documents' %></h1>
-      <p><%= isStaff ? 'Search submissions and open a student record to upload or review documents.' : 'Upload Good Moral Certificates or a PSA birth certificate for your own record.' %></p>
+      <p><%= isStaff ? 'Search submissions and open a student record to upload or review documents. New previous-school report-card scans receive a limited name and file-format precheck before staff review; older files remain marked as archive.' : 'Upload Good Moral, PSA, or a scan of your previous-school report card for your own linked record. Staff review every digital submission.' %></p>
     </div>
-    <% if (isStaff) { %><a class="button button--primary" href="/records">Find a student</a><% } %>
+    <% if (['registrar', 'database_admin'].includes(currentUser.role)) { %><a class="button button--primary" href="/registrar/records">Find a student</a><% } %>
   </section>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
-  <% if (!isStaff) { %>
-    <section class="admin-section" aria-labelledby="form137-status-title">
-      <div class="admin-section__heading"><div><h2 id="form137-status-title">Form 137 physical record</h2><p>Authorized staff may send a scan for temporary local OCR suggestions. The scan and OCR text are not stored as a document or database record; only the human-recorded status and instruction are saved. Suggestions are for staff inspection only.</p></div></div>
-      <p><strong>Status:</strong> <%= form137Status.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></p>
-      <% if (form137Status.instruction) { %><p class="form-alert" role="status"><%= form137Status.instruction %></p><% } %>
-      <% if (form137Status.created_at) { %><p class="muted-copy">Updated <%= new Date(form137Status.created_at).toLocaleString() %></p><% } %>
+  <% if (isStaff) { %>
+    <section class="admin-section document-physical-entry" aria-labelledby="physical-records-entry-title">
+      <div class="admin-section__heading"><div><h2 id="physical-records-entry-title">Physical student requirements</h2><p>These staff-recorded statuses are separate from uploaded files and digital document filters.</p></div></div>
+      <div class="document-physical-entry__types">
+        <p><strong>Form 137 physical record</strong><span>Track paper receipt and staff review status.</span></p>
+        <p><strong>Previous-school report-card paper copy</strong><span>Track the paper enrollment requirement separately from a student's digital scan.</span></p>
+      </div>
+      <a class="button button--secondary" href="/documents/physical">Search physical requirement statuses</a>
     </section>
   <% } %>
 
   <% if (!isStaff) { %>
+    <section class="admin-section" aria-labelledby="previous-school-paper-status-title">
+      <div class="admin-section__heading"><div><h2 id="previous-school-paper-status-title">Previous-school report-card paper copy</h2><p>This status tracks a paper copy brought to school. It is separate from your uploaded scan and never changes grades.</p></div></div>
+      <% const physicalReportCardStatus = previousSchoolReportCardPhysicalStatus?.status || 'not_recorded'; %>
+      <% const physicalReportCardLabels = { not_recorded: 'Not recorded', pending: 'Pending', received: 'Received', verified: 'Checked by staff', correction: 'Clearer or replacement copy requested', rejected: 'Not accepted for this requirement' }; %>
+      <p><strong>Paper-copy status:</strong> <%= physicalReportCardLabels[physicalReportCardStatus] || 'Not recorded' %></p>
+      <% if (previousSchoolReportCardPhysicalStatus?.created_at) { %><p class="muted-copy">Updated <%= new Date(previousSchoolReportCardPhysicalStatus.created_at).toLocaleString() %></p><% } %>
+    </section>
     <section class="admin-section" aria-labelledby="upload-title">
-      <div class="admin-section__heading"><div><h2 id="upload-title">Upload a document</h2><p id="upload-format-help">Accepted file formats: PDF, JPEG, and PNG. Maximum size: <%= uploadMaxMb %> MB.</p></div></div>
+      <div class="admin-section__heading"><div><h2 id="upload-title">Upload a document</h2><p id="upload-format-help">Accepted file formats: PDF, JPEG, and PNG. Maximum size: <%= uploadMaxMb %> MB. Good Moral and PSA files receive configured field prechecks. Your previous-school report-card scan receives a limited visible-name and file-format precheck, then staff review for the enrollment requirement. Grades are not extracted or changed. Upload a correction when staff requests one. If staff rejects the latest submission, you can start a new original submission; earlier submissions stay in your history.</p></div></div>
+      <% if (availableDocumentTypes.length) { %>
       <form class="form-stack document-upload-form" method="post" action="/documents" enctype="multipart/form-data" data-submitting-message="Uploading your document. Please wait.">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <div class="admin-form-grid">
@@ -30,7 +42,7 @@
             <label for="document-type">Document type</label>
             <select id="document-type" name="documentType" aria-describedby="upload-format-help" required>
               <option value="">Choose a document type</option>
-              <% for (const type of documentTypes) { %><option value="<%= type.value %>" <%= documentType === type.value ? 'selected' : '' %>><%= type.label %></option><% } %>
+              <% for (const type of availableDocumentTypes) { %><option value="<%= type.value %>" <%= documentType === type.value ? 'selected' : '' %>><%= type.label %></option><% } %>
             </select>
           </div>
           <div class="field">
@@ -40,15 +52,56 @@
         </div>
         <button class="button button--primary button--align-start" type="submit">Upload document</button>
       </form>
+      <% } else { %>
+        <p class="empty-state">Each allowed document type has a latest submission that was not rejected. Open it to review its status or upload a correction requested by staff.</p>
+      <% } %>
     </section>
   <% } else { %>
     <section class="admin-section" aria-labelledby="search-title">
-      <div class="admin-section__heading"><div><h2 id="search-title">Submissions</h2><p>Search by student name or student number. Results are limited to 200 documents.</p></div></div>
+        <div class="admin-section__heading"><div><h2 id="search-title">Digital submissions</h2><p>Search uploaded files by student name, student number, or LRN. These filters do not include Form 137 or paper-copy status records. Narrow digital submissions by review status; results are limited to 200 files.</p></div></div>
       <form class="admin-search" method="get" action="/documents">
-        <div class="field"><label for="document-search">Student name or number</label><input id="document-search" name="search" type="search" maxlength="100" value="<%= searchTerm %>" autocomplete="off"></div>
+        <div class="field"><label for="document-search">Student name, number, or LRN</label><input id="document-search" name="search" type="search" maxlength="100" value="<%= searchTerm %>" autocomplete="off"></div>
+        <div class="field"><label for="document-type-filter">Document</label><select id="document-type-filter" name="documentType"><option value="all" <%= !documentType ? 'selected' : '' %>>All submissions and archives</option><% for (const type of documentTypes) { %><option value="<%= type.value %>" <%= documentType === type.value ? 'selected' : '' %>><%= type.label %></option><% } %></select></div>
+        <div class="field"><label for="document-status-filter">Review status</label><select id="document-status-filter" name="status"><% for (const option of [{ value: 'all', label: 'All statuses' }, { value: 'awaiting_review', label: 'Awaiting staff review' }, { value: 'processing', label: 'Precheck queued or running' }, { value: 'review_required', label: 'Staff review required' }, { value: 'verified', label: 'Verified by staff' }, { value: 'rejected', label: 'Rejected' }]) { %><option value="<%= option.value %>" <%= statusFilter === option.value ? 'selected' : '' %>><%= option.label %></option><% } %></select></div>
         <button class="button button--secondary" type="submit">Search documents</button>
-        <% if (searchTerm) { %><a class="table-action" href="/documents">Clear search</a><% } %>
+        <% if (searchTerm || documentType || statusFilter !== 'all') { %><a class="table-action" href="/documents">Clear filters</a><% } %>
       </form>
+      <% if (statusSummary?.length) { %>
+        <div class="document-status-overview" aria-label="Current document status counts">
+          <% for (const summary of statusSummary) { %>
+            <article class="document-status-overview__type">
+              <h3><%= summary.document_type === 'good_moral' ? 'Good Moral Certificate' : summary.document_type === 'psa_birth_certificate' ? 'PSA birth certificate' : 'Previous-school report-card scans' %></h3>
+              <% if (summary.document_type === 'report_card' && Number(summary.submitted_count || 0) === 0) { %>
+                <p class="empty-state">No active digital previous-school report-card scans have been submitted.</p>
+              <% } else { %>
+              <dl>
+                <% if (summary.document_type === 'report_card') { %>
+                  <div><dt>Latest submissions</dt><dd><%= summary.submitted_count %></dd></div>
+                  <div><dt>Awaiting staff review</dt><dd><%= summary.awaiting_review_count %></dd></div>
+                  <div><dt>Precheck queued or running</dt><dd><%= summary.processing_count %></dd></div>
+                  <div><dt>Precheck unavailable</dt><dd><%= summary.review_required_count %></dd></div>
+                  <div><dt>Correction requested</dt><dd><%= summary.correction_requested_count %></dd></div>
+                  <div><dt>Verified</dt><dd><%= summary.verified_count %></dd></div>
+                  <div><dt>Rejected</dt><dd><%= summary.rejected_count %></dd></div>
+                <% } else { %>
+                <div><dt>Not submitted</dt><dd><%= summary.missing_count %></dd></div>
+                <div><dt>Awaiting review</dt><dd><%= summary.awaiting_review_count %></dd></div>
+                <div><dt>Precheck running</dt><dd><%= summary.processing_count %></dd></div>
+                <div><dt>Verified</dt><dd><%= summary.verified_count %></dd></div>
+                <div><dt>Rejected</dt><dd><%= summary.rejected_count %></dd></div>
+                <div><dt>Review required</dt><dd><%= summary.review_required_count %></dd></div>
+                <% } %>
+              </dl>
+              <% } %>
+              <% if (summary.document_type === 'report_card' && Number(summary.awaiting_review_count || 0) > 0) { %>
+                <a class="table-action" href="/documents?documentType=report_card&amp;status=awaiting_review">Open active previous-school report-card scan queue</a>
+              <% } else if (summary.document_type === 'report_card' && Number(summary.submitted_count || 0) > 0) { %>
+                <p class="muted-copy">No active scans are awaiting staff review.</p>
+              <% } %>
+            </article>
+          <% } %>
+        </div>
+      <% } %>
     </section>
   <% } %>
 
@@ -65,7 +118,7 @@
                 <% if (isStaff) { %><td data-label="Student"><%= document.student_no %> · <%= [document.first_name, document.middle_name, document.last_name].filter(Boolean).join(' ') %></td><% } %>
                 <td data-label="Document"><%= documentTypeLabel(document.document_type) %><% if (document.supersedes_document_id) { %><br><span class="muted-copy">Corrected submission</span><% } %></td>
                 <td data-label="File"><%= document.original_filename %></td>
-                <td data-label="Status"><%= documentStatusLabel(document.status, document.latest_decision_type, document.latest_review_action, document.document_type) %></td>
+                <td data-label="Status"><%= documentStatusLabel(document.status, document.latest_decision_type, document.latest_review_action, document.document_type, document.is_legacy_archive) %></td>
                 <td data-label="Submitted"><%= document.created_at ? new Date(document.created_at).toLocaleString() : '—' %></td>
                 <td data-label="Actions"><a class="table-action" href="/documents/<%= document.id %>">View details</a></td>
               </tr>

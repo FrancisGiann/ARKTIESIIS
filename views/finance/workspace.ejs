@@ -15,39 +15,19 @@
   <% } %>
 
   <% if (!student) { %>
-    <% if (summary) { %>
-      <section class="dashboard-summary finance-dashboard-summary" aria-label="Finance summary">
-        <div class="finance-summary-heading">
-          <div><span class="finance-summary-eyebrow">Account overview</span><h2>Finance at a glance</h2></div>
-          <p>Current account totals from saved finance records.</p>
-        </div>
-        <dl class="dashboard-summary-grid">
-          <div><dt>Financial accounts</dt><dd><%= summary.account_count %></dd></div>
-          <div><dt>Accounts with a balance due</dt><dd><%= summary.accounts_due_count %></dd></div>
-          <div><dt>Settled accounts</dt><dd><%= summary.accounts_settled_count %></dd></div>
-          <div><dt>Accounts with a credit balance</dt><dd><%= summary.accounts_credit_count %></dd></div>
-        </dl>
-        <div class="finance-summary-activity" aria-label="Ledger activity counts">
-          <span>Ledger activity</span>
-          <span><strong><%= summary.charge_count %></strong> recorded charges</span>
-          <span><strong><%= summary.payment_count %></strong> recorded payments</span>
-        </div>
-      </section>
-    <% } %>
     <% const accountRows = searchTerm ? students : recentAccounts; %>
     <section class="finance-panel finance-overview-panel" aria-labelledby="finance-search-heading">
       <div class="finance-overview-heading">
         <div>
-          <span class="finance-eyebrow">Account index</span>
-          <h2 id="finance-search-heading"><%= searchTerm ? 'Search results' : 'Recently updated accounts' %></h2>
-          <p><%= searchTerm ? 'Matches across active and archived student records.' : 'The latest account activity. Search to find any student record.' %></p>
+          <h2 id="finance-search-heading"><%= searchTerm ? 'Student search results' : 'Find a student account' %></h2>
+          <p><%= searchTerm ? 'Matches across active and archived student records.' : 'Search a student record to review or create its finance account.' %></p>
         </div>
         <form class="finance-search" method="get" action="/finance">
           <label class="field">
-            <span>Student number or name</span>
-            <input type="search" name="search" maxlength="100" value="<%= searchTerm %>" autocomplete="off" placeholder="e.g. DEMO-001" required>
+            <span>Student name or number</span>
+            <input type="search" name="search" maxlength="100" value="<%= searchTerm %>" autocomplete="off" placeholder="Enter a name or student number" required>
           </label>
-          <button class="button button--primary" type="submit">Search</button>
+          <button class="button button--primary" type="submit">Find student</button>
         </form>
       </div>
       <% if (searchError) { %><p class="form-alert" role="alert"><%= searchError %></p><% } %>
@@ -65,7 +45,7 @@
                   <td data-label="Student number"><%= result.student_no %></td>
                   <td data-label="Student"><%= [result.first_name, result.middle_name, result.last_name, result.suffix].filter(Boolean).join(' ') %></td>
                   <td data-label="Account status"><span class="finance-status finance-status--<%= accountStatus.toLowerCase().replaceAll(' ', '-') %>"><%= accountStatus %></span></td>
-                  <td data-label="Balance"><%= balanceAmount === null ? '—' : `PHP ${result.balance}` %></td>
+                  <td data-label="Balance"><%= balanceAmount === null ? '—' : `₱${formatMoney(result.balance)}` %></td>
                   <td data-label="Action"><a class="table-action" href="/finance/students/<%= result.student_id %><%= searchSuffix %>"><%= result.financial_account_id ? 'View account' : 'Create account' %></a></td>
                 </tr>
               <% }) %>
@@ -77,26 +57,92 @@
         <p class="empty-state">No financial accounts are available yet. Search for a student to create an account.</p>
       <% } %>
     </section>
+    <% if (pendingEnrollments?.length) { %>
+      <section class="finance-panel" aria-labelledby="pending-enrollment-payments-heading">
+        <div class="admin-section__heading"><div><h2 id="pending-enrollment-payments-heading">Pending enrollment payments</h2><p>Record a payment from the student's financial account and explicitly clear the matching enrollment.</p></div></div>
+        <div class="table-scroll" tabindex="0" aria-label="Enrollments awaiting payment clearance">
+          <table class="admin-table">
+            <thead><tr><th scope="col">Student</th><th scope="col">Term and section</th><th scope="col"><span class="visually-hidden">Action</span></th></tr></thead>
+            <tbody><% for (const enrollment of pendingEnrollments) { %><tr>
+              <td data-label="Student"><strong><%= [enrollment.first_name, enrollment.middle_name, enrollment.last_name, enrollment.suffix].filter(Boolean).join(' ') %></strong><br><%= enrollment.student_no %></td>
+              <td data-label="Term and section"><%= enrollment.school_year %> · <%= enrollment.term %><br><%= enrollment.section_name || 'No section' %></td>
+              <td data-label="Action"><a class="table-action" href="/finance/students/<%= enrollment.student_id %>">Open account and record payment</a></td>
+            </tr><% } %></tbody>
+          </table>
+        </div>
+      </section>
+    <% } %>
   <% } %>
 
   <% if (student) { %>
     <section class="finance-panel finance-account" aria-labelledby="finance-account-heading">
-      <div class="finance-account__heading">
-        <div>
+      <% const accountStatus = !account ? 'not-created' : Number(account.balance) === 0 ? 'settled' : Number(account.balance) < 0 ? 'credit' : 'due'; %>
+      <header class="finance-account__heading finance-account-summary">
+        <div class="finance-account-identity">
           <h2 id="finance-account-heading"><%= [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(' ') %></h2>
-          <p>Student number: <strong><%= student.student_no %></strong></p>
+          <p class="finance-account-number"><span>Student number</span><strong><%= student.student_no %></strong></p>
+          <% if (student.status === 'archived') { %><span class="finance-account-archive-label">Archived record · Read only</span><% } %>
         </div>
-        <% if (account) { %>
-          <div class="finance-balance">
-            <span>Current balance (PHP)</span>
-            <strong><%= account.balance %></strong>
-            <span><%= Number(account.balance) === 0 ? 'Settled' : String(account.balance).startsWith('-') ? 'Credit' : 'Due' %></span>
+        <dl class="finance-balance-summary">
+          <% if (account) { %>
+            <div class="finance-balance-summary__amount">
+              <dt>Current balance</dt>
+              <dd><span aria-hidden="true">₱</span><strong><%= formatMoney(account.balance) %></strong></dd>
+            </div>
+          <% } %>
+          <div class="finance-balance-summary__status">
+            <dt>Account status</dt>
+            <dd><span class="finance-status finance-account-status finance-account-status--<%= accountStatus %>"><%= accountStatus === 'not-created' ? 'Not created' : accountStatus === 'settled' ? 'Settled' : accountStatus === 'credit' ? 'Credit' : 'Due' %></span></dd>
           </div>
-        <% } %>
-      </div>
+        </dl>
+      </header>
+
+      <% if (pendingEnrollments?.length) { %>
+        <% const unclearedEnrollments = pendingEnrollments.filter((enrollment) => enrollment.clearance_status !== 'cleared'); %>
+        <section class="finance-task-panel finance-clearance-task" aria-labelledby="finance-enrollment-clearance-title">
+          <div class="finance-task-heading">
+            <div>
+              <h3 id="finance-enrollment-clearance-title">Payment clearance</h3>
+              <p>Clearance is recorded for a specific enrollment. The account balance alone does not clear it.</p>
+            </div>
+          </div>
+          <div class="finance-enrollment-list">
+            <% for (const enrollment of pendingEnrollments) { %>
+              <article class="finance-enrollment-item">
+                <div class="finance-enrollment-item__context">
+                  <p class="finance-enrollment-item__term"><%= enrollment.school_year %> · <%= enrollment.term %></p>
+                  <strong><%= enrollment.section_name || 'No section' %></strong>
+                </div>
+                <span class="finance-status finance-clearance-status finance-clearance-status--<%= enrollment.clearance_status === 'cleared' ? 'cleared' : 'pending' %>"><%= enrollment.clearance_status === 'cleared' ? 'Cleared' : 'Pending' %></span>
+                <% if (enrollment.clearance_status !== 'cleared') { %>
+                  <form class="form-stack finance-clearance-followup" method="post" action="/finance/students/<%= student.student_id %>/enrollment-clearance<%= searchSuffix %>">
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                    <input type="hidden" name="enrollmentId" value="<%= enrollment.enrollment_id %>">
+                    <% if (availableEnrollmentPayments?.length) { %>
+                      <label class="field" for="payment-for-enrollment-<%= enrollment.enrollment_id %>">
+                        <span>Unused recorded payment</span>
+                        <select id="payment-for-enrollment-<%= enrollment.enrollment_id %>" name="paymentTransactionId" required>
+                          <option value="">Choose a payment</option>
+                          <% for (const payment of availableEnrollmentPayments) { %>
+                            <option value="<%= payment.transaction_id %>">#<%= payment.transaction_id %> · ₱<%= formatMoney(payment.amount) %> · <%= payment.created_at ? new Date(payment.created_at).toLocaleString() : 'date unavailable' %><%= payment.reference_no ? ` · ${payment.reference_no}` : '' %></option>
+                          <% } %>
+                        </select>
+                      </label>
+                      <label class="checkbox-field"><input type="checkbox" name="confirmEnrollmentClearance" value="1" required><span>I confirm this payment satisfies eligibility for this specific enrollment.</span></label>
+                      <button class="button button--secondary" type="submit">Assign payment and clear enrollment</button>
+                    <% } else { %>
+                      <p>No unused recorded payments are available for this student's account.</p>
+                    <% } %>
+                  </form>
+                <% } %>
+              </article>
+            <% } %>
+          </div>
+        </section>
+      <% } %>
 
       <% if (!account) { %>
-        <div class="finance-empty">
+        <section class="finance-task-panel finance-account-create">
           <h3>No financial account exists</h3>
           <% if (student.status === 'archived') { %>
             <p>A financial account cannot be created for an archived student record.</p>
@@ -107,11 +153,14 @@
               <button class="button button--primary" type="submit">Create financial account</button>
             </form>
           <% } %>
-        </div>
+        </section>
       <% } else { %>
-        <div class="finance-grid finance-detail-grid">
-          <section aria-labelledby="finance-entry-heading">
-            <h3 id="finance-entry-heading"><%= student.status === 'archived' ? 'Transactions are read-only' : 'Record a transaction' %></h3>
+        <section class="finance-task-panel finance-transaction-task" aria-labelledby="finance-entry-heading">
+          <div class="finance-task-heading">
+            <div>
+              <h3 id="finance-entry-heading"><%= student.status === 'archived' ? 'Transactions are read-only' : 'Record a transaction' %></h3>
+            </div>
+          </div>
             <% if (student.status === 'archived') { %>
               <p>New transactions are disabled for archived student records.</p>
             <% } else { %>
@@ -131,9 +180,9 @@
                 <input type="text" name="amount" inputmode="decimal" maxlength="14" placeholder="1250.00 or -125.50" value="<%= transactionValues.amount %>" required aria-describedby="finance-amount-help">
                 <small id="finance-amount-help">Use up to two decimal places. Adjustments may be positive or negative.</small>
               </label>
-              <label class="field">
+              <label class="field finance-entry__field--wide">
                 <span>Description <span class="field__optional">(optional for charges and payments; required for adjustments)</span></span>
-                <textarea name="description" rows="3" maxlength="500"><%= transactionValues.description %></textarea>
+                <textarea class="finance-entry__description" name="description" rows="3" maxlength="500"><%= transactionValues.description %></textarea>
                 <small>Adjustments require a description that explains the reason.</small>
               </label>
               <label class="field">
@@ -141,37 +190,56 @@
                 <input type="text" name="referenceNo" maxlength="100" value="<%= transactionValues.referenceNo %>">
                 <small>A reference may be used once per account. SQL Server collation determines case matching.</small>
               </label>
+              <% const unclearedEnrollments = pendingEnrollments.filter((enrollment) => enrollment.clearance_status !== 'cleared'); %>
+              <% if (unclearedEnrollments.length) { %>
+                <fieldset class="finance-enrollment-clearance-form finance-entry__clearance">
+                  <legend>Optional enrollment clearance</legend>
+                  <label class="field" for="clear-enrollment-id">
+                    <span>Pending enrollment to clear</span>
+                    <select id="clear-enrollment-id" name="clearEnrollmentId">
+                      <option value="">Do not clear</option>
+                      <% for (const enrollment of unclearedEnrollments) { %>
+                        <option value="<%= enrollment.enrollment_id %>" <%= String(transactionValues.clearEnrollmentId || '') === String(enrollment.enrollment_id) ? 'selected' : '' %>><%= enrollment.school_year %> · <%= enrollment.term %> · <%= enrollment.section_name || 'No section' %></option>
+                      <% } %>
+                    </select>
+                  </label>
+                  <label class="checkbox-field"><input type="checkbox" name="confirmEnrollmentClearance" value="1" <%= transactionValues.confirmEnrollmentClearance === '1' ? 'checked' : '' %>><span>I confirm this recorded payment satisfies eligibility for the selected enrollment.</span></label>
+                  <small>Only a payment tied to this selected pending enrollment can clear it. No school payment amount is assumed by the system.</small>
+                </fieldset>
+              <% } %>
               <button class="button button--primary" type="submit">Record transaction</button>
             </form>
             <% } %>
-          </section>
-
-          <section aria-labelledby="finance-history-heading">
-            <h3 id="finance-history-heading">Recent transaction history</h3>
-            <% if (!transactions.length) { %>
-              <p class="finance-empty-copy">No transactions have been recorded.</p>
-            <% } else { %>
-              <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable transaction history for <%= student.student_no %>">
-                <table class="admin-table finance-table finance-history-table">
-                  <caption class="visually-hidden">Recent financial transactions for <%= student.student_no %></caption>
-                  <thead><tr><th scope="col">Date</th><th scope="col">Type</th><th scope="col">Amount</th><th scope="col">Description / reference</th><th scope="col">Recorded by</th></tr></thead>
-                  <tbody>
-                    <% transactions.forEach((entry) => { %>
-                      <tr>
-                        <td data-label="Date"><%= entry.created_at ? new Date(entry.created_at).toLocaleString() : '' %></td>
-                        <td data-label="Type"><%= entry.transaction_type ? entry.transaction_type.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Unknown' %></td>
-                        <td data-label="Amount">PHP <%= entry.amount %></td>
-                        <td data-label="Description / reference"><%= [entry.description, entry.reference_no].filter(Boolean).join(' · ') || '—' %></td>
-                        <td data-label="Recorded by"><%= entry.recorded_by_name %></td>
-                      </tr>
-                    <% }) %>
-                  </tbody>
-                </table>
-              </div>
-              <p class="finance-caption">Showing the latest 100 transactions.</p>
-            <% } %>
-          </section>
-        </div>
+        </section>
+        <section class="finance-task-panel finance-history-panel" aria-labelledby="finance-history-heading">
+          <div class="finance-task-heading">
+            <div>
+              <h3 id="finance-history-heading">Recent transaction history</h3>
+            </div>
+            <% if (transactions.length) { %><p class="finance-caption">Latest 100 transactions</p><% } %>
+          </div>
+          <% if (!transactions.length) { %>
+            <p class="finance-empty-copy">No transactions have been recorded.</p>
+          <% } else { %>
+            <div class="table-scroll" tabindex="0" role="region" aria-label="Scrollable transaction history for <%= student.student_no %>">
+              <table class="admin-table finance-table finance-history-table">
+                <caption class="visually-hidden">Recent financial transactions for <%= student.student_no %></caption>
+                <thead><tr><th scope="col">Date</th><th scope="col">Type</th><th scope="col">Amount</th><th scope="col">Description / reference</th><th scope="col">Recorded by</th></tr></thead>
+                <tbody>
+                  <% transactions.forEach((entry) => { %>
+                    <tr>
+                      <td data-label="Date"><%= entry.created_at ? new Date(entry.created_at).toLocaleString() : '' %></td>
+                      <td data-label="Type"><%= entry.transaction_type ? entry.transaction_type.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Unknown' %></td>
+                      <td data-label="Amount">₱<%= formatMoney(entry.amount) %></td>
+                      <td data-label="Description / reference"><%= [entry.description, entry.reference_no].filter(Boolean).join(' · ') || '—' %></td>
+                      <td data-label="Recorded by"><%= entry.recorded_by_name %></td>
+                    </tr>
+                  <% }) %>
+                </tbody>
+              </table>
+            </div>
+          <% } %>
+        </section>
       <% } %>
     </section>
   <% } %>

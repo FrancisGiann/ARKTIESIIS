@@ -34,42 +34,36 @@ function parseUploadMegabytes(value) {
   return megabytes;
 }
 
-function parseOcrTimeout(value) {
-  const rawValue = value === undefined || value === '' ? '60000' : String(value);
-  if (!/^\d+$/.test(rawValue)) {
-    throw new Error('OCR_TIMEOUT_MS must be an integer between 1000 and 120000.');
-  }
+function parseDocumentProcessingConcurrency(value) {
+  const rawValue = value === undefined || value === '' ? '2' : String(value);
+  if (!/^[1-4]$/.test(rawValue)) throw new Error('DOCUMENT_PROCESSING_CONCURRENCY must be an integer between 1 and 4.');
+  return Number(rawValue);
+}
 
+function configuredGeminiModel(value) {
+  const model = value === undefined || value.trim() === '' ? 'gemini-3.8-flash' : value.trim();
+  if (!/^gemini-[a-z0-9]+(?:[.-][a-z0-9]+){1,5}$/.test(model)) {
+    throw new Error('GEMINI_MODEL must be a valid Gemini model identifier.');
+  }
+  return model;
+}
+
+function parseGeminiTimeout(value) {
+  const rawValue = value === undefined || value === '' ? '45000' : String(value);
+  if (!/^\d+$/.test(rawValue)) throw new Error('GEMINI_TIMEOUT_MS must be an integer between 1000 and 120000.');
   const timeoutMs = Number(rawValue);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 120000) {
-    throw new Error('OCR_TIMEOUT_MS must be an integer between 1000 and 120000.');
+    throw new Error('GEMINI_TIMEOUT_MS must be an integer between 1000 and 120000.');
   }
   return timeoutMs;
 }
 
-function configuredExecutable(name, fallback) {
-  const value = process.env[name];
-  const executable = value === undefined || value.trim() === '' ? fallback : value;
-  if (executable.includes('\u0000')) throw new Error(`${name} contains an invalid character.`);
-  return executable;
-}
-
-function configuredOcrLanguage(value) {
-  const language = value === undefined || value.trim() === '' ? 'eng' : value;
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_+-]{0,63}$/.test(language)) throw new Error('OCR_LANGUAGE is invalid.');
-  return language;
-}
-
-function parseOcrConcurrency(value) {
-  const rawValue = value === undefined || value === '' ? '2' : String(value);
-  if (!/^[1-4]$/.test(rawValue)) throw new Error('OCR_CONCURRENCY must be an integer between 1 and 4.');
-  return Number(rawValue);
-}
-
-function parseOcrMaxPdfPages(value) {
-  const rawValue = value === undefined || value === '' ? '20' : String(value);
-  if (!/^(?:[1-9]|1\d|20)$/.test(rawValue)) throw new Error('OCR_MAX_PDF_PAGES must be an integer between 1 and 20.');
-  return Number(rawValue);
+function configuredGeminiApiKey(value) {
+  const apiKey = value === undefined ? '' : value.trim();
+  if (apiKey.length > 512 || /[\u0000-\u001f\u007f]/.test(apiKey)) {
+    throw new Error('GEMINI_API_KEY is invalid.');
+  }
+  return apiKey;
 }
 
 const configuredSessionSecret = process.env.SESSION_SECRET;
@@ -80,15 +74,39 @@ if (nodeEnv === 'production') {
   }
 }
 
+function configuredAppBaseUrl(value, environment) {
+  const rawValue = typeof value === 'string' && value.trim()
+    ? value.trim()
+    : environment === 'production' ? '' : `http://localhost:${process.env.PORT || '3000'}`;
+  if (!rawValue) throw new Error('APP_BASE_URL must be set to the public application origin in production.');
+
+  let url;
+  try {
+    url = new URL(rawValue);
+  } catch {
+    throw new Error('APP_BASE_URL must be an absolute HTTP(S) URL.');
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/'
+    || url.search || url.hash || (environment === 'production' && url.protocol !== 'https:')) {
+    throw new Error('APP_BASE_URL must be an absolute HTTP(S) origin and use HTTPS in production.');
+  }
+  return url.origin;
+}
+
+const appBaseUrl = configuredAppBaseUrl(process.env.APP_BASE_URL, nodeEnv);
+
 module.exports = {
   nodeEnv,
   devPasswordOnlyLogin: process.env.DEV_PASSWORD_ONLY_LOGIN === 'true',
   port: parsePort('PORT', process.env.PORT, 3000),
   sessionSecret: normalizedSessionSecret || 'dev-only-change-me',
+  appBaseUrl,
   database: {
     server: process.env.DB_SERVER || 'localhost',
     port: parsePort('DB_PORT', process.env.DB_PORT, 1433),
-    database: process.env.DB_NAME || 'ARKTIESIIS',
+    // The active prototype is isolated from the legacy database. DB_NAME is
+    // intentionally ignored so a developer's old .env cannot redirect writes.
+    database: 'ARKTIESIIS_V2',
     user: process.env.DB_USER || 'sa',
     password: process.env.DB_PASSWORD || '',
     encrypt: String(process.env.DB_ENCRYPT || 'false') === 'true',
@@ -102,14 +120,13 @@ module.exports = {
     pass: process.env.SMTP_PASS,
     from: process.env.SMTP_FROM || 'ARKTIESIIS <no-reply@example.com>'
   },
-  ocr: {
-    tesseractPath: configuredExecutable('TESSERACT_PATH', 'tesseract'),
-    pdfinfoPath: configuredExecutable('PDFINFO_PATH', 'pdfinfo'),
-    pdftoppmPath: configuredExecutable('PDFTOPPM_PATH', 'pdftoppm'),
-    language: configuredOcrLanguage(process.env.OCR_LANGUAGE),
-    timeoutMs: parseOcrTimeout(process.env.OCR_TIMEOUT_MS),
-    concurrency: parseOcrConcurrency(process.env.OCR_CONCURRENCY),
-    maxPdfPages: parseOcrMaxPdfPages(process.env.OCR_MAX_PDF_PAGES)
+  documentProcessing: {
+    concurrency: parseDocumentProcessingConcurrency(process.env.DOCUMENT_PROCESSING_CONCURRENCY)
+  },
+  gemini: {
+    apiKey: configuredGeminiApiKey(process.env.GEMINI_API_KEY),
+    model: configuredGeminiModel(process.env.GEMINI_MODEL),
+    timeoutMs: parseGeminiTimeout(process.env.GEMINI_TIMEOUT_MS)
   },
   upload: {
     maxMb: parseUploadMegabytes(process.env.MAX_UPLOAD_MB),

@@ -1,75 +1,45 @@
 <%- include('../partials/head', { title }) %>
-<main class="page-shell dashboard-page records-page student-record-page" id="main-content">
-  <section class="dashboard-heading">
+<main class="page-shell student-home" id="main-content">
+  <% const student = ownRecords?.student || null; %>
+  <% const currentEnrollment = ownRecords?.enrollments?.find((enrollment) => enrollment.is_current && enrollment.enrollment_status === 'enrolled'); %>
+  <% const todaySchedules = classSchedule.filter((schedule) => Number(schedule.day_of_week) === new Date().getDay()); %>
+  <% const currentPlacement = currentEnrollment ? formatStudentPlacement(currentEnrollment.grade_level, currentEnrollment.section_name) : ''; %>
+  <header class="student-welcome">
     <div>
-      <h1>My student record</h1>
-      <p>Student workspace · Lucena Branch</p>
+      <h1><%= student ? `Welcome, ${student.first_name || 'student'}` : 'Your school day' %></h1>
+      <% if (currentEnrollment) { %>
+        <p><span class="student-welcome__label">Current term</span> <%= currentEnrollment.school_year %> · <%= currentEnrollment.term %><% if (currentPlacement) { %> · <%= currentPlacement %><% } %></p>
+      <% } else { %><p>Your current school day at a glance.</p><% } %>
     </div>
-  </section>
-  <% if (summary) { %>
-    <section class="dashboard-summary student-dashboard-summary" aria-label="Your student summary">
-      <dl class="dashboard-summary-grid">
-        <div><dt>Enrollment records</dt><dd><%= summary.enrollment_count %></dd></div>
-        <div><dt>Grade entries</dt><dd><%= summary.grade_entry_count %></dd></div>
-        <div><dt>Permitted documents</dt><dd><%= summary.document_count %></dd></div>
-        <div><dt>Documents awaiting OCR or staff review</dt><dd><%= summary.documents_in_progress_count %></dd></div>
-      </dl>
-      <p class="dashboard-summary-note">Document totals include your Good Moral Certificates and PSA birth certificates. Teacher grade workbooks are reviewed separately by the registrar before grades become visible.</p>
-      <a class="button button--secondary" href="/documents">View my documents</a>
+    <% if (student) { %><a class="button button--secondary" href="/student/records">My profile</a><% } %>
+  </header>
+
+  <% if (!student) { %>
+    <section class="student-unlinked" aria-labelledby="unlinked-title">
+      <h2 id="unlinked-title">Your student profile is not linked yet</h2>
+      <p>Ask the registrar to connect your account. Once linked, your current schedule, grades, finance account, and enrollment history will appear in their own pages.</p>
     </section>
-  <% } %>
-  <% if (ownRecords) { %>
-    <div class="student-record-layout">
-    <section class="admin-section student-profile-panel" aria-labelledby="profile-title">
-      <div class="admin-section__heading"><div><h2 id="profile-title">Profile</h2><p>Your profile details and academic records linked to this account.</p></div></div>
-      <dl class="student-profile-grid">
-        <div><dt>Student number</dt><dd><%= ownRecords.student.student_no %></dd></div>
-        <div><dt>Name</dt><dd><%= [ownRecords.student.first_name, ownRecords.student.middle_name, ownRecords.student.last_name, ownRecords.student.suffix].filter(Boolean).join(' ') %></dd></div>
-        <div><dt>Birth date</dt><dd><%= ownRecords.student.birth_date ? new Date(ownRecords.student.birth_date).toLocaleDateString() : 'Not provided' %></dd></div>
-        <div><dt>Sex</dt><dd><%= ownRecords.student.sex || 'Not provided' %></dd></div>
-        <div><dt>Phone</dt><dd><%= ownRecords.student.phone || 'Not provided' %></dd></div>
-        <div><dt>Address</dt><dd><%= ownRecords.student.address || 'Not provided' %></dd></div>
-      </dl>
-    </section>
-    <div class="student-academic-workspace">
-    <section class="student-record-section" aria-labelledby="enrollments-title">
-      <div class="admin-section__heading"><div><h2 id="enrollments-title">Enrollment history</h2><p>Academic term and section information linked to your student record.</p></div></div>
-      <% if (ownRecords.enrollments.length) { %>
-        <div class="table-scroll" tabindex="0" aria-label="Your enrollment history">
-          <table class="admin-table"><thead><tr><th scope="col">Academic term</th><th scope="col">Section</th><th scope="col">Status</th><th scope="col">Current term</th></tr></thead><tbody>
-            <% for (const enrollment of ownRecords.enrollments) { %><tr>
-              <td data-label="Academic term"><%= enrollment.school_year %> · <%= enrollment.term %></td>
-              <td data-label="Section"><%= enrollment.section_name || 'Not assigned' %></td>
-              <td data-label="Status"><%= enrollment.enrollment_status ? enrollment.enrollment_status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Unknown' %></td>
-              <td data-label="Current term"><%= enrollment.is_current ? 'Yes' : 'No' %></td>
-            </tr><% } %>
-          </tbody></table>
-        </div>
-      <% } else { %><p class="empty-state">No enrollment records are linked to your account.</p><% } %>
-    </section>
-    <section class="student-record-section" aria-labelledby="grades-title">
-      <div class="admin-section__heading"><div><h2 id="grades-title">My grades</h2><p>Grades recorded for subjects in your enrollment history.</p></div></div>
-      <% if (ownRecords.grades && ownRecords.grades.length) { %>
-        <div class="table-scroll" tabindex="0" aria-label="Your grades">
-          <table class="admin-table"><thead><tr><th scope="col">Term</th><th scope="col">Subject</th><th scope="col">Grading period</th><th scope="col">Grade</th><th scope="col">Remarks</th></tr></thead><tbody>
-            <% for (const grade of ownRecords.grades) { %><tr>
-              <td data-label="Term"><%= grade.school_year %> · <%= grade.term %></td>
-              <td data-label="Subject"><%= grade.subject_code %> · <%= grade.subject_name %></td>
-              <td data-label="Grading period"><%= grade.grading_period %></td>
-              <td data-label="Grade"><%= grade.grade_value ?? 'Pending' %></td>
-              <td data-label="Remarks"><%= grade.remarks || '—' %></td>
-            </tr><% } %>
-          </tbody></table>
-        </div>
-      <% } else { %><p class="empty-state">No grades are linked to your account yet.</p><% } %>
-    </section>
-    </div>
-    </div>
   <% } else { %>
-    <section class="placeholder-state student-unlinked-state" aria-labelledby="profile-unavailable-title">
-      <h2 id="profile-unavailable-title">Student profile is not linked</h2>
-      <p>Contact the registrar to link your login to your student record.</p>
+    <section class="student-section student-schedule" aria-labelledby="today-schedule-title">
+      <div class="student-section-heading">
+        <div><h2 id="today-schedule-title">Today's classes</h2><p><%= new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) %></p></div>
+        <a class="text-link" href="/student/schedule">View full schedule</a>
+      </div>
+      <% if (todaySchedules.length) { %>
+        <ol class="schedule-agenda">
+          <% for (const schedule of todaySchedules) { %>
+            <li class="schedule-agenda__row">
+              <div class="schedule-agenda__day"><time><%= schedule.start_time %>–<%= schedule.end_time %></time></div>
+              <div class="schedule-agenda__class"><strong><%= schedule.subject_name %></strong><span><%= formatStudentPlacement(schedule.grade_level, schedule.section_name) %> · <%= schedule.subject_code %></span></div>
+              <div class="schedule-agenda__room"><span><%= schedule.room || 'Room TBA' %></span><span><%= schedule.teacher_name %></span></div>
+            </li>
+          <% } %>
+        </ol>
+      <% } else { %>
+        <p class="empty-state"><%= classSchedule.length ? 'No classes are listed for today.' : 'Your schedule is not posted for this term yet.' %></p>
+      <% } %>
     </section>
+
   <% } %>
 </main>
 <%- include('../partials/foot') %>

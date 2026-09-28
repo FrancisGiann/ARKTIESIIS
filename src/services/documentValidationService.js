@@ -17,6 +17,8 @@ function validateRequiredText(extractedText, requirements = []) {
 }
 
 const MAX_NAME_GAP_TOKENS = 2;
+const MAX_GEMINI_PRECHECK_ATTEMPTS = 3;
+const RETRYABLE_GEMINI_FAILURE_CODES = new Set(['api_error', 'network_error', 'timeout']);
 
 function containsNameSequence(tokens, sequence, start) {
   return sequence.every((token, offset) => tokens[start + offset] === token);
@@ -66,7 +68,7 @@ function findPossibleSchoolNames(extractedText) {
 }
 
 function advisoryChecks(documentType, extractedText, student) {
-  if (!['good_moral', 'psa_birth_certificate'].includes(documentType)) return [];
+  if (!['good_moral', 'psa_birth_certificate', 'report_card'].includes(documentType)) return [];
   const checks = [{
     key: 'linked_student_name',
     label: 'Possible linked student-name match',
@@ -97,8 +99,36 @@ function form137AdvisoryChecks(extractedText, student) {
   ];
 }
 
+function canRetryGeminiPrecheck({
+  documentType,
+  isLegacyArchive = null,
+  documentStatus,
+  validationSummary,
+  precheckAttemptCount,
+  hasFinalDecision = false
+} = {}) {
+  const attempts = Number(precheckAttemptCount);
+  const gemini = validationSummary?.gemini;
+  const retryableDocumentType = ['good_moral', 'psa_birth_certificate'].includes(documentType)
+    || (documentType === 'report_card' && (isLegacyArchive === false || isLegacyArchive === 0));
+  return retryableDocumentType
+    && documentStatus === 'needs_review'
+    && !hasFinalDecision
+    && Number.isSafeInteger(attempts)
+    && attempts >= 1
+    && attempts < MAX_GEMINI_PRECHECK_ATTEMPTS
+    && validationSummary?.stage === 'gemini_precheck'
+    && validationSummary?.precheckVersion === 2
+    && validationSummary?.outcome === 'gemini_unavailable'
+    && validationSummary?.fileFormatPassed === true
+    && gemini?.status === 'unavailable'
+    && RETRYABLE_GEMINI_FAILURE_CODES.has(gemini.code);
+}
+
 module.exports = {
+  MAX_GEMINI_PRECHECK_ATTEMPTS,
   advisoryChecks,
+  canRetryGeminiPrecheck,
   form137AdvisoryChecks,
   validateRequiredText,
   linkedStudentNameFound,

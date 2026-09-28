@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= title %></title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body class="enrollment-print-page">
+  <main class="enrollment-print" id="main-content">
+    <header class="enrollment-print__header">
+      <p>ARK Technological Institute Education System Incorporated · Lucena Branch</p>
+      <h1>Student Enrollment Form</h1>
+      <p>Enrollment <%= enrollment.enrollmentId %> · Prepared <%= printedAt.toLocaleString() %></p>
+    </header>
+    <section aria-labelledby="enrollment-details-title">
+      <h2 id="enrollment-details-title">Student and enrollment details</h2>
+      <dl class="enrollment-print__details">
+        <div><dt>Student number</dt><dd><%= enrollment.studentNo %></dd></div>
+        <div><dt>Student name</dt><dd><%= [enrollment.firstName, enrollment.middleName, enrollment.lastName, enrollment.suffix].filter(Boolean).join(' ') %></dd></div>
+        <div><dt>Academic term</dt><dd><%= enrollment.schoolYear %> · <%= enrollment.term %></dd></div>
+        <div><dt>Section</dt><dd><%= enrollment.sectionName || '—' %></dd></div>
+        <div><dt>Contact and sign-in email</dt><dd><%= enrollment.email %></dd></div>
+      </dl>
+    </section>
+    <section class="enrollment-print__credential" aria-labelledby="temporary-password-title">
+      <h2 id="temporary-password-title">One-time temporary password</h2>
+      <p class="enrollment-print__password"><%= enrollment.temporaryPassword %></p>
+      <p>Keep this credential private. The student must sign in, complete email verification, and change this password before accessing student pages. If this form is lost, use the existing password reset flow; the temporary password cannot be recovered.</p>
+    </section>
+    <footer class="enrollment-print__actions">
+      <button class="button button--primary" type="button" data-print-page>Print enrollment form</button>
+      <a class="button button--secondary" href="/registrar/intake">Return to pending intake</a>
+    </footer>
+  </main>
+<script src="/js/app.js" defer></script>
+</body>
+</html>

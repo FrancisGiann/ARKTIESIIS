@@ -1,0 +1,27 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell student-page" id="main-content">
+  <a class="context-back" href="/student">Back to my school day</a>
+  <% const student = ownRecords?.student || null; %>
+  <% const currentEnrollment = ownRecords?.enrollments?.find((enrollment) => enrollment.is_current && enrollment.enrollment_status === 'enrolled'); %>
+  <header class="page-heading"><div><h1>My schedule</h1><p><%= currentEnrollment ? `${currentEnrollment.school_year} · ${currentEnrollment.term}` : 'Current classes from your enrolled subjects.' %></p></div></header>
+  <% if (!student) { %>
+    <section class="student-unlinked" aria-labelledby="schedule-unlinked-title"><h2 id="schedule-unlinked-title">Your student profile is not linked yet</h2><p>Ask the registrar to connect your account before viewing a personal class schedule.</p></section>
+  <% } else if (classSchedule.length) { %>
+    <% const days = [[1,'Monday'],[2,'Tuesday'],[3,'Wednesday'],[4,'Thursday'],[5,'Friday'],[6,'Saturday']]; %>
+    <% for (const [dayNumber, dayLabel] of days) { const daySchedules = classSchedule.filter((schedule) => Number(schedule.day_of_week) === dayNumber); if (daySchedules.length) { %>
+      <section class="student-section student-weekday" aria-labelledby="schedule-day-<%= dayNumber %>">
+        <div class="student-section-heading"><h2 id="schedule-day-<%= dayNumber %>"><%= dayLabel %></h2></div>
+        <ol class="schedule-agenda">
+          <% for (const schedule of daySchedules) { %>
+            <li class="schedule-agenda__row">
+              <div class="schedule-agenda__day"><time><%= schedule.start_time %>–<%= schedule.end_time %></time></div>
+              <div class="schedule-agenda__class"><strong><%= schedule.subject_name %></strong><span><%= formatStudentPlacement(schedule.grade_level, schedule.section_name) %> · <%= schedule.subject_code %></span></div>
+              <div class="schedule-agenda__room"><span><%= schedule.room || 'Room TBA' %></span><span><%= schedule.teacher_name %></span></div>
+            </li>
+          <% } %>
+        </ol>
+      </section>
+    <% } } %>
+  <% } else { %><p class="empty-state">No class times are posted for your current enrollment yet.</p><% } %>
+</main>
+<%- include('../partials/foot') %>

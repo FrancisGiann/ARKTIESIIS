@@ -1,6 +1,4 @@
 const express = require('express');
-const multer = require('multer');
-const path = require('node:path');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
 const {
@@ -9,14 +7,12 @@ const {
   normalizeId,
   isUniqueConflict
 } = require('../services/academicRecordsService');
-const { GradeImportError, createGradeImportService } = require('../services/gradeImportService');
 const { TeacherGradeSubmissionError, createTeacherGradeSubmissionService } = require('../services/teacherGradeSubmissionService');
 
 const notices = {
   subjectCreated: 'Subject created.',
   subjectUpdated: 'Subject updated.',
   subjectAssigned: 'Subject assigned to the enrollment.',
-  gradeSaved: 'Grade saved.'
 };
 
 function subjectValues(input = {}) {
@@ -27,140 +23,10 @@ function subjectValues(input = {}) {
   };
 }
 
-function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, gradeImportService, teacherGradeSubmissionService } = {}) {
+function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, teacherGradeSubmissionService } = {}) {
   const router = express.Router();
   const service = academicRecordsService || createAcademicRecordsService({ getPool, sql });
-  const importService = gradeImportService || createGradeImportService({ getPool, sql });
   const teacherService = teacherGradeSubmissionService || createTeacherGradeSubmissionService({ getPool, sql });
-  const workbookUpload = multer({
-    storage: multer.memoryStorage(),
-    limits: { files: 1, fileSize: 5 * 1024 * 1024, fields: 3, parts: 4 }
-  }).single('workbook');
-
-  router.use('/grade-import', (_req, res, next) => {
-    res.set('Cache-Control', 'private, no-store');
-    next();
-  });
-
-  async function renderGradeImport(req, res, { status = 200, error = null, preview = null, contextKey = '' } = {}) {
-    try {
-      const contexts = await importService.listImportContexts(req.authUser.id);
-      const summary = req.session.gradeImportSummary || null;
-      delete req.session.gradeImportSummary;
-      return res.status(status).render('records/grade-import', {
-        title: 'Import SSHS E-Class Record Grades',
-        csrfToken: ensureCsrfToken(req),
-        currentUser: req.authUser,
-        contexts,
-        contextKey,
-        preview,
-        summary,
-        error,
-        notice: req.query.notice === 'gradeImportCompleted' ? 'Grade import completed.' : null
-      });
-    } catch {
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The grade-import workspace could not be loaded.' });
-    }
-  }
-
-  function parseWorkbookUpload(req, res, next) {
-    workbookUpload(req, res, (error) => {
-      if (!error) return next();
-      const message = error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE'
-        ? 'The XLSX workbook must be 5 MB or smaller.'
-        : 'Choose one XLSX workbook to preview.';
-      return renderGradeImport(req, res, { status: error.status || 400, error: message });
-    });
-  }
-
-  router.get('/grade-import', requireRole('registrar'), (req, res) => renderGradeImport(req, res, { contextKey: req.query.contextKey || '' }));
-
-  router.post('/grade-import/preview', requireRole('registrar'), parseWorkbookUpload, async (req, res) => {
-    if (!hasValidCsrfToken(req)) {
-      if (req.file?.buffer) req.file.buffer.fill(0);
-      return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
-    }
-    const file = req.file;
-    if (!file) return renderGradeImport(req, res, { status: 400, error: 'Choose one XLSX workbook.' });
-    try {
-      const extension = path.extname(file.originalname).toLocaleLowerCase();
-      const validMime = file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-      const validZip = file.buffer.length >= 4 && file.buffer[0] === 0x50 && file.buffer[1] === 0x4b;
-      if (extension !== '.xlsx' || !validMime || !validZip) {
-        return renderGradeImport(req, res, { status: 400, error: 'Upload a valid .xlsx workbook with the Excel XLSX MIME type.' });
-      }
-      const contextKey = typeof req.body?.contextKey === 'string' ? req.body.contextKey : '';
-      const preview = await importService.createPreview({
-        actorId: req.authUser.id,
-        sessionId: req.sessionID,
-        contextKey,
-        buffer: file.buffer
-      });
-      return renderGradeImport(req, res, { preview, contextKey });
-    } catch (error) {
-      if (error instanceof GradeImportError) return renderGradeImport(req, res, { status: error.status, error: error.message });
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The workbook could not be previewed.' });
-    } finally {
-      file.buffer.fill(0);
-      req.file = undefined;
-    }
-  });
-
-  router.get('/grade-import/:previewId', requireRole('registrar'), async (req, res) => {
-    if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(req.params.previewId)) {
-      return renderGradeImport(req, res, { status: 404, error: 'Grade preview not found.' });
-    }
-    try {
-      const preview = await importService.getPreview({ actorId: req.authUser.id, sessionId: req.sessionID, previewId: req.params.previewId });
-      return renderGradeImport(req, res, { preview });
-    } catch (error) {
-      if (error instanceof GradeImportError) return renderGradeImport(req, res, { status: error.status, error: error.message });
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The grade preview could not be loaded.' });
-    }
-  });
-
-  router.post('/grade-import/:previewId/confirm', requireRole('registrar'), async (req, res) => {
-    if (!hasValidCsrfToken(req)) {
-      return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
-    }
-    if (!/^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(req.params.previewId)) {
-      return renderGradeImport(req, res, { status: 404, error: 'Grade preview not found.' });
-    }
-    try {
-      const preview = await importService.getPreview({ actorId: req.authUser.id, sessionId: req.sessionID, previewId: req.params.previewId });
-      const decisions = preview.rows.map((row) => {
-        const grades = {};
-        for (const grade of row.grades) {
-          const key = grade.gradingPeriod === 'Term 1' ? 'term1'
-            : grade.gradingPeriod === 'Term 2' ? 'term2'
-              : grade.gradingPeriod === 'Term 3' ? 'term3' : 'final';
-          grades[grade.gradingPeriod] = {
-            action: req.body?.[`action_${row.sourceRow}_${key}`] === 'replace' ? 'replace' : 'skip',
-            reason: req.body?.[`reason_${row.sourceRow}_${key}`]
-          };
-        }
-        return {
-          sourceRow: row.sourceRow,
-          include: req.body?.[`includeRow_${row.sourceRow}`] === 'yes',
-          allowNameMismatch: req.body?.[`overrideName_${row.sourceRow}`] === 'yes',
-          nameReason: req.body?.[`nameReason_${row.sourceRow}`],
-          grades
-        };
-      });
-      const summary = await importService.confirmPreview({
-        actorId: req.authUser.id,
-        sessionId: req.sessionID,
-        previewId: req.params.previewId,
-        decisions
-      });
-      req.session.gradeImportSummary = summary;
-      return res.redirect(303, '/records/grade-import?notice=gradeImportCompleted');
-    } catch (error) {
-      if (error instanceof GradeImportError) return renderGradeImport(req, res, { status: error.status, error: error.message });
-      if (isUniqueConflict(error)) return renderGradeImport(req, res, { status: 409, error: 'A grade changed during confirmation. Upload the workbook again.' });
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The grade import could not be confirmed.' });
-    }
-  });
 
   async function renderSubjects(req, res, { status = 200, error = null, values = {} } = {}) {
     try {
@@ -179,16 +45,37 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, gra
     }
   }
 
-  async function renderTeacherAssignments(req, res, { status = 200, error = null, values = {} } = {}) {
+  function teacherAssignmentContext(req, values = {}) {
+    const queryFilters = req.method === 'GET' ? req.query : {};
+    return {
+      termId: queryFilters.termId ?? req.body?.filterTermId ?? values.academicTermId ?? '',
+      sectionId: queryFilters.sectionId ?? req.body?.filterSectionId ?? values.sectionId ?? ''
+    };
+  }
+
+  function teacherAssignmentUrl(context, notice) {
+    const query = new URLSearchParams();
+    if (context.termId) query.set('termId', context.termId);
+    if (context.sectionId) query.set('sectionId', context.sectionId);
+    if (notice) query.set('notice', notice);
+    const serialized = query.toString();
+    return `/registrar/records/teacher-assignments${serialized ? `?${serialized}` : ''}`;
+  }
+
+  async function renderTeacherAssignments(req, res, { status = 200, error = null, values = {}, filters = null } = {}) {
     try {
-      const options = await teacherService.listAssignmentOptions(req.authUser.id);
+      const context = filters || teacherAssignmentContext(req, values);
+      const options = await teacherService.listAssignmentOptions(req.authUser.id, context);
       return res.status(status).render('records/teacher-assignments', {
         title: 'Teacher Assignments', csrfToken: ensureCsrfToken(req), currentUser: req.authUser,
         ...options, values, error,
         notice: req.query.notice === 'assignmentCreated' ? 'Teacher assignment created.'
           : req.query.notice === 'assignmentRevoked' ? 'Teacher assignment revoked.' : null
       });
-    } catch {
+    } catch (loadError) {
+      if (loadError instanceof TeacherGradeSubmissionError) {
+        return res.status(loadError.status).render('error', { title: 'Invalid class context', message: loadError.message });
+      }
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'Teacher assignments are temporarily unavailable.' });
     }
   }
@@ -205,12 +92,13 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, gra
       sectionId: typeof req.body?.sectionId === 'string' ? req.body.sectionId : '',
       subjectId: typeof req.body?.subjectId === 'string' ? req.body.subjectId : ''
     };
+    const context = teacherAssignmentContext(req, values);
     try {
       await teacherService.createAssignment(req.authUser.id, values);
-      return res.redirect(303, '/records/teacher-assignments?notice=assignmentCreated');
+      return res.redirect(303, teacherAssignmentUrl(context, 'assignmentCreated'));
     } catch (error) {
-      if (error instanceof TeacherGradeSubmissionError) return renderTeacherAssignments(req, res, { status: error.status, error: error.message, values });
-      if (isUniqueConflict(error)) return renderTeacherAssignments(req, res, { status: 409, error: 'That class context already has an active teacher assignment.', values });
+      if (error instanceof TeacherGradeSubmissionError) return renderTeacherAssignments(req, res, { status: error.status, error: error.message, values, filters: context });
+      if (isUniqueConflict(error)) return renderTeacherAssignments(req, res, { status: 409, error: 'That class context already has an active teacher assignment.', values, filters: context });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The teacher assignment could not be created.' });
     }
   });
@@ -221,9 +109,9 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, gra
     }
     try {
       await teacherService.revokeAssignment(req.authUser.id, req.params.id);
-      return res.redirect(303, '/records/teacher-assignments?notice=assignmentRevoked');
+      return res.redirect(303, teacherAssignmentUrl(teacherAssignmentContext(req), 'assignmentRevoked'));
     } catch (error) {
-      if (error instanceof TeacherGradeSubmissionError) return renderTeacherAssignments(req, res, { status: error.status, error: error.message });
+      if (error instanceof TeacherGradeSubmissionError) return renderTeacherAssignments(req, res, { status: error.status, error: error.message, filters: teacherAssignmentContext(req) });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The teacher assignment could not be revoked.' });
     }
   });
@@ -260,7 +148,7 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, gra
     const values = subjectValues(req.body);
     try {
       await service.saveSubject(req.authUser.id, null, req.body);
-      return res.redirect(303, '/records/subjects?notice=subjectCreated');
+      return res.redirect(303, '/registrar/records/subjects?notice=subjectCreated');
     } catch (error) {
       if (error instanceof AcademicRecordsError) return renderSubjects(req, res, { status: error.status, error: error.message, values });
       if (isUniqueConflict(error)) return renderSubjects(req, res, { status: 409, error: 'That subject code is already in use.', values });
@@ -276,7 +164,7 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, gra
     if (!subjectId) return res.status(404).render('error', { title: 'Not Found', message: 'Subject not found.' });
     try {
       await service.saveSubject(req.authUser.id, subjectId, req.body);
-      return res.redirect(303, '/records/subjects?notice=subjectUpdated');
+      return res.redirect(303, '/registrar/records/subjects?notice=subjectUpdated');
     } catch (error) {
       if (error instanceof AcademicRecordsError) return renderSubjects(req, res, { status: error.status, error: error.message, values: req.body });
       if (isUniqueConflict(error)) return renderSubjects(req, res, { status: 409, error: 'That subject code is already in use.', values: req.body });
@@ -298,27 +186,11 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, gra
     if (!studentId) return res.status(400).render('error', { title: 'Invalid Request', message: 'Choose a valid student record.' });
     try {
       const savedStudentId = await service.assignSubject(req.authUser.id, req.body);
-      return res.redirect(303, `/records/students/${savedStudentId}/academic?notice=subjectAssigned`);
+      return res.redirect(303, `/registrar/records/students/${savedStudentId}/academic?notice=subjectAssigned`);
     } catch (error) {
       if (error instanceof AcademicRecordsError) return renderAcademicRecord(req, res, studentId, { status: error.status, error: error.message });
       if (isUniqueConflict(error)) return renderAcademicRecord(req, res, studentId, { status: 409, error: 'This subject is already assigned to the enrollment.' });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The subject could not be assigned.' });
-    }
-  });
-
-  router.post('/grades', requireRole('database_admin', 'registrar'), async (req, res) => {
-    if (!hasValidCsrfToken(req)) {
-      return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
-    }
-    const studentId = normalizeId(req.body?.studentId);
-    if (!studentId) return res.status(400).render('error', { title: 'Invalid Request', message: 'Choose a valid student record.' });
-    try {
-      const savedStudentId = await service.saveGrade(req.authUser.id, req.body);
-      return res.redirect(303, `/records/students/${savedStudentId}/academic?notice=gradeSaved`);
-    } catch (error) {
-      if (error instanceof AcademicRecordsError) return renderAcademicRecord(req, res, studentId, { status: error.status, error: error.message });
-      if (isUniqueConflict(error)) return renderAcademicRecord(req, res, studentId, { status: 409, error: 'A grade for this enrollment subject and grading period already exists.' });
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The grade could not be saved.' });
     }
   });
 

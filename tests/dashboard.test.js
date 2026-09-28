@@ -72,42 +72,44 @@ async function withServer(app, run) {
   }
 }
 
-test('role dashboards load their own summaries using the authenticated actor id', async () => {
+test('role dashboards lead with useful work and omit decorative summary strips', async () => {
   const scenarios = [
     {
-      role: 'student', path: '/dashboard/student', label: /Permitted documents/,
+      role: 'student', path: '/student', label: /Today's classes/,
       summary: { enrollment_count: 2, grade_entry_count: 4, document_count: 3, documents_in_progress_count: 1 }
     },
     {
-      role: 'registrar', path: '/dashboard/registrar', label: /Current enrollments/,
+      role: 'registrar', path: '/registrar', label: /Find a student/,
       summary: { active_student_count: 8, archived_student_count: 1, current_enrollment_count: 6, documents_awaiting_review_count: 2, documents_processing_count: 1 }
     },
     {
-      role: 'finance', path: '/finance', label: /Settled accounts/,
+      role: 'finance', path: '/finance', label: /Find a student account/,
       summary: { account_count: 10, accounts_due_count: 4, accounts_settled_count: 5, accounts_credit_count: 1, charge_count: 12, payment_count: 8 }
     },
     {
-      role: 'database_admin', path: '/admin', label: /Inactive accounts/,
+      role: 'database_admin', path: '/admin', label: /User accounts/,
       summary: { active_user_count: 10, inactive_user_count: 2, active_student_count: 8, archived_student_count: 1, documents_awaiting_review_count: 2 }
     }
   ];
 
   for (const scenario of scenarios) {
-    const actorIds = [];
+    const summaryCalls = [];
     const services = {
       adminService: {
         async listDashboard() { return { users: [], auditLogs: [], searchTerm: '' }; },
-        async getDashboardSummary(actorId) { actorIds.push(actorId); return scenario.summary; }
+        async getDashboardSummary(actorId) { summaryCalls.push(['admin', actorId]); return scenario.summary; }
       },
       studentRecordsService: {
         async getOwnStudentRecord() { return { student: { student_no: 'S-7' }, enrollments: [] }; },
-        async getStudentDashboardSummary(actorId) { actorIds.push(actorId); return scenario.summary; },
-        async getRegistrarDashboardSummary(actorId) { actorIds.push(actorId); return scenario.summary; }
+        async getStudentDashboardSummary(actorId) { summaryCalls.push(['student', actorId]); return scenario.summary; },
+        async getRegistrarDashboardSummary(actorId) { summaryCalls.push(['registrar', actorId]); return scenario.summary; }
       },
       academicRecordsService: { async getOwnGrades() { return []; } },
+      classScheduleService: { async getOwnStudentSchedule() { return []; } },
       financeService: {
         async searchStudents(searchTerm) { return { students: [], searchTerm }; },
-        async getDashboardSummary(actorId) { actorIds.push(actorId); return scenario.summary; }
+        async getOwnStudentAccount(actorId) { return { account: null, transactions: [] }; },
+        async getDashboardSummary(actorId) { summaryCalls.push(['finance', actorId]); return scenario.summary; }
       }
     };
     await withServer(createApp({ databasePool: createAuthPool(scenario.role), environment, ...services }), async (baseUrl) => {
@@ -116,8 +118,71 @@ test('role dashboards load their own summaries using the authenticated actor id'
       assert.equal(response.status, 200, scenario.role);
       const html = await response.text();
       assert.match(html, scenario.label, scenario.role);
-      assert.match(html, /<dd>\d+<\/dd>/, scenario.role);
-      assert.deepEqual(actorIds, [7], scenario.role);
+      assert.doesNotMatch(html, /dashboard-summary|Finance at a glance|System summary|Current enrollments/);
+      assert.deepEqual(summaryCalls, [], `${scenario.role} does not fetch dashboard summaries that are not shown`);
     });
   }
+});
+
+test('student ledger currency uses grouped peso display without changing finance service amounts', async () => {
+  const rawAmounts = ['19960.00', '4990.00'];
+  const services = {
+    studentRecordsService: {
+      async getOwnStudentRecord() {
+        return { student: { first_name: 'Alyssa', student_no: 'SHS-2026-0001' }, enrollments: [], grades: [] };
+      },
+      async getStudentDashboardSummary() {
+        return { enrollment_count: 0, grade_entry_count: 0, document_count: 0, documents_in_progress_count: 0 };
+      }
+    },
+    academicRecordsService: { async getOwnGrades() { return []; } },
+    classScheduleService: { async getOwnStudentSchedule() { return []; } },
+    financeService: {
+      async getOwnStudentAccount() {
+        return {
+          student: { student_no: 'S-7', first_name: 'Alex', last_name: 'Kim' },
+          account: { balance: rawAmounts[0] },
+          transactions: [{ transaction_type: 'charge', amount: rawAmounts[1], created_at: new Date('2026-09-28T00:00:00Z'), description: 'Synthetic tuition sample' }]
+        };
+      }
+    }
+  };
+  await withServer(createApp({ databasePool: createAuthPool('student'), environment, ...services }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'student');
+    const response = await fetch(`${baseUrl}/student/finance`, { headers: { cookie } });
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /₱19,960\.00/);
+    assert.match(html, /₱4,990\.00/);
+    assert.deepEqual(rawAmounts, ['19960.00', '4990.00']);
+  });
+});
+
+test('student class start and end times stay together in one readable range', async () => {
+  const services = {
+    studentRecordsService: {
+      async getOwnStudentRecord() {
+        return { student: { id: 22, first_name: 'Alex', last_name: 'Kim', student_no: 'SHS-2026-0001' }, enrollments: [], grades: [] };
+      },
+      async getStudentDashboardSummary() {
+        return { enrollment_count: 0, grade_entry_count: 0, document_count: 0, documents_in_progress_count: 0 };
+      }
+    },
+    academicRecordsService: { async getOwnGrades() { return []; } },
+    classScheduleService: {
+      async getOwnStudentSchedule() {
+        return [{ day_of_week: new Date().getDay(), start_time: '08:00', end_time: '09:00', room: 'Room 2', subject_name: 'Oral Communication', subject_code: 'ENG11', section_name: 'STEM A' }];
+      }
+    },
+    financeService: { async getOwnStudentAccount() { return { account: null, transactions: [] }; } }
+  };
+  await withServer(createApp({ databasePool: createAuthPool('student'), environment, ...services }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'student');
+    const response = await fetch(`${baseUrl}/student`, { headers: { cookie } });
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /<time>08:00–09:00<\/time>/);
+    assert.match(html, /Room 2/);
+    assert.doesNotMatch(html, /<span>09:00<\/span>/);
+  });
 });

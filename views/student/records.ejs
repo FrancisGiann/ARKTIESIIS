@@ -1,0 +1,32 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell student-page" id="main-content">
+  <a class="context-back" href="/student">Back to my school day</a>
+  <header class="page-heading"><div><h1>My profile and enrollment history</h1><p>Your school records are maintained by the registrar. Contact them to request a correction.</p></div></header>
+  <% const student = ownRecords?.student || null; %>
+  <% if (!student) { %>
+    <section class="student-unlinked" aria-labelledby="records-unlinked-title"><h2 id="records-unlinked-title">Your student profile is not linked yet</h2><p>Ask the registrar to connect your account to a student record.</p></section>
+  <% } else { %>
+    <% const fullName = [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(' '); %>
+    <section class="student-section" aria-labelledby="profile-title">
+      <div class="student-section-heading"><div><h2 id="profile-title"><%= fullName %></h2><p>Student number <strong><%= student.student_no %></strong></p></div><span class="record-status record-status--<%= student.status === 'active' ? 'active' : 'archived' %>"><%= student.status %></span></div>
+      <dl class="student-profile-details">
+        <div><dt>Birth date</dt><dd><%= student.birth_date ? new Date(student.birth_date).toLocaleDateString() : 'Not provided' %></dd></div>
+        <div><dt>Sex</dt><dd><%= student.sex || 'Not provided' %></dd></div>
+        <div><dt>Phone</dt><dd><%= student.phone || 'Not provided' %></dd></div>
+        <div><dt>Address</dt><dd><%= student.address || 'Not provided' %></dd></div>
+      </dl>
+    </section>
+    <section class="student-section" aria-labelledby="enrollment-history-title">
+      <div class="student-section-heading"><div><h2 id="enrollment-history-title">Enrollment history</h2><p>Placement and enrollment status by academic term.</p></div></div>
+      <% if (ownRecords.enrollments.length) { %>
+        <ol class="enrollment-history">
+          <% for (const enrollment of ownRecords.enrollments) { %><li>
+            <div><strong><%= enrollment.school_year %> · <%= enrollment.term %></strong><span><%= formatStudentPlacement(enrollment.grade_level, enrollment.section_name) || 'Section not assigned' %></span></div>
+            <span class="status-chip status-chip--<%= enrollment.enrollment_status === 'enrolled' ? 'good' : 'pending' %>"><%= enrollment.enrollment_status.replaceAll('_', ' ') %></span>
+          </li><% } %>
+        </ol>
+      <% } else { %><p class="empty-state">No enrollment history is available on your profile yet.</p><% } %>
+    </section>
+  <% } %>
+</main>
+<%- include('../partials/foot') %>

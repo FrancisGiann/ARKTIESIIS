@@ -318,7 +318,14 @@ function createAdminService({
         .input('email', sql.NVarChar(255), account.email)
         .input('role', sql.NVarChar(30), account.role)
         .input('isActive', sql.Bit, account.isActive)
-        .query('UPDATE dbo.users SET email = @email, role = @role, is_active = @isActive, updated_at = SYSUTCDATETIME() WHERE id = @userId');
+        .input('emailChanged', sql.Bit, String(current.email).toLowerCase() !== account.email.toLowerCase())
+        .query(`UPDATE dbo.users SET email = @email, role = @role, is_active = @isActive, updated_at = SYSUTCDATETIME() WHERE id = @userId;
+          IF @emailChanged = 1 OR @isActive = 0
+          BEGIN
+            UPDATE dbo.two_factor_codes SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL;
+            UPDATE dbo.password_reset_tokens SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL;
+            UPDATE dbo.pending_email_changes SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL;
+          END;`);
 
       if (account.role === 'student') {
         await linkStudent(transaction, { userId: id, studentNo: account.studentNo });
@@ -355,10 +362,10 @@ function createAdminService({
       await transaction.request()
         .input('userId', sql.Int, id)
         .input('passwordHash', sql.NVarChar(255), passwordHash)
-        .query('UPDATE dbo.users SET password_hash = @passwordHash, updated_at = SYSUTCDATETIME() WHERE id = @userId');
-      await transaction.request()
-        .input('userId', sql.Int, id)
-        .query('UPDATE dbo.two_factor_codes SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL');
+        .query(`UPDATE dbo.users SET password_hash = @passwordHash, updated_at = SYSUTCDATETIME() WHERE id = @userId;
+          UPDATE dbo.two_factor_codes SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL;
+          UPDATE dbo.password_reset_tokens SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL;
+          UPDATE dbo.pending_email_changes SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL;`);
       await writeAudit(transaction, {
         actorId,
         action: 'admin.user_password_reset',

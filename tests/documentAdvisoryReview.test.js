@@ -4,8 +4,9 @@ const { advisoryChecks } = require('../src/services/documentValidationService');
 
 const student = { first_name: 'Jamie', last_name: 'Garcia' };
 
-test('legacy report cards have no active OCR advisory checks', () => {
-  assert.deepEqual(advisoryChecks('report_card', 'JAMIE GARCIA\nOther Academy\nMathematics 150', student), []);
+test('report-card prechecks compare only the linked student name', () => {
+  const checks = advisoryChecks('report_card', 'JAMIE GARCIA\nOther Academy\nMathematics 150', student);
+  assert.deepEqual(checks.map(({ key, found }) => [key, found]), [['linked_student_name', true]]);
 });
 
 test('Good Moral and PSA checks are limited to their leader-directed advisory clues', () => {

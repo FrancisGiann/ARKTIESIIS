@@ -1,0 +1,28 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell student-page" id="main-content">
+  <a class="context-back" href="/student">Back to my school day</a>
+  <header class="page-heading"><div><h1>My finance account</h1><p>Read-only balance and entries recorded by the finance office.</p></div></header>
+  <% if (!finance.student) { %>
+    <section class="student-unlinked" aria-labelledby="finance-unlinked-title"><h2 id="finance-unlinked-title">Your student profile is not linked yet</h2><p>Ask the registrar to connect your account before viewing a personal finance ledger.</p></section>
+  <% } else if (!finance.account) { %>
+    <section class="student-section" aria-labelledby="finance-account-title"><h2 id="finance-account-title">Account being prepared</h2><p>Your finance account will appear here when it is ready.</p></section>
+  <% } else { %>
+    <section class="student-section student-ledger" aria-labelledby="finance-ledger-title">
+      <div class="student-section-heading"><div><h2 id="finance-ledger-title">Account ledger</h2><p><%= [finance.student.first_name, finance.student.middle_name, finance.student.last_name, finance.student.suffix].filter(Boolean).join(' ') %> · <%= finance.student.student_no %></p></div></div>
+      <div class="finance-balance-line"><span>Current balance</span><strong>₱<%= formatMoney(finance.account.balance) %></strong></div>
+      <% if (finance.transactions.length) { %>
+        <div class="table-scroll student-ledger-scroll" tabindex="0" aria-label="Your finance ledger">
+          <table class="portal-table"><caption class="visually-hidden">Finance entries for your account</caption><thead><tr><th scope="col">Date</th><th scope="col">Entry</th><th scope="col">Details</th><th scope="col">Amount</th></tr></thead><tbody>
+            <% for (const transaction of finance.transactions) { %><tr>
+              <td data-label="Date"><%= new Date(transaction.created_at).toLocaleDateString() %></td>
+              <td data-label="Entry"><span class="ledger-type"><%= transaction.transaction_type.replaceAll('_', ' ') %></span></td>
+              <td data-label="Details"><%= transaction.description || transaction.reference_no || 'Recorded by finance' %></td>
+              <td data-label="Amount">₱<%= formatMoney(transaction.amount) %></td>
+            </tr><% } %>
+          </tbody></table>
+        </div>
+      <% } else { %><p class="empty-state">No finance entries have been recorded yet.</p><% } %>
+    </section>
+  <% } %>
+</main>
+<%- include('../partials/foot') %>

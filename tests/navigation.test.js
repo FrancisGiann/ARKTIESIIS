@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const bcrypt = require('bcrypt');
 const { createApp } = require('../src/app');
+const { buildNavigation } = require('../src/middleware/navigation');
 
 const passwordHash = bcrypt.hashSync('Correct-Horse-Battery-12', 4);
 const environment = {
@@ -62,6 +63,7 @@ function services({ ownStudentRecords = null } = {}) {
     },
     studentRecordsService: {
       async listWorkspace() { return { students: [], terms: [], sections: [], searchTerm: '', academicTermId: null }; },
+      async getRegistrarDashboardSummary() { return null; },
       async getStudent(id) {
         return { student: { id, student_no: 'S-22', first_name: 'Alex', last_name: 'Kim', status: 'active' }, terms: [], sections: [], enrollments: [] };
       },
@@ -76,6 +78,8 @@ function services({ ownStudentRecords = null } = {}) {
     },
     financeService: {
       async searchStudents(searchTerm) { return { students: [], searchTerm }; },
+      async getDashboardSummary() { return { account_count: 0, accounts_due_count: 0, accounts_settled_count: 0, accounts_credit_count: 0, charge_count: 0, payment_count: 0 }; },
+      async getOwnStudentAccount() { return { account: null, transactions: [] }; },
       async getStudentAccount() {
         return {
           student: { student_id: 22, student_no: 'S-22', first_name: 'Alex', last_name: 'Kim' },
@@ -83,7 +87,8 @@ function services({ ownStudentRecords = null } = {}) {
           transactions: []
         };
       }
-    }
+    },
+    classScheduleService: { async getOwnStudentSchedule() { return []; } }
   };
 }
 
@@ -131,51 +136,86 @@ async function signIn(baseUrl, role) {
 }
 
 function navigationLabels(html) {
-  const nav = html.match(/<nav class="primary-nav"[\s\S]*?<\/nav>/);
-  assert.ok(nav, 'expected authenticated primary navigation');
-  return [...nav[0].matchAll(/class="primary-nav__link"[^>]*>([\s\S]*?)<\/a>/g)]
+  const nav = html.match(/<aside class="desktop-nav"[\s\S]*?<\/aside>/);
+  assert.ok(nav, 'expected authenticated app navigation');
+  return [...nav[0].matchAll(/class="app-nav__link[^\"]*"[^>]*>([\s\S]*?)<\/a>/g)]
     .map((match) => match[1].replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/g, '').replace(/<[^>]+>/g, '').trim());
 }
 
+test('student section navigation uses real server pages with path-specific current state', () => {
+  const destinations = [
+    ['/student', 'home', '/student'],
+    ['/student/schedule', 'schedule', '/student/schedule'],
+    ['/student/grades', 'grades', '/student/grades'],
+    ['/student/finance', 'finance', '/student/finance'],
+    ['/student/records', 'records', '/student/records'],
+    ['/documents', 'documents', '/documents']
+  ];
+  for (const [path, expectedId, expectedHref] of destinations) {
+    const navigation = buildNavigation('student', path);
+    const current = navigation.items.filter((item) => item.current);
+    assert.deepEqual(current.map((item) => item.id), [expectedId], `${path} marks only its destination`);
+    assert.equal(navigation.currentPage, expectedId);
+    assert.equal(navigation.items.find((item) => item.id === expectedId).href, expectedHref);
+  }
+  const links = buildNavigation('student').items.filter((item) => item.id !== 'account');
+  assert.ok(links.every((item) => !item.href.includes('#')), 'student navigation destinations are not in-page anchors');
+});
+
 test('authenticated navigation only exposes destinations available to each role', async () => {
   const cases = [
-    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Audit activity', 'Student records', 'Documents', 'Subject catalog', 'Teacher assignments', 'Finance'], forbidden: [] },
-    { role: 'registrar', path: '/dashboard/registrar', labels: ['Overview', 'Student records', 'Documents', 'Subject catalog', 'Teacher assignments', 'Grade submissions'], forbidden: ['/finance', '/admin'] },
-    { role: 'teacher', path: '/dashboard/teacher', labels: ['My classes'], forbidden: ['/records', '/registrar/grade-submissions', '/finance', '/admin'] },
-    { role: 'finance', path: '/finance', labels: ['Finance workspace'], forbidden: ['/records', '/documents', '/admin'] },
-    { role: 'student', path: '/dashboard/student', labels: ['My record', 'My documents'], forbidden: ['/records', '/finance', '/admin'] }
+    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Audit activity', 'Documents', 'Finance'], forbidden: [] },
+    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollment intake', 'Document review', 'Grade review', 'Class schedules', 'Subject catalog', 'Teacher assignments'], forbidden: ['/finance', '/admin'] },
+    { role: 'teacher', path: '/teacher', labels: ['My classes', 'Submit grades'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/admin'] },
+    { role: 'finance', path: '/finance', labels: ['Finance workspace'], forbidden: ['/registrar/records', '/documents', '/admin'] },
+    { role: 'student', path: '/student', labels: ['Home', 'Schedule', 'Grades', 'Finance', 'My records', 'Documents'], forbidden: ['/registrar/records', '/finance', '/admin'] }
   ];
 
   for (const scenario of cases) {
-    const app = createApp({ databasePool: createAuthPool(scenario.role), environment, ...services() });
+    const ownStudentRecords = scenario.role === 'student'
+      ? { student: { id: 22, student_no: 'SHS-2026-0001', first_name: 'Alex', last_name: 'Student' }, enrollments: [] }
+      : null;
+    const app = createApp({ databasePool: createAuthPool(scenario.role), environment, ...services({ ownStudentRecords }) });
     await withServer(app, async (baseUrl) => {
       const cookie = await signIn(baseUrl, scenario.role);
       const response = await fetch(`${baseUrl}${scenario.path}`, { headers: { cookie } });
       const html = await response.text();
       assert.equal(response.status, 200);
       assert.deepEqual(navigationLabels(html), scenario.labels);
-      const navigation = html.match(/<nav class="primary-nav"[\s\S]*?<\/nav>/)[0];
-      const navigationLinks = [...navigation.matchAll(/<a class="primary-nav__link"[^>]*>[\s\S]*?<\/a>/g)];
+      const navigation = html.match(/<aside class="desktop-nav"[\s\S]*?<\/aside>/)[0];
+      const desktopGroupLabels = [...navigation.matchAll(/<section class="nav-group">\s*<h2>([^<]+)<\/h2>/g)].map((match) => match[1]);
+      assert.ok(desktopGroupLabels.every((label) => !scenario.labels.includes(label)), `${scenario.role} group labels do not repeat destination labels`);
+      const mobileNavigation = html.match(/<details class="mobile-nav">([\s\S]*?)<\/details>/)?.[1];
+      assert.ok(mobileNavigation, 'expected the mobile role menu');
+      const mobileLabels = [...mobileNavigation.matchAll(/class="mobile-nav__link[^\"]*"[^>]*>([\s\S]*?)<\/a>/g)]
+        .map((match) => match[1].replace(/<[^>]+>/g, '').trim());
+      assert.deepEqual(mobileLabels, scenario.labels, `${scenario.role} mobile destinations match its server-filtered desktop menu`);
+      const navigationLinks = [...navigation.matchAll(/<a class="app-nav__link[^\"]*"[^>]*>[\s\S]*?<\/a>/g)];
       assert.equal(navigationLinks.length, scenario.labels.length);
       for (const [index, match] of navigationLinks.entries()) {
-        assert.match(match[0], /<svg class="primary-nav__icon" aria-hidden="true" focusable="false"/);
-        assert.match(match[0], new RegExp(`<span>${scenario.labels[index]}</span>`));
+        assert.match(match[0], new RegExp(`>${scenario.labels[index]}</a>`));
       }
-      assert.match(html, /<a class="brand" href="\/dashboard" aria-label="ARKTIESIIS workspace, Ark Technological Institute Education System Incorporated, Lucena Branch">/);
-      assert.match(html, /<a class="primary-nav__link"[^>]*aria-current="page"/);
-      assert.match(html, /<form class="site-header__signout" method="post" action="\/logout">/);
+      const expectedHome = { database_admin: '/admin', registrar: '/registrar', teacher: '/teacher', finance: '/finance', student: '/student' }[scenario.role];
+      assert.match(html, new RegExp(`<a class="brand" href="${expectedHome}" aria-label="ARKTIESIIS, Ark Technological Institute Education System Incorporated, Lucena Branch">`));
+      assert.match(navigation, /<a class="app-nav__link[^\"]*" href="[^\"]+" aria-current="page"/);
+      assert.match(html, /<details class="mobile-nav">\s*<summary>/, 'mobile navigation uses a keyboard-operable native disclosure');
+      assert.match(html, /<a class="account-shortcut[^\"]*" href="\/account"/);
+      assert.match(html, /<form method="post" action="\/logout">/);
       assert.equal((html.match(/action="\/logout"/g) || []).length, 1, 'sign-out appears only in the shared header');
       assert.ok(csrfFromHtml(html).length >= 32);
       if (scenario.role === 'database_admin') {
         assert.match(html, /User accounts/);
+        assert.match(html, /href="\/registrar\/records"/);
         assert.doesNotMatch(html, /Recent audit activity/);
-        assert.match(html, /System summary/);
+        assert.match(html, /href="\/admin\/audit"/);
+        assert.doesNotMatch(html, /System summary|admin-dashboard-summary/);
       }
       if (scenario.role === 'registrar') {
         assert.match(html, /class="registrar-work-index"/);
-        assert.match(html, /href="\/records"/);
+        assert.match(html, /href="\/registrar\/records"/);
         assert.match(html, /href="\/documents"/);
-        assert.match(html, /href="\/records\/subjects"/);
+        assert.match(html, /href="\/registrar\/records\/subjects"/);
+        assert.match(html, /href="\/registrar\/schedules"/);
         assert.match(html, /href="\/registrar\/grade-submissions"/);
       }
       if (scenario.role === 'teacher') {
@@ -185,10 +225,19 @@ test('authenticated navigation only exposes destinations available to each role'
       if (scenario.role === 'finance') {
         assert.match(html, /class="finance-panel finance-overview-panel"/);
         assert.match(html, /id="finance-search-heading"/);
-        assert.match(html, /Recently updated accounts/);
+        assert.match(html, /Find a student account/);
+        assert.doesNotMatch(html, /finance-dashboard-summary|Finance at a glance/);
       }
       if (scenario.role === 'student') {
-        assert.match(html, /class="[^"]*student-unlinked-state/);
+        const main = html.match(/<main class="page-shell student-home"[\s\S]*?<\/main>/)?.[0];
+        assert.ok(main, 'student home content should render');
+        assert.match(main, /Your current school day at a glance/);
+        assert.doesNotMatch(main, /student-shortcuts|Your school pages/, 'student home does not duplicate navigation links from the sidebar');
+        assert.match(main, /href="\/student\/schedule">View full schedule/);
+        assert.match(main, /href="\/student\/records">My profile/);
+        for (const href of ['/student/grades', '/student/finance', '/documents']) {
+          assert.doesNotMatch(main, new RegExp(`href="${href.replaceAll('/', '\\/')}`), `${href} remains in the sidebar rather than the home content`);
+        }
       }
       for (const href of scenario.forbidden) assert.doesNotMatch(html, new RegExp(`href="${href.replace('/', '\\/')}`));
     });
@@ -206,13 +255,13 @@ test('database administrator audit page has its own current navigation destinati
     assert.match(html, /<h1>Audit activity<\/h1>/);
     assert.match(html, /href="\/admin\/audit" aria-current="page"/);
     assert.match(html, /No audit events have been recorded\./);
-    const navigation = html.match(/<nav class="primary-nav"[\s\S]*?<\/nav>/)[0];
+    const navigation = html.match(/<aside class="desktop-nav"[\s\S]*?<\/aside>/)[0];
     assert.equal((navigation.match(/aria-current="page"/g) || []).length, 1);
     assert.equal((navigation.match(/href="\/admin\/audit"/g) || []).length, 1);
   });
 });
 
-test('linked student dashboard groups profile with enrollment and grades while retaining empty states', async () => {
+test('student overview stays concise while all destinations remain in sidebar and mobile navigation', async () => {
   const ownStudentRecords = {
     student: { student_no: 'S-22', first_name: 'Alex', last_name: 'Kim', status: 'active' },
     enrollments: []
@@ -220,15 +269,31 @@ test('linked student dashboard groups profile with enrollment and grades while r
   const app = createApp({ databasePool: createAuthPool('student'), environment, ...services({ ownStudentRecords }) });
   await withServer(app, async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'student');
-    const response = await fetch(`${baseUrl}/dashboard/student`, { headers: { cookie } });
+    const response = await fetch(`${baseUrl}/student`, { headers: { cookie } });
     const html = await response.text();
 
     assert.equal(response.status, 200);
-    assert.match(html, /class="student-record-layout"/);
-    assert.match(html, /class="[^"]*student-profile-panel/);
-    assert.match(html, /class="student-academic-workspace"/);
-    assert.match(html, /No enrollment records are linked to your account\./);
-    assert.match(html, /No grades are linked to your account yet\./);
+    const main = html.match(/<main class="page-shell student-home"[\s\S]*?<\/main>/)?.[0];
+    assert.ok(main);
+    assert.match(main, /Today's classes/);
+    assert.match(main, /student-schedule/);
+    assert.match(main, /href="\/student\/schedule">View full schedule/);
+    assert.match(main, /href="\/student\/records">My profile/);
+    assert.match(main, /Your current school day at a glance/);
+    assert.doesNotMatch(main, /student-shortcuts|Your school pages/);
+    assert.doesNotMatch(main, /href="\/(student\/grades|student\/finance|documents)"/);
+    assert.doesNotMatch(main, /₱|Approved grades|Enrollment history/);
+
+    const destinations = ['Home', 'Schedule', 'Grades', 'Finance', 'My records', 'Documents'];
+    assert.deepEqual(navigationLabels(html), destinations);
+    const mobileNavigation = html.match(/<details class="mobile-nav">([\s\S]*?)<\/details>/)?.[1];
+    assert.ok(mobileNavigation);
+    const mobileLabels = [...mobileNavigation.matchAll(/class="mobile-nav__link[^\"]*"[^>]*>([\s\S]*?)<\/a>/g)]
+      .map((match) => match[1].replace(/<[^>]+>/g, '').trim());
+    assert.deepEqual(mobileLabels, destinations);
+    for (const href of ['/student/schedule', '/student/grades', '/student/finance', '/student/records', '/documents']) {
+      assert.ok(html.includes(`href="${href}"`), `${href} remains discoverable from the role navigation`);
+    }
   });
 });
 
@@ -236,12 +301,11 @@ test('student records use the workspace rail and show a clear no-current-term st
   const app = createApp({ databasePool: createAuthPool('registrar'), environment, ...services() });
   await withServer(app, async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
-    const response = await fetch(`${baseUrl}/records`, { headers: { cookie } });
+    const response = await fetch(`${baseUrl}/registrar/records`, { headers: { cookie } });
     const html = await response.text();
 
     assert.equal(response.status, 200);
-    assert.match(html, /<aside class="workspace-rail" aria-label="ARKTIESIIS workspace">/);
-    assert.match(html, /<div class="workspace-stage">/);
+    assert.match(html, /<main class="page-shell dashboard-page admin-page records-page"/);
     assert.match(html, /<h1>Student records<\/h1>/);
     assert.match(html, /No academic term is marked current\./);
     assert.match(html, /Student master list/);
@@ -258,19 +322,19 @@ test('nested workspace pages mark the current destination and provide fixed pare
   const registrarApp = createApp({ databasePool: createAuthPool('registrar'), environment, ...services() });
   await withServer(registrarApp, async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
-    const subjects = await fetch(`${baseUrl}/records/subjects`, { headers: { cookie } });
+    const subjects = await fetch(`${baseUrl}/registrar/records/subjects`, { headers: { cookie } });
     const subjectsHtml = await subjects.text();
-    assert.match(subjectsHtml, /href="\/records\/subjects" aria-current="page"/);
-    assert.match(subjectsHtml, /class="context-back" href="\/records"/);
+    assert.match(subjectsHtml, /href="\/registrar\/records\/subjects" aria-current="page"/);
+    assert.match(subjectsHtml, /class="context-back" href="\/registrar\/records"/);
 
-    const profile = await fetch(`${baseUrl}/records/students/22/edit`, { headers: { cookie } });
+    const profile = await fetch(`${baseUrl}/registrar/records/students/22/edit`, { headers: { cookie } });
     const profileHtml = await profile.text();
-    assert.match(profileHtml, /class="context-back" href="\/records"/);
-    assert.match(profileHtml, /href="\/records\/students\/22\/academic"/);
+    assert.match(profileHtml, /class="context-back" href="\/registrar\/records"/);
+    assert.match(profileHtml, /href="\/registrar\/records\/students\/22\/academic"/);
 
-    const academic = await fetch(`${baseUrl}/records/students/22/academic`, { headers: { cookie } });
+    const academic = await fetch(`${baseUrl}/registrar/records/students/22/academic`, { headers: { cookie } });
     const academicHtml = await academic.text();
-    assert.match(academicHtml, /class="context-back" href="\/records\/students\/22\/edit"/);
+    assert.match(academicHtml, /class="context-back" href="\/registrar\/records\/students\/22\/edit"/);
   });
 
   const adminApp = createApp({ databasePool: createAuthPool('database_admin'), environment, ...services() });
@@ -278,7 +342,7 @@ test('nested workspace pages mark the current destination and provide fixed pare
     const cookie = await signIn(baseUrl, 'database_admin');
     const accountForm = await fetch(`${baseUrl}/admin/users/new`, { headers: { cookie } });
     const html = await accountForm.text();
-    assert.match(html, /class="primary-nav__link" href="\/dashboard" aria-current="page"/);
+    assert.match(html, /class="app-nav__link is-current" href="\/admin\/users" aria-current="page"/);
     assert.match(html, /class="context-back" href="\/admin#users-title"/);
   });
 
@@ -294,7 +358,7 @@ test('shared sign-out rejects invalid CSRF and destroys the session with a valid
   const app = createApp({ databasePool: createAuthPool('student'), environment, ...services() });
   await withServer(app, async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'student');
-    const page = await fetch(`${baseUrl}/dashboard/student`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/student`, { headers: { cookie } });
     const html = await page.text();
     const token = csrfFromHtml(html);
 

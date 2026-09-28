@@ -94,14 +94,15 @@ async function withServer(app, run) {
   finally { await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
 }
 
-function readerHarness({ actorId = 7, role = 'teacher', active = true, ownerId = 7, assignmentActive = true } = {}) {
+function readerHarness({ actorId = 7, role = 'teacher', active = true, ownerId = 7, assignmentActive = true,
+  storageDirectory, storageKey = SUBMISSION_ID } = {}) {
   const calls = [];
   const header = {
     id: SUBMISSION_ID, assignment_id: 12, previous_submission_id: null, revision_number: 1,
     submitted_by: ownerId, school_year: '2026-2027', grade_level: 'Grade 11', section_name: 'STEM A',
     subject_id: 77, subject_name: 'Oral Communication', workbook_grade_level: 'Grade 11',
     workbook_section_name: 'STEM A', workbook_subject_name: 'Oral Communication', context_mismatch: false,
-    original_filename: 'grades.xlsx', storage_key: SUBMISSION_ID, file_size_bytes: 4,
+    original_filename: 'grades.xlsx', storage_key: storageKey, file_size_bytes: 4,
     status: 'pending', submitted_at: new Date(), decision_reason: null, decided_at: null, term: 'Term 1'
   };
   const pool = {
@@ -127,9 +128,101 @@ function readerHarness({ actorId = 7, role = 'teacher', active = true, ownerId =
       }, calls);
     }
   };
-  const service = createTeacherGradeSubmissionService({ getPool: async () => pool, sql: fakeSql(), secret: 'teacher-grade-test-secret' });
+  const service = createTeacherGradeSubmissionService({ getPool: async () => pool, sql: fakeSql(),
+    storageDirectory, secret: 'teacher-grade-test-secret' });
   return { service, calls };
 }
+
+function assignmentOptionsHarness() {
+  const calls = [];
+  const pool = {
+    request() {
+      return requestFor(({ statement, values }) => {
+        if (statement.includes('SELECT id, role FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+        if (statement.includes('FROM dbo.academic_terms ORDER BY')) return { recordset: [
+          { id: 3, school_year: '2026-2027', term: 'First', is_current: true },
+          { id: 9, school_year: '2025-2026', term: 'Second', is_current: false }
+        ] };
+        if (statement.includes('FROM dbo.sections AS sec')) return { recordset: values.termId === 3
+          ? [{ id: 22, academic_term_id: 3, name: 'STEM A', grade_level: 'Grade 11', school_year: '2026-2027', term: 'First' }]
+          : [] };
+        if (statement.includes('SELECT id, subject_code, subject_name FROM dbo.subjects')) return { recordset: [{ id: 4, subject_code: 'OCOM', subject_name: 'Oral Communication' }] };
+        if (statement.includes('FROM dbo.users AS u INNER JOIN dbo.staff_profiles')) return { recordset: [{ id: 8, email: 'teacher@example.edu', first_name: 'Jamie', last_name: 'Lee' }] };
+        if (statement.includes('FROM dbo.teacher_assignments AS a')) return { recordset: values.termId === 3
+          ? [{ id: 44, academic_term_id: 3, section_id: 22, is_active: true, school_year: '2026-2027', term: 'First',
+            grade_level: 'Grade 11', section_name: 'STEM A', subject_code: 'OCOM', subject_name: 'Oral Communication',
+            first_name: 'Jamie', last_name: 'Lee', roster_count: 18, latest_submission_status: null }]
+          : [] };
+        throw new Error(`Unexpected assignment-options SQL: ${statement}`);
+      }, calls);
+    }
+  };
+  const service = createTeacherGradeSubmissionService({ getPool: async () => pool, sql: fakeSql(),
+    secret: 'teacher-grade-test-secret' });
+  return { service, calls };
+}
+
+test('registrar assignment options default to is_current and bind sections and assignments to that term', async () => {
+  const { service, calls } = assignmentOptionsHarness();
+  const options = await service.listAssignmentOptions(7);
+
+  assert.equal(options.selectedTermId, 3);
+  assert.equal(options.selectedSectionId, null);
+  assert.equal(options.terms.find((term) => term.is_current).id, 3);
+  const sections = calls.find(({ statement }) => statement.includes('FROM dbo.sections AS sec'));
+  assert.equal(sections.values.termId, 3);
+  const assignments = calls.find(({ statement }) => statement.includes('FROM dbo.teacher_assignments AS a'));
+  assert.equal(assignments.values.termId, 3);
+  assert.equal(assignments.values.sectionId, null);
+  assert.match(assignments.statement, /a\.academic_term_id = @termId/);
+});
+
+test('assignment options clear a section from another term instead of returning its rows', async () => {
+  const { service, calls } = assignmentOptionsHarness();
+  const options = await service.listAssignmentOptions(7, { termId: '3', sectionId: '91' });
+
+  assert.equal(options.selectedTermId, 3);
+  assert.equal(options.selectedSectionId, null);
+  assert.match(options.sectionFilterNotice, /different term/);
+  assert.equal(options.sections.some((section) => section.id === 91), false);
+  const assignments = calls.find(({ statement }) => statement.includes('FROM dbo.teacher_assignments AS a'));
+  assert.equal(assignments.values.termId, 3);
+  assert.equal(assignments.values.sectionId, null);
+});
+
+test('teacher assignment creation rejects a forged term and section pairing before writing', async () => {
+  const calls = [];
+  let rolledBack = false;
+  const transactionFactory = () => ({
+    async begin() {},
+    request() {
+      return requestFor(({ statement }) => {
+        if (statement.includes('FROM dbo.users WITH') && statement.includes('@actorId')) {
+          return { recordset: [{ id: 7, role: 'registrar' }] };
+        }
+        if (statement.includes('FROM dbo.users WITH') && statement.includes('@teacherId')) {
+          return { recordset: [{ id: 8 }] };
+        }
+        if (statement.includes('FROM dbo.academic_terms AS term')) return { recordset: [] };
+        throw new Error(`Unexpected assignment-create SQL: ${statement}`);
+      }, calls);
+    },
+    async commit() {}, async rollback() { rolledBack = true; }
+  });
+  const service = createTeacherGradeSubmissionService({ getPool: async () => ({}), sql: fakeSql(), transactionFactory,
+    secret: 'teacher-grade-test-secret' });
+
+  await assert.rejects(service.createAssignment(7, {
+    teacherId: '8', academicTermId: '6', sectionId: '91', subjectId: '3'
+  }), (error) => error instanceof TeacherGradeSubmissionError && error.status === 404);
+
+  const context = calls.find(({ statement }) => statement.includes('FROM dbo.academic_terms AS term'));
+  assert.deepEqual(context.values, { termId: 6, sectionId: 91, subjectId: 3 });
+  assert.match(context.statement, /sec\.academic_term_id = term\.id AND sec\.id = @sectionId/);
+  assert.equal(calls.some(({ statement }) => statement.includes('INSERT INTO dbo.teacher_assignments')), false);
+  assert.equal(calls.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(rolledBack, true);
+});
 
 test('teacher can only read their own active assignment submission and workbook', async () => {
   const own = readerHarness();
@@ -146,6 +239,22 @@ test('teacher can only read their own active assignment submission and workbook'
   await assert.rejects(otherTeacher.service.getWorkbook(8, SUBMISSION_ID, 'teacher'), (error) => error.status === 404);
   assert.equal(otherTeacher.calls.filter(({ statement }) => statement.includes('teacher_grade_submission_rows')).length, 0,
     'another teacher does not receive parsed review rows');
+});
+
+test('registrar can retrieve a private workbook when SQL Server returns an uppercase GUID', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ark-teacher-download-'));
+  const submissionDirectory = path.join(directory, 'teacher-grade-submissions');
+  const workbook = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+  await fs.mkdir(submissionDirectory, { recursive: true });
+  await fs.writeFile(path.join(submissionDirectory, `${SUBMISSION_ID}.xlsx`), workbook, { mode: 0o600 });
+  try {
+    const { service } = readerHarness({ storageDirectory: directory, storageKey: SUBMISSION_ID.toUpperCase() });
+    const result = await service.getWorkbook(7, SUBMISSION_ID, 'teacher');
+    assert.equal(path.basename(result.filePath), `${SUBMISSION_ID}.xlsx`);
+    assert.deepEqual(await fs.readFile(result.filePath), workbook);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('teacher access ends after assignment removal or account revocation; teachers cannot open registrar queue', async () => {
@@ -305,6 +414,66 @@ test('submission rolls back and removes its staged original if the teacher assig
   }
 });
 
+test('teacher submission carries the server stored LRN fingerprint without returning it in the preview', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ark-teacher-fingerprint-'));
+  const calls = [];
+  const fingerprint = 'a'.repeat(64);
+  let insertedRow = null;
+  const transactionFactory = () => ({
+    async begin(isolation) { assert.equal(isolation, 'SERIALIZABLE'); },
+    request() {
+      return requestFor(({ statement, values }) => {
+        if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: 'teacher' }] };
+        if (statement.includes('FROM dbo.grade_import_previews WITH')) return { recordset: [{ id: PREVIEW_ID }] };
+        if (statement.includes('FROM dbo.teacher_assignments AS a WITH')) return { recordset: [{
+          id: 12, academic_term_id: 3, school_year: '2026-2027', grade_level: 'Grade 11',
+          section_name: 'STEM A', subject_name: 'Oral Communication'
+        }] };
+        if (statement.includes('SELECT id, revision_number, status, submitted_by')) return { recordset: [] };
+        if (statement.includes('FROM dbo.grade_import_preview_rows WITH')) {
+          calls.push({ statement, values });
+          return { recordset: [{ source_row: 17, lrn_fingerprint: fingerprint }] };
+        }
+        if (statement.includes('INSERT INTO dbo.teacher_grade_submission_rows')) {
+          insertedRow = values;
+          return { recordset: [{ id: 100 }] };
+        }
+        if (statement.includes('INSERT INTO dbo.teacher_grade_submission_grades')) return { recordset: [] };
+        if (statement.includes('INSERT INTO dbo.audit_logs')
+          || statement.includes('INSERT INTO dbo.teacher_grade_submissions')
+          || statement.includes('INSERT INTO dbo.teacher_grade_submission_events')) return { recordset: [] };
+        throw new Error(`Unexpected SQL: ${statement}`);
+      }, calls);
+    },
+    async commit() {}, async rollback() {}
+  });
+  const service = createTeacherGradeSubmissionService({
+    getPool: async () => ({}), sql: fakeSql(), transactionFactory,
+    storageDirectory: directory, secret: 'teacher-grade-test-secret'
+  });
+  const preview = {
+    id: PREVIEW_ID, academicTermId: 3, schoolYear: '2026-2027', gradeLevel: 'Grade 11',
+    sectionName: 'STEM A', subjectName: 'Oral Communication', originalFilename: 'grades.xlsx',
+    workbookGradeLevel: 'Grade 11', workbookSectionName: 'STEM A', workbookSubjectName: 'Oral Communication',
+    contextMismatch: false,
+    rows: [{ sourceRow: 17, studentId: 44, studentNo: 'S-44', studentName: 'Jamie Garcia', workbookName: 'Jamie Garcia',
+      issue: null, nameMismatch: false, grades: [
+        { gradingPeriod: 'Term 1', gradeValue: 89 }, { gradingPeriod: 'Term 2', gradeValue: 90 },
+        { gradingPeriod: 'Term 3', gradeValue: 91 }, { gradingPeriod: 'Final Grade', gradeValue: 90 }
+      ] }]
+  };
+  const workbook = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+  try {
+    await service.submitPreview({ actorId: 7, assignmentId: 12, preview, sessionId: 'session-a', buffer: workbook });
+    assert.equal(Object.hasOwn(preview.rows[0], 'lrnFingerprint'), false, 'the private fingerprint is not exposed on the preview object');
+    assert.equal(insertedRow.lrnFingerprint, fingerprint, 'the submission row uses the transaction scoped preview fingerprint');
+    assert.equal(calls.some(({ statement, values }) => statement.includes('FROM dbo.grade_import_preview_rows WITH')
+      && values.previewId === PREVIEW_ID), true);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('teacher upload, preview, durable submission, and registrar approval routes enforce CSRF and role boundaries', async () => {
   const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
   const users = [
@@ -358,10 +527,20 @@ test('teacher upload, preview, durable submission, and registrar approval routes
   try {
     await withServer(app, async (baseUrl) => {
       const teacherCookie = await signIn(baseUrl, 'teacher@example.edu');
-      const dashboard = await fetch(`${baseUrl}/teacher/grades`, { headers: { cookie: teacherCookie } });
-      const dashboardHtml = await dashboard.text();
-      assert.equal(dashboard.status, 200, dashboardHtml);
-      assert.match(dashboardHtml, /Teacher dashboard/);
+      const classOverview = await fetch(`${baseUrl}/teacher`, { headers: { cookie: teacherCookie } });
+      const classOverviewHtml = await classOverview.text();
+      assert.equal(classOverview.status, 200, classOverviewHtml);
+      assert.match(classOverviewHtml, /My classes/);
+      assert.match(classOverviewHtml, /Open class/);
+
+      const gradeSelection = await fetch(`${baseUrl}/teacher/grades`, { headers: { cookie: teacherCookie } });
+      const gradeSelectionHtml = await gradeSelection.text();
+      assert.equal(gradeSelection.status, 200, gradeSelectionHtml);
+      assert.match(gradeSelectionHtml, /<h1>Submit grades<\/h1>/);
+      assert.match(gradeSelectionHtml, /Classes ready for submission/);
+      assert.match(gradeSelectionHtml, /href="\/teacher\/grades\/12"/);
+      assert.match(gradeSelectionHtml, /Upload corrected workbook/);
+      assert.match(gradeSelectionHtml, /href="\/teacher\/grades" aria-current="page"/);
       const uploadPage = await fetch(`${baseUrl}/teacher/grades/12`, { headers: { cookie: teacherCookie } });
       assert.equal(uploadPage.status, 200);
       const uploadHtml = await uploadPage.text();

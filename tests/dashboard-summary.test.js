@@ -39,6 +39,7 @@ test('student dashboard summary is parameterized and tied to the authenticated s
   assert.match(call.statement, /s\.user_id = @actorId/);
   assert.match(call.statement, /psa_birth_certificate/);
   assert.match(call.statement, /d\.document_type IN \('good_moral', 'psa_birth_certificate'\)/);
+  assert.equal((call.statement.match(/d\.document_type = 'report_card' AND d\.is_legacy_archive = 0 AND d\.upload_source = 'student'/g) || []).length, 2);
   assert.doesNotMatch(call.statement, /d\.upload_source IN/);
   assert.doesNotMatch(call.statement, /extracted_text|validation_json/);
 });

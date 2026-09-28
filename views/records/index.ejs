@@ -7,31 +7,28 @@
       <p><%= currentUser.role === 'database_admin' ? 'Database administrator' : 'Registrar' %> workspace <span aria-hidden="true">·</span> Lucena Branch</p>
     </div>
     <div class="admin-heading-actions">
-      <a class="button button--primary" href="/records/students/new">Add student</a>
-      <% if (currentUser.role === 'registrar') { %><a class="button button--secondary" href="/records/grade-import">Import grades</a><% } %>
+      <% if (currentUser.role === 'registrar') { %><a class="button button--secondary" href="/registrar/intake">Enrollment intake</a><% } %>
+      <% if (currentUser.role === 'database_admin') { %><a class="button button--secondary" href="/admin/student-accounts">Set up student logins</a><% } %>
     </div>
   </section>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
-  <section class="records-context-strip" aria-label="Academic term context">
-    <div class="records-context-label"><span aria-hidden="true"></span>Academic records</div>
+  <section class="records-context-strip records-context-strip--term" aria-label="Academic term context">
     <p><strong>Current term</strong><span><% if (currentTerm) { %><%= currentTerm.school_year %> · <%= currentTerm.term %><% } else { %>No academic term is marked current.<% } %></span></p>
-    <p class="records-context-count"><strong><%= students.length %> matching</strong><span>student<%= students.length === 1 ? '' : 's' %></span></p>
   </section>
 
   <section class="admin-section records-list-panel" aria-labelledby="students-title">
     <div class="admin-section__heading">
       <div>
         <h2 id="students-title">Student master list</h2>
-        <p>Search by name or student number. Results are limited to 250 records.</p>
+        <p>Find a student by name, student number, or LRN. Enrollment and required-document status stay visible in the result.</p>
       </div>
-      <span class="records-limit-note"><%= students.length === 250 ? 'Showing the first 250 records' : 'Latest enrollment details' %></span>
     </div>
-    <form class="admin-search records-search" method="get" action="/records">
+    <form class="admin-search records-search" method="get" action="/registrar/records">
       <div class="field">
-        <label for="student-search">Name or student number</label>
+        <label for="student-search">Name, student number, or LRN</label>
         <input id="student-search" name="search" type="search" maxlength="100" value="<%= searchTerm %>" autocomplete="off">
       </div>
       <div class="field">
@@ -44,35 +41,53 @@
         </select>
       </div>
       <button class="button button--secondary" type="submit">Filter records</button>
-      <% if (searchTerm || academicTermId) { %><a class="table-action" href="/records">Clear filters</a><% } %>
+      <% if (searchTerm || academicTermId) { %><a class="table-action" href="/registrar/records">Clear filters</a><% } %>
     </form>
     <% if (students.length) { %>
-      <div class="table-scroll" tabindex="0" aria-label="Scrollable student records table">
-        <table class="admin-table records-table">
-          <caption class="visually-hidden">Student master list and latest selected enrollment</caption>
-          <thead><tr><th scope="col">Student number</th><th scope="col">Student name</th><th scope="col">Status</th><th scope="col">Term</th><th scope="col">Section</th><th scope="col">Enrollment</th><th scope="col"><span class="visually-hidden">Record actions</span></th></tr></thead>
-          <tbody>
-            <% for (const student of students) { %>
-              <tr>
-                <td data-label="Student number"><%= student.student_no %></td>
-                <td data-label="Student name"><%= [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(' ') %></td>
-                <td data-label="Status"><span class="record-status <%= student.status === 'active' ? 'record-status--active' : student.status === 'archived' ? 'record-status--archived' : '' %>"><%= student.status ? student.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Unknown' %></span></td>
-                <td data-label="Term"><%= student.academic_term_id ? `${student.school_year} · ${student.term}` : '—' %></td>
-                <td data-label="Section"><%= student.section_name || '—' %></td>
-                <td data-label="Enrollment"><%= student.enrollment_status ? student.enrollment_status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Not enrolled' %></td>
-                <td data-label="Actions"><div class="records-table-actions"><a class="table-action" href="/records/students/<%= student.id %>/edit">Edit profile</a><a class="table-action" href="/records/students/<%= student.id %>/academic">Academic record</a><a class="table-action" href="/documents/students/<%= student.id %>">Documents</a></div></td>
-              </tr>
-            <% } %>
-          </tbody>
-        </table>
-      </div>
+      <% const firstStudentNumber = (page - 1) * pageSize + 1; const lastStudentNumber = Math.min(page * pageSize, totalStudents); %>
+      <p class="records-list-count" role="status">Showing <%= firstStudentNumber %>–<%= lastStudentNumber %> of <%= totalStudents %> students</p>
+      <ul class="records-student-list" aria-label="Student records">
+        <% for (const student of students) { %>
+          <li class="records-student-list__item">
+            <div class="records-student-main">
+              <strong><%= [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(' ') %></strong>
+              <span>Student no. <%= student.student_no %> · LRN <%= student.lrn || 'Not recorded' %></span>
+            </div>
+            <div class="records-student-enrollment">
+              <% if (student.academic_term_id) { %>
+                <span><%= student.school_year %> · <%= student.term %><% if (student.section_name) { %> · <%= student.section_name %><% } %></span>
+                <span><%= student.enrollment_status ? student.enrollment_status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Enrollment status unavailable' %></span>
+              <% } else { %><span>No enrollment</span><% } %>
+            </div>
+            <div class="records-document-checks" aria-label="Required document status">
+              <% const statusLabel = (status) => ({ valid: 'Verified', needs_review: 'Review needed', rejected: 'Rejected', pending: 'Processing', processing: 'Processing', failed: 'Review needed' })[status] || 'Missing'; %>
+              <span>Good Moral <strong><%= statusLabel(student.good_moral_status) %></strong></span>
+              <span>PSA <strong><%= statusLabel(student.psa_status) %></strong></span>
+              <span>Form 137 physical record (staff only) <strong><%= student.form137_status ? student.form137_status.replaceAll('_', ' ') : 'Not recorded' %></strong></span>
+            </div>
+            <span class="record-status <%= student.status === 'active' ? 'record-status--active' : student.status === 'archived' ? 'record-status--archived' : '' %>"><%= student.status ? student.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Unknown' %></span>
+            <nav class="records-student-actions" aria-label="<%= [student.first_name, student.last_name].filter(Boolean).join(' ') %> record actions">
+              <a class="table-action" href="/registrar/records/students/<%= student.id %>">Open student record</a>
+              <a class="table-action" href="/registrar/records/students/<%= student.id %>/edit">Edit profile</a>
+              <a class="table-action" href="/documents/students/<%= student.id %>">Documents</a>
+            </nav>
+          </li>
+        <% } %>
+      </ul>
+      <% if (totalPages > 1) { const pageUrl = (targetPage) => { const query = new URLSearchParams(); if (searchTerm) query.set('search', searchTerm); if (academicTermId) query.set('termId', String(academicTermId)); query.set('page', String(targetPage)); return `/registrar/records?${query.toString()}`; }; %>
+        <nav class="records-pagination" aria-label="Student record pages">
+          <% if (page > 1) { %><a class="button button--secondary" rel="prev" href="<%= pageUrl(page - 1) %>">Previous</a><% } else { %><span class="button button--secondary" aria-disabled="true">Previous</span><% } %>
+          <span aria-current="page">Page <%= page %> of <%= totalPages %></span>
+          <% if (page < totalPages) { %><a class="button button--secondary" rel="next" href="<%= pageUrl(page + 1) %>">Next</a><% } else { %><span class="button button--secondary" aria-disabled="true">Next</span><% } %>
+        </nav>
+      <% } %>
     <% } else { %><p class="empty-state">No student records match these filters.</p><% } %>
   </section>
 
   <div class="records-management-grid">
     <section class="admin-section" aria-labelledby="terms-title">
       <div class="admin-section__heading"><div><h2 id="terms-title">Academic terms</h2><p>Create a term and choose which existing term is current.</p></div></div>
-      <form class="form-stack records-compact-form" method="post" action="/records/terms">
+      <form class="form-stack records-compact-form" method="post" action="/registrar/records/terms">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <div class="admin-form-grid">
           <div class="field"><label for="school-year">School year</label><input id="school-year" name="schoolYear" type="text" maxlength="20" required></div>
@@ -88,7 +103,7 @@
               <td data-label="Term"><%= term.school_year %> · <%= term.term %></td>
               <td data-label="Status"><%= term.is_current ? 'Current' : 'Previous' %></td>
               <td data-label="Actions"><% if (!term.is_current) { %>
-                <form method="post" action="/records/terms/<%= term.id %>/current"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><button class="table-action table-button" type="submit">Set current</button></form>
+                <form method="post" action="/registrar/records/terms/<%= term.id %>/current"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><button class="table-action table-button" type="submit">Set current</button></form>
               <% } else { %><span class="muted-copy">Current term</span><% } %></td>
             </tr><% } %></tbody>
           </table>
@@ -98,7 +113,7 @@
 
     <section class="admin-section" aria-labelledby="sections-title">
       <div class="admin-section__heading"><div><h2 id="sections-title">Sections</h2><p>Each section belongs to one academic term.</p></div></div>
-      <form class="form-stack records-compact-form" method="post" action="/records/sections">
+      <form class="form-stack records-compact-form" method="post" action="/registrar/records/sections">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <div class="field"><label for="section-name">Section name</label><input id="section-name" name="name" type="text" maxlength="100" required></div>
         <div class="admin-form-grid">

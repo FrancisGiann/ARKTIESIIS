@@ -1,0 +1,58 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page records-page physical-requirements-page" id="main-content">
+  <a class="context-back" href="/documents">Back to document management</a>
+  <header class="dashboard-heading">
+    <div>
+      <h1>Physical student requirements</h1>
+      <p>Review Form 137 and paper previous-school report-card status. These physical records are separate from uploaded document files.</p>
+    </div>
+  </header>
+
+  <section class="admin-section" aria-labelledby="physical-requirements-search-title">
+    <div class="admin-section__heading">
+      <div><h2 id="physical-requirements-search-title">Find a student</h2><p>Search active student records by name, student number, or LRN.</p></div>
+    </div>
+    <form class="admin-search" method="get" action="/documents/physical">
+      <div class="field"><label for="physical-requirements-search">Student name, number, or LRN</label><input id="physical-requirements-search" name="search" type="search" maxlength="100" value="<%= searchTerm %>" autocomplete="off"></div>
+      <button class="button button--secondary" type="submit">Search students</button>
+      <% if (searchTerm || page > 1) { %><a class="table-action" href="/documents/physical">Clear search</a><% } %>
+    </form>
+    <p class="admin-result-count"><% if (totalStudents) { %>Showing <%= (page - 1) * pageSize + 1 %>–<%= Math.min(page * pageSize, totalStudents) %> of <%= totalStudents %> active students<% } else { %>No active student records match this search.<% } %></p>
+
+    <% if (students.length) { %>
+      <div class="physical-requirements-list">
+        <% for (const student of students) {
+          const name = [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(' ');
+          const form137Label = ({ pending: 'Pending', received: 'Received', verified: 'Verified', correction: 'Correction needed', rejected: 'Rejected' })[student.form137_status] || 'Not recorded';
+          const paperReportCardLabel = ({ pending: 'Pending', received: 'Received', verified: 'Checked by staff', correction: 'Clearer or replacement copy needed', rejected: 'Not accepted for this requirement' })[student.paper_report_card_status] || 'Not recorded';
+        %>
+          <article class="physical-requirements-item" aria-labelledby="physical-student-<%= student.id %>">
+            <header class="physical-requirements-item__heading">
+              <div><h3 id="physical-student-<%= student.id %>"><%= name %></h3><p>Student no. <%= student.student_no %><% if (student.lrn) { %> · LRN <%= student.lrn %><% } %></p></div>
+            </header>
+            <dl class="physical-requirements-statuses">
+              <div class="physical-requirement-status">
+                <dt>Form 137 physical record</dt>
+                <dd><span class="record-document-status"><%= form137Label %></span><% if (student.form137_updated_at) { %><span class="muted-copy">Updated <%= new Date(student.form137_updated_at).toLocaleDateString() %></span><% } %><a class="button button--secondary" href="/documents/students/<%= student.id %>#form137-status-title">Record or update Form 137 status</a></dd>
+              </div>
+              <div class="physical-requirement-status">
+                <dt>Previous-school report-card paper copy</dt>
+                <dd><span class="record-document-status"><%= paperReportCardLabel %></span><% if (student.paper_report_card_updated_at) { %><span class="muted-copy">Updated <%= new Date(student.paper_report_card_updated_at).toLocaleDateString() %></span><% } %><a class="button button--secondary" href="/documents/students/<%= student.id %>#previous-school-report-card-status-title">Record or update paper-copy status</a></dd>
+              </div>
+            </dl>
+          </article>
+        <% } %>
+      </div>
+      <% if (totalPages > 1) { %>
+        <nav class="records-pagination" aria-label="Physical requirements pages">
+          <% if (page > 1) { %><a class="button button--secondary" href="/documents/physical?search=<%= encodeURIComponent(searchTerm) %>&amp;page=<%= page - 1 %>">Previous page</a><% } %>
+          <span aria-current="page">Page <%= page %> of <%= totalPages %></span>
+          <% if (page < totalPages) { %><a class="button button--secondary" href="/documents/physical?search=<%= encodeURIComponent(searchTerm) %>&amp;page=<%= page + 1 %>">Next page</a><% } %>
+        </nav>
+      <% } %>
+    <% } else { %>
+      <p class="empty-state">No active student records match this search.</p>
+    <% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

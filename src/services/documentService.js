@@ -3,12 +3,15 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { constants: fsConstants } = require('node:fs');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
+const { MAX_GEMINI_PRECHECK_ATTEMPTS, canRetryGeminiPrecheck } = require('./documentValidationService');
 
 const ID_PATTERN = /^\d{1,10}$/;
 const STAFF_ROLES = new Set(['registrar', 'database_admin']);
-const STUDENT_UPLOAD_DOCUMENT_TYPES = new Set(['good_moral', 'psa_birth_certificate']);
+const STUDENT_UPLOAD_DOCUMENT_TYPES = new Set(['good_moral', 'psa_birth_certificate', 'report_card']);
 const UPLOAD_DOCUMENT_TYPES = new Set(['good_moral', 'psa_birth_certificate']);
+const GEMINI_PRECHECK_PROCESSOR = 'Gemini field extraction';
 const FORM137_STATUSES = new Set(['pending', 'received', 'verified', 'correction', 'rejected']);
+const PREVIOUS_SCHOOL_REPORT_CARD_PHYSICAL_STATUSES = new Set(['pending', 'received', 'verified', 'correction', 'rejected']);
 const MIME_BY_EXTENSION = new Map([
   ['.pdf', 'application/pdf'],
   ['.jpg', 'image/jpeg'],
@@ -16,22 +19,20 @@ const MIME_BY_EXTENSION = new Map([
   ['.png', 'image/png']
 ]);
 const STORED_NAME_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(pdf|jpg|jpeg|png)$/i;
-const OCR_MESSAGES = new Map([
-  ['extracted', 'OCR text was extracted. Advisory checks are available; registrar or database administrator source inspection is required.'],
-  ['empty_ocr', 'No readable text was extracted. Staff review is required.'],
-  ['malformed_response', 'The local OCR tools returned an unreadable result. Staff review is required.'],
-  ['processor_unavailable', 'A local OCR utility is unavailable. Staff review is required.'],
-  ['processor_timeout', 'OCR processing timed out. Staff review is required.'],
-  ['malformed_document', 'The file could not be read by the local OCR tools. Submit an unprotected, readable file.'],
-  ['page_limit', 'The PDF exceeds the configured page limit. Submit a shorter PDF.'],
-  ['output_limit', 'The extracted text exceeded the supported size. Staff review is required.'],
-  ['processing_recovered', 'OCR processing did not finish within the recovery window. Staff review is required.'],
+const PRECHECK_MESSAGES = new Map([
+  ['processor_timeout', 'Gemini field extraction timed out. Staff review is required.'],
   ['stored_file_unavailable', 'The stored file could not be read. Staff review is required.'],
-  ['processor_error', 'The local OCR tools could not process this file. Staff review is required.']
+  ['processor_error', 'Gemini field extraction could not be completed. Staff review is required.'],
+  ['processing_recovered', 'Gemini field extraction did not finish within the recovery window. Staff review is required.'],
+  ['precheck_pass', 'The configured name and file-format checks passed. A registrar or database administrator must inspect the source and make the final decision.'],
+  ['precheck_attention', 'The extracted name or file-format check needs source inspection.'],
+  ['gemini_unavailable', 'Gemini field extraction is unavailable. Staff source inspection is required.'],
+  ['invalid_file_format', 'The stored file does not match its declared PDF, JPEG, or PNG format. Staff review is required.']
 ]);
 const ADVISORY_KEYS_BY_TYPE = new Map([
   ['good_moral', ['linked_student_name', 'possible_school_name']],
-  ['psa_birth_certificate', ['linked_student_name']]
+  ['psa_birth_certificate', ['linked_student_name']],
+  ['report_card', ['linked_student_name']]
 ]);
 const LINKED_STUDENT_NAME_ITEM_V1 = {
   key: 'linkedStudentNameLegible',
@@ -49,17 +50,35 @@ const ALL_PAGES_ITEM_V1 = {
   key: 'allSubmittedPagesReadableComplete',
   label: 'I inspected all submitted pages and confirmed they are readable and complete.'
 };
-const VERIFICATION_CHECKLIST_VERSION = 1;
+const REPORT_CARD_IDENTITY_ITEM_V1 = {
+  key: 'reportCardIdentityMatches',
+  label: 'I inspected the previous-school report-card scan and confirmed the learner name and student number match the linked student record.'
+};
+const REPORT_CARD_PERIOD_ITEM_V1 = {
+  key: 'reportCardPeriodIdentified',
+  label: 'I confirmed the previous-school report-card scan identifies a prior grading period or school year for the enrollment submission.'
+};
+const GOOD_MORAL_CONTEXT_ITEM_V2 = {
+  key: 'goodMoralContextLegible',
+  label: 'I inspected the source and confirmed it contains readable Good Moral certificate title or character statement with surrounding certificate content; isolated name and school lines are insufficient.'
+};
+const VERIFICATION_CHECKLIST_VERSION = 2;
 const VERIFICATION_CHECKLIST_ITEMS_V1 = new Map([
   ['good_moral', [LINKED_STUDENT_NAME_ITEM_V1, SCHOOL_NAME_ITEM_V1, DOCUMENT_TYPE_ITEM_V1, ALL_PAGES_ITEM_V1]],
   ['psa_birth_certificate', [LINKED_STUDENT_NAME_ITEM_V1, DOCUMENT_TYPE_ITEM_V1, ALL_PAGES_ITEM_V1]]
 ]);
+const VERIFICATION_CHECKLIST_ITEMS_V2 = new Map([
+  ['good_moral', [LINKED_STUDENT_NAME_ITEM_V1, SCHOOL_NAME_ITEM_V1, GOOD_MORAL_CONTEXT_ITEM_V2, DOCUMENT_TYPE_ITEM_V1, ALL_PAGES_ITEM_V1]],
+  ['psa_birth_certificate', [LINKED_STUDENT_NAME_ITEM_V1, DOCUMENT_TYPE_ITEM_V1, ALL_PAGES_ITEM_V1]],
+  ['report_card', [REPORT_CARD_IDENTITY_ITEM_V1, REPORT_CARD_PERIOD_ITEM_V1, DOCUMENT_TYPE_ITEM_V1, ALL_PAGES_ITEM_V1]]
+]);
 const VERIFICATION_CHECKLIST_ITEMS_BY_VERSION = new Map([
-  [VERIFICATION_CHECKLIST_VERSION, VERIFICATION_CHECKLIST_ITEMS_V1]
+  [1, VERIFICATION_CHECKLIST_ITEMS_V1],
+  [VERIFICATION_CHECKLIST_VERSION, VERIFICATION_CHECKLIST_ITEMS_V2]
 ]);
 
 function verificationChecklistItems(documentType) {
-  return VERIFICATION_CHECKLIST_ITEMS_V1.get(documentType) || [];
+  return VERIFICATION_CHECKLIST_ITEMS_V2.get(documentType) || [];
 }
 
 function serializeVerificationChecklist(documentType, input) {
@@ -97,18 +116,68 @@ function activeAdvisoryChecks(documentType, checks) {
     : checks;
 }
 
-function completeAdvisoryChecks(documentType, checks) {
-  const expectedKeys = ADVISORY_KEYS_BY_TYPE.get(documentType);
-  if (!expectedKeys || !Array.isArray(checks)) return false;
-  const keyedChecks = new Map(checks.map((check) => [check?.key, check]));
-  return expectedKeys.every((key) => {
-    const check = keyedChecks.get(key);
-    if (typeof check?.found !== 'boolean') return false;
-    if (key === 'linked_student_name') return true;
-    if (!Array.isArray(check.candidates) || check.candidates.length > 3
-      || check.candidates.some((candidate) => typeof candidate !== 'string' || candidate.length > 200)) return false;
-    return !check.found || check.candidates.length > 0;
-  });
+function supportedDocumentFormat(document) {
+  if (typeof document?.original_filename !== 'string' || typeof document?.mime_type !== 'string') return false;
+  const extension = path.extname(document.original_filename).toLowerCase();
+  const expectedMimeType = MIME_BY_EXTENSION.get(extension);
+  return Boolean(expectedMimeType && document.mime_type === expectedMimeType);
+}
+
+function blockedNewOriginalTypesFromDocuments(documents) {
+  const latestByType = new Map();
+  for (const document of documents) {
+    if (document.document_type === 'report_card' && (document.is_legacy_archive === true || document.is_legacy_archive === 1)) continue;
+    if (STUDENT_UPLOAD_DOCUMENT_TYPES.has(document.document_type) && !latestByType.has(document.document_type)) {
+      latestByType.set(document.document_type, document);
+    }
+  }
+  return [...latestByType]
+    .filter(([, document]) => document.status !== 'rejected')
+    .map(([documentType]) => documentType);
+}
+
+function safeGeminiFieldChecks(documentType, summary) {
+  const gemini = summary?.gemini;
+  const fields = gemini?.fields;
+  const available = gemini?.status === 'extracted' && fields && typeof fields === 'object' && !Array.isArray(fields);
+  const textValue = (value) => typeof value === 'string'
+    ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 240)
+    : '';
+  const studentName = available ? textValue(fields.studentName) : '';
+  const studentMatch = available && typeof gemini.studentNameMatchesLinkedRecord === 'boolean'
+    ? gemini.studentNameMatchesLinkedRecord
+    : null;
+  const checks = [{
+    key: 'student_name',
+    label: 'Gemini-extracted student name',
+    value: studentName,
+    status: !available ? 'unavailable' : !studentName ? 'not_identified' : studentMatch ? 'matched' : 'mismatch'
+  }];
+  if (documentType === 'good_moral') {
+    const schoolName = available ? textValue(fields.issuingSchoolName) : '';
+    const contextEvidence = available ? textValue(fields.goodMoralContextEvidence) : '';
+    const layoutEvidence = available ? textValue(fields.goodMoralLayoutEvidence) : '';
+    checks.push(
+      { key: 'issuing_school_name', label: 'Gemini-extracted issuing school', value: schoolName, status: !available ? 'unavailable' : schoolName ? 'identified' : 'not_identified' },
+      { key: 'good_moral_context', label: 'Good Moral title or statement evidence', value: contextEvidence, status: !available ? 'unavailable' : contextEvidence ? 'identified' : 'not_identified' },
+      { key: 'good_moral_layout', label: 'Surrounding certificate context', value: layoutEvidence, status: !available ? 'unavailable' : layoutEvidence ? 'identified' : 'not_identified' }
+    );
+  }
+  return checks;
+}
+
+function automatedCheckOutcome(documentType, resultStatus, summary, formatCheckPassed) {
+  if (!ADVISORY_KEYS_BY_TYPE.has(documentType)) return null;
+  if (summary?.precheckVersion !== 2) return 'unavailable';
+  if (resultStatus !== 'needs_review') return 'unavailable';
+  if (!['precheck_pass', 'precheck_attention', 'gemini_unavailable', 'invalid_file_format'].includes(summary.outcome)) return 'unavailable';
+  if (summary.outcome === 'gemini_unavailable') return 'unavailable';
+  if (summary.outcome === 'precheck_attention') return 'attention';
+  if (summary.fileFormatPassed !== true || !formatCheckPassed) return 'attention';
+  if (summary.gemini?.status !== 'extracted') return 'unavailable';
+  const fieldChecks = safeGeminiFieldChecks(documentType, summary);
+  if (fieldChecks.some((check) => check.status === 'unavailable')) return 'unavailable';
+  return fieldChecks.every((check) => ['matched', 'identified'].includes(check.status)) ? 'pass' : 'attention';
 }
 
 class DocumentServiceError extends Error {
@@ -318,7 +387,7 @@ function createDocumentService({
   }
 
   function studentTypeAllowed(actor, documentType) {
-    if (documentType === 'form_137' || documentType === 'report_card') return false;
+    if (documentType === 'form_137') return false;
     return actor.role === 'student'
       ? STUDENT_UPLOAD_DOCUMENT_TYPES.has(documentType)
       : UPLOAD_DOCUMENT_TYPES.has(documentType);
@@ -326,6 +395,7 @@ function createDocumentService({
 
   async function insertSubmission({ actor, studentId, documentType, file, metadata, supersedesDocumentId = null, onFileSaved }) {
     const storedFilename = `${crypto.randomUUID()}${metadata.extension}`;
+    const initialStatus = 'pending';
     const filePath = await savePrivateFile(file.buffer, storedFilename);
     onFileSaved(filePath);
     const insertResult = await actor.transaction.request()
@@ -337,13 +407,15 @@ function createDocumentService({
       .input('fileSizeBytes', sql.BigInt, metadata.fileSizeBytes)
       .input('uploadedBy', sql.Int, actor.id)
       .input('uploadSource', sql.NVarChar(30), actor.role)
+      .input('initialStatus', sql.NVarChar(30), initialStatus)
+      .input('isLegacyArchive', sql.Bit, 0)
       .input('supersedesDocumentId', sql.Int, supersedesDocumentId)
       .query(`INSERT INTO dbo.documents
           (student_id, document_type, original_filename, stored_filename, mime_type,
-            file_size_bytes, uploaded_by, upload_source, status, supersedes_document_id)
+            file_size_bytes, uploaded_by, upload_source, status, is_legacy_archive, supersedes_document_id)
         OUTPUT INSERTED.id AS id
         VALUES (@studentId, @documentType, @originalFilename, @storedFilename, @mimeType,
-            @fileSizeBytes, @uploadedBy, @uploadSource, 'pending', @supersedesDocumentId)`);
+            @fileSizeBytes, @uploadedBy, @uploadSource, @initialStatus, @isLegacyArchive, @supersedesDocumentId)`);
     const documentId = insertResult.recordset?.[0]?.id;
     if (!Number.isSafeInteger(documentId) || documentId < 1) throw new Error('Document insert returned no identifier.');
     await writeAudit(actor.transaction, {
@@ -353,7 +425,21 @@ function createDocumentService({
       studentId,
       documentType
     });
-    return { id: documentId, studentId, documentType };
+    return { id: documentId, studentId, documentType, status: initialStatus };
+  }
+
+  async function ensureLatestSubmissionAllowsNewOriginal(transaction, studentId, documentType) {
+    const existingResult = await transaction.request()
+      .input('studentId', sql.Int, studentId)
+      .input('documentType', sql.NVarChar(50), documentType)
+      .query(`SELECT TOP (1) id, status FROM dbo.documents WITH (UPDLOCK, HOLDLOCK)
+        WHERE student_id = @studentId AND document_type = @documentType
+          AND (@documentType <> 'report_card' OR is_legacy_archive = 0)
+        ORDER BY created_at DESC, id DESC`);
+    const latestSubmission = existingResult.recordset?.[0];
+    if (latestSubmission && latestSubmission.status !== 'rejected') {
+      throw new DocumentServiceError('A submission of this type already exists. Use its correction request to upload a revised file.', 409);
+    }
   }
 
   async function upload(actorInput, input, file) {
@@ -367,9 +453,11 @@ function createDocumentService({
         const message = documentType === 'form_137'
           ? 'Form 137 is recorded as a physical document status and cannot be uploaded.'
           : documentType === 'report_card'
-            ? 'Report cards are a historical archive. Submit new grades through the teacher workbook review workflow.'
+            ? actor.role === 'student'
+              ? 'Previous-school report-card scans receive a limited student-name and file-format precheck, then staff review for enrollment. They do not change published grades.'
+              : 'Only students may upload a previous-school report-card scan through their own linked account.'
           : actor.role === 'student'
-            ? 'Students may upload Good Moral Certificates and PSA birth certificates for their own linked record. Report cards must be submitted by staff.'
+            ? 'Students may upload Good Moral Certificates, PSA birth certificates, and previous-school report-card scans for their own linked record.'
             : 'Staff may upload Good Moral Certificates and PSA birth certificates.';
         throw new DocumentServiceError(message, 403);
       }
@@ -390,6 +478,8 @@ function createDocumentService({
         if (!studentResult.recordset?.length) throw new DocumentServiceError('Student record not found.', 404);
       }
 
+      await ensureLatestSubmissionAllowsNewOriginal(transaction, studentId, documentType);
+
       const scopedActor = { ...actor, transaction };
       return insertSubmission({ actor: scopedActor, studentId, documentType, file, metadata, onFileSaved });
     });
@@ -404,7 +494,8 @@ function createDocumentService({
       const previousResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
         .input('actorId', sql.Int, actor.id)
-        .query(`SELECT d.id, d.student_id, d.document_type, d.upload_source, d.status, s.user_id AS student_user_id
+        .query(`SELECT d.id, d.student_id, d.document_type, d.upload_source, d.status,
+            d.is_legacy_archive, s.user_id AS student_user_id
           FROM dbo.documents AS d WITH (UPDLOCK, HOLDLOCK)
           INNER JOIN dbo.students AS s WITH (UPDLOCK, HOLDLOCK) ON s.id = d.student_id
           WHERE d.id = @documentId`);
@@ -413,6 +504,8 @@ function createDocumentService({
       if (actor.role === 'student'
         && (previous.student_user_id !== actor.id
           || (previous.document_type === 'psa_birth_certificate' && previous.upload_source !== 'student')
+          || (previous.document_type === 'report_card' && (previous.upload_source !== 'student'
+            || previous.is_legacy_archive === true || previous.is_legacy_archive === 1))
           || !STUDENT_UPLOAD_DOCUMENT_TYPES.has(previous.document_type))) {
         throw new DocumentServiceError('Document not found.', 404);
       }
@@ -420,7 +513,12 @@ function createDocumentService({
         throw new DocumentServiceError('Form 137 is tracked through its physical status history; files cannot be re-uploaded.', 403);
       }
       if (previous.document_type === 'report_card') {
-        throw new DocumentServiceError('Historical report cards cannot be corrected or re-uploaded.', 403);
+        if (previous.is_legacy_archive === true || previous.is_legacy_archive === 1) {
+          throw new DocumentServiceError('Historical report cards cannot be corrected or re-uploaded.', 403);
+        }
+        if (actor.role !== 'student' || previous.upload_source !== 'student' || previous.student_user_id !== actor.id) {
+          throw new DocumentServiceError('Document not found.', 404);
+        }
       }
 
       const decisionResult = await transaction.request()
@@ -455,7 +553,7 @@ function createDocumentService({
     });
   }
 
-  async function listDocuments(actorInput, searchInput = '') {
+  async function listDocuments(actorInput, searchInput = '', filters = {}) {
     let searchTerm = '';
     if (searchInput !== undefined && searchInput !== null && searchInput !== '') {
       if (typeof searchInput !== 'string') throw new DocumentServiceError('Search must be 100 printable characters or fewer.');
@@ -464,18 +562,27 @@ function createDocumentService({
         throw new DocumentServiceError('Search must be 100 printable characters or fewer.');
       }
     }
+    const filterValue = (input, allowed, label) => {
+      if (input === undefined || input === null || input === '') return 'all';
+      if (typeof input !== 'string' || !allowed.includes(input)) throw new DocumentServiceError(`Choose a supported ${label}.`);
+      return input;
+    };
+    const documentType = filterValue(filters?.documentType, ['all', 'good_moral', 'psa_birth_certificate', 'report_card'], 'document type');
+    const statusFilter = filterValue(filters?.status, ['all', 'awaiting_review', 'processing', 'verified', 'rejected', 'review_required'], 'review status');
     const pool = await getPool();
     const actor = await requireReadActor(pool, actorInput);
     const searchPattern = searchTerm ? `%${searchTerm.replace(/[~%_[\]]/g, (character) => `~${character}`)}%` : null;
     const result = await pool.request()
       .input('actorId', sql.Int, actor.id)
       .input('searchPattern', sql.NVarChar(204), searchPattern)
-      .query(`SELECT TOP (200) d.id, d.student_id, d.document_type, d.original_filename,
+      .input('documentType', sql.NVarChar(50), documentType === 'all' ? null : documentType)
+      .input('statusFilter', sql.NVarChar(30), statusFilter === 'all' ? null : statusFilter)
+      .query(`SELECT TOP (200) d.id, d.student_id, d.document_type, d.is_legacy_archive, d.original_filename,
           d.mime_type, d.file_size_bytes, d.status, d.supersedes_document_id, d.created_at,
           s.student_no, s.first_name, s.middle_name, s.last_name,
           latest.action_type AS latest_review_action,
           CASE WHEN EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
-              OR d.document_type <> 'psa_birth_certificate' OR d.upload_source = 'student'
+              OR (d.document_type NOT IN ('psa_birth_certificate', 'report_card') OR d.upload_source = 'student')
             THEN latest.instruction ELSE NULL END AS latest_review_instruction,
           latest.created_at AS latest_review_at, latest_decision.decision_type AS latest_decision_type
         FROM dbo.documents AS d
@@ -490,31 +597,187 @@ function createDocumentService({
           FROM dbo.document_decision_events AS e
           WHERE e.document_id = d.id ORDER BY e.created_at DESC, e.id DESC
         ) AS latest_decision
-        WHERE (
+        WHERE ((
           EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
           AND (@searchPattern IS NULL OR s.student_no LIKE @searchPattern ESCAPE N'~'
             OR s.first_name LIKE @searchPattern ESCAPE N'~' OR s.middle_name LIKE @searchPattern ESCAPE N'~'
             OR s.last_name LIKE @searchPattern ESCAPE N'~'
+            OR s.lrn LIKE @searchPattern ESCAPE N'~'
             OR CONCAT_WS(N' ', s.first_name, NULLIF(s.middle_name, N''), s.last_name) LIKE @searchPattern ESCAPE N'~')
         ) OR (
           EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role = 'student')
           AND s.user_id = @actorId AND (
-            d.document_type IN ('good_moral', 'psa_birth_certificate')
+            (d.document_type IN ('good_moral', 'psa_birth_certificate')
+              OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'))
           )
-        )
+        ))
+        AND (@documentType IS NULL OR d.document_type = @documentType)
+        AND (@statusFilter IS NULL
+          OR (@statusFilter = 'awaiting_review' AND d.status = 'needs_review'
+            AND (d.document_type <> 'report_card' OR ISNULL(latest_decision.decision_type, '') <> 'correction_requested'))
+          OR (@statusFilter = 'processing' AND d.status IN ('pending', 'processing'))
+          OR (@statusFilter = 'verified' AND d.status = 'valid')
+          OR (@statusFilter = 'rejected' AND d.status = 'rejected')
+          OR (@statusFilter = 'review_required' AND d.status = 'failed'))
         ORDER BY d.created_at DESC, d.id DESC`);
-    let form137Status = null;
-    if (actor.role === 'student') {
-      const statusResult = await pool.request()
+    let blockedNewOriginalTypes = [];
+    let statusSummary = [];
+    if (STAFF_ROLES.has(actor.role)) {
+      const summaryResult = await pool.request()
         .input('actorId', sql.Int, actor.id)
-        .query(`SELECT TOP (1) e.status, e.instruction, e.created_at
-          FROM dbo.students AS s
-          INNER JOIN dbo.form137_status_events AS e ON e.student_id = s.id
-          WHERE s.user_id = @actorId
-          ORDER BY e.created_at DESC, e.id DESC`);
-      form137Status = statusResult.recordset?.[0] || { status: 'not_recorded', instruction: null, created_at: null };
+        .query(`WITH latest_submissions AS (
+          SELECT d.student_id, d.document_type, d.status, d.is_legacy_archive,
+            ROW_NUMBER() OVER (PARTITION BY d.student_id, d.document_type ORDER BY d.created_at DESC, d.id DESC) AS submission_rank
+          FROM dbo.documents AS d
+          WHERE d.document_type IN ('good_moral', 'psa_birth_certificate')
+        )
+        SELECT required.document_type, COUNT_BIG(*) AS student_count,
+          SUM(CASE WHEN latest.status IS NULL THEN 1 ELSE 0 END) AS missing_count,
+          SUM(CASE WHEN latest.status = 'needs_review' THEN 1 ELSE 0 END) AS awaiting_review_count,
+          SUM(CASE WHEN latest.status IN ('pending', 'processing') THEN 1 ELSE 0 END) AS processing_count,
+          SUM(CASE WHEN latest.status = 'valid' THEN 1 ELSE 0 END) AS verified_count,
+          SUM(CASE WHEN latest.status = 'rejected' THEN 1 ELSE 0 END) AS rejected_count,
+          SUM(CASE WHEN latest.status = 'failed' THEN 1 ELSE 0 END) AS review_required_count
+        FROM dbo.students AS s
+        CROSS JOIN (VALUES (N'good_moral'), (N'psa_birth_certificate')) AS required(document_type)
+        LEFT JOIN latest_submissions AS latest ON latest.student_id = s.id
+          AND latest.document_type = required.document_type AND latest.submission_rank = 1
+        WHERE s.status = 'active'
+          AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+        GROUP BY required.document_type`);
+      statusSummary = summaryResult.recordset || [];
+      const reportCardSummaryResult = await pool.request()
+        .input('actorId', sql.Int, actor.id)
+        .query(`WITH ranked_report_cards AS (
+          SELECT d.student_id, d.status, latest_decision.decision_type AS latest_decision_type,
+            ROW_NUMBER() OVER (PARTITION BY d.student_id ORDER BY d.created_at DESC, d.id DESC) AS submission_rank
+          FROM dbo.documents AS d
+          OUTER APPLY (
+            SELECT TOP (1) decision_type
+            FROM dbo.document_decision_events
+            WHERE document_id = d.id ORDER BY created_at DESC, id DESC
+          ) AS latest_decision
+          WHERE d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'
+        )
+        SELECT N'report_card' AS document_type, COUNT_BIG(*) AS submitted_count,
+          COALESCE(SUM(CASE WHEN status = 'needs_review' AND ISNULL(latest_decision_type, '') <> 'correction_requested' THEN 1 ELSE 0 END), 0) AS awaiting_review_count,
+          COALESCE(SUM(CASE WHEN status IN ('pending', 'processing') THEN 1 ELSE 0 END), 0) AS processing_count,
+          COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS review_required_count,
+          COALESCE(SUM(CASE WHEN latest_decision_type = 'correction_requested' THEN 1 ELSE 0 END), 0) AS correction_requested_count,
+          COALESCE(SUM(CASE WHEN status = 'valid' THEN 1 ELSE 0 END), 0) AS verified_count,
+          COALESCE(SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END), 0) AS rejected_count
+        FROM ranked_report_cards
+        WHERE submission_rank = 1
+          AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))`);
+      statusSummary.push(reportCardSummaryResult.recordset?.[0] || {
+        document_type: 'report_card', submitted_count: 0, awaiting_review_count: 0,
+        processing_count: 0, review_required_count: 0, correction_requested_count: 0,
+        verified_count: 0, rejected_count: 0
+      });
     }
-    return { documents: result.recordset || [], searchTerm, isStaff: STAFF_ROLES.has(actor.role), form137Status };
+    if (actor.role === 'student') {
+      const blockedResult = await pool.request()
+        .input('actorId', sql.Int, actor.id)
+        .query(`WITH latest_submissions AS (
+          SELECT d.document_type, d.status,
+            ROW_NUMBER() OVER (PARTITION BY d.document_type ORDER BY d.created_at DESC, d.id DESC) AS submission_rank
+          FROM dbo.documents AS d
+          INNER JOIN dbo.students AS s ON s.id = d.student_id
+          WHERE s.user_id = @actorId AND (d.document_type IN ('good_moral', 'psa_birth_certificate')
+            OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'))
+        )
+        SELECT document_type FROM latest_submissions
+        WHERE submission_rank = 1 AND status <> 'rejected'`);
+      blockedNewOriginalTypes = (blockedResult.recordset || []).map(({ document_type }) => document_type);
+    }
+    return {
+      documents: result.recordset || [], searchTerm, isStaff: STAFF_ROLES.has(actor.role),
+      blockedNewOriginalTypes, statusSummary, documentType, statusFilter
+    };
+  }
+
+  async function listPhysicalRequirements(actorInput, searchInput = '', pageInput = 1) {
+    let searchTerm = '';
+    if (searchInput !== undefined && searchInput !== null && searchInput !== '') {
+      if (typeof searchInput !== 'string') throw new DocumentServiceError('Search must be 100 printable characters or fewer.');
+      searchTerm = searchInput.trim();
+      if (searchTerm.length > 100 || /[\u0000-\u001f\u007f]/.test(searchTerm)) {
+        throw new DocumentServiceError('Search must be 100 printable characters or fewer.');
+      }
+    }
+    const requestedPage = pageInput === undefined || pageInput === null || pageInput === ''
+      ? 1
+      : typeof pageInput === 'number'
+        ? pageInput
+        : typeof pageInput === 'string' && /^\d{1,7}$/.test(pageInput)
+          ? Number(pageInput)
+          : NaN;
+    if (!Number.isSafeInteger(requestedPage) || requestedPage < 1 || requestedPage > 1_000_000) {
+      throw new DocumentServiceError('Choose a valid physical-requirements page.');
+    }
+
+    const searchPattern = searchTerm ? `%${searchTerm.replace(/[~%_[\]]/g, (character) => `~${character}`)}%` : null;
+    const pageSize = 25;
+    const pool = await getPool();
+    const actor = await requireReadActor(pool, actorInput);
+    if (!STAFF_ROLES.has(actor.role)) throw new DocumentServiceError('Staff physical-requirements access is required.', 403);
+
+    const matchingStudents = await pool.request()
+      .input('actorId', sql.Int, actor.id)
+      .input('searchPattern', sql.NVarChar(204), searchPattern)
+      .query(`SELECT COUNT_BIG(*) AS total_students
+        FROM dbo.students AS s
+        WHERE s.status = 'active'
+          AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+          AND (@searchPattern IS NULL
+            OR s.student_no LIKE @searchPattern ESCAPE N'~'
+            OR s.lrn LIKE @searchPattern ESCAPE N'~'
+            OR s.first_name LIKE @searchPattern ESCAPE N'~'
+            OR s.middle_name LIKE @searchPattern ESCAPE N'~'
+            OR s.last_name LIKE @searchPattern ESCAPE N'~'
+            OR CONCAT_WS(N' ', s.first_name, NULLIF(s.middle_name, N''), s.last_name) LIKE @searchPattern ESCAPE N'~')`);
+    const totalStudents = Number(matchingStudents.recordset?.[0]?.total_students || 0);
+    if (!Number.isSafeInteger(totalStudents) || totalStudents < 0) {
+      throw new DocumentServiceError('Physical-requirements records could not be loaded.', 503);
+    }
+    const totalPages = Math.max(1, Math.ceil(totalStudents / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const offset = (page - 1) * pageSize;
+    const students = await pool.request()
+      .input('actorId', sql.Int, actor.id)
+      .input('searchPattern', sql.NVarChar(204), searchPattern)
+      .input('offset', sql.Int, offset)
+      .input('pageSize', sql.Int, pageSize)
+      .query(`SELECT s.id, s.student_no, s.lrn, s.first_name, s.middle_name, s.last_name, s.suffix,
+          form137.status AS form137_status, form137.created_at AS form137_updated_at,
+          report_card.status AS paper_report_card_status, report_card.created_at AS paper_report_card_updated_at
+        FROM dbo.students AS s
+        OUTER APPLY (
+          SELECT TOP (1) e.status, e.created_at
+          FROM dbo.form137_status_events AS e
+          WHERE e.student_id = s.id ORDER BY e.created_at DESC, e.id DESC
+        ) AS form137
+        OUTER APPLY (
+          SELECT TOP (1) e.status, e.created_at
+          FROM dbo.previous_school_report_card_status_events AS e
+          WHERE e.student_id = s.id ORDER BY e.created_at DESC, e.id DESC
+        ) AS report_card
+        WHERE s.status = 'active'
+          AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+          AND (@searchPattern IS NULL
+            OR s.student_no LIKE @searchPattern ESCAPE N'~'
+            OR s.lrn LIKE @searchPattern ESCAPE N'~'
+            OR s.first_name LIKE @searchPattern ESCAPE N'~'
+            OR s.middle_name LIKE @searchPattern ESCAPE N'~'
+            OR s.last_name LIKE @searchPattern ESCAPE N'~'
+            OR CONCAT_WS(N' ', s.first_name, NULLIF(s.middle_name, N''), s.last_name) LIKE @searchPattern ESCAPE N'~')
+        ORDER BY s.last_name, s.first_name, s.student_no, s.id
+        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`);
+
+    return {
+      students: students.recordset || [], searchTerm, totalStudents,
+      page, pageSize, totalPages
+    };
   }
 
   async function getStudentDocuments(actorInput, studentInput) {
@@ -531,11 +794,11 @@ function createDocumentService({
           AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))`);
     const student = studentResult.recordset?.[0];
     if (!student) return null;
-    const [documentResult, form137StatusResult] = await Promise.all([
+    const [documentResult, form137StatusResult, previousSchoolReportCardStatusResult] = await Promise.all([
       pool.request()
       .input('studentId', sql.Int, studentId)
       .input('actorId', sql.Int, actor.id)
-      .query(`SELECT d.id, d.student_id, d.document_type, d.original_filename,
+      .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.original_filename,
           d.mime_type, d.file_size_bytes, d.status, d.supersedes_document_id, d.created_at,
           latest.action_type AS latest_review_action, latest.instruction AS latest_review_instruction,
           latest.created_at AS latest_review_at, latest_decision.decision_type AS latest_decision_type
@@ -562,15 +825,45 @@ function createDocumentService({
           LEFT JOIN dbo.staff_profiles AS p ON p.user_id = e.recorded_by
           WHERE e.student_id = @studentId
             AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+          ORDER BY e.created_at DESC, e.id DESC`),
+      pool.request()
+        .input('studentId', sql.Int, studentId)
+        .input('actorId', sql.Int, actor.id)
+        .query(`SELECT e.id, e.status, e.instruction, e.created_at, e.recorded_by,
+            COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(p.first_name, N' ', p.last_name))), N''), CONCAT(N'Staff ', e.recorded_by)) AS recorded_by_name
+          FROM dbo.previous_school_report_card_status_events AS e
+          LEFT JOIN dbo.staff_profiles AS p ON p.user_id = e.recorded_by
+          WHERE e.student_id = @studentId
+            AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
           ORDER BY e.created_at DESC, e.id DESC`)
     ]);
     const form137StatusHistory = form137StatusResult.recordset || [];
+    const previousSchoolReportCardStatusHistory = previousSchoolReportCardStatusResult.recordset || [];
+    const documents = documentResult.recordset || [];
     return {
       student,
-      documents: documentResult.recordset || [],
+      documents,
+      blockedNewOriginalTypes: blockedNewOriginalTypesFromDocuments(documents),
       form137Status: form137StatusHistory[0] || { status: 'not_recorded', instruction: null, created_at: null },
-      form137StatusHistory
+      form137StatusHistory,
+      previousSchoolReportCardPhysicalStatus: previousSchoolReportCardStatusHistory[0] || { status: 'not_recorded', instruction: null, created_at: null },
+      previousSchoolReportCardPhysicalStatusHistory: previousSchoolReportCardStatusHistory
     };
+  }
+
+  async function getOwnPreviousSchoolReportCardPhysicalStatus(actorInput) {
+    const pool = await getPool();
+    const actor = await requireReadActor(pool, actorInput);
+    if (actor.role !== 'student') throw new DocumentServiceError('Student document access is required.', 403);
+    const result = await pool.request()
+      .input('actorId', sql.Int, actor.id)
+      .query(`SELECT TOP (1) e.status, e.created_at
+        FROM dbo.previous_school_report_card_status_events AS e
+        INNER JOIN dbo.students AS s ON s.id = e.student_id
+        INNER JOIN dbo.users AS u ON u.id = @actorId AND u.is_active = 1 AND u.role = 'student'
+        WHERE s.user_id = @actorId
+        ORDER BY e.created_at DESC, e.id DESC`);
+    return result.recordset?.[0] || { status: 'not_recorded', created_at: null };
   }
 
   async function getDocument(actorInput, documentInput) {
@@ -581,7 +874,7 @@ function createDocumentService({
     const documentResult = await pool.request()
       .input('actorId', sql.Int, actor.id)
       .input('documentId', sql.Int, documentId)
-      .query(`SELECT d.id, d.student_id, d.document_type, d.original_filename, d.stored_filename,
+      .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.original_filename, d.stored_filename,
           d.mime_type, d.file_size_bytes, d.uploaded_by, d.upload_source, d.status,
           d.supersedes_document_id, d.created_at, s.user_id AS student_user_id,
           s.student_no, s.first_name, s.middle_name, s.last_name, u.role AS uploader_role
@@ -591,21 +884,29 @@ function createDocumentService({
         WHERE d.id = @documentId
           AND (EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
             OR (EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role = 'student')
-              AND s.user_id = @actorId AND d.document_type IN ('good_moral', 'psa_birth_certificate')))`);
+              AND s.user_id = @actorId
+              AND (d.document_type IN ('good_moral', 'psa_birth_certificate')
+                OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'))))`);
     const document = documentResult.recordset?.[0];
     if (!document) return null;
 
-    const archivedReportCard = document.document_type === 'report_card';
-    const validationPromise = STAFF_ROLES.has(actor.role) && document.document_type !== 'form_137' && !archivedReportCard
+    const archivedReportCard = document.document_type === 'report_card'
+      && (document.is_legacy_archive === true || document.is_legacy_archive === 1);
+    const validationPromise = STAFF_ROLES.has(actor.role)
+      && document.document_type !== 'form_137' && !archivedReportCard
       ? pool.request()
         .input('documentId', sql.Int, documentId)
         .input('actorId', sql.Int, actor.id)
-        .query(`SELECT TOP (1) id, processor, extracted_text, validation_json, result_status, created_at
-          FROM dbo.document_validations
-          WHERE document_id = @documentId
+        .input('precheckProcessor', sql.NVarChar(100), GEMINI_PRECHECK_PROCESSOR)
+        .query(`SELECT TOP (1) validation.id, validation.processor, validation.extracted_text,
+            validation.validation_json, validation.result_status, validation.created_at,
+            (SELECT COUNT_BIG(*) FROM dbo.document_validations AS attempts
+              WHERE attempts.document_id = @documentId AND attempts.processor = @precheckProcessor) AS precheck_attempt_count
+          FROM dbo.document_validations AS validation
+          WHERE validation.document_id = @documentId
             AND EXISTS (SELECT 1 FROM dbo.users
               WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
-          ORDER BY created_at DESC, id DESC`)
+          ORDER BY validation.created_at DESC, validation.id DESC`)
       : Promise.resolve({ recordset: [] });
     const visibleReviewer = STAFF_ROLES.has(actor.role)
       ? "COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(p.first_name, N' ', p.last_name))), N''), CONCAT(N'Staff ', e.reviewer_id))"
@@ -622,7 +923,7 @@ function createDocumentService({
           CAST(NULL AS INT) AS reviewer_id, CAST(NULL AS NVARCHAR(201)) AS reviewer_name
         FROM dbo.document_review_events AS e
         WHERE e.document_id = @documentId AND e.action_type = 'correction_requested'
-          AND (@documentType <> 'psa_birth_certificate' OR @uploadSource = 'student')
+          AND (@documentType NOT IN ('psa_birth_certificate', 'report_card') OR @uploadSource = 'student')
         ORDER BY e.created_at DESC, e.id DESC`;
     const decisionHistorySql = archivedReportCard
       ? 'SELECT CAST(NULL AS INT) AS id WHERE 1 = 0'
@@ -632,8 +933,8 @@ function createDocumentService({
         LEFT JOIN dbo.staff_profiles AS p ON p.user_id = e.reviewer_id
         WHERE e.document_id = @documentId ORDER BY e.created_at DESC, e.id DESC`
       : `SELECT e.id, e.decision_type,
-          CASE WHEN e.decision_type = 'correction_requested'
-              AND (@documentType <> 'psa_birth_certificate' OR @uploadSource = 'student')
+          CASE WHEN e.decision_type IN ('rejected', 'correction_requested')
+              AND (@documentType NOT IN ('psa_birth_certificate', 'report_card') OR @uploadSource = 'student')
             THEN e.reason ELSE NULL END AS reason,
           CAST(NULL AS NVARCHAR(500)) AS verification_checklist_json,
           e.created_at,
@@ -646,7 +947,8 @@ function createDocumentService({
         .input('studentId', sql.Int, document.student_id)
         .input('documentType', sql.NVarChar(50), document.document_type)
         .input('actorId', sql.Int, actor.id)
-        .query(`SELECT history_document.id, history_document.original_filename,
+        .query(`SELECT history_document.id, history_document.original_filename, history_document.mime_type,
+            history_document.is_legacy_archive,
             history_document.status, history_document.supersedes_document_id, history_document.created_at,
             latest.action_type AS latest_review_action, latest_decision.decision_type AS latest_decision_type
           FROM dbo.documents AS history_document
@@ -663,6 +965,7 @@ function createDocumentService({
             ORDER BY latest_decision_event.created_at DESC, latest_decision_event.id DESC
           ) AS latest_decision
           WHERE history_document.student_id = @studentId AND history_document.document_type = @documentType
+            AND (history_document.document_type <> 'report_card' OR (history_document.is_legacy_archive = 0 AND history_document.upload_source = 'student'))
             AND (EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
               OR EXISTS (SELECT 1 FROM dbo.students AS history_student
                 WHERE history_student.id = history_document.student_id AND history_student.user_id = @actorId
@@ -684,16 +987,28 @@ function createDocumentService({
     let validation = null;
     if (validationRow) {
       let outcome = null;
+      let storedSummary = null;
       let advisory = [];
-      let hasAdvisoryData = false;
       try {
-        const storedSummary = JSON.parse(validationRow.validation_json);
+        storedSummary = JSON.parse(validationRow.validation_json);
         outcome = storedSummary?.outcome;
         advisory = activeAdvisoryChecks(document.document_type, storedSummary?.advisoryChecks);
-        hasAdvisoryData = completeAdvisoryChecks(document.document_type, advisory);
       } catch {
         // Ignore malformed stored summaries and use a fixed safe fallback.
       }
+      const formatCheckPassed = supportedDocumentFormat(document);
+      const checkOutcome = automatedCheckOutcome(
+        document.document_type,
+        validationRow.result_status,
+        storedSummary,
+        formatCheckPassed
+      );
+      const legacyOcrOnly = storedSummary?.precheckVersion !== 2;
+      const storedAttemptCount = Number(validationRow.precheck_attempt_count);
+      const precheckAttemptCount = Number.isSafeInteger(storedAttemptCount) && storedAttemptCount >= 0
+        ? storedAttemptCount
+        : validationRow.processor === GEMINI_PRECHECK_PROCESSOR ? 1 : 0;
+      const hasFinalDecision = (decisionsResult.recordset || []).some(({ decision_type }) => ['verified', 'rejected'].includes(decision_type));
       validation = {
         id: validationRow.id,
         processor: validationRow.processor,
@@ -701,9 +1016,25 @@ function createDocumentService({
         result_status: validationRow.result_status,
         created_at: validationRow.created_at,
         advisoryChecks: advisory,
-        requiresOverrideReason: document.status === 'failed' || validationRow.result_status === 'failed'
-          || !hasAdvisoryData || advisory.some((check) => check?.found === false),
-        message: OCR_MESSAGES.get(outcome) || 'A processing result is available for staff review.'
+        fieldChecks: safeGeminiFieldChecks(document.document_type, storedSummary),
+        formatCheckPassed,
+        automatedCheckOutcome: checkOutcome,
+        requiresOverrideReason: checkOutcome !== 'pass',
+        legacyOcrOnly,
+        canRetryPrecheck: canRetryGeminiPrecheck({
+          documentType: document.document_type,
+          isLegacyArchive: document.is_legacy_archive,
+          documentStatus: document.status,
+          validationSummary: storedSummary,
+          precheckAttemptCount,
+          hasFinalDecision
+        }),
+        precheckRetriesRemaining: Math.max(0, MAX_GEMINI_PRECHECK_ATTEMPTS - precheckAttemptCount),
+        message: legacyOcrOnly
+          ? 'Legacy OCR-only result. Gemini field extraction was not run; inspect the source and record a staff decision.'
+          : PRECHECK_MESSAGES.get(outcome) || (storedSummary?.gemini?.status === 'unavailable'
+            ? 'Gemini field extraction is unavailable. Staff inspection is required.'
+            : 'A processing result is available for staff review.')
       };
     }
     const decisions = (decisionsResult.recordset || []).map(({ verification_checklist_json: checklistJson, ...decision }) => ({
@@ -721,29 +1052,109 @@ function createDocumentService({
     };
   }
 
+  async function requestPrecheckRetry(actorInput, documentInput) {
+    const documentId = normalizeId(documentInput);
+    if (!documentId) throw new DocumentServiceError('Document not found.', 404);
+
+    return runTransaction(async (transaction) => {
+      const actor = await requireActor(transaction, actorInput, STAFF_ROLES);
+      const documentResult = await transaction.request()
+        .input('documentId', sql.Int, documentId)
+        .input('precheckProcessor', sql.NVarChar(100), GEMINI_PRECHECK_PROCESSOR)
+        .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.status,
+            latest.validation_json, attempts.precheck_attempt_count
+          FROM dbo.documents AS d WITH (UPDLOCK, HOLDLOCK)
+          OUTER APPLY (
+            SELECT TOP (1) validation_json
+            FROM dbo.document_validations
+            WHERE document_id = d.id
+            ORDER BY created_at DESC, id DESC
+          ) AS latest
+          CROSS APPLY (
+            SELECT COUNT_BIG(*) AS precheck_attempt_count
+            FROM dbo.document_validations
+            WHERE document_id = d.id AND processor = @precheckProcessor
+          ) AS attempts
+          WHERE d.id = @documentId`);
+      const document = documentResult.recordset?.[0];
+      if (!document) throw new DocumentServiceError('Document not found.', 404);
+
+      const finalDecisionResult = await transaction.request()
+        .input('documentId', sql.Int, documentId)
+        .query(`SELECT TOP (1) decision_type
+          FROM dbo.document_decision_events WITH (UPDLOCK, HOLDLOCK)
+          WHERE document_id = @documentId AND decision_type IN ('verified', 'rejected')`);
+      const hasFinalDecision = Boolean(finalDecisionResult.recordset?.length);
+      let validationSummary = null;
+      try {
+        validationSummary = JSON.parse(document.validation_json || 'null');
+      } catch {
+        // Malformed summaries are never eligible for another provider request.
+      }
+
+      const precheckAttemptCount = Number(document.precheck_attempt_count);
+      if (!canRetryGeminiPrecheck({
+        documentType: document.document_type,
+        isLegacyArchive: document.is_legacy_archive,
+        documentStatus: document.status,
+        validationSummary,
+        precheckAttemptCount,
+        hasFinalDecision
+      })) {
+        const message = precheckAttemptCount >= MAX_GEMINI_PRECHECK_ATTEMPTS
+          ? 'The automated precheck retry limit has been reached for this submission.'
+          : 'This submission is not eligible for an automated precheck retry.';
+        throw new DocumentServiceError(message, 409);
+      }
+
+      const updateResult = await transaction.request()
+        .input('documentId', sql.Int, documentId)
+        .input('studentId', sql.Int, document.student_id)
+        .input('documentType', sql.NVarChar(50), document.document_type)
+        .query(`UPDATE dbo.documents
+          SET status = 'pending', processing_started_at = NULL
+          OUTPUT INSERTED.id AS id
+          WHERE id = @documentId AND status = 'needs_review'
+            AND ((document_type IN ('good_moral', 'psa_birth_certificate'))
+              OR (document_type = 'report_card' AND is_legacy_archive = 0))`);
+      if (!updateResult.recordset?.length) {
+        throw new DocumentServiceError('The submission state changed before the retry could be queued.', 409);
+      }
+
+      await writeAudit(transaction, {
+        actor,
+        action: 'precheck_retry_queued',
+        documentId,
+        studentId: document.student_id,
+        documentType: document.document_type
+      });
+      return { id: documentId, status: 'pending' };
+    });
+  }
+
   async function addReviewEvent(actorInput, documentInput, actionInput, instructionInput = '') {
     const documentId = normalizeId(documentInput);
     if (!documentId) throw new DocumentServiceError('Document not found.', 404);
-    const action = ['review_requested', 'correction_requested'].includes(actionInput) ? actionInput : null;
+    const action = actionInput === 'correction_requested' ? actionInput : null;
     if (!action) throw new DocumentServiceError('Choose a valid review action.');
     const instruction = typeof instructionInput === 'string' ? instructionInput.trim() : '';
     if (action === 'correction_requested' && (!instruction || instruction.length > 1000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(instruction))) {
       throw new DocumentServiceError('Enter a correction instruction up to 1000 characters.');
     }
-    if (action === 'review_requested' && instruction) throw new DocumentServiceError('Review handoff does not accept a student instruction.');
 
     return runTransaction(async (transaction) => {
       const actor = await requireActor(transaction, actorInput, new Set(STAFF_ROLES));
       const documentResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
-        .query(`SELECT id, student_id, document_type FROM dbo.documents WITH (UPDLOCK, HOLDLOCK)
+        .query(`SELECT id, student_id, document_type, is_legacy_archive FROM dbo.documents WITH (UPDLOCK, HOLDLOCK)
           WHERE id = @documentId`);
       const document = documentResult.recordset?.[0];
       if (!document) throw new DocumentServiceError('Document not found.', 404);
       if (document.document_type === 'form_137') {
         throw new DocumentServiceError('Form 137 uses the physical status workflow.', 409);
       }
-      if (document.document_type === 'report_card') {
+      if (document.document_type === 'report_card'
+        && (document.is_legacy_archive === true || document.is_legacy_archive === 1)) {
         throw new DocumentServiceError('Historical report cards are read-only archive records.', 409);
       }
       await transaction.request()
@@ -755,7 +1166,7 @@ function createDocumentService({
           VALUES (@documentId, @reviewerId, @actionType, @instruction)`);
       await writeAudit(transaction, {
         actor,
-        action: action === 'correction_requested' ? 'correction_requested' : 'review_handoff',
+        action: 'correction_requested',
         documentId,
         studentId: document.student_id,
         documentType: document.document_type
@@ -781,7 +1192,7 @@ function createDocumentService({
       const actor = await requireActor(transaction, actorInput, new Set(STAFF_ROLES));
       const documentResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
-        .query(`SELECT d.id, d.student_id, d.document_type, d.status,
+        .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.status, d.original_filename, d.mime_type,
             validation.result_status, validation.validation_json
           FROM dbo.documents AS d WITH (UPDLOCK, HOLDLOCK)
           OUTER APPLY (
@@ -796,14 +1207,18 @@ function createDocumentService({
       if (document.document_type === 'form_137') {
         throw new DocumentServiceError('Form 137 uses the physical status workflow.', 409);
       }
-      if (document.document_type === 'report_card') {
+      const activeReportCard = document.document_type === 'report_card'
+        && document.is_legacy_archive !== true && document.is_legacy_archive !== 1;
+      if (document.document_type === 'report_card' && !activeReportCard) {
         throw new DocumentServiceError('Historical report cards are read-only archive records.', 409);
       }
       if (!['needs_review', 'failed'].includes(document.status)) {
-        throw new DocumentServiceError('The document must finish OCR before staff review.', 409);
+        throw new DocumentServiceError(activeReportCard
+          ? 'This report card is not waiting for a staff decision.'
+          : 'The field precheck must finish before staff review.', 409);
       }
-      if (!document.result_status) {
-        throw new DocumentServiceError('An OCR result must be recorded before staff review.', 409);
+      if ((activeReportCard || decision === 'verified') && !document.result_status) {
+        throw new DocumentServiceError('A precheck result must be recorded before staff review.', 409);
       }
       const checklistJson = decision === 'verified'
         ? serializeVerificationChecklist(document.document_type, checklistInput)
@@ -818,24 +1233,22 @@ function createDocumentService({
         throw new DocumentServiceError('This submission already has a final staff decision.', 409);
       }
 
+      let summary = null;
       let advisoryChecks = [];
-      let hasSummary = false;
-      let hasAdvisoryChecks = false;
       try {
-        const summary = JSON.parse(document.validation_json);
-        hasSummary = Boolean(summary && typeof summary === 'object');
+        summary = JSON.parse(document.validation_json);
         advisoryChecks = activeAdvisoryChecks(document.document_type, summary?.advisoryChecks);
-        hasAdvisoryChecks = completeAdvisoryChecks(document.document_type, advisoryChecks);
       } catch {
         // A malformed advisory summary is not allowed to bypass the source inspection decision.
       }
-      const hasOcrWarning = !hasSummary
-        || !hasAdvisoryChecks
-        || document.status === 'failed'
-        || document.result_status === 'failed'
-        || advisoryChecks.some((check) => check?.found === false);
-      if (decision === 'verified' && hasOcrWarning && !reason) {
-        throw new DocumentServiceError('Enter a reason to verify a submission with an OCR warning or failure.');
+      const checkOutcome = automatedCheckOutcome(
+        document.document_type,
+        document.result_status,
+        summary,
+        summary?.fileFormatPassed === true && supportedDocumentFormat(document)
+      );
+      if (decision === 'verified' && checkOutcome !== 'pass' && !reason) {
+        throw new DocumentServiceError('Enter a reason to verify a submission when automated checks did not pass.');
       }
 
       await transaction.request()
@@ -868,6 +1281,97 @@ function createDocumentService({
       });
       return { id: documentId, status: nextStatus, decision };
     });
+  }
+
+  async function deleteDocument(actorInput, documentInput) {
+    const documentId = normalizeId(documentInput);
+    if (!documentId) throw new DocumentServiceError('Document not found.', 404);
+
+    let sourceFilePath = null;
+    let stagedFilePath = null;
+    let stagedFile = false;
+
+    try {
+      const result = await runTransaction(async (transaction) => {
+        const actor = await requireActor(transaction, actorInput, STAFF_ROLES);
+        const documentResult = await transaction.request()
+          .input('documentId', sql.Int, documentId)
+          .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.stored_filename
+            FROM dbo.documents AS d WITH (UPDLOCK, HOLDLOCK)
+            WHERE d.id = @documentId`);
+        const document = documentResult.recordset?.[0];
+        if (!document) throw new DocumentServiceError('Document not found.', 404);
+        const activeReportCard = document.document_type === 'report_card'
+          && document.is_legacy_archive !== true && document.is_legacy_archive !== 1;
+        if (!['good_moral', 'psa_birth_certificate'].includes(document.document_type) && !activeReportCard) {
+          throw new DocumentServiceError('Only active Good Moral, PSA, or report-card submissions can be permanently deleted.', 409);
+        }
+
+        const childResult = await transaction.request()
+          .input('documentId', sql.Int, documentId)
+          .query(`SELECT TOP (1) id FROM dbo.documents WITH (UPDLOCK, HOLDLOCK)
+            WHERE supersedes_document_id = @documentId`);
+        if (childResult.recordset?.length) {
+          throw new DocumentServiceError('Delete the latest corrected submission before deleting this earlier version.', 409);
+        }
+
+        await ensurePrivateStorageRoot();
+        sourceFilePath = resolveStoredPath(document.stored_filename);
+        stagedFilePath = path.join(storageRoot, `.deleting-${crypto.randomUUID()}`);
+        try {
+          await fileSystem.rename(sourceFilePath, stagedFilePath);
+          stagedFile = true;
+        } catch (error) {
+          if (error?.code !== 'ENOENT') {
+            throw new DocumentServiceError('The stored file could not be safely prepared for deletion.', 503);
+          }
+        }
+
+        for (const table of ['document_validations', 'document_review_events', 'document_decision_events']) {
+          await transaction.request()
+            .input('documentId', sql.Int, documentId)
+            .query(`DELETE FROM dbo.${table} WHERE document_id = @documentId`);
+        }
+        await writeAudit(transaction, {
+          actor,
+          action: 'deleted',
+          documentId,
+          studentId: document.student_id,
+          documentType: document.document_type
+        });
+        const deleteResult = await transaction.request()
+          .input('documentId', sql.Int, documentId)
+          .query(`DELETE FROM dbo.documents
+            OUTPUT DELETED.id AS id
+            WHERE id = @documentId`);
+        if (!deleteResult.recordset?.length) {
+          throw new DocumentServiceError('The submission changed before it could be deleted.', 409);
+        }
+        return { id: documentId };
+      });
+
+      if (stagedFile) {
+        try {
+          await fileSystem.unlink(stagedFilePath);
+          stagedFile = false;
+        } catch {
+          logger.error('Deleted document file cleanup failed.');
+          return { ...result, fileDeleted: false };
+        }
+      }
+      return { ...result, fileDeleted: true };
+    } catch (error) {
+      if (stagedFile) {
+        try {
+          await fileSystem.rename(stagedFilePath, sourceFilePath);
+          stagedFile = false;
+        } catch {
+          logger.error('Document file restoration after failed deletion failed.');
+          throw new DocumentServiceError('The submission could not be deleted safely. Contact a database administrator.', 503);
+        }
+      }
+      throw error;
+    }
   }
 
   async function recordForm137Status(actorInput, studentInput, statusInput, instructionInput = '') {
@@ -907,6 +1411,43 @@ function createDocumentService({
     });
   }
 
+  async function recordPreviousSchoolReportCardPhysicalStatus(actorInput, studentInput, statusInput, instructionInput = '') {
+    const studentId = normalizeId(studentInput);
+    if (!studentId) throw new DocumentServiceError('Student record not found.', 404);
+    const status = PREVIOUS_SCHOOL_REPORT_CARD_PHYSICAL_STATUSES.has(statusInput) ? statusInput : null;
+    if (!status) throw new DocumentServiceError('Choose a valid previous-school report-card paper status.');
+    const instruction = typeof instructionInput === 'string' ? instructionInput.trim() : '';
+    if (instruction.length > 1000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(instruction)) {
+      throw new DocumentServiceError('Enter a status note up to 1000 characters.');
+    }
+    if (status === 'correction' && !instruction) {
+      throw new DocumentServiceError('Enter a note when requesting a clearer or replacement paper copy.');
+    }
+
+    return runTransaction(async (transaction) => {
+      const actor = await requireActor(transaction, actorInput, STAFF_ROLES);
+      const studentResult = await transaction.request()
+        .input('studentId', sql.Int, studentId)
+        .query('SELECT id FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE id = @studentId');
+      if (!studentResult.recordset?.length) throw new DocumentServiceError('Student record not found.', 404);
+      await transaction.request()
+        .input('studentId', sql.Int, studentId)
+        .input('recorderId', sql.Int, actor.id)
+        .input('status', sql.NVarChar(30), status)
+        .input('instruction', sql.NVarChar(1000), instruction || null)
+        .query(`INSERT INTO dbo.previous_school_report_card_status_events (student_id, recorded_by, status, instruction)
+          VALUES (@studentId, @recorderId, @status, @instruction)`);
+      await transaction.request()
+        .input('actorId', sql.Int, actor.id)
+        .input('action', sql.NVarChar(100), `${actor.role}.previous_school_report_card_physical_status_recorded`)
+        .input('entityId', sql.NVarChar(100), String(studentId))
+        .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify({ status }))
+        .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
+          VALUES (@actorId, @action, 'previous_school_report_card_physical_status', @entityId, @detailsJson)`);
+      return { studentId, status };
+    });
+  }
+
   async function openDownload(actorInput, documentInput) {
     const document = await getDocument(actorInput, documentInput);
     if (!document) throw new DocumentServiceError('Document not found.', 404);
@@ -929,11 +1470,16 @@ function createDocumentService({
     upload,
     reupload,
     listDocuments,
+    listPhysicalRequirements,
     getStudentDocuments,
+    getOwnPreviousSchoolReportCardPhysicalStatus,
     getDocument,
+    requestPrecheckRetry,
     addReviewEvent,
     decideDocument,
+    deleteDocument,
     recordForm137Status,
+    recordPreviousSchoolReportCardPhysicalStatus,
     openDownload
   };
 }

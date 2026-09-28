@@ -1,11 +1,11 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/dashboard/registrar">Back to registrar dashboard</a>
+  <a class="context-back" href="/registrar">Back to registrar dashboard</a>
   <section class="dashboard-heading"><div><h1>Teacher grade submissions</h1><p>Review a teacher’s corrected SSHS E-Class Record workbook before grades become visible to students.</p></div></section>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <section class="admin-section" aria-labelledby="pending-grade-submissions-title"><div class="admin-section__heading"><div><h2 id="pending-grade-submissions-title">Pending review</h2><p>Approval imports the selected cached grades within the review transaction.</p></div></div>
     <% if (submissions.length) { %><div class="table-scroll" tabindex="0" aria-label="Pending teacher grade submissions"><table class="admin-table"><caption class="visually-hidden">Pending teacher grade workbooks</caption><thead><tr><th scope="col">Submitted</th><th scope="col">Teacher</th><th scope="col">Class context</th><th scope="col">Workbook</th><th scope="col">Action</th></tr></thead><tbody>
-      <% for (const submission of submissions) { %><tr><td><%= new Date(submission.submitted_at).toLocaleString() %><br>Revision <%= submission.revision_number %></td><td><%= [submission.first_name, submission.last_name].filter(Boolean).join(' ') || 'Teacher' %></td><td><%= submission.school_year %> · <%= submission.term %><br>Grade <%= submission.grade_level %> · <%= submission.section_name %><br><%= submission.subject_name %></td><td><%= submission.original_filename %></td><td><a class="button button--primary" href="/registrar/grade-submissions/<%= submission.id %>">Review workbook</a></td></tr><% } %>
+      <% for (const submission of submissions) { const placement = formatStudentPlacement(submission.grade_level, submission.section_name); %><tr><td><%= new Date(submission.submitted_at).toLocaleString() %><br>Revision <%= submission.revision_number %></td><td><%= [submission.first_name, submission.last_name].filter(Boolean).join(' ') || 'Teacher' %></td><td><%= submission.school_year %> · <%= submission.term %><br><%= placement %><br><%= submission.subject_name %></td><td><%= submission.original_filename %></td><td><a class="button button--primary" href="/registrar/grade-submissions/<%= submission.id %>">Review workbook</a></td></tr><% } %>
     </tbody></table></div><% } else { %><p class="empty-state">There are no teacher workbooks awaiting review.</p><% } %>
   </section>
 </main>

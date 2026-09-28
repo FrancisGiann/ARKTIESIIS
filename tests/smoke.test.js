@@ -379,17 +379,16 @@ test('environment rejects invalid ports and a missing production session secret'
 
   assert.notEqual(loadEnvironment({ PORT: 'not-a-port' }).status, 0);
   assert.notEqual(loadEnvironment({ DB_PORT: '65536' }).status, 0);
-  assert.notEqual(loadEnvironment({ OCR_TIMEOUT_MS: '999' }).status, 0);
-  assert.notEqual(loadEnvironment({ OCR_TIMEOUT_MS: '120001' }).status, 0);
-  assert.notEqual(loadEnvironment({ OCR_TIMEOUT_MS: '1.5' }).status, 0);
-  assert.equal(loadEnvironment({ OCR_TIMEOUT_MS: '1000' }).status, 0);
-  assert.equal(loadEnvironment({ OCR_TIMEOUT_MS: '120000' }).status, 0);
-  assert.notEqual(loadEnvironment({ OCR_CONCURRENCY: '5' }).status, 0);
-  assert.notEqual(loadEnvironment({ OCR_MAX_PDF_PAGES: '21' }).status, 0);
-  assert.equal(loadEnvironment({ OCR_MAX_PDF_PAGES: '20' }).status, 0);
-  assert.notEqual(loadEnvironment({ OCR_LANGUAGE: '-invalid' }).status, 0);
+  assert.notEqual(loadEnvironment({ GEMINI_TIMEOUT_MS: '999' }).status, 0);
+  assert.notEqual(loadEnvironment({ GEMINI_TIMEOUT_MS: '120001' }).status, 0);
+  assert.notEqual(loadEnvironment({ GEMINI_TIMEOUT_MS: '1.5' }).status, 0);
+  assert.equal(loadEnvironment({ GEMINI_TIMEOUT_MS: '1000' }).status, 0);
+  assert.equal(loadEnvironment({ GEMINI_TIMEOUT_MS: '120000' }).status, 0);
+  assert.notEqual(loadEnvironment({ DOCUMENT_PROCESSING_CONCURRENCY: '5' }).status, 0);
+  assert.notEqual(loadEnvironment({ GEMINI_MODEL: 'not-a-gemini-model' }).status, 0);
+  assert.notEqual(loadEnvironment({ GEMINI_API_KEY: 'invalid\nkey' }).status, 0);
   assert.notEqual(loadEnvironment({ NODE_ENV: 'production', SESSION_SECRET: '' }).status, 0);
-  assert.equal(loadEnvironment({ NODE_ENV: 'production', SESSION_SECRET: 'a'.repeat(32) }).status, 0);
+  assert.equal(loadEnvironment({ NODE_ENV: 'production', SESSION_SECRET: 'a'.repeat(32), APP_BASE_URL: 'https://school.example.edu' }).status, 0);
 });
 
 test('development login regenerates the session and redirects to the database-backed role dashboard', async () => {
@@ -425,7 +424,7 @@ test('development login regenerates the session and redirects to the database-ba
     });
 
     assert.equal(response.status, 303);
-    assert.equal(response.headers.get('location'), '/dashboard');
+    assert.equal(response.headers.get('location'), '/registrar');
     const authenticatedCookie = getSessionCookie(response);
     assert.notEqual(authenticatedCookie, anonymousCookie);
 
@@ -435,12 +434,12 @@ test('development login regenerates the session and redirects to the database-ba
 
     const dashboardRedirect = await fetch(`${baseUrl}/dashboard`, { headers: { cookie: authenticatedCookie }, redirect: 'manual' });
     assert.equal(dashboardRedirect.status, 303);
-    assert.equal(dashboardRedirect.headers.get('location'), '/dashboard/registrar');
+    assert.equal(dashboardRedirect.headers.get('location'), '/registrar');
 
-    const rolePage = await fetch(`${baseUrl}/dashboard/registrar`, { headers: { cookie: authenticatedCookie } });
+    const rolePage = await fetch(`${baseUrl}/registrar`, { headers: { cookie: authenticatedCookie } });
     assert.equal(rolePage.status, 200);
     assert.equal(rolePage.headers.get('cache-control'), 'private, no-store');
-    assert.match(await rolePage.text(), /Registrar dashboard/);
+    assert.match(await rolePage.text(), /Find a student/);
 
     const deniedPage = await fetch(`${baseUrl}/dashboard/finance`, { headers: { cookie: authenticatedCookie } });
     assert.equal(deniedPage.status, 403);
@@ -471,14 +470,14 @@ test('non-development login requires OTP even when the development bypass flag i
       code: twoFactorService.state.deliveredCode
     });
     assert.equal(verified.status, 303);
-    assert.equal(verified.headers.get('location'), '/dashboard');
+    assert.equal(verified.headers.get('location'), '/registrar');
     assert.notEqual(getSessionCookie(verified), authenticatedCookie);
     const dashboardAfterOtp = await fetch(`${baseUrl}/dashboard`, {
       headers: { cookie: getSessionCookie(verified) },
       redirect: 'manual'
     });
     assert.equal(dashboardAfterOtp.status, 303);
-    assert.equal(dashboardAfterOtp.headers.get('location'), '/dashboard/registrar');
+    assert.equal(dashboardAfterOtp.headers.get('location'), '/registrar');
   });
 });
 
@@ -540,7 +539,7 @@ test('OTP verification rejects wrong, expired, and replayed codes and requires C
 
     const replay = await postForm(baseUrl, '/login/verify', thirdCookie, { _csrf: thirdForm.csrfToken, code: correctCode });
     assert.equal(replay.status, 403);
-    const stalePendingDashboard = await fetch(`${baseUrl}/dashboard/student`, { headers: { cookie: thirdCookie }, redirect: 'manual' });
+    const stalePendingDashboard = await fetch(`${baseUrl}/student`, { headers: { cookie: thirdCookie }, redirect: 'manual' });
     assert.equal(stalePendingDashboard.status, 302);
     assert.equal(stalePendingDashboard.headers.get('location'), '/login');
   });
@@ -743,7 +742,7 @@ test('login and logout reject missing or invalid session CSRF tokens and valid l
     assert.equal(badLoginCsrf.status, 403);
 
     const authenticatedCookie = await loginForCookie(baseUrl, 'student@example.edu');
-    const dashboard = await fetch(`${baseUrl}/dashboard/student`, { headers: { cookie: authenticatedCookie } });
+    const dashboard = await fetch(`${baseUrl}/student`, { headers: { cookie: authenticatedCookie } });
     const logoutCsrf = csrfFromHtml(await dashboard.text());
 
     const missingLogoutCsrf = await postForm(baseUrl, '/logout', authenticatedCookie, {});
@@ -797,7 +796,7 @@ test('inactive users lose protected access after their account is deactivated', 
   await withServer(createApp({ databasePool: database.getPool, environment: developmentEnvironment() }), async (baseUrl) => {
     const cookie = await loginForCookie(baseUrl, 'registrar@example.edu');
     user.is_active = false;
-    const response = await fetch(`${baseUrl}/dashboard/registrar`, { headers: { cookie }, redirect: 'manual' });
+    const response = await fetch(`${baseUrl}/registrar`, { headers: { cookie }, redirect: 'manual' });
     assert.equal(response.status, 302);
     assert.equal(response.headers.get('location'), '/login');
     assert.match(response.headers.get('set-cookie'), /Expires=Thu, 01 Jan 1970/);
@@ -833,7 +832,7 @@ test('password-only login is denied outside development and a dev session is des
     const authenticatedCookie = getSessionCookie(login);
 
     mutableEnvironment.nodeEnv = 'production';
-    const response = await fetch(`${baseUrl}/dashboard/student`, { headers: { cookie: authenticatedCookie }, redirect: 'manual' });
+    const response = await fetch(`${baseUrl}/student`, { headers: { cookie: authenticatedCookie }, redirect: 'manual' });
     assert.equal(response.status, 302);
     assert.equal(response.headers.get('location'), '/login');
     assert.match(response.headers.get('set-cookie'), /Expires=Thu, 01 Jan 1970/);

@@ -1,0 +1,19 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell auth-page" id="main-content">
+  <section class="auth-intro" aria-labelledby="confirm-email-title">
+    <a class="context-back" href="/login">Return to sign in</a>
+    <h1 id="confirm-email-title">Confirm email address</h1>
+    <p>Confirm <strong><%= email %></strong> as your sign-in and verification email. This will sign out all sessions, and you will sign in again with the new address.</p>
+  </section>
+  <section class="auth-form-section" aria-labelledby="email-confirmation-title">
+    <h2 id="email-confirmation-title">Email confirmation</h2>
+    <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+    <form class="form-stack" method="post" action="/account/email/confirm" data-submitting-message="Confirming your email address. Please wait.">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <input type="hidden" name="requestId" value="<%= requestId %>">
+      <input type="hidden" name="token" value="<%= token %>">
+      <button class="button button--primary" type="submit"<% if (!requestId || !token) { %> disabled<% } %>>Confirm new email</button>
+    </form>
+  </section>
+</main>
+<%- include('../partials/foot') %>

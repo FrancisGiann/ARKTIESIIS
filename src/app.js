@@ -7,11 +7,15 @@ const env = require('./config/environment');
 const { getPool } = require('./config/database');
 const { createRouter } = require('./routes');
 const { errorHandler } = require('./middleware/errorHandler');
+const { formatMoney } = require('./utils/formatMoney');
+const { formatStudentPlacement } = require('./utils/formatStudentPlacement');
 
 const projectRoot = path.resolve(__dirname, '..');
 
-function createApp({ databasePool = getPool, environment = env, twoFactorService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, documentService, documentProcessingService, form137ScanService } = {}) {
+function createApp({ databasePool = getPool, environment = env, twoFactorService, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService } = {}) {
   const app = express();
+  app.locals.formatMoney = formatMoney;
+  app.locals.formatStudentPlacement = formatStudentPlacement;
 
   app.set('view engine', 'ejs');
   app.set('views', path.join(projectRoot, 'views'));
@@ -34,14 +38,14 @@ function createApp({ databasePool = getPool, environment = env, twoFactorService
     }
   }));
 
-  app.use(createRouter({ getPool: databasePool, environment, twoFactorService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, documentService, documentProcessingService, form137ScanService }));
+  app.use(createRouter({ getPool: databasePool, environment, twoFactorService, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService }));
 
   app.use((req, res) => {
     res.status(404).render('error', {
       title: 'Not Found',
       message: 'Page not found.',
       errorRecovery: res.locals.currentUser
-        ? { href: '/dashboard', label: 'Return to your workspace' }
+        ? { href: ({ database_admin: '/admin', registrar: '/registrar', teacher: '/teacher', finance: '/finance', student: '/student' })[res.locals.currentUser.role] || '/', label: 'Return to your workspace' }
         : { href: '/', label: 'Return to home' }
     });
   });

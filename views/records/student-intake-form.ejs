@@ -1,0 +1,29 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page admin-page records-page" id="main-content">
+  <a class="context-back" href="/registrar/intake">Back to student intake</a>
+  <section class="dashboard-heading"><div><h1>New student intake</h1><p>Create a new student profile, inactive login, and pending enrollment for an existing term and section.</p></div></section>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <section class="admin-form-section" aria-labelledby="intake-form-title">
+    <h2 id="intake-form-title">Student details</h2>
+    <p>The student number is assigned automatically from the selected academic year in the format SHS-YYYY-0001. LRN and email must be unused. Finance must record a payment and explicitly clear this enrollment before the login can be activated.</p>
+    <form class="form-stack admin-form" method="post" action="/registrar/intake" data-submitting-message="Saving the new student intake. Please wait.">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <div class="admin-form-grid">
+        <div class="field"><label for="intake-lrn">Learner Reference Number (LRN)</label><input id="intake-lrn" name="lrn" inputmode="numeric" pattern="[0-9]{12}" maxlength="12" required value="<%= values.lrn || '' %>"></div>
+        <div class="field"><label for="intake-first-name">First name</label><input id="intake-first-name" name="firstName" maxlength="100" required value="<%= values.firstName || '' %>"></div>
+        <div class="field"><label for="intake-middle-name">Middle name (optional)</label><input id="intake-middle-name" name="middleName" maxlength="100" value="<%= values.middleName || '' %>"></div>
+        <div class="field"><label for="intake-last-name">Last name</label><input id="intake-last-name" name="lastName" maxlength="100" required value="<%= values.lastName || '' %>"></div>
+        <div class="field"><label for="intake-suffix">Suffix (optional)</label><input id="intake-suffix" name="suffix" maxlength="20" value="<%= values.suffix || '' %>"></div>
+        <div class="field"><label for="intake-birth-date">Birth date (optional)</label><input id="intake-birth-date" name="birthDate" type="date" value="<%= values.birthDate || '' %>"></div>
+        <div class="field"><label for="intake-sex">Sex (optional)</label><input id="intake-sex" name="sex" maxlength="20" value="<%= values.sex || '' %>"></div>
+        <div class="field"><label for="intake-phone">Phone (optional)</label><input id="intake-phone" name="phone" type="tel" maxlength="50" value="<%= values.phone || '' %>"></div>
+        <div class="field"><label for="intake-email">Contact and sign-in email</label><input id="intake-email" name="email" type="email" autocomplete="email" maxlength="255" required value="<%= values.email || '' %>"></div>
+        <div class="field"><label for="intake-term">Academic term</label><select id="intake-term" name="academicTermId" required><option value="">Choose a term</option><% for (const term of terms) { %><option value="<%= term.id %>" <%= String(values.academicTermId || '') === String(term.id) ? 'selected' : '' %>><%= term.school_year %> · <%= term.term %><%= term.is_current ? ' (current)' : '' %></option><% } %></select></div>
+        <div class="field"><label for="intake-section">Section</label><select id="intake-section" name="sectionId" required><option value="">Choose a section</option><% for (const section of sections) { %><option value="<%= section.id %>" <%= String(values.sectionId || '') === String(section.id) ? 'selected' : '' %>><%= formatStudentPlacement(section.grade_level, section.name) %> — <%= section.school_year %> · <%= section.term %></option><% } %></select></div>
+        <div class="field field--full"><label for="intake-address">Address (optional)</label><textarea id="intake-address" name="address" maxlength="500" rows="3"><%= values.address || '' %></textarea></div>
+      </div>
+      <div class="admin-form-actions"><button class="button button--primary" type="submit" <%= terms.length && sections.length ? '' : 'disabled' %>>Save pending intake</button><a class="button button--secondary" href="/registrar/intake">Cancel</a></div>
+    </form>
+  </section>
+</main>
+<%- include('../partials/foot') %>

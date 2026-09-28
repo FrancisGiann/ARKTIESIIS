@@ -381,10 +381,10 @@ test('database administrator read matrix permits staff workspaces and denies stu
     const cases = [
       ['/admin', 200, /Database Admin Dashboard/],
       ['/admin/audit', 200, /Audit activity/],
-      ['/records', 200, /Student Records/],
+      ['/registrar/records', 200, /Student Records/],
       ['/documents', 200, /Documents/],
       ['/finance', 200, /Finance Workspace/],
-      ['/dashboard/student', 403, null]
+      ['/student', 403, null]
     ];
 
     for (const [route, expectedStatus, expectedContent] of cases) {
@@ -395,12 +395,10 @@ test('database administrator read matrix permits staff workspaces and denies stu
 
     assert.deepEqual(calls, [
       ['listDashboard', ''],
-      ['getDashboardSummary', 7],
       ['listAuditLogs'],
       ['listWorkspace', '', ''],
       ['listDocuments', 7],
-      ['searchFinanceStudents', ''],
-      ['financeSummary', 7]
+      ['searchFinanceStudents', '']
     ], 'only read services for database-admin workspaces run; student self-service stays denied');
   });
 });

@@ -1,6 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/records">Back to student records</a>
+  <% const canManageSubjects = ['registrar', 'database_admin'].includes(currentUser.role); %>
+  <a class="context-back" href="/registrar/records">Back to student records</a>
   <section class="dashboard-heading">
     <div>
       <h1>Subject catalog</h1>
@@ -10,11 +11,11 @@
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
-  <% if (['registrar', 'database_admin'].includes(currentUser.role)) { %>
+  <% if (canManageSubjects) { %>
     <section class="admin-form-section records-form-section" aria-labelledby="new-subject-title">
       <h2 id="new-subject-title">Add subject</h2>
       <p>Subject codes are stored in uppercase. Units are optional.</p>
-      <form class="form-stack admin-form" method="post" action="/records/subjects">
+      <form class="form-stack admin-form" method="post" action="/registrar/records/subjects">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <div class="admin-form-grid">
           <div class="field"><label for="subject-code">Subject code</label><input id="subject-code" name="subjectCode" type="text" maxlength="50" required value="<%= values.subjectCode %>"></div>
@@ -27,22 +28,39 @@
   <% } %>
 
   <section class="admin-section" aria-labelledby="catalog-title">
-    <div class="admin-section__heading"><div><h2 id="catalog-title">Catalog</h2><p><%= subjects.length %> subject<%= subjects.length === 1 ? '' : 's' %></p></div></div>
+    <div class="admin-section__heading"><div><h2 id="catalog-title">Subjects</h2><p><%= subjects.length %> subject<%= subjects.length === 1 ? '' : 's' %></p></div></div>
     <% if (subjects.length) { %>
-      <div class="table-scroll" tabindex="0" aria-label="Subject catalog">
-        <table class="admin-table"><thead><tr><th scope="col">Code</th><th scope="col">Name</th><th scope="col">Units</th><% if (['registrar', 'database_admin'].includes(currentUser.role)) { %><th scope="col">Update</th><% } %></tr></thead>
-          <tbody><% for (const subject of subjects) { %><tr>
-            <% if (['registrar', 'database_admin'].includes(currentUser.role)) { %>
-              <td data-label="Code"><label class="visually-hidden" for="subject-code-<%= subject.id %>">Code for <%= subject.subject_name %></label><input id="subject-code-<%= subject.id %>" form="subject-form-<%= subject.id %>" name="subjectCode" type="text" maxlength="50" required value="<%= subject.subject_code %>"></td>
-              <td data-label="Name"><label class="visually-hidden" for="subject-name-<%= subject.id %>">Name</label><input id="subject-name-<%= subject.id %>" form="subject-form-<%= subject.id %>" name="subjectName" type="text" maxlength="200" required value="<%= subject.subject_name %>"></td>
-              <td data-label="Units"><label class="visually-hidden" for="subject-units-<%= subject.id %>">Units</label><input id="subject-units-<%= subject.id %>" form="subject-form-<%= subject.id %>" name="units" type="number" min="0.01" max="999.99" step="0.01" value="<%= subject.units ?? '' %>"></td>
-              <td data-label="Update"><form id="subject-form-<%= subject.id %>" method="post" action="/records/subjects/<%= subject.id %>"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><button class="table-action table-button" type="submit">Save</button></form></td>
+      <ul class="subject-catalog" aria-label="Subjects in the catalog">
+        <% for (const subject of subjects) { %>
+          <li class="subject-catalog__item">
+            <% if (canManageSubjects) { %>
+              <details class="subject-catalog__disclosure">
+                <summary class="subject-catalog__summary">
+                  <span class="subject-catalog__code"><%= subject.subject_code %></span>
+                  <span class="subject-catalog__name"><%= subject.subject_name %></span>
+                  <span class="subject-catalog__units"><%= subject.units == null ? 'Units not set' : `${subject.units} units` %></span>
+                  <span class="subject-catalog__edit">Edit</span>
+                </summary>
+                <form class="subject-catalog__form" method="post" action="/registrar/records/subjects/<%= subject.id %>">
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                  <div class="admin-form-grid">
+                    <div class="field"><label for="subject-code-<%= subject.id %>">Subject code</label><input id="subject-code-<%= subject.id %>" name="subjectCode" type="text" maxlength="50" required value="<%= subject.subject_code %>"></div>
+                    <div class="field"><label for="subject-name-<%= subject.id %>">Subject name</label><input id="subject-name-<%= subject.id %>" name="subjectName" type="text" maxlength="200" required value="<%= subject.subject_name %>"></div>
+                    <div class="field"><label for="subject-units-<%= subject.id %>">Units (optional)</label><input id="subject-units-<%= subject.id %>" name="units" type="number" min="0.01" max="999.99" step="0.01" value="<%= subject.units ?? '' %>"></div>
+                  </div>
+                  <button class="button button--secondary" type="submit">Save subject</button>
+                </form>
+              </details>
             <% } else { %>
-              <td data-label="Code"><%= subject.subject_code %></td><td data-label="Name"><%= subject.subject_name %></td><td data-label="Units"><%= subject.units ?? '—' %></td>
+              <div class="subject-catalog__summary">
+                <span class="subject-catalog__code"><%= subject.subject_code %></span>
+                <span class="subject-catalog__name"><%= subject.subject_name %></span>
+                <span class="subject-catalog__units"><%= subject.units == null ? 'Units not set' : `${subject.units} units` %></span>
+              </div>
             <% } %>
-          </tr><% } %></tbody>
-        </table>
-      </div>
+          </li>
+        <% } %>
+      </ul>
     <% } else { %><p class="empty-state">No subjects have been added.</p><% } %>
   </section>
 </main>

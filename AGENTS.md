@@ -10,7 +10,7 @@ It is a web-based information management system with AI-assisted document valida
 - Express.js
 - EJS + HTML/CSS/JavaScript
 - Microsoft SQL Server
-- Local Tesseract OCR with Poppler (`pdfinfo` and `pdftoppm`) for PDF rendering
+- Google Gemini API for bounded document-field extraction, using built-in Node.js `fetch`
 - Email-based two-factor authentication
 
 Do not replace the stack unless the user explicitly approves it.
@@ -25,11 +25,11 @@ Do not replace the stack unless the user explicitly approves it.
 Enforce authorization on the server. Hiding UI buttons is never enough.
 
 ## AI scope - very important
-The automated document feature is limited to:
-- OCR / text extraction
-- required-field checks
-- completeness validation
-- configured format/compliance checks
+The automated document precheck is limited to:
+- visible field extraction for Good Moral, PSA, active student-uploaded previous-school report-card scans, and transient Form 137 scans
+- comparison of the extracted student name with the linked student record
+- Good Moral certificate-context clues
+- configured PDF/JPEG/PNG file-format checks
 
 It MUST NOT claim to:
 - prove document authenticity
@@ -38,14 +38,19 @@ It MUST NOT claim to:
 - verify seals
 - perform forensic document analysis
 
-Human review remains part of document acceptance when needed.
+Human review is always responsible for acceptance; the precheck never sets a digital document to `valid`.
 
-OCR runs locally through installed native tools; no cloud document-processing service is used. Use direct `execFile` argument arrays without a shell, keep executable paths configurable, cap PDFs at 20 pages, and enforce the configured timeout and bounded worker concurrency.
+Good Moral/PSA and active student-uploaded report-card bytes are sent to Google Gemini for the explicitly approved bounded precheck. Report-card extraction is limited to the visible student name; it must not extract grades, marks, subjects, attendance, or other academic results. Staff scan bytes for Form 137 are also sent to Gemini transiently; the app does not save these scans as files or database rows. Do not log raw bytes, extracted personal fields, API keys, or provider errors. Enforce file, request/response, timeout, and bounded worker limits. The Gemini adapter uses inline bytes and structured responses; do not add an SDK package.
+
+New student-origin previous-school report-card scans use the bounded worker for visible-name comparison and PDF/JPEG/PNG format checks, then require staff source inspection and a staff checklist decision. Provider failure leaves the submission reviewable; eligible transient failures may be retried within the existing limit. The precheck never writes grades. Rows marked as the pre-lifecycle archive remain read-only for staff and are excluded from processing and retry. Paper copies have a separate staff-recorded event history; neither channel is a grade source.
+
+The former local Tesseract/Poppler service remains inactive legacy code only. It is not used by current digital-document or Form 137 workflows.
 
 ## Document access rules
 - Students may only access their own permitted documents.
-- Students may upload Good Moral Certificates and PSA birth certificates only for their own linked student record. Teachers submit corrected SSHS E-Class Record workbooks for assigned term/section/subject contexts to the registrar; grades are written only after registrar approval.
-- Students may not access report cards, including historical report-card records. Existing report cards remain a staff-only archive for registrars and database administrators; no new report-card document upload, correction, or OCR is allowed.
+- Students may upload Good Moral Certificates, PSA birth certificates, and scans of a previous-school report card only for their own linked student record. Students may view, preview, download, or re-upload their own student-origin scan only after staff requests a correction. Their documents page shows only the latest status/date of a separate physical paper-copy record, without staff notes. Teachers submit corrected SSHS E-Class Record workbooks for assigned term/section/subject contexts to the registrar; grades are written only after registrar approval.
+- Registrar/database administrator staff can record the separate physical previous-school report-card paper-copy history. The prototype statuses are pending, received, verified, correction, and rejected; this vocabulary and what each means require school review before production use. The staff history never writes grades.
+- Pre-lifecycle report-card archive rows remain staff-only and read-only. A student cannot access them, including through a guessed document URL. Staff can inspect, preview, and download archive rows, but cannot decide, correct, or delete them.
 - Students may view/download their own PSA submissions and staff-uploaded PSA files, and may re-upload only a student-origin PSA after staff requests a correction. Staff-origin PSA correction instructions and reasons remain staff-only.
 - Form 137 is restricted to authorized staff such as registrar/database admin.
 - Database admin may oversee stored documents and validation results.
@@ -66,9 +71,9 @@ OCR runs locally through installed native tools; no cloud document-processing se
 - Do not expose raw database errors in production.
 
 ## Database baseline and migrations
-- `database/schema.sql` is a one-time baseline for a fresh database and records version `001` in `dbo.schema_migrations`.
+- `database/schema.sql` is the inert one-time baseline for the former database. Active prototype setup uses `database/v2/schema.sql` (`v2.001`) and numbered forward-only migrations such as V2 `002_report_card_lifecycle.sql`.
 - Apply later schema changes through new, numbered, forward-only migration scripts. Do not edit or rerun the baseline to update an initialized database, and do not rewrite migrations that have already been applied.
-- The schema retains `psa_birth_certificate` and legacy `report_card` document types. Students may upload PSA only for their own linked record. New report-card document uploads and corrections are blocked; only registrar/database administrator users may read/download existing archived report-card rows. Keep Form 137 restricted to authorized staff.
+- V2 distinguishes pre-lifecycle report-card archive rows from new active submissions with `documents.is_legacy_archive`. V2 migration `003_previous_school_report_card_physical_status.sql` stores the separate paper-copy status history; migration `004_previous_school_report_card_status_constraint.sql` gives its status check a stable name and preserves the prototype vocabulary. The migration runner applies each known V2 forward migration once; do not edit an applied migration or the V2 baseline. Keep Form 137 restricted to authorized staff and its own workflow.
 
 ## Development workflow
 For every requested phase:

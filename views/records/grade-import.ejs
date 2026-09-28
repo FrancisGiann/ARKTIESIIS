@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/records">Back to student records</a>
+  <a class="context-back" href="/registrar/records">Back to student records</a>
   <section class="dashboard-heading">
     <div><h1>Import SSHS E-Class Record grades</h1><p>Registrar-only import for the corrected SY 2026–2027 workbook.</p></div>
   </section>
@@ -14,13 +14,13 @@
     <section class="admin-section" aria-labelledby="upload-grade-record-title">
       <div class="admin-section__heading"><div><h2 id="upload-grade-record-title">Choose the existing class context</h2><p>The selected context is checked against the workbook and the existing student enrollments.</p></div></div>
       <% if (contexts.length) { %>
-        <form class="form-stack records-compact-form" method="post" enctype="multipart/form-data" action="/records/grade-import/preview" data-submitting-message="Checking the workbook and preparing a preview. Please wait.">
+        <form class="form-stack records-compact-form" method="post" enctype="multipart/form-data" action="/registrar/records/grade-import/preview" data-submitting-message="Checking the workbook and preparing a preview. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <div class="field"><label for="grade-import-context">School year, grade level, section, and subject</label>
             <select id="grade-import-context" name="contextKey" required>
               <option value="">Choose an existing class context</option>
               <% for (const context of contexts) { %>
-                <option value="<%= context.key %>" <%= contextKey === context.key ? 'selected' : '' %>><%= context.school_year %> · Grade <%= context.grade_level %> · <%= context.section_name %> · <%= context.subject_code %> — <%= context.subject_name %></option>
+                <option value="<%= context.key %>" <%= contextKey === context.key ? 'selected' : '' %>><%= context.school_year %> · <%= formatStudentPlacement(context.grade_level, context.section_name) %> · <%= context.subject_code %> — <%= context.subject_name %></option>
               <% } %>
             </select>
           </div>
@@ -33,12 +33,12 @@
     </section>
   <% } else { %>
     <section class="admin-section grade-import-preview" aria-labelledby="preview-context-title">
-      <div class="admin-section__heading"><div><h2 id="preview-context-title">Preview · <%= preview.schoolYear %> · Grade <%= preview.gradeLevel %> · <%= preview.sectionName %></h2><p>Subject: <%= preview.subjectName %>. This preview expires at <%= new Date(preview.expiresAt).toLocaleString() %>.</p></div></div>
+      <div class="admin-section__heading"><div><h2 id="preview-context-title">Preview · <%= preview.schoolYear %> · <%= formatStudentPlacement(preview.gradeLevel, preview.sectionName) %></h2><p>Subject: <%= preview.subjectName %>. This preview expires at <%= new Date(preview.expiresAt).toLocaleString() %>.</p></div></div>
       <% if (preview.contextMismatch) { %>
-        <p class="form-alert" role="alert">Workbook context: Grade <%= preview.workbookGradeLevel %> · <%= preview.workbookSectionName %> · <%= preview.workbookSubjectName %>. The selected class context differs. These rows are excluded; correct the roster or workbook and upload it again.</p>
+        <p class="form-alert" role="alert">Workbook context: <%= formatStudentPlacement(preview.workbookGradeLevel, preview.workbookSectionName) %> · <%= preview.workbookSubjectName %>. The selected class context differs. These rows are excluded; correct the roster or workbook and upload it again.</p>
       <% } %>
       <p><%= preview.counts.eligible %> matched rows, <%= preview.counts.unresolved %> excluded rows, and <%= preview.counts.conflicts %> grade conflicts.</p>
-      <form class="form-stack" method="post" action="/records/grade-import/<%= preview.id %>/confirm" data-submitting-message="Saving the selected grades. Please wait.">
+      <form class="form-stack" method="post" action="/registrar/records/grade-import/<%= preview.id %>/confirm" data-submitting-message="Saving the selected grades. Please wait.">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <div class="table-scroll grade-import-preview__table-scroll" tabindex="0" aria-label="Grade import preview">
           <table class="admin-table grade-import-preview__table">
@@ -84,7 +84,7 @@
           </table>
         </div>
         <p class="field-help">Rows are excluded unless you select “Include these grades.” Name differences require a separate review checkbox and reason. Conflicting grades stay as recorded unless you choose Replace and give a reason. Equal grades are left unchanged.</p>
-        <div class="admin-form-actions"><button class="button button--primary" type="submit" <%= preview.contextMismatch || !preview.counts.eligible ? 'disabled' : '' %>>Confirm selected grades</button><a class="button button--secondary" href="/records/grade-import">Upload another workbook</a></div>
+        <div class="admin-form-actions"><button class="button button--primary" type="submit" <%= preview.contextMismatch || !preview.counts.eligible ? 'disabled' : '' %>>Confirm selected grades</button><a class="button button--secondary" href="/registrar/records/grade-import">Upload another workbook</a></div>
       </form>
     </section>
   <% } %>

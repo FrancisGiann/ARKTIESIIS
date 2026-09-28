@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { PassThrough, Writable } = require('node:stream');
 const { readHidden } = require('../scripts/bootstrap-admin');
 const { verifyPassword } = require('../src/routes');
-const { isDevelopmentPasswordLoginEnabled, createAuthFingerprint, hasMatchingAuthFingerprint } = require('../src/middleware/auth');
+const { isDevelopmentPasswordLoginEnabled, createAuthFingerprint, hasMatchingAuthFingerprint, createRequireAuth } = require('../src/middleware/auth');
 const { getListenHost } = require('../src/server');
 const twoFactor = require('../src/services/twoFactorService');
 
@@ -33,6 +33,70 @@ test('auth fingerprints change with role, password hash, or account update times
   assert.equal(hasMatchingAuthFingerprint(createAuthFingerprint({ ...user, updated_at_fingerprint: '2026-09-23T01:02:04.0000000' }, environment), fingerprint), false);
   assert.equal(createAuthFingerprint({ role: 'registrar' }, environment), null);
   assert.equal(hasMatchingAuthFingerprint(null, fingerprint), false);
+});
+
+test('temporary-password gate checks current database state and blocks direct protected routes until password change', async () => {
+  const environment = { nodeEnv: 'production', devPasswordOnlyLogin: false, sessionSecret: 'mandatory-password-change-test-secret' };
+  const user = {
+    id: 12, email: 'student@example.edu', role: 'student', is_active: true,
+    password_hash: 'temporary-bcrypt-hash', must_change_password: true,
+    auth_session_version: 'session-v1', updated_at_fingerprint: '2026-09-28T01:02:03.0000000'
+  };
+  const requireAuth = createRequireAuth({
+    environment,
+    sql: { Int: 'Int' },
+    getPool: async () => ({
+      request() {
+        return {
+          input() { return this; },
+          async query(statement) {
+            assert.match(statement, /must_change_password/);
+            return { recordset: [{ ...user }] };
+          }
+        };
+      }
+    })
+  });
+  async function request(url, method = 'GET', authLevel = 'email_2fa') {
+    const res = {
+      headers: {}, locals: {},
+      set(name, value) { this.headers[name.toLowerCase()] = value; return this; },
+      redirect(status, location) {
+        this.statusCode = location === undefined ? 302 : status;
+        this.location = location === undefined ? status : location;
+        return this;
+      },
+      clearCookie() {}
+    };
+    const req = {
+      originalUrl: url, method, session: {
+        userId: user.id, authLevel, authFingerprint: createAuthFingerprint(user, environment),
+        authSessionVersion: 'session-v1',
+        destroy(callback) { callback(null); }
+      }
+    };
+    let continued = false;
+    await requireAuth(req, res, () => { continued = true; });
+    return { req, res, continued };
+  }
+
+  for (const path of ['/student', '/documents/students/999', '/records/intake']) {
+    const result = await request(path);
+    assert.equal(result.continued, false, path + ' must not reach its protected route');
+    assert.equal(result.res.statusCode, 303);
+    assert.equal(result.res.location, '/account/password/required');
+  }
+  const requiredPage = await request('/account/password/required');
+  assert.equal(requiredPage.continued, true);
+  assert.equal(requiredPage.res.headers['cache-control'], 'private, no-store');
+  const passwordPost = await request('/account/password', 'POST');
+  assert.equal(passwordPost.continued, true);
+  const logout = await request('/logout', 'POST');
+  assert.equal(logout.continued, true);
+
+  const passwordOnlySession = await request('/account/password/required', 'GET', 'password_only_dev');
+  assert.equal(passwordOnlySession.continued, false);
+  assert.equal(passwordOnlySession.res.location, '/login');
 });
 
 test('missing and inactive accounts each perform one dummy bcrypt comparison', async () => {

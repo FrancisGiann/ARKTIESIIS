@@ -1,0 +1,87 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell account-page" id="main-content">
+  <section class="account-heading">
+    <div>
+      <h1>Account</h1>
+      <p>Review your sign-in details and manage your password, verification email, and sessions.</p>
+    </div>
+  </section>
+
+  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+
+  <section class="account-summary" aria-labelledby="account-summary-title">
+    <div class="account-summary__identity">
+      <h2 id="account-summary-title"><%= account.display_name || 'Account details' %></h2>
+      <p><%= account.role === 'database_admin' ? 'Database administrator' : account.role.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) %></p>
+    </div>
+    <dl class="account-summary__email">
+      <div>
+        <dt>Sign-in and verification email</dt>
+        <dd><%= account.email %></dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="account-security" aria-labelledby="account-security-title">
+    <h2 id="account-security-title">Sign-in and verification</h2>
+    <div class="account-security__grid">
+      <section class="account-panel" aria-labelledby="password-title">
+        <h3 id="password-title">Change password</h3>
+        <p>Changing your password signs out all sessions, including this one. You will sign in again with the new password.</p>
+        <form class="form-stack account-panel__form" method="post" action="/account/password" data-password-match-form data-submitting-message="Changing your password. Please wait.">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <div class="field">
+            <label for="current-password">Current password</label>
+            <input id="current-password" name="currentPassword" type="password" maxlength="72" autocomplete="current-password" required>
+          </div>
+          <div class="field">
+            <label for="new-password">New password</label>
+            <input id="new-password" name="password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required aria-describedby="new-password-help" data-password-source>
+            <span class="field-help" id="new-password-help">Use 12 to 72 UTF-8 bytes.</span>
+          </div>
+          <div class="field">
+            <label for="confirm-password">Confirm new password</label>
+            <input id="confirm-password" name="confirmPassword" type="password" minlength="12" maxlength="72" autocomplete="new-password" required aria-describedby="new-password-mismatch" data-password-confirm>
+            <span id="new-password-mismatch" class="password-match-error" data-password-mismatch-message aria-live="polite" aria-atomic="true"></span>
+          </div>
+          <button class="button button--primary" type="submit">Change password</button>
+        </form>
+      </section>
+
+      <section class="account-panel" aria-labelledby="email-title">
+        <h3 id="email-title">Change verification email</h3>
+        <p>This address receives sign-in codes. Re-enter your password, then confirm the new address from its email. Your current address receives a security notice as soon as the request is made.</p>
+        <% if (account.pending_email) { %><p class="account-panel__pending" role="status">Waiting for confirmation at <strong><%= account.pending_email %></strong>. The current address remains active until you confirm.</p><% } %>
+        <form class="form-stack account-panel__form" method="post" action="/account/email/request" data-submitting-message="Sending the email change instructions. Please wait.">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <div class="field">
+            <label for="email-current-password">Current password</label>
+            <input id="email-current-password" name="currentPassword" type="password" maxlength="72" autocomplete="current-password" required>
+          </div>
+          <div class="field">
+            <label for="new-email">New email address</label>
+            <input id="new-email" name="email" type="email" maxlength="255" autocomplete="email" required>
+          </div>
+          <button class="button button--primary" type="submit">Send confirmation</button>
+        </form>
+      </section>
+    </div>
+  </section>
+
+  <section class="account-sessions" aria-labelledby="sessions-title">
+    <div class="account-sessions__copy">
+      <h2 id="sessions-title">Sign out other sessions</h2>
+      <p>This signs out your other browsers and devices while keeping this session active. Enter your current password to continue.</p>
+    </div>
+    <form class="account-sessions__form" method="post" action="/account/sessions/revoke-others" data-submitting-message="Signing out other sessions. Please wait.">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <div class="field">
+        <label for="sessions-current-password">Current password</label>
+        <input id="sessions-current-password" name="currentPassword" type="password" maxlength="72" autocomplete="current-password" required>
+      </div>
+      <button class="button button--secondary" type="submit">Sign out other sessions</button>
+    </form>
+  </section>
+</main>
+<%- include('../partials/foot') %>

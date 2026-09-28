@@ -1,0 +1,25 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page teacher-grade-selection" id="main-content">
+  <a class="context-back" href="/teacher">Back to my classes</a>
+  <header class="page-heading"><div><h1>Submit grades</h1><p>Choose an active assigned class to upload its corrected SSHS E-Class Record workbook.</p></div></header>
+  <section class="registrar-workspace" aria-labelledby="grade-assignment-list-title">
+    <div class="admin-section__heading"><div><h2 id="grade-assignment-list-title">Classes ready for submission</h2><p>Your uploads go to the registrar for review. Grades remain unpublished until the registrar approves them.</p></div></div>
+    <% if (assignments.length) { %>
+      <div class="registrar-work-index" aria-label="Assigned classes for grade submission">
+        <% for (const assignment of assignments) { const placement = formatStudentPlacement(assignment.grade_level, assignment.section_name); %>
+          <a class="registrar-work-index__link" href="/teacher/grades/<%= assignment.assignment_id %>">
+            <span>
+              <strong><%= assignment.school_year %> · <%= assignment.term %><% if (placement) { %> · <%= placement %><% } %></strong>
+              <span><%= assignment.subject_code %> · <%= assignment.subject_name %> · <%= assignment.roster_count %> students</span>
+              <span><%= assignment.latest_submission_status ? `Latest workbook: ${assignment.latest_submission_status.replaceAll('_', ' ')}` : 'No workbook submitted' %></span>
+            </span>
+            <span class="registrar-work-index__action">Upload corrected workbook</span>
+          </a>
+        <% } %>
+      </div>
+    <% } else { %>
+      <p class="empty-state">No active classes are assigned to your account. Contact the registrar if you expect to submit grades.</p>
+    <% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

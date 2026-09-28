@@ -20,21 +20,28 @@ const { createAcademicRecordsRouter } = require('./academicRecords');
 const { createFinanceRouter } = require('./finance');
 const { createTeacherGradeSubmissionRouter, createRegistrarGradeSubmissionRouter } = require('./teacherGradeSubmissions');
 const { createDocumentsRouter } = require('./documents');
+const { createStudentBulkAccountsRouter, createStudentIntakeRouter } = require('./studentSetup');
+const { createStudentPortalRouter } = require('./studentPortal');
+const { createClassSchedulesRouter } = require('./classSchedules');
 const { createStudentRecordsService } = require('../services/studentRecordsService');
 const { createAcademicRecordsService } = require('../services/academicRecordsService');
 const { createFinanceService } = require('../services/financeService');
 const { createTeacherGradeSubmissionService } = require('../services/teacherGradeSubmissionService');
 const { createGradeImportService } = require('../services/gradeImportService');
+const { createAccountService } = require('../services/accountService');
+const { createStudentSetupService } = require('../services/studentSetupService');
+const { createClassScheduleService } = require('../services/classScheduleService');
+const { createAccountRouter, createEmailConfirmationRouter } = require('./account');
 
 const credentialError = 'Invalid email or password.';
 // Fixed cost-12 hash for timing equalization; no account uses its discarded random source value.
 const DUMMY_PASSWORD_HASH = '$2b$12$2GN3Hm/rogpWV12Ve9rA..0pPmX1b0nzDXo16QFiqYwSNc/bRiMb2';
 const dashboardViews = {
-  database_admin: { path: '/admin', view: 'dashboards/database-admin', title: 'Database Admin Dashboard' },
-  registrar: { path: '/dashboard/registrar', view: 'dashboards/registrar', title: 'Registrar Dashboard' },
-  teacher: { path: '/dashboard/teacher', view: 'dashboards/teacher', title: 'Teacher Dashboard' },
+  database_admin: { path: '/admin', view: 'dashboards/database-admin', title: 'Admin overview' },
+  registrar: { path: '/registrar', view: 'dashboards/registrar', title: 'Registrar workspace' },
+  teacher: { path: '/teacher', view: 'dashboards/teacher', title: 'My classes' },
   finance: { path: '/finance', title: 'Finance Workspace' },
-  student: { path: '/dashboard/student', view: 'dashboards/student', title: 'Student Dashboard' }
+  student: { path: '/student', view: 'dashboards/student', title: 'My school day' }
 };
 
 function normalizeCredentials(body) {
@@ -52,14 +59,18 @@ async function verifyPassword(user, password, comparePassword = bcrypt.compare) 
   return Boolean(active && passwordMatches);
 }
 
-function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment = defaultEnvironment, twoFactorService = twoFactor, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, documentService, documentProcessingService, form137ScanService } = {}) {
+function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment = defaultEnvironment, twoFactorService = twoFactor, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService } = {}) {
   const router = express.Router();
+  const authRouter = express.Router();
   const requireAuth = createRequireAuth({ getPool, sql, environment });
   const recordsService = studentRecordsService || createStudentRecordsService({ getPool, sql });
   const academicsService = academicRecordsService || createAcademicRecordsService({ getPool, sql });
   const gradeImports = gradeImportService || createGradeImportService({ getPool, sql });
   const teacherSubmissions = teacherGradeSubmissionService || createTeacherGradeSubmissionService({ getPool, sql, storageDirectory: environment.upload?.storageDirectory });
   const financesService = financeService || createFinanceService({ getPool, sql });
+  const studentSetup = studentSetupService || createStudentSetupService({ getPool, sql });
+  const schedulesService = classScheduleService || createClassScheduleService({ getPool, sql });
+  const accountsService = accountService || createAccountService({ getPool, sql, smtp: environment.smtp, appBaseUrl: environment.appBaseUrl });
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 10,
@@ -80,11 +91,36 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       message: 'Too many verification attempts. Try again later.'
     })
   });
+  const passwordResetRequestLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => res.status(200).render('auth/forgot-password', {
+      title: 'Forgot Password', csrfToken: ensureCsrfToken(req),
+      notice: 'If the account is active, password reset instructions will be sent shortly.', error: null
+    })
+  });
+  const passwordResetLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 8,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => res.status(400).render('auth/password-reset', {
+      title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: '', token: '', error: 'This reset link is invalid or has expired.'
+    })
+  });
 
+  const loginNotices = {
+    passwordChanged: 'Your password was changed. Sign in with the new password.',
+    passwordReset: 'Your password was reset. Sign in with the new password.',
+    emailChanged: 'Your sign-in and verification email was changed. Sign in with the new address.'
+  };
   const renderLogin = (req, res, error, status = 200) => res.status(status).render('auth/login', {
     title: 'Login',
     csrfToken: ensureCsrfToken(req),
     twoFactorRequired: !isDevelopmentPasswordLoginEnabled(environment),
+    notice: loginNotices[req.query.notice] || null,
     error
   });
   const renderVerification = (req, res, error = null, status = 200) => res.status(status).render('auth/verify', {
@@ -120,13 +156,20 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     return { allowed: true, codeId: challenge.codeId };
   };
 
+  router.use('/admin/student-accounts', requireAuth, requireRole('database_admin'), createStudentBulkAccountsRouter({ getPool, sql, studentSetupService: studentSetup }));
+  router.use('/registrar/intake', requireAuth, requireRole('registrar'), createStudentIntakeRouter({ getPool, sql, studentSetupService: studentSetup }));
   router.use('/finance', requireAuth, requireRole('finance', 'database_admin'), createFinanceRouter({ getPool, sql, financeService: financesService }));
   router.use('/admin', requireAuth, requireRole('database_admin'), createAdminRouter({ getPool, sql, adminService }));
-  router.use('/records', requireAuth, requireRole('database_admin', 'registrar'), createStudentRecordsRouter({ getPool, sql, studentRecordsService: recordsService }));
-  router.use('/records', requireAuth, requireRole('database_admin', 'registrar'), createAcademicRecordsRouter({ getPool, sql, academicRecordsService: academicsService, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
+  router.use('/registrar/records', requireAuth, requireRole('registrar', 'database_admin'), createStudentRecordsRouter({ getPool, sql, studentRecordsService: recordsService, academicRecordsService: academicsService }));
+  router.use('/registrar/records', requireAuth, requireRole('registrar', 'database_admin'), createAcademicRecordsRouter({ getPool, sql, academicRecordsService: academicsService, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
+  router.use('/registrar/schedules', requireAuth, requireRole('registrar'), createClassSchedulesRouter({ getPool, sql, classScheduleService: schedulesService }));
+  router.use('/student', requireAuth, createStudentPortalRouter({ getPool, sql, studentRecordsService: recordsService, academicRecordsService: academicsService, financeService: financesService, classScheduleService: schedulesService }));
   router.use('/teacher/grades', requireAuth, requireRole('teacher'), createTeacherGradeSubmissionRouter({ getPool, sql, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
   router.use('/registrar/grade-submissions', requireAuth, requireRole('registrar'), createRegistrarGradeSubmissionRouter({ getPool, sql, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
   router.use('/documents', requireAuth, createDocumentsRouter({ getPool, sql, environment, documentService, documentProcessingService, form137ScanService }));
+  router.use('/account/email/confirm', createEmailConfirmationRouter({ accountService: accountsService }));
+  router.use(authRouter);
+  router.use('/account', requireAuth, createAccountRouter({ accountService: accountsService, environment }));
 
   router.get('/', (req, res) => {
     res.render('home', { title: 'ARKTIESIIS' });
@@ -142,11 +185,67 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     }
   });
 
-  router.get('/login', (req, res) => {
+  authRouter.get('/login', (req, res) => {
     return renderLogin(req, res, null);
   });
 
-  router.post('/login', loginLimiter, async (req, res) => {
+  authRouter.get('/password/forgot', (req, res) => res.render('auth/forgot-password', {
+    title: 'Forgot Password', csrfToken: ensureCsrfToken(req), notice: null, error: null
+  }));
+
+  authRouter.post('/password/forgot', passwordResetRequestLimiter, async (req, res) => {
+    if (!hasValidCsrfToken(req)) {
+      return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    }
+    const email = typeof req.body?.email === 'string' ? req.body.email : '';
+    queueMicrotask(() => {
+      void accountsService.requestPasswordReset(email).catch(() => {
+        // Keep delivery and database failures out of the unauthenticated response.
+      });
+    });
+    return res.status(200).render('auth/forgot-password', {
+      title: 'Forgot Password', csrfToken: ensureCsrfToken(req),
+      notice: 'If the account is active, password reset instructions will be sent shortly.', error: null
+    });
+  });
+
+  authRouter.get('/password/reset', async (req, res) => {
+    try {
+      const valid = await accountsService.inspectPasswordReset(req.query.requestId, req.query.token);
+      if (!valid) return res.status(400).set('Referrer-Policy', 'no-referrer').set('Cache-Control', 'no-store').render('auth/password-reset', {
+        title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: '', token: '', error: 'This reset link is invalid or has expired.'
+      });
+      return res.set('Referrer-Policy', 'no-referrer').set('Cache-Control', 'no-store').render('auth/password-reset', {
+        title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: req.query.requestId, token: req.query.token, error: null
+      });
+    } catch {
+      return res.status(503).render('error', { title: 'Reset Unavailable', message: 'The password reset link could not be checked.' });
+    }
+  });
+
+  authRouter.post('/password/reset', passwordResetLimiter, async (req, res) => {
+    if (!hasValidCsrfToken(req)) {
+      return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    }
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (password !== req.body?.confirmPassword) return res.status(400).render('auth/password-reset', {
+      title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: req.body?.requestId || '', token: req.body?.token || '', error: 'The new passwords do not match.'
+    });
+    try {
+      const result = await accountsService.resetPasswordWithToken(req.body?.requestId, req.body?.token, password);
+      if (result === 'reset') return res.redirect(303, '/login?notice=passwordReset');
+      const error = result === 'invalid_request'
+        ? 'Password must contain 12 to 72 UTF-8 bytes, and the reset link must be valid.'
+        : 'This reset link is invalid or has expired.';
+      return res.status(400).render('auth/password-reset', {
+        title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: req.body?.requestId || '', token: req.body?.token || '', error
+      });
+    } catch {
+      return res.status(503).render('error', { title: 'Reset Unavailable', message: 'The password could not be reset.' });
+    }
+  });
+
+  authRouter.post('/login', loginLimiter, async (req, res) => {
     if (!hasValidCsrfToken(req)) {
       return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     }
@@ -168,7 +267,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       const pool = await getPool();
       const result = await pool.request()
         .input('email', sql.NVarChar(255), credentials.email)
-        .query('SELECT id, email, password_hash, role, is_active, CONVERT(NVARCHAR(33), updated_at, 126) AS updated_at_fingerprint FROM dbo.users WHERE email = @email');
+        .query('SELECT id, email, password_hash, role, is_active, must_change_password, auth_session_version, CONVERT(NVARCHAR(33), updated_at, 126) AS updated_at_fingerprint FROM dbo.users WHERE email = @email');
       const user = result.recordset?.[0];
       const passwordMatches = await verifyPassword(user, credentials.password);
 
@@ -176,13 +275,23 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
         return renderLogin(req, res, credentialError, 401);
       }
 
-      if (developmentLogin) {
+      const mustChangePassword = user.must_change_password === true || user.must_change_password === 1;
+      const passwordOnlyLogin = developmentLogin && !mustChangePassword;
+      if (!passwordOnlyLogin && !smtpReady()) {
+        return res.status(503).render('error', {
+          title: 'Login Unavailable',
+          message: 'Sign in is temporarily unavailable.'
+        });
+      }
+
+      if (passwordOnlyLogin) {
         await regenerateSession(req);
         req.session.userId = user.id;
         req.session.authLevel = 'password_only_dev';
         req.session.authFingerprint = createAuthFingerprint(user, environment);
+        req.session.authSessionVersion = user.auth_session_version || '';
         await saveSession(req);
-        return res.redirect(303, '/dashboard');
+        return res.redirect(303, dashboardViews[user.role].path);
       }
 
       const challenge = await sendChallenge(user);
@@ -195,6 +304,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       req.session.pendingOtpId = challenge.codeId;
       req.session.authLevel = 'pending_2fa';
       req.session.pendingAuthFingerprint = createAuthFingerprint(user, environment);
+      req.session.pendingAuthSessionVersion = user.auth_session_version || '';
       req.session.cookie.maxAge = twoFactorService.OTP_TTL_MINUTES * 60 * 1000;
       await saveSession(req);
       return res.redirect(303, '/login/verify');
@@ -203,7 +313,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     }
   });
 
-  router.get('/login/verify', async (req, res) => {
+  authRouter.get('/login/verify', async (req, res) => {
     const userId = req.session?.pendingUserId;
     const codeId = req.session?.pendingOtpId;
     if (!Number.isSafeInteger(userId) || userId < 1 || !Number.isSafeInteger(codeId) || codeId < 1 || req.session.authLevel !== 'pending_2fa') {
@@ -218,13 +328,16 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       if (!hasMatchingAuthFingerprint(createAuthFingerprint(user, environment), req.session.pendingAuthFingerprint)) {
         return resetSessionAndRespond(req, res, () => renderLogin(req, res, credentialError, 401));
       }
+      if ((req.session.pendingAuthSessionVersion || '') !== (user.auth_session_version || '')) {
+        return resetSessionAndRespond(req, res, () => renderLogin(req, res, credentialError, 401));
+      }
       return renderVerification(req, res);
     } catch {
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'Authentication is temporarily unavailable.' });
     }
   });
 
-  router.post('/login/verify', otpLimiter, async (req, res) => {
+  authRouter.post('/login/verify', otpLimiter, async (req, res) => {
     if (!hasValidCsrfToken(req)) {
       return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     }
@@ -245,6 +358,9 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       if (!hasMatchingAuthFingerprint(createAuthFingerprint(user, environment), req.session.pendingAuthFingerprint)) {
         return resetSessionAndRespond(req, res, () => renderLogin(req, res, credentialError, 401));
       }
+      if ((req.session.pendingAuthSessionVersion || '') !== (user.auth_session_version || '')) {
+        return resetSessionAndRespond(req, res, () => renderLogin(req, res, credentialError, 401));
+      }
 
       const challenge = await twoFactorService.getOtpChallenge({ getPool, sql, userId, codeId });
       if (!challenge) return renderVerification(req, res, 'This code is invalid or has expired. Request a new code.', 401);
@@ -263,14 +379,15 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       req.session.userId = user.id;
       req.session.authLevel = 'email_2fa';
       req.session.authFingerprint = createAuthFingerprint(user, environment);
+      req.session.authSessionVersion = user.auth_session_version || '';
       await saveSession(req);
-      return res.redirect(303, '/dashboard');
+      return res.redirect(303, dashboardViews[user.role].path);
     } catch {
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'Authentication is temporarily unavailable.' });
     }
   });
 
-  router.post('/login/verify/resend', otpLimiter, async (req, res) => {
+  authRouter.post('/login/verify/resend', otpLimiter, async (req, res) => {
     if (!hasValidCsrfToken(req)) {
       return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     }
@@ -284,6 +401,9 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
         return resetSessionAndRespond(req, res, () => renderLogin(req, res, credentialError, 401));
       }
       if (!hasMatchingAuthFingerprint(createAuthFingerprint(user, environment), req.session.pendingAuthFingerprint)) {
+        return resetSessionAndRespond(req, res, () => renderLogin(req, res, credentialError, 401));
+      }
+      if ((req.session.pendingAuthSessionVersion || '') !== (user.auth_session_version || '')) {
         return resetSessionAndRespond(req, res, () => renderLogin(req, res, credentialError, 401));
       }
 
@@ -304,7 +424,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     }
   });
 
-  router.post('/logout', (req, res) => {
+  authRouter.post('/logout', (req, res) => {
     if (!hasValidCsrfToken(req)) {
       return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     }
@@ -317,7 +437,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     });
   });
 
-  router.post('/login/verify/cancel', (req, res) => {
+  authRouter.post('/login/verify/cancel', (req, res) => {
     if (!hasValidCsrfToken(req)) {
       return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     }
@@ -336,10 +456,18 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     return res.redirect(303, dashboard.path);
   });
 
-  router.get('/dashboard/database-admin', requireAuth, requireRole('database_admin'), (req, res) => res.redirect(303, '/admin'));
-  router.get('/dashboard/finance', requireAuth, requireRole('finance'), (req, res) => res.redirect(303, '/finance'));
+  const legacyDashboardPaths = {
+    '/dashboard/database-admin': ['database_admin', '/admin'],
+    '/dashboard/registrar': ['registrar', '/registrar'],
+    '/dashboard/teacher': ['teacher', '/teacher'],
+    '/dashboard/finance': ['finance', '/finance'],
+    '/dashboard/student': ['student', '/student']
+  };
+  for (const [legacyPath, [role, destination]] of Object.entries(legacyDashboardPaths)) {
+    router.get(legacyPath, requireAuth, requireRole(role), (req, res) => res.redirect(303, destination));
+  }
 
-  router.get('/dashboard/teacher', requireAuth, requireRole('teacher'), async (req, res) => {
+  router.get('/teacher', requireAuth, requireRole('teacher'), async (req, res) => {
     try {
       const assignments = await teacherSubmissions.listTeacherAssignments(req.authUser.id);
       return res.render('dashboards/teacher', {
@@ -352,35 +480,13 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     }
   });
 
-  router.get('/dashboard/student', requireAuth, requireRole('student'), async (req, res) => {
-    try {
-      const [ownRecords, summary] = await Promise.all([
-        recordsService.getOwnStudentRecord(req.authUser.id),
-        recordsService.getStudentDashboardSummary?.(req.authUser.id) || null
-      ]);
-      if (ownRecords) {
-        ownRecords.grades = await academicsService.getOwnGrades(req.authUser.id);
-      }
-      return res.render('dashboards/student', {
-        title: dashboardViews.student.title,
-        csrfToken: ensureCsrfToken(req),
-        ownRecords,
-        summary
-      });
-    } catch {
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'Student records are temporarily unavailable.' });
-    }
-  });
-
   for (const [role, dashboard] of Object.entries(dashboardViews)) {
     if (role === 'database_admin' || role === 'finance' || role === 'student' || role === 'teacher') continue;
     router.get(dashboard.path, requireAuth, requireRole(role), async (req, res) => {
       try {
-        const summary = await recordsService.getRegistrarDashboardSummary?.(req.authUser.id) || null;
         return res.render(dashboard.view, {
           title: dashboard.title,
-          csrfToken: ensureCsrfToken(req),
-          summary
+          csrfToken: ensureCsrfToken(req)
         });
       } catch {
         return res.status(503).render('error', {

@@ -74,7 +74,7 @@ function createRequireAuth({ getPool = defaultGetPool, sql = defaultSql, environ
       const pool = await getPool();
       const result = await pool.request()
         .input('userId', sql.Int, userId)
-        .query('SELECT id, email, role, is_active, password_hash, CONVERT(NVARCHAR(33), updated_at, 126) AS updated_at_fingerprint FROM dbo.users WHERE id = @userId');
+        .query('SELECT id, email, role, is_active, password_hash, must_change_password, auth_session_version, CONVERT(NVARCHAR(33), updated_at, 126) AS updated_at_fingerprint FROM dbo.users WHERE id = @userId');
       const user = result.recordset?.[0];
 
       if (!user || !(user.is_active === true || user.is_active === 1)) {
@@ -85,16 +85,33 @@ function createRequireAuth({ getPool = defaultGetPool, sql = defaultSql, environ
       if (!hasMatchingAuthFingerprint(expectedFingerprint, req.session.authFingerprint)) {
         return destroySession(req, res, environment, () => res.redirect('/login'));
       }
+      if ((req.session.authSessionVersion || '') !== (user.auth_session_version || '')) {
+        return destroySession(req, res, environment, () => res.redirect('/login'));
+      }
 
-      req.authUser = { id: user.id, email: user.email, role: user.role };
+      const mustChangePassword = user.must_change_password === true || user.must_change_password === 1;
+      if (mustChangePassword && developmentLogin) {
+        return destroySession(req, res, environment, () => res.redirect('/login'));
+      }
+      const requestPath = req.originalUrl.split('?', 1)[0];
+      const passwordChangePath = requestPath === '/account/password/required'
+        || (requestPath === '/account/password' && req.method === 'POST');
+      const logoutPath = requestPath === '/logout' && req.method === 'POST';
+      if (mustChangePassword && !passwordChangePath && !logoutPath) {
+        return res.redirect(303, '/account/password/required');
+      }
+
+      req.authUser = { id: user.id, email: user.email, role: user.role, mustChangePassword };
       res.set('Cache-Control', 'private, no-store');
       const navigation = buildNavigation(req.authUser.role, req.originalUrl);
       res.locals.currentUser = req.authUser;
       res.locals.currentPath = req.originalUrl.split('?', 1)[0];
       res.locals.navigationItems = navigation.items;
+      res.locals.navigationGroups = navigation.groups;
       res.locals.currentPage = navigation.currentPage;
       res.locals.csrfToken = ensureCsrfToken(req);
-      res.locals.errorRecovery = { href: '/dashboard', label: 'Return to your workspace' };
+      const workspaceHomes = { database_admin: '/admin', registrar: '/registrar', teacher: '/teacher', finance: '/finance', student: '/student' };
+      res.locals.errorRecovery = { href: workspaceHomes[req.authUser.role] || '/', label: 'Return to your workspace' };
       return next();
     } catch {
       return res.status(503).render('error', {

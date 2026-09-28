@@ -59,6 +59,7 @@ function makeSeedDatabase({ collideWithStudent = false, collideWithStaff = false
 }
 
 const emails = deriveDemoEmails('prototype.user+smtp@gmail.com');
+const legacyDevelopmentRuntime = { nodeEnv: 'development', database: { server: 'localhost', database: 'ARKTIESIIS' } };
 const passwords = Object.fromEntries(['registrar', 'finance', 'student1', 'student2', 'student3']
   .map((role) => [role, `${role}-` + 'x'.repeat(32)]));
 const credentials = { emails, passwords };
@@ -129,6 +130,7 @@ test('demo seed is atomic, records expected sample rows, and a rerun adds nothin
     sqlTypes: fakeSql(),
     transactionFactory: fixture.transactionFactory,
     credentials,
+    runtime: legacyDevelopmentRuntime,
     hashPassword: async (password) => `hash:${password}`
   };
   const first = await seedDemoData(options);
@@ -159,6 +161,7 @@ test('demo student and staff key conflicts abort before inserts and roll back th
       sqlTypes: fakeSql(),
       transactionFactory: fixture.transactionFactory,
       credentials,
+      runtime: legacyDevelopmentRuntime,
       hashPassword: async (password) => `hash:${password}`
     }), /already exists without the demo seed marker/);
     assert.equal(fixture.state.rollbacks, 1);

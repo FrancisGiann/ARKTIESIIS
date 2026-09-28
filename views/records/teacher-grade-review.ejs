@@ -1,7 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
   <a class="context-back" href="/registrar/grade-submissions">Back to pending submissions</a>
-  <section class="dashboard-heading"><div><h1>Review teacher grade workbook</h1><p><%= submission.school_year %> · <%= submission.term %> · Grade <%= submission.grade_level %> · <%= submission.section_name %> · <%= submission.subject_name %></p></div></section>
+  <section class="dashboard-heading"><div><h1>Review teacher grade workbook</h1><p><%= submission.school_year %> · <%= submission.term %> · <%= formatStudentPlacement(submission.grade_level, submission.section_name) %> · <%= submission.subject_name %></p></div></section>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <p>Submitted by <%= [submission.teacher_first_name, submission.teacher_last_name].filter(Boolean).join(' ') || 'Teacher' %> on <%= new Date(submission.submitted_at).toLocaleString() %> · Revision <%= submission.revision_number %> · <%= submission.counts.eligible %> eligible · <%= submission.counts.unresolved %> unresolved · <%= submission.counts.conflicts %> conflicts</p>
   <p><a class="button button--secondary" href="/registrar/grade-submissions/<%= submission.id %>/workbook">Download original workbook</a></p>

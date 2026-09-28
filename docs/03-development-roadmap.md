@@ -39,6 +39,7 @@
 - [x] Database-admin-only audit log viewer that omits raw event details.
 - [x] Student logins link to existing unlinked student records; Phase 4 does not create or edit student master records.
 - [x] Database administrators may archive student records; linked login access and pending OTPs are disabled while academic and finance history remains.
+- [x] Database administrators may set up logins in bulk for existing unlinked students from a bounded Excel roster; profiles and enrollments are not changed, and the one-time temporary credentials are never persisted in plaintext.
 
 ## Phase 5 - Student Records
 - [x] Registrar/database administrator student master list with bounded name/student-number search and term filter.
@@ -49,6 +50,8 @@
 - [x] Enrollment create/update with server-side term/section consistency checks.
 - [x] Student self-view resolved only through the authenticated account's linked student record.
 - [x] Audit events for profile, term, section, and enrollment mutations.
+- [x] Registrar new-student intake assigns a unique year-based student number and creates the profile, inactive login, and pending enrollment for an existing term/section in one transaction; duplicate LRN and email values are rejected.
+- [x] Registrar finalization requires finance to clear that exact enrollment after recording a linked payment; it activates the account and issues a one-time printable enrollment form.
 
 ## Phase 6 - Registrar / Academic Records
 - [x] Registrar dashboard links to student records and the subject catalog.
@@ -69,6 +72,8 @@
 - [x] Charges increase balance, payments decrease balance, and signed adjustments apply directly; a negative balance represents a credit.
 - [x] Finance workspace is available to finance staff and database administrators; registrars and students are denied. Write transactions recheck the active role.
 - [x] CSRF-protected, parameterized account and transaction writes use serializable transactions, row locks, duplicate-reference checks, and atomic audit records.
+- [x] Finance can explicitly clear one pending enrollment while recording a payment for that student's account; general balance is not treated as clearance and the registrar sees status only.
+- [x] Temporary student passwords require an email-2FA sign-in and password change before protected access; the database flag is checked on every protected request and clears only on password change or token reset.
 - [x] Registrar may deactivate a linked student login without archiving the student record.
 
 **Reference number rule:** a nonempty reference number is accepted once per financial account after trimming. Duplicate matching follows the SQL Server database collation. Reuse on a different account is allowed.
@@ -95,7 +100,7 @@
 - Registrar preview and confirmation of cached Term 1–3 and Final Grade values from the corrected SSHS E-Class Record for SY 2026–2027, matched by LRN to existing enrollment and subject context. This workbook-specific grade-import feature is separate from document validation and does not define school-wide grading or document-acceptance policy.
 
 ## Phase 10 - Validation Rules
-- Advisory OCR clues for linked student name and possible school-name lines; report-card grade-entry suggestions have been removed.
+- Advisory document prechecks for linked student name and possible school-name lines; report-card grade-entry suggestions have been removed, and active report cards use only a visible-name precheck before mandatory staff review.
 - Registrar/admin source inspection with immutable verify/correction/reject decisions; only manual verification sets `valid`.
 - Physical Form 137 status history; authorized staff can scan the paper for temporary OCR suggestions without storing the scan or OCR text.
 - Institution-approved required fields, completeness, grading, and format/compliance checks remain pending school approval.

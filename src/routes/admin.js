@@ -42,15 +42,11 @@ function createAdminRouter({ getPool, sql, adminService } = {}) {
   router.get('/', async (req, res) => {
     const searchTerm = req.query.search === undefined ? '' : req.query.search;
     try {
-      const [dashboard, summary] = await Promise.all([
-        service.listDashboard(searchTerm),
-        service.getDashboardSummary?.(req.authUser.id) || null
-      ]);
+      const dashboard = await service.listDashboard(searchTerm);
       res.render('dashboards/database-admin', {
         title: 'Database Admin Dashboard',
         csrfToken: ensureCsrfToken(req),
         currentUser: req.authUser,
-        summary,
         users: dashboard.users,
         searchTerm: dashboard.searchTerm,
         searchError: null,
@@ -62,7 +58,6 @@ function createAdminRouter({ getPool, sql, adminService } = {}) {
           title: 'Database Admin Dashboard',
           csrfToken: ensureCsrfToken(req),
           currentUser: req.authUser,
-          summary: null,
           users: [],
           searchTerm: '',
           searchError: error.message,

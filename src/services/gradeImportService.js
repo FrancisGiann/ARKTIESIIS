@@ -295,7 +295,6 @@ function createGradeImportService({
         .input('subjectId', sql.Int, subject.id)
         .input('schoolYear', sql.NVarChar(20), context.schoolYear)
         .input('academicTermId', sql.Int, context.academicTermId)
-        .input('originalFilename', sql.NVarChar(255), storedOriginalFilename)
         .input('teacherId', sql.Int, actor.role === 'teacher' ? actor.id : null);
       const parameters = validLrns.map((lrn, index) => {
         const name = `lrn${index}`;
@@ -416,6 +415,7 @@ function createGradeImportService({
         .input('sectionName', sql.NVarChar(100), context.sectionName)
         .input('subjectId', sql.Int, subject.id)
         .input('subjectName', sql.NVarChar(200), subject.subject_name)
+        .input('originalFilename', sql.NVarChar(255), storedOriginalFilename)
         .input('workbookGradeLevel', sql.NVarChar(50), workbookContext.gradeLevel)
         .input('workbookSectionName', sql.NVarChar(100), workbookContext.sectionName)
         .input('workbookSubjectName', sql.NVarChar(200), workbookContext.subjectName)

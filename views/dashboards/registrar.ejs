@@ -1,55 +1,40 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page registrar-dashboard-page" id="main-content">
-  <section class="dashboard-heading">
+  <header class="dashboard-heading">
     <div>
-      <h1>Registrar dashboard</h1>
-      <p>Registrar workspace · Lucena Branch</p>
+      <h1>Registrar workspace</h1>
+      <p>Find a student record, review documents, and move enrollment or academic work forward.</p>
     </div>
+  </header>
+
+  <section class="registrar-lookup" aria-labelledby="find-student-title">
+    <h2 id="find-student-title">Find a student</h2>
+    <form class="admin-search registrar-lookup__form" method="get" action="/registrar/records">
+      <div class="field"><label for="registrar-student-search">Student name, number, or LRN</label><input id="registrar-student-search" name="search" type="search" maxlength="100" autocomplete="off" required></div>
+      <button class="button button--primary" type="submit">Search records</button>
+      <a class="text-link" href="/registrar/records">Browse student records</a>
+    </form>
+    <p>Search results show enrollment and required-document status with each student record.</p>
   </section>
-  <% if (summary) { %>
-    <section class="dashboard-summary registrar-dashboard-summary" aria-label="Registrar summary">
-      <dl class="dashboard-summary-grid">
-        <div><dt>Active student records</dt><dd><%= summary.active_student_count %></dd></div>
-        <div><dt>Archived student records</dt><dd><%= summary.archived_student_count %></dd></div>
-        <div><dt>Current enrollments</dt><dd><%= summary.current_enrollment_count %></dd></div>
-        <div><dt>Documents awaiting staff review</dt><dd><%= summary.documents_awaiting_review_count %></dd></div>
-        <div><dt>Documents queued or processing OCR</dt><dd><%= summary.documents_processing_count %></dd></div>
-      </dl>
+
+  <div class="registrar-task-layout">
+    <section class="registrar-task-group" aria-labelledby="registrar-next-tasks">
+      <h2 id="registrar-next-tasks">Enrollment and review</h2>
+      <nav class="registrar-work-index" aria-label="Enrollment and review tasks">
+        <a class="registrar-work-index__link" href="/registrar/intake"><span><strong>Enrollment intake</strong><span>Create student profiles and finalize enrollment.</span></span><span class="registrar-work-index__action">Open intake</span></a>
+        <a class="registrar-work-index__link" href="/documents"><span><strong>Document review</strong><span>Review Good Moral, PSA, and Form 137 status from student records.</span></span><span class="registrar-work-index__action">Review documents</span></a>
+        <a class="registrar-work-index__link" href="/registrar/grade-submissions"><span><strong>Grade review</strong><span>Check teacher workbooks and approve grade imports.</span></span><span class="registrar-work-index__action">Review submissions</span></a>
+        <a class="registrar-work-index__link" href="/registrar/schedules"><span><strong>Class schedules</strong><span>Manage meeting times for assigned classes.</span></span><span class="registrar-work-index__action">Manage schedules</span></a>
+      </nav>
     </section>
-  <% } %>
-  <section class="registrar-workspace" aria-labelledby="academic-workspace-title">
-    <div class="admin-section__heading">
-      <div>
-        <h2 id="academic-workspace-title">Registrar workspaces</h2>
-        <p>Manage student profiles, enrollment history, the subject catalog, and grades. Grade entries are associated with an enrolled subject and a grading period.</p>
-      </div>
-    </div>
-    <nav class="registrar-work-index" aria-label="Registrar workspaces">
-      <a class="registrar-work-index__link" href="/records">
-        <span><strong>Student records</strong><span>Profiles, academic terms, sections, and enrollment history.</span></span>
-        <span class="registrar-work-index__action">Open workspace</span>
-      </a>
-      <a class="registrar-work-index__link" href="/documents">
-        <span><strong>Document review</strong><span>Search student submissions and review their current status and history.</span></span>
-        <span class="registrar-work-index__action">Open workspace</span>
-      </a>
-      <a class="registrar-work-index__link" href="/records/subjects">
-        <span><strong>Subject catalog</strong><span>Manage subjects associated with academic records and grade entries.</span></span>
-        <span class="registrar-work-index__action">Open workspace</span>
-      </a>
-      <a class="registrar-work-index__link" href="/records/teacher-assignments">
-        <span><strong>Teacher assignments</strong><span>Assign a teacher to a school term, section, and subject.</span></span>
-        <span class="registrar-work-index__action">Open workspace</span>
-      </a>
-      <a class="registrar-work-index__link" href="/registrar/grade-submissions">
-        <span><strong>Teacher grade submissions</strong><span>Review workbook matches and conflicts before importing grades.</span></span>
-        <span class="registrar-work-index__action">Open review queue</span>
-      </a>
-      <a class="registrar-work-index__link" href="/records/grade-import">
-        <span><strong>Direct grade import</strong><span>Registrar fallback for direct imports from the corrected SSHS workbook.</span></span>
-        <span class="registrar-work-index__action">Open workspace</span>
-      </a>
-    </nav>
-  </section>
+    <section class="registrar-task-group registrar-task-group--setup" aria-labelledby="registrar-setup-title">
+      <h2 id="registrar-setup-title">Academic setup</h2>
+      <p>Lower-frequency tools for maintaining the class structure.</p>
+      <nav class="registrar-work-index" aria-label="Academic setup tasks">
+        <a class="registrar-work-index__link" href="/registrar/records/subjects"><span><strong>Subject catalog</strong><span>Maintain subjects used by academic records.</span></span><span class="registrar-work-index__action">Manage subjects</span></a>
+        <a class="registrar-work-index__link" href="/registrar/records/teacher-assignments"><span><strong>Teacher assignments</strong><span>Assign teachers to a term, section, and subject.</span></span><span class="registrar-work-index__action">Manage assignments</span></a>
+      </nav>
+    </section>
+  </div>
 </main>
 <%- include('../partials/foot') %>

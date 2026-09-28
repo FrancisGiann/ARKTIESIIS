@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/records/students/<%= student.id %>/edit">Back to student profile</a>
+  <a class="context-back" href="/registrar/records/students/<%= student.id %>/edit">Back to student profile</a>
   <section class="dashboard-heading">
     <div>
       <h1>Academic record</h1>
@@ -45,35 +45,12 @@
                       <% } %>
                     </div>
                   <% } else { %><p class="empty-state">No grades recorded for this subject.</p><% } %>
-                  <% if (student.status !== 'archived' && ['registrar', 'database_admin'].includes(currentUser.role)) { %>
-                    <details class="academic-grade-disclosure" <%= error ? 'open' : '' %>>
-                      <summary>Manage grades</summary>
-                      <div class="academic-grade-disclosure__content">
-                        <% for (const grade of assignment.grades) { %>
-                          <form class="academic-grade-form" method="post" action="/records/grades">
-                            <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="studentId" value="<%= student.id %>"><input type="hidden" name="studentSubjectId" value="<%= assignment.id %>"><input type="hidden" name="gradeId" value="<%= grade.id %>">
-                            <div class="field"><label for="grade-period-<%= grade.id %>">Grading period</label><input id="grade-period-<%= grade.id %>" name="gradingPeriod" type="text" maxlength="50" required value="<%= grade.gradingPeriod %>"></div>
-                            <div class="field"><label for="grade-value-<%= grade.id %>">Grade (0–100)</label><input id="grade-value-<%= grade.id %>" name="gradeValue" type="number" min="0" max="100" step="0.01" value="<%= grade.gradeValue ?? '' %>"></div>
-                            <div class="field"><label for="grade-remarks-<%= grade.id %>">Remarks (optional)</label><input id="grade-remarks-<%= grade.id %>" name="remarks" type="text" maxlength="100" value="<%= grade.remarks || '' %>"></div>
-                            <button class="button button--secondary" type="submit">Update grade</button>
-                          </form>
-                        <% } %>
-                        <form class="academic-grade-form academic-grade-form--new" method="post" action="/records/grades">
-                          <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="studentId" value="<%= student.id %>"><input type="hidden" name="studentSubjectId" value="<%= assignment.id %>">
-                          <div class="field"><label for="new-grade-period-<%= assignment.id %>">Grading period</label><input id="new-grade-period-<%= assignment.id %>" name="gradingPeriod" type="text" maxlength="50" required></div>
-                          <div class="field"><label for="new-grade-value-<%= assignment.id %>">Grade (0–100)</label><input id="new-grade-value-<%= assignment.id %>" name="gradeValue" type="number" min="0" max="100" step="0.01"></div>
-                          <div class="field"><label for="new-grade-remarks-<%= assignment.id %>">Remarks (optional)</label><input id="new-grade-remarks-<%= assignment.id %>" name="remarks" type="text" maxlength="100"></div>
-                          <button class="button button--primary" type="submit">Save grade</button>
-                        </form>
-                      </div>
-                    </details>
-                  <% } %>
                 </section>
               <% } %>
             </div>
           <% } else { %><p class="empty-state">No subjects are assigned to this enrollment.</p><% } %>
           <% if (student.status !== 'archived' && ['registrar', 'database_admin'].includes(currentUser.role)) { %>
-            <form class="form-stack records-enrollment-form academic-assignment-form" method="post" action="/records/student-subjects">
+            <form class="form-stack records-enrollment-form academic-assignment-form" method="post" action="/registrar/records/student-subjects">
               <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="studentId" value="<%= student.id %>"><input type="hidden" name="enrollmentId" value="<%= enrollment.id %>">
               <h4>Assign a subject</h4>
               <div class="field"><label for="subject-for-enrollment-<%= enrollment.id %>">Subject</label><select id="subject-for-enrollment-<%= enrollment.id %>" name="subjectId" required><option value="">Choose a subject</option><% for (const subject of subjects) { %><option value="<%= subject.id %>"><%= subject.subject_code %> · <%= subject.subject_name %></option><% } %></select></div>

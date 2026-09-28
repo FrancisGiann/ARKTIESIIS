@@ -3,24 +3,17 @@
   <section class="dashboard-heading">
     <div>
       <h1>Database administration</h1>
-      <p>Database administrator workspace · Lucena Branch</p>
+      <p>Manage school accounts, search student records, and review recorded system activity.</p>
     </div>
-    <div class="admin-heading-actions"><a class="button button--primary" href="/admin/users/new">Add user</a></div>
+    <div class="admin-heading-actions"><a class="button button--secondary" href="/admin/student-accounts">Set up student logins</a><a class="button button--primary" href="/admin/users/new">Add user</a></div>
   </section>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
 
-  <% if (summary) { %>
-    <section class="dashboard-summary admin-dashboard-summary" aria-label="System summary">
-      <dl class="dashboard-summary-grid">
-        <div><dt>Active accounts</dt><dd><%= summary.active_user_count %></dd></div>
-        <div><dt>Inactive accounts</dt><dd><%= summary.inactive_user_count %></dd></div>
-        <div><dt>Active student records</dt><dd><%= summary.active_student_count %></dd></div>
-        <div><dt>Archived student records</dt><dd><%= summary.archived_student_count %></dd></div>
-        <div><dt>Documents awaiting staff review</dt><dd><%= summary.documents_awaiting_review_count %></dd></div>
-      </dl>
-    </section>
-  <% } %>
+  <nav class="admin-work-links" aria-label="Administration workspaces">
+    <a href="/registrar/records"><strong>Student records</strong><span>Search student profiles and review enrollment and document status.</span></a>
+    <a href="/admin/audit"><strong>Audit activity</strong><span>Review actions recorded by the system.</span></a>
+  </nav>
 
   <section class="admin-section admin-dashboard-users" aria-labelledby="users-title">
     <div class="admin-section__heading">
@@ -32,7 +25,7 @@
     <% if (searchError) { %><p class="form-alert" role="alert"><%= searchError %></p><% } %>
     <form class="admin-search" method="get" action="/admin">
       <div class="field">
-        <label for="account-search">Email or student number</label>
+        <label for="account-search">Find an account by email or student number</label>
         <input id="account-search" name="search" type="search" maxlength="100" value="<%= searchTerm %>" autocomplete="off">
       </div>
       <button class="button button--secondary" type="submit">Search accounts</button>

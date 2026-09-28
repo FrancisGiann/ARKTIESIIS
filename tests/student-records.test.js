@@ -122,6 +122,7 @@ async function signIn(baseUrl, role) {
 
 test('student record, term, section, and enrollment inputs are bounded and validated', () => {
   assert.equal(validateStudent({ studentNo: ' S-1 ', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee', birthDate: '2008-02-29' }).studentNo, 'S-1');
+  assert.equal(validateStudent({ lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee' }, { requireStudentNo: false }).studentNo, null);
   assert.throws(() => normalizeLrn('12345678901'), /exactly 12 digits/);
   assert.throws(() => normalizeLrn('12345678901 '), /exactly 12 digits/);
   assert.equal(validateStudent({ studentNo: 'S-OLD', firstName: 'Jamie', lastName: 'Lee' }, { requireLrn: false }).lrn, null);
@@ -134,7 +135,7 @@ test('student record, term, section, and enrollment inputs are bounded and valid
   assert.deepEqual(validateEnrollment({ studentId: '5', academicTermId: '4', sectionId: '' }), { studentId: 5, academicTermId: 4, sectionId: null });
 });
 
-test('LRN is required for new students, registrars can backfill blanks, and only database administrators can change a recorded LRN', async () => {
+test('LRN is required for new students, registrars can backfill blanks, and only administrators create profiles or change recorded LRNs', async () => {
   const input = { studentNo: 'S-13', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee' };
   const registrarEdit = transactionalService(({ statement }) => {
     if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
@@ -157,10 +158,47 @@ test('LRN is required for new students, registrars can backfill blanks, and only
     if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
-  assert.equal(await registrarCreate.service.saveStudent(7, null, input), 13);
-  assert.equal(registrarCreate.log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.students')).values.studentNo, 'S-13');
-  assert.equal(registrarCreate.log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.students')).values.lrn, input.lrn);
-  assert.equal(registrarCreate.log.committed, true);
+  await assert.rejects(registrarCreate.service.saveStudent(7, null, input), (error) => {
+    assert.ok(error instanceof StudentRecordsError);
+    assert.equal(error.status, 403);
+    assert.match(error.message, /through student enrollment intake/);
+    return true;
+  });
+  assert.equal(registrarCreate.log.rolledBack, true);
+  assert.equal(registrarCreate.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.students')), false);
+
+  const databaseAdminCreate = transactionalService(({ statement }) => {
+    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
+    if (statement.includes('FROM dbo.academic_terms WITH')) return { recordset: [{ school_year: '2026-2027' }] };
+    if (statement.includes('sp_getapplock')) return { recordset: [{ lock_result: 0 }] };
+    if (statement.includes('DECLARE @prefix')) return { recordset: [{ student_no: 'SHS-2026-0321' }] };
+    if (statement.includes('INSERT INTO dbo.students')) return { recordset: [{ id: 13 }] };
+    if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+    throw new Error(`Unexpected query: ${statement}`);
+  });
+  assert.equal(await databaseAdminCreate.service.saveStudent(7, null, { ...input, studentNo: 'FORGED-999' }), 13);
+  const createInsert = databaseAdminCreate.log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.students'));
+  assert.equal(createInsert.values.studentNo, 'SHS-2026-0321');
+  assert.match(createInsert.statement, /OUTPUT INSERTED\.id INTO @insertedStudents/);
+  assert.ok(databaseAdminCreate.log.queries.some(({ statement }) => statement.includes('sp_getapplock')));
+  assert.equal(databaseAdminCreate.log.committed, true);
+
+  const noCurrentTerm = transactionalService(({ statement }) => {
+    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
+    if (statement.includes('FROM dbo.academic_terms WITH')) return { recordset: [] };
+    throw new Error(`Unexpected query: ${statement}`);
+  });
+  await assert.rejects(noCurrentTerm.service.saveStudent(7, null, input), /Set a current academic term/);
+  assert.equal(noCurrentTerm.log.rolledBack, true);
+  assert.equal(noCurrentTerm.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.students')), false);
+
+  const invalidCurrentTerm = transactionalService(({ statement }) => {
+    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
+    if (statement.includes('FROM dbo.academic_terms WITH')) return { recordset: [{ school_year: '2026/2027' }] };
+    throw new Error(`Unexpected query: ${statement}`);
+  });
+  await assert.rejects(invalidCurrentTerm.service.saveStudent(7, null, input), /invalid school year/);
+  assert.equal(invalidCurrentTerm.log.queries.some(({ statement }) => statement.includes('sp_getapplock')), false);
 
   const registrarBackfill = transactionalService(({ statement }) => {
     if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
@@ -195,7 +233,7 @@ test('LRN is required for new students, registrars can backfill blanks, and only
   assert.equal(databaseAdminEdit.log.committed, true);
 });
 
-test('master list search binds escaped input, applies term filter, and bounds returned rows', async () => {
+test('master list search binds escaped input, applies term filter, and pages across every match', async () => {
   const calls = [];
   const pool = {
     request() {
@@ -206,22 +244,41 @@ test('master list search binds escaped input, applies term filter, and bounds re
           calls.push({ statement, values: { ...values } });
           if (statement.includes('FROM dbo.academic_terms')) return { recordset: [{ id: 3, school_year: '2026-2027', term: 'First', is_current: true }] };
           if (statement.includes('FROM dbo.sections')) return { recordset: [] };
+          if (statement.includes('COUNT_BIG(*) AS total_students')) return { recordset: [{ total_students: 57 }] };
           return { recordset: [] };
         }
       };
     }
   };
   const service = createStudentRecordsService({ getPool: async () => pool, sql: fakeSql() });
-  const result = await service.listWorkspace('A_%[b]~', '3');
+  const result = await service.listWorkspace('A_%[b]~', '3', '2');
   const studentsCall = calls.at(-1);
+  const countCall = calls.find(({ statement }) => statement.includes('COUNT_BIG(*) AS total_students'));
   assert.equal(result.searchTerm, 'A_%[b]~');
   assert.equal(result.academicTermId, 3);
+  assert.equal(result.totalStudents, 57);
+  assert.equal(result.page, 2);
+  assert.equal(result.pageSize, 25);
+  assert.equal(result.totalPages, 3);
   assert.equal(studentsCall.values.searchPattern, '%A~_~%~[b~]~~%');
   assert.equal(studentsCall.values.academicTermId, 3);
+  assert.equal(studentsCall.values.offset, 25);
+  assert.equal(studentsCall.values.pageSize, 25);
   assert.match(studentsCall.statement, /OUTER APPLY/);
+  assert.match(countCall.statement, /s\.lrn LIKE @searchPattern/);
+  assert.match(countCall.statement, /CONCAT_WS\(N' ', s\.first_name, NULLIF\(s\.middle_name, N''\), s\.last_name\)/);
+  assert.match(studentsCall.statement, /s\.lrn LIKE @searchPattern/);
+  assert.match(studentsCall.statement, /CONCAT_WS\(N' ', s\.first_name, NULLIF\(s\.middle_name, N''\), s\.last_name\)/);
+  assert.match(studentsCall.statement, /AS good_moral_status/);
+  assert.match(studentsCall.statement, /AS psa_status/);
+  assert.match(studentsCall.statement, /AS form137_status/);
   assert.match(studentsCall.statement, /@academicTermId IS NULL OR EXISTS \([\s\S]*filtered_enrollment\.academic_term_id = @academicTermId/);
-  assert.match(studentsCall.statement, /SELECT TOP \(250\)/);
+  assert.match(studentsCall.statement, /OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY/);
+  assert.doesNotMatch(studentsCall.statement, /SELECT TOP \(250\)/);
   assert.doesNotMatch(studentsCall.statement, /A_%\[b\]/);
+  const lastPage = await service.listWorkspace('', '', '999');
+  assert.equal(lastPage.page, 3);
+  assert.equal(calls.at(-1).values.offset, 50);
   await assert.rejects(service.listWorkspace('x'.repeat(101), ''), /100 printable characters or fewer/);
 });
 
@@ -251,10 +308,38 @@ test('own student view queries only the student linked to the authenticated user
   assert.match(calls[1].statement, /WHERE e\.student_id = @studentId/);
 });
 
+test('unified student record reads only the active student-origin report-card scan and the separate paper status', async () => {
+  const statements = [];
+  const pool = {
+    request() {
+      return {
+        input() { return this; },
+        async query(statement) {
+          statements.push(statement);
+          if (statement.includes('FROM dbo.students AS s LEFT JOIN dbo.users')) {
+            return { recordset: [{ id: 44, previous_report_card_status: 'needs_review', previous_school_report_card_physical_status: 'received', form137_status: 'verified' }] };
+          }
+          return { recordset: [] };
+        }
+      };
+    }
+  };
+  const service = createStudentRecordsService({ getPool: async () => pool, sql: fakeSql() });
+  const result = await service.getStudent('44');
+  assert.equal(result.student.previous_report_card_status, 'needs_review');
+  assert.equal(result.student.previous_school_report_card_physical_status, 'received');
+  assert.equal(result.student.form137_status, 'verified');
+  const profileQuery = statements.find((statement) => statement.includes('FROM dbo.students AS s LEFT JOIN dbo.users'));
+  assert.match(profileQuery, /d\.document_type = 'report_card'[\s\S]*d\.is_legacy_archive = 0 AND d\.upload_source = 'student'/);
+  assert.match(profileQuery, /previous_school_report_card_status_events/);
+  assert.match(profileQuery, /form137_status_events/);
+});
+
 test('a section from another academic term is rejected before enrollment writes', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
     if (statement.includes('FROM dbo.students')) return { recordset: [{ id: 12 }] };
+    if (statement.includes('FROM dbo.enrollments AS enrollment')) return { recordset: [] };
     if (statement.includes('FROM dbo.academic_terms')) return { recordset: [{ id: 5 }] };
     if (statement.includes('FROM dbo.sections')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
@@ -288,6 +373,7 @@ test('enrollment update changes only the section and keeps the schema-managed en
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
     if (statement.includes('FROM dbo.students')) return { recordset: [{ id: 12 }] };
+    if (statement.includes('FROM dbo.enrollments AS enrollment')) return { recordset: [] };
     if (statement.includes('FROM dbo.academic_terms')) return { recordset: [{ id: 5 }] };
     if (statement.includes('FROM dbo.sections')) return { recordset: [{ id: 9 }] };
     if (statement.includes('FROM dbo.enrollments')) return { recordset: [{ id: 44, enrollment_status: 'enrolled' }] };
@@ -300,6 +386,27 @@ test('enrollment update changes only the section and keeps the schema-managed en
   assert.doesNotMatch(update.statement, /enrollment_status/);
   assert.equal(log.committed, true);
   assert.ok(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')));
+});
+
+test('legacy enrollment writes cannot bypass a pending new-student intake', async () => {
+  const { service, log } = transactionalService(({ statement }) => {
+    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM dbo.students')) return { recordset: [{ id: 12, status: 'active' }] };
+    if (statement.includes('FROM dbo.enrollments AS enrollment')) return { recordset: [{ id: 45 }] };
+    throw new Error(`Unexpected query: ${statement}`);
+  });
+  await assert.rejects(service.saveEnrollment(7, { studentId: '12', academicTermId: '5', sectionId: '9' }), (error) => {
+    assert.ok(error instanceof StudentRecordsError);
+    assert.equal(error.status, 409);
+    assert.match(error.message, /pending new-student intake/);
+    return true;
+  });
+  assert.equal(log.rolledBack, true);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.enrollments')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('UPDATE dbo.enrollments')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.match(log.queries.find(({ statement }) => statement.includes('FROM dbo.enrollments AS enrollment')).statement,
+    /enrollment_status = N'pending_payment'[\s\S]*created_for_intake = 1/);
 });
 
 test('database administrator archives a student, disables the linked account, consumes OTPs, and audits atomically', async () => {
@@ -367,13 +474,13 @@ test('finance cannot access the student master list and denied requests do not l
   };
   await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, studentRecordsService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
-    const response = await fetch(`${baseUrl}/records`, { headers: { cookie } });
+    const response = await fetch(`${baseUrl}/registrar/records`, { headers: { cookie } });
     assert.equal(response.status, 403);
     assert.equal(listReads, 0);
   });
 });
 
-test('student dashboard resolves the own profile from session identity and rejects staff workspace access', async () => {
+test('student overview and profile page resolve only the session-owned profile and reject staff workspace access', async () => {
   const ownUserIds = [];
   const ownGradeUserIds = [];
   const summaryUserIds = [];
@@ -382,37 +489,119 @@ test('student dashboard resolves the own profile from session identity and rejec
       ownUserIds.push(userId);
       return { student: { student_no: 'S-7', first_name: 'Rae', last_name: 'Student' }, enrollments: [] };
     },
-    async getStudentDashboardSummary(userId) {
-      summaryUserIds.push(userId);
-      return { enrollment_count: 2, grade_entry_count: 1, document_count: 3, documents_in_progress_count: 1 };
-    },
+    async getStudentDashboardSummary(userId) { summaryUserIds.push(userId); return {}; },
     async listWorkspace() { throw new Error('student should not read the staff list'); }
   };
   const academicRecordsService = {
     async getOwnGrades(userId) { ownGradeUserIds.push(userId); return []; }
   };
-  await withServer(createApp({ databasePool: makeAuthPool('student'), environment, studentRecordsService, academicRecordsService }), async (baseUrl) => {
+  await withServer(createApp({
+    databasePool: makeAuthPool('student'), environment, studentRecordsService, academicRecordsService,
+    financeService: { async getOwnStudentAccount() { return { account: null, transactions: [] }; } },
+    classScheduleService: { async getOwnStudentSchedule() { return []; } }
+  }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'student');
-    const dashboard = await fetch(`${baseUrl}/dashboard/student?studentId=999`, { headers: { cookie } });
+    const dashboard = await fetch(`${baseUrl}/student?studentId=999`, { headers: { cookie } });
     assert.equal(dashboard.status, 200);
     const html = await dashboard.text();
-    assert.match(html, /S-7/);
-    assert.match(html, /Documents awaiting OCR or staff review[\s\S]*?<dd>1<\/dd>/);
-    assert.deepEqual(ownUserIds, [7]);
-    assert.deepEqual(summaryUserIds, [7]);
-    assert.deepEqual(ownGradeUserIds, [7]);
-    const records = await fetch(`${baseUrl}/records`, { headers: { cookie } });
+    assert.doesNotMatch(html, /student-shortcuts|Your school pages/);
+    const profile = await fetch(`${baseUrl}/student/records?studentId=999`, { headers: { cookie } });
+    assert.equal(profile.status, 200);
+    assert.match(await profile.text(), /S-7/);
+    assert.deepEqual(ownUserIds, [7, 7]);
+    assert.deepEqual(summaryUserIds, [], 'student overview does not fetch an unused document summary');
+    assert.deepEqual(ownGradeUserIds, [], 'the overview does not fetch detailed grades');
+    const records = await fetch(`${baseUrl}/registrar/records`, { headers: { cookie } });
     assert.equal(records.status, 403);
+  });
+});
+
+test('database administrators can search the master list and open a unified profile, enrollment, academic, and document-status record', async () => {
+  let staffListReads = 0;
+  const studentRecordsService = {
+    async listWorkspace() {
+      staffListReads += 1;
+      return {
+        students: [{ id: 12, student_no: 'S-12', lrn: '123456789012', first_name: 'Jamie', last_name: 'Lee', status: 'active', good_moral_status: 'needs_review', psa_status: null, form137_status: 'received' }],
+        terms: [], sections: [], searchTerm: '', academicTermId: null, totalStudents: 1, page: 1, pageSize: 25, totalPages: 1
+      };
+    },
+    async getStudent(id) {
+      return { student: { id, student_no: 'S-12', lrn: '123456789012', first_name: 'Jamie', last_name: 'Lee', status: 'active', good_moral_status: 'needs_review', psa_status: null, previous_report_card_status: 'needs_review', previous_school_report_card_physical_status: 'received', form137_status: 'received' }, terms: [], sections: [], enrollments: [] };
+    }
+  };
+  const academicRecordsService = {
+    async getStudentAcademicRecord() {
+        return { enrollments: [{ id: 5, school_year: '2026-2027', term: 'First', is_current: true, grade_level: 'Grade 11', section_name: 'Mabini', enrollment_status: 'enrolled', subjects: [{ subjectCode: 'ENG1', subjectName: 'English', grades: [{ gradingPeriod: 'Quarter 1', gradeValue: 94 }] }] }] };
+    }
+  };
+  const dependencies = { studentRecordsService, academicRecordsService };
+  await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, ...dependencies }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'database_admin');
+    const list = await fetch(`${baseUrl}/registrar/records?search=Jamie%20Lee`, { headers: { cookie } });
+    const listHtml = await list.text();
+    assert.equal(list.status, 200);
+    assert.equal(staffListReads, 1);
+    assert.match(listHtml, /LRN 123456789012/);
+    assert.match(listHtml, /href="\/registrar\/records\/students\/12"/);
+    assert.match(listHtml, /Good Moral <strong>Review needed/);
+    assert.match(listHtml, /PSA <strong>Missing/);
+    assert.match(listHtml, /Form 137 physical record \(staff only\) <strong>received/);
+    const newProfile = await fetch(`${baseUrl}/registrar/records/students/new`, { headers: { cookie } });
+    const newProfileHtml = await newProfile.text();
+    assert.equal(newProfile.status, 200);
+    assert.doesNotMatch(newProfileHtml, /name="studentNo"/);
+    assert.match(newProfileHtml, /assigned automatically from the current academic year/);
+    const detail = await fetch(`${baseUrl}/registrar/records/students/12`, { headers: { cookie } });
+    const detailHtml = await detail.text();
+    assert.equal(detail.status, 200);
+    assert.match(detailHtml, /Enrollment, subjects, and grades/);
+    assert.match(detailHtml, /Good Moral Certificate/);
+    assert.match(detailHtml, /Needs staff review/);
+    assert.match(detailHtml, /PSA birth certificate/);
+    assert.match(detailHtml, /Grade 11 · Mabini/);
+    assert.doesNotMatch(detailHtml, /Grade Grade 11/);
+    assert.match(detailHtml, /Form 137 physical record \(staff only\)/);
+    assert.match(detailHtml, /Previous-school report card · digital enrollment scan/);
+    assert.match(detailHtml, /Previous-school report card · paper copy \(staff only\)/);
+    assert.match(detailHtml, /href="\/documents\/students\/12#previous-school-report-card-status-title"/);
+    assert.match(detailHtml, /href="\/documents\/students\/12#form137-status-title"/);
+    assert.match(detailHtml, /Review digital submission/);
+    assert.match(detailHtml, /Not submitted/);
+    assert.match(detailHtml, /Quarter 1[\s\S]*?94/);
+    assert.match(detailHtml, /href="\/documents\/students\/12"/);
+  });
+
+  let deniedReads = 0;
+  await withServer(createApp({
+    databasePool: makeAuthPool('finance'), environment,
+    studentRecordsService: { async listWorkspace() { deniedReads += 1; return {}; } }
+  }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'finance');
+    const denied = await fetch(`${baseUrl}/registrar/records/students/12`, { headers: { cookie } });
+    assert.equal(denied.status, 403);
+    assert.equal(deniedReads, 0);
   });
 });
 
 test('records mutations reject missing CSRF tokens before calling the service', async () => {
   let createCalls = 0;
+  let studentCreateCalls = 0;
+  let enrollmentSaveCalls = 0;
+  const listCalls = [];
   const studentRecordsService = {
     async createTerm() { createCalls += 1; },
-    async listWorkspace() { return {
-      students: [{ id: 12, student_no: 'S-12', first_name: 'Jamie', last_name: 'Lee', status: 'active', enrollment_status: 'enrolled', school_year: '2026-2027', term: 'First' }],
-      terms: [{ id: 2, school_year: '2026-2027', term: 'First', is_current: true }], sections: [], searchTerm: '', academicTermId: null
+    async saveStudent() { studentCreateCalls += 1; },
+    async saveEnrollment() {
+      enrollmentSaveCalls += 1;
+      throw new StudentRecordsError('This student has a pending new-student intake. Finance must clear that enrollment before it can be finalized.', 409);
+    },
+    async listWorkspace(searchTerm = '', termId = '', page = 1) {
+      listCalls.push({ searchTerm, termId, page });
+      return {
+      students: [{ id: 12, student_no: 'S-12', lrn: '123456789012', first_name: 'Jamie', last_name: 'Lee', status: 'active', enrollment_status: 'enrolled', school_year: '2026-2027', term: 'First', good_moral_status: 'needs_review', psa_status: null, form137_status: 'received' }],
+      terms: [{ id: 2, school_year: '2026-2027', term: 'First', is_current: true }], sections: [], searchTerm, academicTermId: termId ? Number(termId) : null,
+      totalStudents: 61, page: Number(page), pageSize: 25, totalPages: 3
     }; },
     async getStudent(id) {
       return {
@@ -424,23 +613,51 @@ test('records mutations reject missing CSRF tokens before calling the service', 
   };
   await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment, studentRecordsService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
-    const masterList = await fetch(`${baseUrl}/records`, { headers: { cookie } });
+    const masterList = await fetch(`${baseUrl}/registrar/records`, { headers: { cookie } });
     assert.equal(masterList.status, 200);
     const masterListHtml = await masterList.text();
     assert.match(masterListHtml, /Student master list/);
+    assert.match(masterListHtml, /LRN 123456789012/);
+    assert.match(masterListHtml, /Good Moral <strong>Review needed/);
+    assert.match(masterListHtml, /Form 137 physical record \(staff only\) <strong>received/);
+    assert.match(masterListHtml, /records-context-strip--term/);
     assert.match(masterListHtml, /record-status--active">Active/);
-    assert.match(masterListHtml, /Edit profile/);
-    assert.match(masterListHtml, /Academic record/);
-    const newStudentForm = await fetch(`${baseUrl}/records/students/new`, { headers: { cookie } });
-    assert.equal(newStudentForm.status, 200);
-    assert.doesNotMatch(await newStudentForm.text(), /id="student-no"[^>]*readonly/);
-    const editStudentForm = await fetch(`${baseUrl}/records/students/12/edit`, { headers: { cookie } });
+    assert.match(masterListHtml, />Edit profile<\/a>/);
+    assert.match(masterListHtml, /Open student record/);
+    assert.match(masterListHtml, /Showing 1–25 of 61 students/);
+    assert.match(masterListHtml, /href="\/registrar\/intake"/);
+    assert.doesNotMatch(masterListHtml, /href="\/registrar\/records\/students\/new"/);
+    const secondPage = await fetch(`${baseUrl}/registrar/records?search=Lee&termId=2&page=2`, { headers: { cookie } });
+    assert.equal(secondPage.status, 200);
+    const secondPageHtml = await secondPage.text();
+    assert.match(secondPageHtml, /Showing 26–50 of 61 students/);
+    assert.match(secondPageHtml, /href="\/registrar\/records\?search=Lee&amp;termId=2&amp;page=3"/);
+    assert.deepEqual(listCalls.slice(0, 2), [
+      { searchTerm: '', termId: '', page: 1 },
+      { searchTerm: 'Lee', termId: '2', page: '2' }
+    ]);
+    const legacyNewStudent = await fetch(`${baseUrl}/registrar/records/students/new`, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(legacyNewStudent.status, 303);
+    assert.equal(legacyNewStudent.headers.get('location'), '/registrar/intake/new');
+    const directCreate = await postForm(baseUrl, '/registrar/records/students', cookie, {
+      _csrf: csrfFromHtml(masterListHtml), studentNo: 'ST-NEW', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee'
+    });
+    assert.equal(directCreate.status, 403);
+    assert.match(await directCreate.text(), /through student enrollment intake/);
+    assert.equal(studentCreateCalls, 0);
+    const legacyEnrollment = await postForm(baseUrl, '/registrar/records/enrollments', cookie, {
+      _csrf: csrfFromHtml(masterListHtml), studentId: '12', academicTermId: '2', sectionId: '9'
+    });
+    assert.equal(legacyEnrollment.status, 409);
+    assert.match(await legacyEnrollment.text(), /pending new-student intake/);
+    assert.equal(enrollmentSaveCalls, 1);
+    const editStudentForm = await fetch(`${baseUrl}/registrar/records/students/12/edit`, { headers: { cookie } });
     assert.equal(editStudentForm.status, 200);
     const editStudentHtml = await editStudentForm.text();
     assert.match(editStudentHtml, /Enrollment history/);
     assert.match(editStudentHtml, /id="student-no"[^>]*readonly aria-describedby="student-number-help"/);
     assert.match(editStudentHtml, /Only a database administrator can correct a student number/);
-    const response = await postForm(baseUrl, '/records/terms', cookie, { schoolYear: '2026-2027', term: 'First' });
+    const response = await postForm(baseUrl, '/registrar/records/terms', cookie, { schoolYear: '2026-2027', term: 'First' });
     assert.equal(response.status, 403);
     assert.equal(createCalls, 0);
   });
@@ -462,19 +679,19 @@ test('student archive is database-admin-only and registrar login deactivation is
 
   await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, studentRecordsService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'database_admin');
-    const page = await fetch(`${baseUrl}/records/students/12/edit`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/registrar/records/students/12/edit`, { headers: { cookie } });
     const html = await page.text();
     assert.equal(page.status, 200);
     assert.match(html, /Type S-12 to confirm archiving/);
     assert.doesNotMatch(html, /id="student-no"[^>]*readonly/);
     assert.doesNotMatch(html, /login\/deactivate/);
-    const response = await postForm(baseUrl, '/records/students/12/archive', cookie, {
+    const response = await postForm(baseUrl, '/registrar/records/students/12/archive', cookie, {
       _csrf: csrfFromHtml(html), confirmation: 'S-12'
     });
     assert.equal(response.status, 303);
     assert.equal(calls[0][0], 'archive');
     assert.equal(calls[0][1], 7);
-    const forbidden = await postForm(baseUrl, '/records/students/12/login/deactivate', cookie, {
+    const forbidden = await postForm(baseUrl, '/registrar/records/students/12/login/deactivate', cookie, {
       _csrf: csrfFromHtml(html), confirmation: 'DEACTIVATE'
     });
     assert.equal(forbidden.status, 403);
@@ -482,18 +699,18 @@ test('student archive is database-admin-only and registrar login deactivation is
 
   await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment, studentRecordsService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
-    const page = await fetch(`${baseUrl}/records/students/12/edit`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/registrar/records/students/12/edit`, { headers: { cookie } });
     const html = await page.text();
     assert.equal(page.status, 200);
     assert.match(html, /Type DEACTIVATE to disable this student login/);
-    assert.doesNotMatch(html, /action="\/records\/students\/12\/archive"/);
-    const response = await postForm(baseUrl, '/records/students/12/login/deactivate', cookie, {
+    assert.doesNotMatch(html, /action="\/registrar\/records\/students\/12\/archive"/);
+    const response = await postForm(baseUrl, '/registrar/records/students/12/login/deactivate', cookie, {
       _csrf: csrfFromHtml(html), confirmation: 'DEACTIVATE'
     });
     assert.equal(response.status, 303);
     assert.equal(calls.at(-1)[0], 'deactivate');
     assert.equal(calls.at(-1)[1], 7);
-    const forbidden = await postForm(baseUrl, '/records/students/12/archive', cookie, {
+    const forbidden = await postForm(baseUrl, '/registrar/records/students/12/archive', cookie, {
       _csrf: csrfFromHtml(html), confirmation: 'S-12'
     });
     assert.equal(forbidden.status, 403);
@@ -514,12 +731,12 @@ test('archived student profiles explain that retained academic and finance histo
   };
   await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment, studentRecordsService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
-    const page = await fetch(`${baseUrl}/records/students/12/edit`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/registrar/records/students/12/edit`, { headers: { cookie } });
     const html = await page.text();
     assert.equal(page.status, 200);
     assert.match(html, /Existing academic and finance history remains available for review, but cannot be changed/);
     assert.match(html, /<fieldset disabled>/);
     assert.doesNotMatch(html, /authorized staff can continue maintaining/);
-    assert.doesNotMatch(html, /action="\/records\/enrollments"/);
+    assert.doesNotMatch(html, /action="\/registrar\/records\/enrollments"/);
   });
 });

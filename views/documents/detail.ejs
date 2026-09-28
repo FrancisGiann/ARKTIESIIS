@@ -2,83 +2,172 @@
 <main class="page-shell dashboard-page records-page" id="main-content">
   <% const latestDecision = document.decisions[0] || null; %>
   <% const correctionRequested = latestDecision ? latestDecision.decision_type === 'correction_requested' : document.reviewEvents[0]?.action_type === 'correction_requested'; %>
+  <% const hasCorrectedSubmission = document.history.some((item) => String(item.supersedes_document_id) === String(document.id)); %>
   <section class="dashboard-heading">
     <div>
-      <h1><%= documentTypeLabel(document.document_type) %></h1>
+      <h1><%= documentTypeLabel(document.document_type) %><%= document.document_type === 'report_card' ? ' · Enrollment submission' : '' %></h1>
       <p>Submission #<%= document.id %><% if (isStaff) { %> · <%= document.student_no %> · <%= [document.first_name, document.middle_name, document.last_name].filter(Boolean).join(' ') %><% } %></p>
     </div>
     <div class="admin-heading-actions">
       <a class="button button--secondary" href="<%= isStaff ? `/documents/students/${document.student_id}` : '/documents' %>"><%= isStaff ? 'Student documents' : 'My documents' %></a>
-      <a class="button button--primary" href="/documents/<%= document.id %>/download">Download file</a>
+      <% if (!['image/jpeg', 'image/png'].includes(document.mime_type)) { %><a class="button button--primary" href="/documents/<%= document.id %>/preview" data-document-preview-trigger data-preview-title="<%= document.original_filename %>" data-preview-mime="<%= document.mime_type || '' %>" aria-haspopup="dialog" aria-controls="document-preview-dialog">View document</a><% } %>
+      <a class="button button--secondary" href="/documents/<%= document.id %>/download">Download file</a>
     </div>
   </section>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <% if (!isStaff && ['good_moral', 'psa_birth_certificate', 'report_card'].includes(document.document_type) && latestDecision?.decision_type === 'rejected' && typeof latestDecision.reason === 'string' && latestDecision.reason.trim()) { %>
+    <section class="form-alert document-rejection-callout" role="status" aria-labelledby="rejection-reason-title">
+      <strong id="rejection-reason-title">Reason for rejection</strong>
+      <p><%= latestDecision.reason.trim() %></p>
+    </section>
+  <% } %>
 
-  <section class="admin-section" aria-labelledby="submission-title">
-    <div class="admin-section__heading"><div><h2 id="submission-title">Submission</h2><p><% if (document.isArchivedReportCard) { %>This historical report card is retained as a read-only archive file. New grades use the teacher workbook review workflow.<% } else if (document.document_type === 'form_137') { %>This is a historical Form 137 file. New records use a separate physical status workflow; authorized staff may scan the paper for temporary local OCR suggestions. Scans and OCR results are not retained in that workflow.<% } else { %>The uploader selected the document type. OCR suggestions are advisory, and a registrar or database administrator must inspect the source file before making a decision.<% } %></p></div></div>
+  <div class="document-detail-overview <%= ['image/jpeg', 'image/png'].includes(document.mime_type) ? 'document-detail-overview--with-preview' : '' %>">
+  <% if (['image/jpeg', 'image/png'].includes(document.mime_type)) { %>
+    <section class="admin-section document-image-thumbnail-card" aria-labelledby="document-image-title">
+      <div class="admin-section__heading"><div><h2 id="document-image-title">Document preview</h2><p>Select the thumbnail to inspect the full image.</p></div></div>
+      <a class="document-image-thumbnail" href="/documents/<%= document.id %>/preview" data-document-preview-trigger data-preview-title="<%= document.original_filename %>" data-preview-mime="<%= document.mime_type || '' %>" aria-haspopup="dialog" aria-controls="document-preview-dialog" aria-label="Open full-size preview of <%= document.original_filename %>">
+        <span class="document-image-thumbnail__viewport"><img src="/documents/<%= document.id %>/preview" alt="Uploaded <%= documentTypeLabel(document.document_type) %> image: <%= document.original_filename %>"></span>
+        <span class="document-image-thumbnail__label">Open full-size image</span>
+      </a>
+    </section>
+  <% } %>
+
+  <section class="admin-section document-detail-card" aria-labelledby="submission-title">
+    <div class="admin-section__heading"><div><h2 id="submission-title">Submission</h2><p><% if (document.isArchivedReportCard) { %>This historical report-card file is retained as a read-only archive. New previous-school report-card scans are enrollment submissions; current grades use the separate teacher workbook review workflow.<% } else if (document.document_type === 'report_card') { %>This digital scan was submitted as an enrollment requirement. It receives a limited precheck for the visible linked student name and configured file format. Staff inspect the source and make every final decision. The precheck does not extract or change grades.<% } else if (document.document_type === 'form_137') { %>This is a historical Form 137 file. New records use a separate physical status workflow; authorized staff may send a temporary scan to Gemini for field suggestions. Scans and suggestions are not retained in that workflow.<% } else if (isStaff) { %>Gemini provides field suggestions for staff. Inspect the source file before making a decision.<% } else { %>This is the file submitted for review. Staff make the final decision after inspecting the source.<% } %></p></div></div>
     <dl class="student-profile-grid">
       <div><dt>File name</dt><dd><%= document.original_filename %></dd></div>
       <div><dt>File type</dt><dd><%= document.mime_type %></dd></div>
       <div><dt>File size</dt><dd><%= (Number(document.file_size_bytes) / 1048576).toFixed(2) %> MB</dd></div>
-      <div><dt>Status</dt><dd><%= documentStatusLabel(document.status, latestDecision?.decision_type, document.reviewEvents?.[0]?.action_type, document.document_type) %></dd></div>
+      <div><dt>Status</dt><dd><%= documentStatusLabel(document.status, latestDecision?.decision_type, document.reviewEvents?.[0]?.action_type, document.document_type, document.is_legacy_archive) %></dd></div>
       <div><dt>Uploaded</dt><dd><%= document.created_at ? new Date(document.created_at).toLocaleString() : '—' %></dd></div>
       <div><dt>Submission version</dt><dd><%= document.supersedes_document_id ? `Corrected from submission #${document.supersedes_document_id}` : 'Original submission' %></dd></div>
     </dl>
   </section>
 
+  </div>
+
   <% if (document.isArchivedReportCard) { %>
-    <section class="admin-section"><p class="muted-copy">This historical report card can be read and downloaded by authorized staff. It does not enter current OCR or document-review workflows.</p></section>
+    <section class="admin-section"><p class="muted-copy">This historical report card can be read and downloaded by authorized staff. It does not enter current Gemini field-extraction or document-review workflows.</p></section>
+  <% } else if (document.document_type === 'report_card') { %>
+    <section class="admin-section document-detail-card" aria-labelledby="report-card-review-title">
+      <div class="admin-section__heading"><div><h2 id="report-card-review-title"><%= isStaff ? 'Previous-school report-card scan review' : 'Staff review' %></h2><p>This review is for the digital enrollment submission. The limited precheck compares the visible student name with the linked record and checks PDF/JPEG/PNG format. It does not extract grades, establish authenticity, or make an acceptance decision. Staff must inspect the source; this workflow never writes grades.</p></div></div>
+      <% if (isStaff) { %>
+        <% if (document.validation) { %>
+          <% const reportCardOutcome = document.validation.automatedCheckOutcome || 'unavailable'; %>
+          <div class="document-precheck-status document-precheck-status--<%= reportCardOutcome %>" role="status">
+            <strong><%= reportCardOutcome === 'pass' ? 'Name and file-format checks passed' : reportCardOutcome === 'attention' ? 'Needs source inspection' : 'Precheck unavailable' %></strong>
+            <span><%= reportCardOutcome === 'pass' ? 'The visible name matched the linked student record and the supported file format matched.' : reportCardOutcome === 'attention' ? 'The name or file-format check needs source inspection.' : 'Gemini or file processing did not complete. The submission remains available for staff review.' %></span>
+          </div>
+          <p class="muted-copy"><%= document.validation.message %></p>
+          <dl class="student-profile-grid">
+            <div><dt>File format</dt><dd><%= document.validation.formatCheckPassed ? 'Supported PDF, JPEG, or PNG' : 'Unsupported or mismatched format' %></dd></div>
+            <div><dt>Processor</dt><dd><%= document.validation.processor %></dd></div>
+            <div><dt>Processed</dt><dd><%= document.validation.created_at ? new Date(document.validation.created_at).toLocaleString() : '—' %></dd></div>
+          </dl>
+          <% if (document.validation.fieldChecks?.length) { %>
+            <div class="admin-section__heading"><div><h3>Linked-name finding</h3><p>Use this as a staff review aid and confirm against the source.</p></div></div>
+            <ul class="document-review-history document-field-findings"><% for (const check of document.validation.fieldChecks) { %><li>
+              <strong><%= check.label %></strong>
+              <span><%= check.status === 'matched' ? 'Matches linked student record' : check.status === 'mismatch' ? 'Does not match linked student record' : check.status === 'not_identified' ? 'Not identified' : 'Unavailable' %></span>
+              <% if (check.value) { %><p><%= check.value %></p><% } %>
+            </li><% } %></ul>
+          <% } %>
+          <% if (document.validation.canRetryPrecheck) { %>
+            <form class="form-stack document-precheck-retry" method="post" action="/documents/<%= document.id %>/precheck-retry" data-submitting-message="Queueing the automated precheck retry. Please wait.">
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+              <p class="field-help">The transient Gemini request failed. You can retry up to <%= document.validation.precheckRetriesRemaining %> more time<%= document.validation.precheckRetriesRemaining === 1 ? '' : 's' %>. The retry does not record a staff decision.</p>
+              <button class="button button--secondary button--align-start" type="submit">Retry limited precheck</button>
+            </form>
+          <% } %>
+        <% } else { %>
+          <ul class="document-precheck-list">
+            <li><strong>Visible student name</strong><span>Compared with the linked student record after the precheck runs.</span></li>
+            <li><strong>File format</strong><span>PDF, JPEG, or PNG signature required.</span></li>
+            <li><strong>Grades and academic marks</strong><span>Not extracted or written by this workflow.</span></li>
+          </ul>
+          <p class="empty-state"><%= document.status === 'pending' ? 'The limited Gemini precheck is queued.' : document.status === 'processing' ? 'The limited Gemini precheck is processing this submission.' : 'No automated precheck result has been recorded yet.' %></p>
+        <% } %>
+        <ul class="document-precheck-list"><% for (const item of verificationChecklistItems) { %><li><strong><%= item.label %></strong><span>Staff source inspection required.</span></li><% } %></ul>
+      <% } else { %><p class="muted-copy">Your upload stays linked to your account. Staff will inspect it after the limited precheck. You can view its status and follow any correction instruction from staff.</p><% } %>
+    </section>
   <% } else if (isStaff && document.document_type !== 'form_137') { %>
-    <section class="admin-section" aria-labelledby="ocr-result-title">
-      <div class="admin-section__heading"><div><h2 id="ocr-result-title">OCR result</h2><p>Extracted text is restricted to registrar and database administrator users. OCR does not determine document authenticity.</p></div></div>
+    <% const automatedCheckOutcome = document.validation?.automatedCheckOutcome || 'unavailable'; %>
+    <section class="admin-section document-detail-card" aria-labelledby="precheck-result-title">
+      <div class="admin-section__heading"><div><h2 id="precheck-result-title">Automated precheck</h2><p>Gemini receives the uploaded file bytes and returns configured field suggestions: the linked student name and, for Good Moral Certificates, issuing school and visible certificate-context clues. Suggestions can be inaccurate.</p></div></div>
+      <div class="document-precheck-status document-precheck-status--<%= automatedCheckOutcome %>" role="status">
+        <strong><%= automatedCheckOutcome === 'pass' ? 'Configured checks passed' : automatedCheckOutcome === 'attention' ? 'Needs attention' : 'Checks unavailable' %></strong>
+        <span><%= automatedCheckOutcome === 'pass' ? 'The configured Gemini fields, certificate context evidence, and supported file format were identified.' : automatedCheckOutcome === 'attention' ? 'One or more configured fields, certificate context clues, or file-format checks need source inspection.' : 'Gemini field extraction is unavailable or this is a legacy OCR-only result.' %></span>
+      </div>
+      <p class="document-precheck-scope">A pass means the extracted student name matched the linked record and configured field/context and file-format checks found expected values. It does not establish authenticity or acceptance, prove issuer identity, confirm every required field, or confirm page completeness. Inspect every page before recording a decision.</p>
       <% if (document.validation) { %>
-        <p class="form-alert" role="status"><%= document.validation.message %></p>
+        <p class="muted-copy"><%= document.validation.message %></p>
         <dl class="student-profile-grid">
-          <div><dt>Processing result</dt><dd><%= document.validation.result_status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></dd></div>
+          <div><dt>Gemini field result</dt><dd><%= document.validation.legacyOcrOnly ? 'Legacy OCR-only · Needs review' : automatedCheckOutcome === 'pass' ? 'Configured fields and context found' : automatedCheckOutcome === 'attention' ? 'One or more fields or context clues need review' : 'Unavailable' %></dd></div>
+          <div><dt>File format</dt><dd><%= document.validation.formatCheckPassed ? 'Supported PDF, JPEG, or PNG' : 'Unsupported or mismatched format' %></dd></div>
           <div><dt>Processor</dt><dd><%= document.validation.processor %></dd></div>
           <div><dt>Processed</dt><dd><%= document.validation.created_at ? new Date(document.validation.created_at).toLocaleString() : '—' %></dd></div>
         </dl>
-        <% if (document.validation.extracted_text) { %>
-          <details class="document-extracted-text"><summary>Show extracted text</summary><pre><%= document.validation.extracted_text %></pre></details>
+        <% if (document.validation.canRetryPrecheck) { %>
+          <form class="form-stack document-precheck-retry" method="post" action="/documents/<%= document.id %>/precheck-retry" data-submitting-message="Queueing the automated precheck retry. Please wait.">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+            <p class="field-help">The last Gemini request was unavailable. You can retry up to <%= document.validation.precheckRetriesRemaining %> more time<%= document.validation.precheckRetriesRemaining === 1 ? '' : 's' %> for this submission. Retrying sends the stored file to Google Gemini again and does not record a staff review decision.</p>
+            <button class="button button--secondary button--align-start" type="submit">Retry automated precheck</button>
+          </form>
         <% } %>
-        <% if (document.validation.advisoryChecks?.length) { %>
-          <div class="admin-section__heading"><div><h3>OCR suggestions for source inspection</h3><p>These checks only point to possible text. The student-name clue compares first and last name text found close together on one OCR line; it does not confirm that the document belongs to the linked student. OCR can omit or misread names, so staff must inspect the source. These checks do not establish acceptance or document authenticity.</p></div></div>
+        <% if (document.validation.legacyOcrOnly && document.validation.extracted_text) { %>
+          <details class="document-extracted-text"><summary>Show legacy OCR text</summary><pre><%= document.validation.extracted_text %></pre></details>
+        <% } %>
+        <% if (document.validation.fieldChecks?.length) { %>
+          <div class="admin-section__heading"><div><h3>Gemini field findings</h3><p>Visible values and linked-name comparison support staff review.</p></div></div>
+          <ul class="document-review-history document-field-findings"><% for (const check of document.validation.fieldChecks) { %><li>
+            <strong><%= check.label %></strong>
+            <span><%= check.status === 'matched' ? 'Matches linked student record' : check.status === 'mismatch' ? 'Does not match linked student record' : check.status === 'identified' ? 'Evidence identified' : check.status === 'not_identified' ? 'Not identified' : 'Unavailable' %></span>
+            <% if (check.value) { %><p><%= check.value %></p><% } %>
+          </li><% } %></ul>
+        <% } %>
+        <% if (document.validation.legacyOcrOnly && document.validation.advisoryChecks?.length) { %>
+          <div class="admin-section__heading"><div><h3>Legacy OCR suggestions</h3><p>These stored text suggestions came from the earlier OCR-only precheck. Gemini was not run for this result; staff must inspect the original source.</p></div></div>
           <ul class="document-review-history"><% for (const check of document.validation.advisoryChecks) { %><li>
-            <strong><%= check.key === 'linked_student_name' ? 'Possible linked student-name match' : check.label %></strong><span><%= check.found && (check.key === 'linked_student_name' || check.candidates?.length) ? 'Possible text identified' : 'Possible text not identified' %></span>
+            <strong><%= check.key === 'linked_student_name' ? 'Linked student-name text' : 'Possible school-name text' %></strong><span><%= check.found && (check.key === 'linked_student_name' || check.candidates?.length) ? 'Possible text identified' : 'Text not identified' %></span>
             <% if (check.candidates?.length) { %><ul><% for (const candidate of check.candidates) { %><li><%= candidate %></li><% } %></ul><% } %>
           </li><% } %></ul>
         <% } %>
-      <% } else { %><p class="empty-state">No OCR result has been recorded for this submission.</p><% } %>
+      <% } else { %>
+        <ul class="document-precheck-list">
+          <li><strong>Linked student name</strong><span>Unavailable until Gemini returns an extraction.</span></li>
+          <% if (document.document_type === 'good_moral') { %><li><strong>Issuing school and certificate context</strong><span>Unavailable until Gemini returns an extraction.</span></li><% } %>
+          <li><strong>File format</strong><span>PDF, JPEG, or PNG required.</span></li>
+          <li><strong>Page completeness</strong><span>Registrar inspection required.</span></li>
+        </ul>
+        <p class="empty-state"><%= document.status === 'pending' ? 'Gemini field extraction is queued for this submission.' : document.status === 'processing' ? 'Gemini field extraction is processing this submission.' : 'No Gemini precheck result has been recorded for this submission.' %></p>
+      <% } %>
     </section>
   <% } else if (isStaff) { %>
-    <section class="admin-section"><p class="muted-copy">This historical Form 137 file is available to authorized staff. Current status history is stored separately; temporary staff scan suggestions are returned only for inspection and are not saved as OCR data.</p></section>
+    <section class="admin-section"><p class="muted-copy">This historical Form 137 file is available to authorized staff. Current status history is stored separately; authorized staff may send the paper for temporary Gemini suggestions. Scans and results are not saved in that workflow.</p></section>
   <% } %>
 
   <% if (isStaff && !document.isArchivedReportCard && document.document_type !== 'form_137' && ['needs_review', 'failed'].includes(document.status) && !['verified', 'rejected'].includes(latestDecision?.decision_type)) { %>
     <section class="admin-section" aria-labelledby="review-actions-title">
-      <div class="admin-section__heading"><div><h2 id="review-actions-title">Staff review decision</h2><p>Inspect the source document, then complete the checklist to record verification, request a corrected upload, or reject it. The checklist records staff observations and does not determine authenticity. <% if (document.validation?.requiresOverrideReason) { %>A reason is required to verify despite an OCR warning or failure.<% } %></p></div></div>
+      <div class="admin-section__heading"><div><h2 id="review-actions-title">Staff review decision</h2><p>Inspect the source document, then complete the checklist to record verification, request a corrected upload, or reject it. The checklist records staff observations and does not determine authenticity. <% if (document.validation?.requiresOverrideReason) { %>A reason is required to verify despite a configured-check warning or unavailable precheck.<% } %></p></div></div>
       <div class="document-review-actions">
-        <form class="form-stack document-review-action document-review-action--handoff" method="post" action="/documents/<%= document.id %>/review" data-submitting-message="Sending this submission for staff review. Please wait.">
-          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-          <button class="button button--secondary button--align-start" type="submit">Send for staff review</button>
-        </form>
         <form class="form-stack document-review-action document-review-action--verification" method="post" action="/documents/<%= document.id %>/decision" data-submitting-message="Recording the staff decision. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="decision" value="verified">
           <fieldset class="admin-fieldset">
             <legend>Required source-inspection checklist</legend>
-            <p class="field-help">Check each item only after inspecting the submitted source. OCR suggestions do not complete this checklist.</p>
+            <p class="field-help"><% if (document.document_type === 'report_card') { %>This checklist is separate from the limited name and file-format precheck. Check each item only after inspecting the submitted source.<% } else { %>Check each item only after inspecting the submitted source. Gemini suggestions do not complete this checklist.<% } %></p>
             <% for (const item of verificationChecklistItems) { %>
               <label class="checkbox-field"><input name="<%= item.key %>" value="yes" type="checkbox" required><span><%= item.label %></span></label>
             <% } %>
           </fieldset>
-          <div class="field"><label for="verify-reason">Verification reason <%= document.validation?.requiresOverrideReason ? '(required for OCR warning or failure)' : '(optional)' %></label><textarea id="verify-reason" name="reason" rows="3" maxlength="1000" <%= document.validation?.requiresOverrideReason ? 'required' : '' %>></textarea></div>
+          <div class="field"><label for="verify-reason">Verification reason <%= document.validation?.requiresOverrideReason ? '(required for a check warning or unavailable precheck)' : '(optional)' %></label><textarea id="verify-reason" name="reason" rows="3" maxlength="1000" <%= document.validation?.requiresOverrideReason ? 'required' : '' %>></textarea></div>
           <button class="button button--primary button--align-start" type="submit">Record staff verification</button>
         </form>
         <form class="form-stack document-review-action document-review-action--correction" method="post" action="/documents/<%= document.id %>/correction" data-submitting-message="Sending the correction instruction. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-          <div class="field"><label for="correction-instruction">Correction instruction <%= document.document_type === 'report_card' || (document.document_type === 'psa_birth_certificate' && document.upload_source !== 'student') ? 'for staff' : 'for the student' %></label><textarea id="correction-instruction" name="instruction" rows="4" maxlength="1000" required></textarea></div>
+          <div class="field"><label for="correction-instruction">Correction instruction <%= (document.document_type === 'report_card' || document.document_type === 'psa_birth_certificate') && document.upload_source !== 'student' ? 'for staff' : 'for the student' %></label><textarea id="correction-instruction" name="instruction" rows="4" maxlength="1000" required></textarea></div>
           <button class="button button--secondary button--align-start" type="submit">Request correction</button>
         </form>
         <form class="form-stack document-review-action document-review-action--rejection" method="post" action="/documents/<%= document.id %>/decision" data-submitting-message="Recording the staff decision. Please wait.">
@@ -88,7 +177,7 @@
         </form>
       </div>
     </section>
-    <% if (correctionRequested) { %>
+    <% if (correctionRequested && document.document_type !== 'report_card') { %>
       <section class="admin-section" aria-labelledby="staff-correction-title">
         <div class="admin-section__heading"><div><h2 id="staff-correction-title">Submit corrected file</h2><p>Upload a new linked submission while preserving this original.</p></div></div>
         <form class="form-stack document-upload-form" method="post" action="/documents/<%= document.id %>/reupload" enctype="multipart/form-data" data-submitting-message="Uploading the corrected document. Please wait.">
@@ -113,6 +202,21 @@
     </section>
   <% } %>
 
+  <% if (isStaff && ['good_moral', 'psa_birth_certificate', 'report_card'].includes(document.document_type) && !document.isArchivedReportCard) { %>
+    <section class="admin-section" aria-labelledby="delete-submission-title">
+      <div class="admin-section__heading"><div><h2 id="delete-submission-title">Permanently delete submission</h2><p>This removes this active submission, its private file, and its review history. The deletion action remains in the staff audit log without file contents or review reasons.</p></div></div>
+      <% if (hasCorrectedSubmission) { %>
+        <p class="form-alert" role="status">A corrected submission depends on this version. Delete the latest corrected submission first.</p>
+      <% } else { %>
+        <form class="form-stack" method="post" action="/documents/<%= document.id %>/delete" data-submitting-message="Permanently deleting this submission. Please wait.">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <label class="checkbox-field" for="confirm-delete-<%= document.id %>"><input id="confirm-delete-<%= document.id %>" name="confirmDelete" value="yes" type="checkbox" required><span>I understand this permanently deletes <%= document.original_filename %> and its review history.</span></label>
+          <button class="button button--secondary button--align-start" type="submit">Permanently delete submission</button>
+        </form>
+      <% } %>
+    </section>
+  <% } %>
+
   <section class="admin-section" aria-labelledby="versions-title">
     <div class="admin-section__heading"><div><h2 id="versions-title">Submissions for this document type</h2><p>Each row is a separate stored file. Earlier submissions remain available.</p></div></div>
     <% if (document.history.length) { %>
@@ -122,17 +226,36 @@
           <tbody><% for (const item of document.history) { %><tr>
             <td data-label="Submission">#<%= item.id %><% if (item.id === document.id) { %> · Current<% } else if (item.id === document.supersedes_document_id) { %> · Previous version<% } %></td>
             <td data-label="File"><%= item.original_filename %></td>
-            <td data-label="Status"><%= documentStatusLabel(item.status, item.latest_decision_type, item.latest_review_action, document.document_type) %></td>
+            <td data-label="Status"><%= documentStatusLabel(item.status, item.latest_decision_type, item.latest_review_action, document.document_type, item.is_legacy_archive) %></td>
             <td data-label="Date"><%= item.created_at ? new Date(item.created_at).toLocaleString() : '—' %></td>
-            <td data-label="Actions"><a class="table-action" href="/documents/<%= item.id %>">View</a> · <a class="table-action" href="/documents/<%= item.id %>/download">Download</a></td>
+            <td data-label="Actions"><a class="table-action" href="/documents/<%= item.id %>/preview" data-document-preview-trigger data-preview-title="<%= item.original_filename %>" data-preview-mime="<%= item.mime_type || '' %>" aria-haspopup="dialog" aria-controls="document-preview-dialog" aria-label="View <%= item.original_filename %>">View</a> · <a class="table-action" href="/documents/<%= item.id %>/download">Download</a></td>
           </tr><% } %></tbody>
         </table>
       </div>
     <% } else { %><p class="empty-state">No related submissions are available.</p><% } %>
   </section>
 
+  <dialog class="document-preview-dialog" id="document-preview-dialog" data-document-preview-dialog aria-labelledby="document-preview-title">
+    <div class="document-preview-dialog__header">
+      <h2 class="document-preview-dialog__title" id="document-preview-title" data-document-preview-title>Document preview</h2>
+      <button class="button button--secondary" type="button" data-document-preview-close>Close</button>
+    </div>
+    <div class="document-preview-dialog__image-viewer" data-document-preview-image-viewer hidden>
+      <div class="document-image-viewer__viewport" data-document-image-viewport role="group" tabindex="0" aria-label="Full document image fitted to view. Use zoom controls, or arrow keys to pan while zoomed.">
+        <img class="document-image-viewer__image" data-document-image alt="Document preview">
+      </div>
+      <div class="document-image-viewer__controls" role="group" aria-label="Image zoom controls">
+        <button class="button button--secondary" type="button" data-image-zoom-out aria-label="Zoom out">−</button>
+        <button class="button button--secondary" type="button" data-image-zoom-reset>Reset zoom</button>
+        <button class="button button--secondary" type="button" data-image-zoom-in aria-label="Zoom in">+</button>
+        <span class="document-image-viewer__zoom" data-image-zoom-status role="status" aria-live="polite">Zoom 100%</span>
+      </div>
+    </div>
+    <iframe class="document-preview-dialog__frame" data-document-preview-frame title="Document preview" src="about:blank"></iframe>
+  </dialog>
+
   <% if (!document.isArchivedReportCard) { %><section class="admin-section" aria-labelledby="review-history-title">
-    <div class="admin-section__heading"><div><h2 id="review-history-title">Review history</h2><p>Handoffs, source inspection decisions, and correction instructions recorded for this submission.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="review-history-title">Review history</h2><p>Staff decisions and correction instructions recorded for this submission.</p></div></div>
     <% if (document.decisions.length || document.reviewEvents.length) { %>
       <ul class="document-review-history">
         <% for (const decision of document.decisions) { %>

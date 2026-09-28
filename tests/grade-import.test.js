@@ -150,6 +150,7 @@ function makePreviewHarness({ studentName = 'Jamie Garza', sectionName = 'STEM A
           state.header = {
             id: values.previewId, schoolYear: values.schoolYear, gradeLevel: values.gradeLevel,
             sectionName: values.sectionName, subjectName: values.subjectName,
+            originalFilename: values.originalFilename,
             workbookGradeLevel: values.workbookGradeLevel, workbookSectionName: values.workbookSectionName,
             workbookSubjectName: values.workbookSubjectName, contextMismatch: values.contextMismatch,
             expiresAt: values.expiresAt
@@ -192,7 +193,8 @@ test('preview matches by LRN, displays database identity, and flags a name misma
   const { service, state } = makePreviewHarness();
   const [context] = await service.listImportContexts(7);
   const preview = await service.createPreview({
-    actorId: 7, sessionId: 'session-a', contextKey: context.key, buffer: fs.readFileSync(FIXTURE)
+    actorId: 7, sessionId: 'session-a', contextKey: context.key, buffer: fs.readFileSync(FIXTURE),
+    originalFilename: 'corrected-mini.xlsx'
   });
   assert.equal(preview.rows.length, 1);
   assert.equal(preview.rows[0].studentNo, 'S-0044');
@@ -204,6 +206,7 @@ test('preview matches by LRN, displays database identity, and flags a name misma
   assert.equal(state.rows[0].lrn, undefined, 'preview row storage contains an HMAC fingerprint, not the raw LRN');
   assert.equal(JSON.stringify(state.rows).includes(LRN), false);
   assert.equal(state.commits, 1);
+  assert.equal(state.header.originalFilename, 'corrected-mini.xlsx');
 });
 
 test('teacher preview persistence rechecks the active assignment inside its serializable transaction', async () => {
@@ -577,7 +580,7 @@ async function withServer(app, run) {
   finally { await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
 }
 
-test('grade-import route is registrar-only and requires CSRF before processing an upload', async () => {
+test('legacy direct registrar grade-import routes are absent; teachers use assigned class submissions', async () => {
   const environment = { nodeEnv: 'development', devPasswordOnlyLogin: true, sessionSecret: SECRET };
   let previews = 0;
   const gradeImportService = {
@@ -585,34 +588,17 @@ test('grade-import route is registrar-only and requires CSRF before processing a
     async createPreview() { previews += 1; throw new Error('must not be called'); }
   };
   const appFor = (role) => createApp({ databasePool: authPool(role), environment, gradeImportService });
-  await withServer(appFor('finance'), async (baseUrl) => {
-    const cookie = await signIn(baseUrl, 'finance');
-    const response = await fetch(`${baseUrl}/records/grade-import`, { headers: { cookie } });
-    assert.equal(response.status, 403);
-    assert.equal(previews, 0);
-  });
   await withServer(appFor('registrar'), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
-    const page = await fetch(`${baseUrl}/records/grade-import`, { headers: { cookie } });
-    assert.equal(page.status, 200);
-    assert.match(page.headers.get('cache-control'), /private, no-store/);
-    const html = await page.text();
-    assert.match(html, /Choose the existing class context/);
-    const token = csrfFrom(html);
-    const mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    const bytes = fs.readFileSync(FIXTURE);
-    const missingCsrf = new FormData();
-    missingCsrf.set('contextKey', 'context-key');
-    missingCsrf.set('workbook', new Blob([bytes], { type: mime }), 'corrected-mini.xlsx');
-    const denied = await fetch(`${baseUrl}/records/grade-import/preview`, { method: 'POST', headers: { cookie }, body: missingCsrf });
-    assert.equal(denied.status, 403);
-
-    const badExtension = new FormData();
-    badExtension.set('_csrf', token);
-    badExtension.set('contextKey', 'context-key');
-    badExtension.set('workbook', new Blob([bytes], { type: mime }), 'corrected-mini.xls');
-    const invalid = await fetch(`${baseUrl}/records/grade-import/preview`, { method: 'POST', headers: { cookie }, body: badExtension });
-    assert.equal(invalid.status, 400);
+    for (const path of ['/records/grade-import', '/registrar/records/grade-import', '/registrar/records/grades']) {
+      const response = await fetch(`${baseUrl}${path}`, { headers: { cookie } });
+      assert.equal(response.status, 404, path);
+    }
+  });
+  await withServer(appFor('finance'), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'finance');
+    const response = await fetch(`${baseUrl}/registrar/records/grade-import`, { headers: { cookie } });
+    assert.equal(response.status, 403);
   });
   assert.equal(previews, 0);
 });

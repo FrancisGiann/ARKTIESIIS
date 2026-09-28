@@ -1,11 +1,11 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page registrar-dashboard-page" id="main-content">
-  <section class="dashboard-heading"><div><h1>Teacher dashboard</h1><p>Classes assigned to your account for grade submission.</p></div></section>
+  <section class="dashboard-heading"><div><h1>My classes</h1><p>Open an assigned class to submit a corrected workbook for registrar review.</p></div></section>
   <section class="registrar-workspace" aria-labelledby="assigned-classes-title">
-    <div class="admin-section__heading"><div><h2 id="assigned-classes-title">My classes</h2><p>Each class has a term-specific section and subject roster. Upload the corrected SSHS E-Class Record workbook for review.</p></div></div>
-    <% if (assignments.length) { %><div class="registrar-work-index" aria-label="Assigned classes"><% for (const assignment of assignments) { %>
+    <div class="admin-section__heading"><div><h2 id="assigned-classes-title">Assigned classes</h2><p>Each class has a term-specific section and subject roster. Upload the corrected SSHS E-Class Record workbook for review.</p></div></div>
+    <% if (assignments.length) { %><div class="registrar-work-index" aria-label="Assigned classes"><% for (const assignment of assignments) { const placement = formatStudentPlacement(assignment.grade_level, assignment.section_name); %>
       <a class="registrar-work-index__link" href="/teacher/grades/<%= assignment.assignment_id %>">
-        <span><strong><%= assignment.school_year %> · <%= assignment.term %> · Grade <%= assignment.grade_level %> · <%= assignment.section_name %></strong><span><%= assignment.subject_code %> · <%= assignment.subject_name %> · <%= assignment.roster_count %> students</span><span><%= assignment.latest_submission_status ? `Workbook ${assignment.latest_submission_status.replaceAll('_', ' ')}` : 'No workbook submitted' %></span></span>
+        <span><strong><%= assignment.school_year %> · <%= assignment.term %><% if (placement) { %> · <%= placement %><% } %></strong><span><%= assignment.subject_code %> · <%= assignment.subject_name %> · <%= assignment.roster_count %> students</span><span><%= assignment.latest_submission_status ? `Workbook ${assignment.latest_submission_status.replaceAll('_', ' ')}` : 'No workbook submitted' %></span></span>
         <span class="registrar-work-index__action">Open class</span>
       </a>
     <% } %></div><% } else { %><p class="empty-state">No active classes are assigned to your account. Contact the registrar.</p><% } %>

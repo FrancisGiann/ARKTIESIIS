@@ -11,6 +11,8 @@ const {
   validateGrade,
   normalizeGradeValue
 } = require('../src/services/academicRecordsService');
+const { ClassScheduleError } = require('../src/services/classScheduleService');
+const { TeacherGradeSubmissionError } = require('../src/services/teacherGradeSubmissionService');
 
 function fakeSql() {
   return {
@@ -326,16 +328,21 @@ test('catalog reads follow role rules, mutations require CSRF, and rendered cata
     studentRecordsService: { async listWorkspace() { return {}; } }
   }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
-    const page = await fetch(`${baseUrl}/records/subjects`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/registrar/records/subjects`, { headers: { cookie } });
     assert.equal(page.status, 200);
     const html = await page.text();
     assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
     assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
-    const denied = await postForm(baseUrl, '/records/subjects', cookie, { subjectCode: 'X1', subjectName: 'Test' });
+    assert.match(html, /<details class="subject-catalog__disclosure">/);
+    assert.match(html, /action="\/registrar\/records\/subjects\/4"/);
+    assert.match(html, /name="subjectCode"/);
+    assert.match(html, /name="subjectName"/);
+    assert.match(html, /name="units"/);
+    const denied = await postForm(baseUrl, '/registrar/records/subjects', cookie, { subjectCode: 'X1', subjectName: 'Test' });
     assert.equal(denied.status, 403);
     assert.equal(writes.length, 0);
-    const saved = await postForm(baseUrl, '/records/grades', cookie, { studentId: '10', studentSubjectId: '80', gradingPeriod: 'P1' });
-    assert.equal(saved.status, 403);
+    const saved = await postForm(baseUrl, '/registrar/records/grades', cookie, { studentId: '10', studentSubjectId: '80', gradingPeriod: 'P1' });
+    assert.equal(saved.status, 404);
     assert.equal(writes.length, 0);
   });
 
@@ -344,7 +351,7 @@ test('catalog reads follow role rules, mutations require CSRF, and rendered cata
     studentRecordsService: { async listWorkspace() { return {}; } }
   }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
-    const page = await fetch(`${baseUrl}/records/subjects`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/registrar/records/subjects`, { headers: { cookie } });
     assert.equal(page.status, 403);
   });
 
@@ -353,22 +360,167 @@ test('catalog reads follow role rules, mutations require CSRF, and rendered cata
     studentRecordsService: { async listWorkspace() { return {}; } }
   }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'database_admin');
-    const page = await fetch(`${baseUrl}/records/subjects`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/registrar/records/subjects`, { headers: { cookie } });
     assert.equal(page.status, 200);
     const html = await page.text();
     assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
-    assert.match(html, /action="\/records\/subjects"/);
-    const saved = await postForm(baseUrl, '/records/subjects', cookie, {
+    assert.match(html, /action="\/registrar\/records\/subjects"/);
+    const saved = await postForm(baseUrl, '/registrar/records/subjects', cookie, {
       _csrf: csrfFromHtml(html), subjectCode: 'X1', subjectName: 'Test'
     });
     assert.equal(saved.status, 303);
     assert.equal(writes.length, 1);
     assert.equal(writes[0][0], 7);
+    const updated = await postForm(baseUrl, '/registrar/records/subjects/4', cookie, {
+      _csrf: csrfFromHtml(html), subjectCode: 'CS1', subjectName: 'Computer Science', units: '3'
+    });
+    assert.equal(updated.status, 303);
+    assert.equal(writes.length, 2);
+    assert.equal(writes[1][1], 4);
   });
-  assert.equal(writes.length, 1);
+  assert.equal(writes.length, 2);
 });
 
-test('academic student view renders subject and grade forms for registrars and database administrators', async () => {
+test('teacher assignment list keeps concise context and working status and revoke controls', async () => {
+  const revoked = [];
+  const assignmentContextCalls = [];
+  const teacherGradeSubmissionService = {
+    async listAssignmentOptions(actorId, filters) {
+      assert.equal(Number(actorId), 7);
+      assignmentContextCalls.push(filters);
+      return {
+        teachers: [{ id: 6, first_name: 'Ari', last_name: 'Lee', email: 'ari@example.edu' }],
+        terms: [{ id: 2, school_year: '2026-2027', term: 'First', is_current: true }],
+        sections: [{ id: 3, school_year: '2026-2027', term: 'First', grade_level: 'Grade 11', name: 'Section A' }],
+        selectedTermId: 2, selectedSectionId: 3, sectionFilterNotice: null,
+        subjects: [{ id: 4, subject_code: 'CS1', subject_name: 'Computer Science' }],
+        assignments: [{
+          id: 20, academic_term_id: 2, section_id: 3, school_year: '2026-2027', term: 'First', grade_level: 'Grade 11', section_name: 'Section A',
+          subject_code: 'CS1', subject_name: 'Computer Science', first_name: 'Ari', last_name: 'Lee',
+          roster_count: 18, is_active: true, latest_submission_status: 'pending_review'
+        }, {
+          id: 21, academic_term_id: 2, section_id: 3, school_year: '2026-2027', term: 'First', grade_level: 'Grade 11', section_name: 'Section A',
+          subject_code: 'BIO1', subject_name: 'Biology', first_name: 'Rae', last_name: 'Kim',
+          roster_count: 18, is_active: false, latest_submission_status: null
+        }]
+      };
+    },
+    async createAssignment(actorId, values) {
+      assert.equal(Number(actorId), 7);
+      assert.equal(values.teacherId, '6');
+      assert.equal(values.subjectId, '4');
+      throw new TeacherGradeSubmissionError('The selected term, section, or subject is unavailable.', 409);
+    },
+    async revokeAssignment(actorId, assignmentId) { revoked.push([actorId, assignmentId]); }
+  };
+  const academicRecordsService = { async listSubjects() { return []; } };
+  await withServer(createApp({
+    databasePool: makeAuthPool('registrar'), environment, academicRecordsService,
+    studentRecordsService: { async listWorkspace() { return {}; } }, teacherGradeSubmissionService
+  }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'registrar');
+    const page = await fetch(`${baseUrl}/registrar/records/teacher-assignments`, { headers: { cookie } });
+    const html = await page.text();
+    assert.equal(page.status, 200);
+    assert.match(html, /Grade 11 · Section A/);
+    assert.match(html, /class="teacher-assignment-class"><strong>Grade 11 · Section A<\/strong>/);
+    assert.doesNotMatch(html, /Grade Grade 11/);
+    assert.match(html, /class="teacher-assignment-roster">18 students<\/span>/);
+    assert.match(html, /pending review/);
+    assert.match(html, /Active assignments/);
+    assert.match(html, /action="\/registrar\/records\/teacher-assignments\/20\/revoke"/);
+    assert.match(html, /<button class="button button--danger" type="submit">Revoke<\/button>/);
+    assert.match(html, /name="termId"/);
+    assert.match(html, /name="sectionId"/);
+    assert.match(html, /<label for="assignment-term-context">Academic term<\/label>/);
+    assert.match(html, /<label for="assignment-section-context">Section<\/label>/);
+    assert.match(html, /<label for="teacher-id">Teacher<\/label>/);
+    assert.match(html, /<label for="subject-id">Subject<\/label>/);
+    assert.equal((html.match(/name="termId"/g) || []).length, 1, 'assignment creation does not ask for term twice');
+    assert.match(html, /Past and revoked assignments/);
+    assert.match(html, /<details/);
+    assert.match(html, /\/registrar\/schedules\?termId=2&amp;sectionId=3&amp;assignmentId=20#schedule-create-title/);
+    const createResponse = await postForm(baseUrl, '/registrar/records/teacher-assignments', cookie, {
+      _csrf: csrfFromHtml(html), academicTermId: '2', sectionId: '3', filterTermId: '2', filterSectionId: '3',
+      teacherId: '6', subjectId: '4'
+    });
+    assert.equal(createResponse.status, 409);
+    const createErrorHtml = await createResponse.text();
+    assert.match(createErrorHtml, /The selected term, section, or subject is unavailable/);
+    assert.match(createErrorHtml, /name="academicTermId" value="2"/);
+    assert.match(createErrorHtml, /name="sectionId" value="3"/);
+    assert.match(createErrorHtml, /option value="6" selected/);
+    assert.match(createErrorHtml, /option value="4" selected/);
+    assert.deepEqual(assignmentContextCalls.at(-1), { termId: '2', sectionId: '3' });
+    const response = await postForm(baseUrl, '/registrar/records/teacher-assignments/20/revoke', cookie, {
+      _csrf: csrfFromHtml(html), filterTermId: '2', filterSectionId: '3'
+    });
+    assert.equal(response.status, 303);
+    assert.equal(response.headers.get('location'), '/registrar/records/teacher-assignments?termId=2&sectionId=3&notice=assignmentRevoked');
+    assert.deepEqual(revoked, [[7, '20']]);
+  });
+});
+
+test('schedule page honors a contextual assignment link and preserves selected values on conflict', async () => {
+  const filtersSeen = [];
+  const workspace = {
+    terms: [{ id: 6, school_year: '2026-2027', term: 'First', is_current: true }],
+    sections: [{ id: 12, name: 'STEM A', grade_level: 'Grade 11' }],
+    academicTermId: 6,
+    selectedSectionId: 12,
+    selectedAssignmentId: 44,
+    contextNotice: null,
+    assignments: [{ id: 44, grade_level: 'Grade 11', section_name: 'STEM A', subject_code: 'OCOM', teacher_name: 'Jamie Lee' }],
+    schedules: [{ id: 72, assignment_id: 44, day_of_week: 1, start_time: '08:00', end_time: '09:00', room: 'A12',
+      assignment_is_active: true, grade_level: 'Grade 11', section_name: 'STEM A', school_year: '2026-2027',
+      term: 'First', subject_code: 'OCOM', subject_name: 'Oral Communication', teacher_name: 'Jamie Lee' }]
+  };
+  const classScheduleService = {
+    async listRegistrarWorkspace(actorId, filters) { assert.equal(Number(actorId), 7); filtersSeen.push(filters); return workspace; },
+    async saveSchedule(actorId, scheduleId, values) {
+      assert.equal(Number(actorId), 7);
+      assert.equal(scheduleId, null);
+      assert.equal(values.assignmentId, '44');
+      throw new ClassScheduleError('This time conflicts with another class for the section, teacher, or room.', 409);
+    }
+  };
+  await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment, classScheduleService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'registrar');
+    const page = await fetch(`${baseUrl}/registrar/schedules?termId=6&sectionId=12&assignmentId=44`, { headers: { cookie } });
+    assert.equal(page.status, 200);
+    const html = await page.text();
+    assert.deepEqual(filtersSeen[0], { termId: '6', sectionId: '12', assignmentId: '44' });
+    assert.match(html, /name="assignmentId"/);
+    assert.match(html, /value="44" selected/);
+    assert.match(html, /STEM A · OCOM · Jamie Lee/);
+    assert.match(html, /class="schedule-table__class"><strong>Grade 11 · STEM A<\/strong>/);
+    assert.match(html, /Clear day, time, and room/);
+    assert.match(html, /aria-label="Weekly class schedule"/);
+    assert.match(html, /data-clear-section-on-term-change data-clear-assignment-on-section-change/);
+    for (const [id, label] of [['schedule-term-filter', 'Academic term'], ['schedule-section-filter', 'Section'],
+      ['schedule-assignment-filter', 'Assigned class'], ['schedule-day', 'Day'], ['schedule-start', 'Starts'],
+      ['schedule-end', 'Ends'], ['schedule-room', 'Room']]) {
+      assert.match(html, new RegExp(`<label for="${id}">${label}`));
+    }
+
+    const response = await postForm(baseUrl, '/registrar/schedules', cookie, {
+      _csrf: csrfFromHtml(html), termId: '6', filterSectionId: '12', filterAssignmentId: '44',
+      assignmentId: '44', dayOfWeek: '3', startTime: '10:00', endTime: '11:00', room: 'Room 204'
+    });
+    assert.equal(response.status, 409);
+    const errorHtml = await response.text();
+    assert.match(errorHtml, /This time conflicts with another class/);
+    assert.match(errorHtml, /name="filterSectionId" value="12"/);
+    assert.match(errorHtml, /name="filterAssignmentId" value="44"/);
+    assert.match(errorHtml, /name="dayOfWeek"/);
+    assert.match(errorHtml, /value="3" selected/);
+    assert.match(errorHtml, /name="startTime" type="time" required value="10:00"/);
+    assert.match(errorHtml, /name="endTime" type="time" required value="11:00"/);
+    assert.match(errorHtml, /name="room" maxlength="80" value="Room 204"/);
+  });
+});
+
+test('academic student view shows read-only grades and permits enrollment subject assignment for staff', async () => {
   const academicRecordsService = {
     async getStudentAcademicRecord() {
       return {
@@ -386,32 +538,32 @@ test('academic student view renders subject and grade forms for registrars and d
   const studentRecordsService = { async listWorkspace() { return {}; } };
   await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment, studentRecordsService, academicRecordsService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
-    const page = await fetch(`${baseUrl}/records/students/10/academic`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/registrar/records/students/10/academic`, { headers: { cookie } });
     assert.equal(page.status, 200);
     const html = await page.text();
     assert.match(html, /Enrollment history/);
     assert.match(html, /CS1 · Computer Science/);
     assert.match(html, /Registrar label/);
     assert.match(html, /Quarter A/);
-    assert.match(html, /<summary>Manage grades<\/summary>/);
-    assert.doesNotMatch(html, /<details[^>]*\bopen\b/);
-    assert.match(html, /action="\/records\/grades"/);
-    assert.match(html, /action="\/records\/student-subjects"/);
+    assert.match(html, /92\.5/);
+    assert.doesNotMatch(html, /action="\/registrar\/records\/grades"/);
+    assert.match(html, /action="\/registrar\/records\/student-subjects"/);
   });
 
   await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, studentRecordsService, academicRecordsService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'database_admin');
-    const page = await fetch(`${baseUrl}/records/students/10/academic`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/registrar/records/students/10/academic`, { headers: { cookie } });
     assert.equal(page.status, 200);
     const html = await page.text();
     assert.match(html, /CS1 · Computer Science/);
     assert.match(html, /Quarter A/);
-    assert.match(html, /action="\/records\/grades"/);
-    assert.match(html, /action="\/records\/student-subjects"/);
+    assert.doesNotMatch(html, /action="\/registrar\/records\/grades"/);
+    assert.match(html, /action="\/registrar\/records\/student-subjects"/);
   });
 });
 
-test('academic grade disclosures reopen when saving returns a validation error', async () => {
+test('registrar direct grade writes are unavailable; approved teacher submissions are the grade write path', async () => {
+  let directWrites = 0;
   const academicRecordsService = {
     async getStudentAcademicRecord() {
       return {
@@ -424,21 +576,18 @@ test('academic grade disclosures reopen when saving returns a validation error',
         }]
       };
     },
-    async saveGrade() { throw new AcademicRecordsError('Enter a grade from 0 to 100.', 400); }
+    async saveGrade() { directWrites += 1; throw new AcademicRecordsError('Enter a grade from 0 to 100.', 400); }
   };
   const studentRecordsService = { async listWorkspace() { return {}; } };
   await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment, studentRecordsService, academicRecordsService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
-    const page = await fetch(`${baseUrl}/records/students/10/academic`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/registrar/records/students/10/academic`, { headers: { cookie } });
     const html = await page.text();
-    const response = await postForm(baseUrl, '/records/grades', cookie, {
+    const response = await postForm(baseUrl, '/registrar/records/grades', cookie, {
       _csrf: csrfFromHtml(html), studentId: '10', studentSubjectId: '80', gradingPeriod: 'Quarter A', gradeValue: '101'
     });
-    const errorHtml = await response.text();
-    assert.equal(response.status, 400);
-    assert.match(errorHtml, /Enter a grade from 0 to 100\./);
-    assert.match(errorHtml, /<details class="academic-grade-disclosure" open>/);
-    assert.match(errorHtml, /name="gradingPeriod"/);
+    assert.equal(response.status, 404);
+    assert.equal(directWrites, 0);
   });
 });
 
@@ -460,14 +609,14 @@ test('archived academic records retain history but hide grade and subject write 
   const studentRecordsService = { async listWorkspace() { return {}; } };
   await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment, studentRecordsService, academicRecordsService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
-    const page = await fetch(`${baseUrl}/records/students/10/academic`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/registrar/records/students/10/academic`, { headers: { cookie } });
     assert.equal(page.status, 200);
     const html = await page.text();
     assert.match(html, /Existing enrollments, subjects, and grades are available for review/);
     assert.match(html, /Quarter A/);
     assert.match(html, /Good progress/);
-    assert.doesNotMatch(html, /action="\/records\/grades"/);
-    assert.doesNotMatch(html, /action="\/records\/student-subjects"/);
+    assert.doesNotMatch(html, /action="\/registrar\/records\/grades"/);
+    assert.doesNotMatch(html, /action="\/registrar\/records\/student-subjects"/);
   });
 });
 
@@ -482,9 +631,9 @@ test('registrar subject create requires a valid CSRF token before invoking write
     studentRecordsService: { async listWorkspace() { return {}; } }
   }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
-    const page = await fetch(`${baseUrl}/records/subjects`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/registrar/records/subjects`, { headers: { cookie } });
     const csrfToken = csrfFromHtml(await page.text());
-    const response = await postForm(baseUrl, '/records/subjects', cookie, {
+    const response = await postForm(baseUrl, '/registrar/records/subjects', cookie, {
       _csrf: csrfToken, subjectCode: 'CS1', subjectName: 'Computer Science', units: '3'
     });
     assert.equal(response.status, 303);
@@ -493,13 +642,14 @@ test('registrar subject create requires a valid CSRF token before invoking write
   });
 });
 
-test('student dashboard requests grades only with the session user id, ignoring query-supplied student ids', async () => {
+test('student grades page requests only session-owned grades, ignoring query-supplied student ids', async () => {
   const gradeUserIds = [];
   const studentRecordsService = {
     async getOwnStudentRecord(userId) {
       assert.equal(userId, 7);
       return { student: { student_no: 'S-7', first_name: 'Rae', last_name: 'Student' }, enrollments: [] };
-    }
+    },
+    async getStudentDashboardSummary(userId) { assert.equal(userId, 7); return { document_count: 0, documents_in_progress_count: 0 }; }
   };
   const academicRecordsService = {
     async getOwnGrades(userId) {
@@ -507,11 +657,13 @@ test('student dashboard requests grades only with the session user id, ignoring 
       return [{ subject_code: 'CS1', subject_name: 'Computer Science', grading_period: 'Quarter A', grade_value: 97 }];
     }
   };
-  await withServer(createApp({ databasePool: makeAuthPool('student'), environment, studentRecordsService, academicRecordsService }), async (baseUrl) => {
+  const financeService = { async getOwnStudentAccount(userId) { assert.equal(userId, 7); return { account: null, transactions: [] }; } };
+  const classScheduleService = { async getOwnStudentSchedule(userId) { assert.equal(userId, 7); return []; } };
+  await withServer(createApp({ databasePool: makeAuthPool('student'), environment, studentRecordsService, academicRecordsService, financeService, classScheduleService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'student');
-    const page = await fetch(`${baseUrl}/dashboard/student?studentId=999&userId=888`, { headers: { cookie } });
+    const page = await fetch(`${baseUrl}/student/grades?studentId=999&userId=888`, { headers: { cookie } });
     assert.equal(page.status, 200);
-    assert.match(await page.text(), /CS1 · Computer Science/);
+    assert.match(await page.text(), /Computer Science/);
     assert.deepEqual(gradeUserIds, [7]);
   });
 });

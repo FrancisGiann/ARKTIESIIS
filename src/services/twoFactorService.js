@@ -140,7 +140,7 @@ async function getActiveUser({ getPool, sql, userId }) {
   const pool = await getPool();
   const result = await pool.request()
     .input('userId', sql.Int, userId)
-    .query('SELECT id, email, role, password_hash, is_active, CONVERT(NVARCHAR(33), updated_at, 126) AS updated_at_fingerprint FROM dbo.users WHERE id = @userId');
+    .query('SELECT id, email, role, password_hash, is_active, must_change_password, auth_session_version, CONVERT(NVARCHAR(33), updated_at, 126) AS updated_at_fingerprint FROM dbo.users WHERE id = @userId');
   return result.recordset?.[0] || null;
 }
 

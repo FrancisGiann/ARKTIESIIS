@@ -12,6 +12,7 @@
   </section>
   <section class="auth-form-section" aria-labelledby="credentials-title">
     <h2 id="credentials-title">School account</h2>
+    <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
     <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
     <form class="form-stack" method="post" action="/login" data-submitting-message="Checking your sign-in. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
@@ -25,6 +26,7 @@
       </div>
       <button class="button button--primary" type="submit">Continue</button>
     </form>
+    <p class="field-help"><a href="/password/forgot">Forgot your password?</a></p>
   </section>
 </main>
 <%- include('../partials/foot') %>
