@@ -881,6 +881,15 @@ label { font-size: 0.84rem; }
 .schedule-entry .schedule-edit form:focus-within { border-color: var(--focus); }
 .schedule-entry .schedule-edit summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 0.2rem; }
 .student-page { padding-top: clamp(1.5rem, 3vw, 2.6rem); }
+.student-grade-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 0.8rem; padding-bottom: 1.15rem; margin-bottom: 1rem; border-bottom: 1px solid var(--line); }
+.student-grade-filters .field { min-width: 0; }
+.student-grade-filters .button { white-space: nowrap; }
+.student-grade-context { display: flex; flex-wrap: wrap; gap: 0.5rem 2rem; margin-bottom: 0.9rem; }
+.student-grade-context p { display: grid; gap: 0.15rem; margin: 0; }
+.student-grade-context span { color: var(--muted); font-size: 0.78rem; }
+.student-grade-context strong { font-size: 0.9rem; }
+.student-grade-table { min-width: 24rem; }
+.student-grade-table th:last-child, .student-grade-table td:last-child { width: 9rem; text-align: right; font-variant-numeric: tabular-nums; }
 .student-weekday .student-section-heading { margin-bottom: 0.4rem; }
 .enrollment-history { display: grid; padding: 0; margin: 0; list-style: none; }
 .enrollment-history li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.85rem 0; border-top: 1px solid var(--line); }
@@ -894,6 +903,15 @@ label { font-size: 0.84rem; }
 
 @media (max-width: 760px) {
   .class-context-panel, .schedule-create-form { padding: 0.9rem; }
+  .student-grade-filters { grid-template-columns: minmax(0, 1fr); }
+  .student-grade-filters .button { justify-self: start; }
+  .student-grade-table { width: 100%; min-width: 0; table-layout: fixed; }
+  .student-grade-table tbody { display: table-row-group; width: 100%; }
+  .student-grade-table tr { display: table-row; padding: 0; border-bottom: 1px solid var(--line); }
+  .student-grade-table td { display: table-cell; padding: 0.6rem 0.7rem; border: 0; vertical-align: middle; }
+  .student-grade-table td::before { display: none; content: none; }
+  .student-grade-table td:first-child { width: auto; overflow-wrap: anywhere; font-weight: 650; }
+  .student-grade-table td:last-child { width: 5rem; min-width: 5rem; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 750; }
   .schedule-section-grid { grid-template-columns: minmax(0, 1fr); }
   .schedule-section-card { padding: 0.9rem; }
   .schedule-entry__overview { grid-template-columns: minmax(4.7rem, 0.55fr) minmax(0, 1.45fr); gap: 0.65rem; }

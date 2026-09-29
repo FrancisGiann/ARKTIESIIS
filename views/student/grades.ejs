@@ -4,18 +4,39 @@
   <header class="page-heading"><div><h1>My grades</h1><p>Only grades published after registrar approval appear here.</p></div></header>
   <% if (!ownRecords?.student) { %>
     <section class="student-unlinked" aria-labelledby="grades-unlinked-title"><h2 id="grades-unlinked-title">Your student profile is not linked yet</h2><p>Ask the registrar to connect your account before viewing grades.</p></section>
-  <% } else if (grades.length) { %>
-    <section class="student-section" aria-labelledby="approved-grades-title">
+  <% } else if (gradeSelection) { %>
+    <section class="student-section student-grades" aria-labelledby="approved-grades-title">
       <div class="student-section-heading"><div><h2 id="approved-grades-title">Approved grades</h2><p><%= ownRecords.student.student_no %></p></div></div>
-      <div class="table-scroll" tabindex="0" aria-label="Your registrar-approved grades">
-        <table class="portal-table"><caption class="visually-hidden">Published grades for your enrolled subjects</caption><thead><tr><th scope="col">Term</th><th scope="col">Subject</th><th scope="col">Period</th><th scope="col">Grade</th></tr></thead><tbody>
-          <% for (const grade of grades) { %><tr>
-            <td data-label="Term"><%= grade.school_year %> · <%= grade.term %></td>
-            <td data-label="Subject"><%= grade.subject_name %></td>
-            <td data-label="Period"><%= grade.grading_period %></td>
-            <td data-label="Grade"><%= grade.grade_value ?? '—' %></td>
-          </tr><% } %>
-        </tbody></table>
+      <form class="student-grade-filters" method="get" action="/student/grades">
+        <div class="field">
+          <label for="student-grade-semester">Semester</label>
+          <select id="student-grade-semester" name="semester">
+            <% for (const semester of gradeSelection.semesters) { %><option value="<%= semester.value %>" <%= semester.value === gradeSelection.selectedSemester ? 'selected' : '' %>><%= semester.label %></option><% } %>
+          </select>
+        </div>
+        <div class="field">
+          <label for="student-grade-period">Grading period</label>
+          <select id="student-grade-period" name="gradingPeriod">
+            <% for (const period of gradeSelection.periods) { %><option value="<%= period.value %>" <%= period.value === gradeSelection.selectedPeriod ? 'selected' : '' %>><%= period.label %></option><% } %>
+          </select>
+        </div>
+        <button class="button button--primary" type="submit">Show grades</button>
+      </form>
+      <div class="student-grade-context">
+        <p><span>Semester</span><strong><%= gradeSelection.selectedSemesterLabel %></strong></p>
+        <p><span>Grading period</span><strong><%= gradeSelection.selectedPeriodLabel %></strong></p>
+      </div>
+      <div class="table-scroll">
+        <table class="portal-table student-grade-table">
+          <caption class="visually-hidden">Published grades for <%= gradeSelection.selectedSemesterLabel %>, <%= gradeSelection.selectedPeriodLabel %></caption>
+          <thead><tr><th scope="col">Subject</th><th scope="col">Grade</th></tr></thead>
+          <tbody>
+            <% for (const grade of gradeSelection.grades) { %><tr>
+              <td data-label="Subject"><%= grade.subject_name || grade.subject_code || 'Subject not listed' %></td>
+              <td data-label="Grade"><%= grade.grade_value ?? '—' %></td>
+            </tr><% } %>
+          </tbody>
+        </table>
       </div>
     </section>
   <% } else { %><p class="empty-state">Approved grades will appear here after the registrar reviews a teacher submission.</p><% } %>

@@ -97,6 +97,7 @@ test('student pages are separate, read-only destinations bound to the authentica
       assert.match(html, heading, path);
       assert.match(html, content, path);
       assert.doesNotMatch(html, /ANOTHER-STUDENT|SHS-2026-0999/);
+      if (path.startsWith('/student/grades')) assert.match(html, /value="Term 1" selected/);
       if (path.startsWith('/student?')) {
         assert.doesNotMatch(html, /student-shortcuts|Your school pages/);
         assert.match(html, /href="\/student\/schedule">View full schedule/);
@@ -149,5 +150,72 @@ test('unlinked student accounts receive clear empty states on every self-service
     }
     assert.equal(calls.some(([name]) => name === 'grades'), false, 'grades are not requested without a linked student record');
     assert.ok(calls.every(([, userId]) => userId === 7), 'all attempted reads use the authenticated account id');
+  });
+});
+
+test('student grades select one own semester and grading period with safe defaults and query validation', async () => {
+  const gradeUserIds = [];
+  const studentRecordsService = {
+    async getOwnStudentRecord(userId) {
+      assert.equal(userId, 7);
+      return { student: { student_no: 'S-7' }, enrollments: [
+        { school_year: '2026-2027', term: 'First', is_current: true },
+        { school_year: '2025-2026', term: 'Second', is_current: false }
+      ] };
+    }
+  };
+  const academicRecordsService = {
+    async getOwnGrades(userId) {
+      gradeUserIds.push(userId);
+      return [
+        { school_year: '2026-2027', term: 'First', subject_code: 'ENG11', subject_name: 'English', grading_period: 'First Grading', grade_value: 84 },
+        { school_year: '2026-2027', term: 'First', subject_code: 'ENG11', subject_name: 'English', grading_period: 'Second Grading', grade_value: 91 },
+        { school_year: '2026-2027', term: 'First', subject_code: 'ENG11', subject_name: 'English', grading_period: 'Second Grading', grade_value: 92 },
+        { school_year: '2026-2027', term: 'First', subject_code: 'MATH11', subject_name: 'General Mathematics', grading_period: 'Second Grading', grade_value: 95 },
+        { school_year: '2025-2026', term: 'First', subject_code: 'ENG10', subject_name: 'English 10', grading_period: 'Term 1', grade_value: 81 },
+        { school_year: '2025-2026', term: 'Second', subject_code: 'ENG11', subject_name: 'English', grading_period: 'Quarter A', grade_value: 78 }
+      ];
+    }
+  };
+  const services = {
+    studentRecordsService,
+    academicRecordsService,
+    financeService: { async getOwnStudentAccount() { return { account: null, transactions: [] }; } },
+    classScheduleService: { async getOwnStudentSchedule() { return []; } }
+  };
+
+  await withServer(createApp({ databasePool: authPool('student'), environment, ...services }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'student');
+    const defaultPage = await fetch(`${baseUrl}/student/grades`, { headers: { cookie } });
+    const defaultHtml = await defaultPage.text();
+    assert.equal(defaultPage.status, 200);
+    assert.match(defaultHtml, /<label for="student-grade-semester">Semester<\/label>/);
+    assert.match(defaultHtml, /<label for="student-grade-period">Grading period<\/label>/);
+    assert.match(defaultHtml, /value="\[&#34;2026-2027&#34;,&#34;First&#34;\]" selected/);
+    assert.match(defaultHtml, /value="Second Grading" selected/);
+    assert.ok(defaultHtml.indexOf('value="First Grading"') < defaultHtml.indexOf('value="Second Grading"'), 'grading periods keep logical order');
+    assert.ok(defaultHtml.indexOf('2025-2026 · First') < defaultHtml.indexOf('2025-2026 · Second'), 'semester labels keep logical order');
+    assert.match(defaultHtml, /<td data-label="Grade">91<\/td>/);
+    assert.doesNotMatch(defaultHtml, /<td data-label="Grade">84<\/td>|<td data-label="Grade">78<\/td>/);
+    assert.equal((defaultHtml.match(/data-label="Subject">English/g) || []).length, 1, 'each subject is shown once for the selected period');
+    assert.match(defaultHtml, /<th scope="col">Subject<\/th><th scope="col">Grade<\/th>/);
+
+    const requestedSemester = JSON.stringify(['2025-2026', 'Second']);
+    const requested = new URLSearchParams({ semester: requestedSemester, gradingPeriod: 'Quarter A' });
+    const selectedPage = await fetch(`${baseUrl}/student/grades?${requested}`, { headers: { cookie } });
+    const selectedHtml = await selectedPage.text();
+    assert.equal(selectedPage.status, 200);
+    assert.match(selectedHtml, /value="Quarter A" selected/);
+    assert.match(selectedHtml, /<td data-label="Grade">78<\/td>/);
+    assert.doesNotMatch(selectedHtml, /<td data-label="Grade">91<\/td>|<td data-label="Grade">95<\/td>/);
+
+    const invalid = new URLSearchParams({ semester: 'not-an-owned-semester', gradingPeriod: 'Not an owned period', studentId: '999' });
+    const invalidPage = await fetch(`${baseUrl}/student/grades?${invalid}`, { headers: { cookie } });
+    const invalidHtml = await invalidPage.text();
+    assert.equal(invalidPage.status, 200);
+    assert.match(invalidHtml, /value="\[&#34;2026-2027&#34;,&#34;First&#34;\]" selected/);
+    assert.match(invalidHtml, /value="Second Grading" selected/);
+    assert.doesNotMatch(invalidHtml, /<td data-label="Grade">78<\/td>/);
+    assert.deepEqual(gradeUserIds, [7, 7, 7], 'all grades come from the authenticated user regardless of query parameters');
   });
 });
