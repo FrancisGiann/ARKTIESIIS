@@ -839,14 +839,19 @@ test('password-only login is denied outside development and a dev session is des
   });
 });
 
-test('login limiter allows ten attempts per IP and rejects the next attempt', async () => {
+test('development password login skips only the login limiter while retaining CSRF and credential checks', async () => {
   const database = createAuthDatabase([]);
   await withServer(createApp({ databasePool: database.getPool, environment: developmentEnvironment() }), async (baseUrl) => {
     const page = await fetch(`${baseUrl}/login`);
     const cookie = getSessionCookie(page);
     const token = csrfFromHtml(await page.text());
+    const invalidCsrf = await postForm(baseUrl, '/login', cookie, {
+      _csrf: 'invalid', email: 'nobody@example.edu', password: 'not-the-password'
+    });
+    assert.equal(invalidCsrf.status, 403);
+    await invalidCsrf.arrayBuffer();
     const statuses = [];
-    for (let attempt = 0; attempt < 11; attempt += 1) {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
       const response = await postForm(baseUrl, '/login', cookie, {
         _csrf: token,
         email: 'nobody@example.edu',
@@ -855,7 +860,33 @@ test('login limiter allows ten attempts per IP and rejects the next attempt', as
       statuses.push(response.status);
       await response.arrayBuffer();
     }
-    assert.deepEqual(statuses, [401, 401, 401, 401, 401, 401, 401, 401, 401, 401, 429]);
+    assert.deepEqual(statuses, Array(12).fill(401));
+  });
+});
+
+test('production login remains limited to ten attempts per IP even if the development bypass flag is set', async () => {
+  const database = createAuthDatabase([]);
+  const environment = {
+    nodeEnv: 'production', devPasswordOnlyLogin: true, sessionSecret: 'production-login-limiter-test-secret',
+    smtp: { host: 'smtp.test.invalid', from: 'ARKTIESIIS <test@example.edu>' }
+  };
+  const app = createApp({ databasePool: database.getPool, environment });
+  app.set('trust proxy', 1);
+  await withServer(app, async (baseUrl) => {
+    const page = await fetch(`${baseUrl}/login`, { headers: { 'x-forwarded-proto': 'https' } });
+    const cookie = getSessionCookie(page);
+    const token = csrfFromHtml(await page.text());
+    const statuses = [];
+    for (let attempt = 0; attempt < 11; attempt += 1) {
+      const response = await postForm(baseUrl, '/login', cookie, {
+        _csrf: token,
+        email: 'nobody@example.edu',
+        password: 'not-the-password'
+      }, { headers: { cookie, 'content-type': 'application/x-www-form-urlencoded', 'x-forwarded-proto': 'https' } });
+      statuses.push(response.status);
+      await response.arrayBuffer();
+    }
+    assert.deepEqual(statuses, [...Array(10).fill(401), 429]);
   });
 });
 

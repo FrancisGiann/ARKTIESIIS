@@ -74,6 +74,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 10,
+    skip: () => isDevelopmentPasswordLoginEnabled(environment),
     standardHeaders: true,
     legacyHeaders: false,
     handler: (req, res) => res.status(429).render('error', {
