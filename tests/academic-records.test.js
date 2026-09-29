@@ -493,9 +493,9 @@ test('schedule page honors a contextual assignment link and preserves selected v
     assert.match(html, /name="assignmentId"/);
     assert.match(html, /value="44" selected/);
     assert.match(html, /STEM A · OCOM · Jamie Lee/);
-    assert.match(html, /class="schedule-table__class"><strong>Grade 11 · STEM A<\/strong>/);
+    assert.match(html, /class="schedule-section-card__heading">[\s\S]*?<h3 id="schedule-section-title-0">Grade 11 · STEM A<\/h3>/);
     assert.match(html, /Clear day, time, and room/);
-    assert.match(html, /aria-label="Weekly class schedule"/);
+    assert.match(html, /aria-label="Class times grouped by section"/);
     assert.match(html, /data-clear-section-on-term-change data-clear-assignment-on-section-change/);
     for (const [id, label] of [['schedule-term-filter', 'Academic term'], ['schedule-section-filter', 'Section'],
       ['schedule-assignment-filter', 'Assigned class'], ['schedule-day', 'Day'], ['schedule-start', 'Starts'],

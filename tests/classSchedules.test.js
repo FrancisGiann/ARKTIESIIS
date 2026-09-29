@@ -1,6 +1,38 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
+const ejs = require('ejs');
 const { ClassScheduleError, createClassScheduleService } = require('../src/services/classScheduleService');
+const { formatStudentPlacement } = require('../src/utils/formatStudentPlacement');
+
+function scheduleViewData(overrides = {}) {
+  return {
+    title: 'Class schedules', csrfToken: 'test-token', notice: null, error: null, contextNotice: null,
+    values: {}, editScheduleId: null, terms: [{ id: 6, school_year: '2026-2027', term: 'First', is_current: true }],
+    sections: [{ id: 12, name: 'STEM A', grade_level: 'Grade 11' }], academicTermId: 6,
+    selectedSectionId: null, selectedAssignmentId: null,
+    assignments: [
+      { id: 44, grade_level: 'Grade 11', section_name: 'STEM A', subject_code: 'OCOM', teacher_name: 'Jamie Lee' },
+      { id: 45, grade_level: 'Grade 11', section_name: 'STEM A', subject_code: 'STAT', teacher_name: 'Jamie Lee' }
+    ],
+    schedules: [
+      { id: 72, assignment_id: 44, section_id: 12, day_of_week: 2, start_time: '11:00', end_time: '12:00', room: 'A12', assignment_is_active: true,
+        grade_level: 'Grade 11', section_name: 'STEM A', school_year: '2026-2027', term: 'First', subject_code: 'OCOM', subject_name: 'Oral Communication', teacher_name: 'Jamie Lee' },
+      { id: 73, assignment_id: 45, section_id: 12, day_of_week: 1, start_time: '10:00', end_time: '11:00', room: 'A13', assignment_is_active: true,
+        grade_level: 'Grade 11', section_name: 'STEM A', school_year: '2026-2027', term: 'First', subject_code: 'STAT', subject_name: 'Statistics and Probability', teacher_name: 'Jamie Lee' },
+      { id: 74, assignment_id: 44, section_id: 12, day_of_week: 1, start_time: '08:00', end_time: '09:00', room: 'A12', assignment_is_active: true,
+        grade_level: 'Grade 11', section_name: 'STEM A', school_year: '2026-2027', term: 'First', subject_code: 'OCOM', subject_name: 'Oral Communication', teacher_name: 'Jamie Lee' },
+      { id: 75, assignment_id: 44, section_id: 13, day_of_week: 1, start_time: '09:00', end_time: '10:00', room: null, assignment_is_active: false,
+        grade_level: 'Grade 11', section_name: 'STEM B', school_year: '2026-2027', term: 'First', subject_code: 'BIO', subject_name: 'Biology', teacher_name: 'Taylor Cruz' }
+    ],
+    formatStudentPlacement,
+    ...overrides
+  };
+}
+
+function renderScheduleView(overrides = {}) {
+  return ejs.renderFile(path.join(__dirname, '../views/registrar/schedules.ejs'), scheduleViewData(overrides));
+}
 
 function fakeSql() {
   return {
@@ -165,6 +197,58 @@ test('schedule save rejects a class that does not match the posted section conte
   assert.equal(state.rolledBack, true);
   assert.equal(state.queries.some(({ statement }) => statement.includes('SELECT TOP (1) schedule.id')), false);
   assert.equal(state.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.class_schedules')), false);
+});
+
+test('registrar weekly schedule renders ordered, section-grouped cards with intact edit and remove forms', async () => {
+  const html = await renderScheduleView();
+
+  assert.doesNotMatch(html, /<table\b/);
+  assert.match(html, /class="schedule-section-grid" aria-label="Class times grouped by section"/);
+  assert.equal((html.match(/class="schedule-section-card"/g) || []).length, 2);
+  assert.match(html, /Grade 11 · STEM A/);
+  assert.match(html, /Grade 11 · STEM B/);
+  const rowIds = [...html.matchAll(/<li class="schedule-entry" id="schedule-(\d+)"/g)].map((match) => match[1]);
+  assert.deepEqual(rowIds, ['74', '73', '72', '75'], 'entries sort by section, then day and start time');
+  assert.match(html, /Monday<\/span><strong>08:00–09:00/);
+  assert.match(html, /Oral Communication/);
+  assert.match(html, /Teacher: Jamie Lee/);
+  assert.match(html, /Room: A12/);
+  assert.doesNotMatch(html, /schedule-entry__status--active|>Active<\/span>/);
+  assert.equal((html.match(/schedule-entry__status--revoked/g) || []).length, 1);
+  assert.match(html, /<details class="schedule-edit"\s*>\s*<summary>Edit class time<\/summary>/);
+  assert.match(html, /<form method="post" action="\/registrar\/schedules\/72">/);
+  assert.match(html, /<form method="post" action="\/registrar\/schedules\/72\/delete" class="schedule-delete-form">/);
+  assert.match(html, /name="_csrf" value="test-token"/);
+  assert.match(html, /name="filterSectionId" value=""/);
+  assert.match(html, /name="filterAssignmentId" value=""/);
+  assert.match(html, /#schedule-72">Cancel<\/a>/);
+
+  const revokedRow = html.match(/<li class="schedule-entry" id="schedule-75">([\s\S]*?)<\/li>/)?.[1] || '';
+  assert.ok(revokedRow);
+  assert.match(revokedRow, /schedule-entry__overview--revoked/);
+  assert.match(revokedRow, /schedule-entry__status--revoked">Assignment revoked/);
+  assert.doesNotMatch(revokedRow, /<details|method="post"/);
+  const activeRow = html.match(/<li class="schedule-entry" id="schedule-72">([\s\S]*?)<\/li>/)?.[1] || '';
+  assert.ok(activeRow);
+  assert.match(activeRow, /class="schedule-entry__overview"/);
+  assert.doesNotMatch(activeRow, /schedule-entry__overview--revoked|schedule-entry__status/);
+});
+
+test('schedule edit remains open with posted values after validation errors and empty schedule has a clear state', async () => {
+  const html = await renderScheduleView({
+    editScheduleId: 72,
+    values: { assignmentId: '45', dayOfWeek: '3', startTime: '11:30', endTime: '12:30', room: 'Lab 8' }
+  });
+  assert.match(html, /<details class="schedule-edit" open>/);
+  assert.match(html, /id="assignment-72" name="assignmentId" required>[\s\S]*?<option value="45" selected>/);
+  assert.match(html, /id="day-72" name="dayOfWeek" required>[\s\S]*?<option value="3" selected>Wednesday/);
+  assert.match(html, /name="startTime" required value="11:30"/);
+  assert.match(html, /name="endTime" required value="12:30"/);
+  assert.match(html, /name="room" maxlength="80" value="Lab 8"/);
+
+  const emptyHtml = await renderScheduleView({ schedules: [] });
+  assert.match(emptyHtml, /No class times match this context yet/);
+  assert.doesNotMatch(emptyHtml, /schedule-section-grid/);
 });
 
 test('student schedule binds the authenticated account and only returns currently enrolled subjects', async () => {

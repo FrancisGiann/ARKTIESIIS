@@ -69,19 +69,39 @@
   <section class="schedule-list" aria-labelledby="schedule-list-title" id="schedule-list">
     <div class="section-heading"><div><h2 id="schedule-list-title">Weekly schedule</h2><p>Overlaps for a section, teacher, or room are blocked when schedule times are saved.</p></div></div>
     <% if (schedules.length) { %>
-      <div class="table-scroll" tabindex="0" aria-label="Weekly class schedule">
-        <table class="admin-table schedule-table">
-          <caption class="visually-hidden">Class schedule rows for the selected term, section, and class</caption>
-          <thead><tr><th scope="col">Day</th><th scope="col">Time</th><th scope="col">Class</th><th scope="col">Teacher</th><th scope="col">Room</th><th scope="col">Actions</th></tr></thead>
-          <tbody>
-            <% for (const schedule of schedules) { const dayLabel = ['','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][Number(schedule.day_of_week)] || 'Unknown'; const isActiveAssignment = schedule.assignment_is_active === true || schedule.assignment_is_active === 1; const isEditing = Number(editScheduleId) === Number(schedule.id); %>
-              <tr id="schedule-<%= schedule.id %>">
-                <td data-label="Day"><%= dayLabel %></td>
-                <td data-label="Time"><strong><%= schedule.start_time %>–<%= schedule.end_time %></strong></td>
-                <td data-label="Class"><div class="schedule-table__class"><strong><%= formatStudentPlacement(schedule.grade_level, schedule.section_name) %></strong><span class="table-subtext"><%= schedule.school_year %> · <%= schedule.term %> · <%= schedule.subject_code %> · <%= schedule.subject_name %></span></div></td>
-                <td data-label="Teacher"><%= schedule.teacher_name %></td>
-                <td data-label="Room"><%= schedule.room || 'To be announced' %></td>
-                <td data-label="Actions">
+      <% const dayNames = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']; %>
+      <% const orderedSchedules = [...schedules].sort((left, right) => Number(left.day_of_week) - Number(right.day_of_week)
+        || String(left.start_time).localeCompare(String(right.start_time))
+        || String(left.subject_code).localeCompare(String(right.subject_code))); %>
+      <% const scheduleGroupsBySection = new Map(); %>
+      <% for (const schedule of orderedSchedules) {
+        const sectionKey = String(schedule.section_id ?? `${schedule.grade_level || ''}:${schedule.section_name || ''}`);
+        if (!scheduleGroupsBySection.has(sectionKey)) scheduleGroupsBySection.set(sectionKey, []);
+        scheduleGroupsBySection.get(sectionKey).push(schedule);
+      } %>
+      <% const scheduleGroups = [...scheduleGroupsBySection.values()].sort((left, right) =>
+        String(left[0].grade_level).localeCompare(String(right[0].grade_level), undefined, { numeric: true })
+        || String(left[0].section_name).localeCompare(String(right[0].section_name))); %>
+      <div class="schedule-section-grid" aria-label="Class times grouped by section">
+        <% for (const [groupIndex, sectionSchedules] of scheduleGroups.entries()) { const first = sectionSchedules[0]; %>
+          <article class="schedule-section-card" aria-labelledby="schedule-section-title-<%= groupIndex %>">
+            <header class="schedule-section-card__heading">
+              <div><h3 id="schedule-section-title-<%= groupIndex %>"><%= formatStudentPlacement(first.grade_level, first.section_name) %></h3>
+                <p><%= first.school_year %> · <%= first.term %></p></div>
+              <span class="schedule-section-card__count"><%= sectionSchedules.length %> <%= sectionSchedules.length === 1 ? 'class time' : 'class times' %></span>
+            </header>
+            <ol class="schedule-entry-list">
+              <% for (const schedule of sectionSchedules) { const dayLabel = dayNames[Number(schedule.day_of_week)] || 'Unknown day'; const isActiveAssignment = schedule.assignment_is_active === true || schedule.assignment_is_active === 1; const isEditing = Number(editScheduleId) === Number(schedule.id); %>
+                <li class="schedule-entry" id="schedule-<%= schedule.id %>">
+                  <div class="schedule-entry__overview<%= isActiveAssignment ? '' : ' schedule-entry__overview--revoked' %>">
+                    <div class="schedule-entry__day-time"><span><%= dayLabel %></span><strong><%= schedule.start_time %>–<%= schedule.end_time %></strong></div>
+                    <div class="schedule-entry__class">
+                      <h4><span><%= schedule.subject_code %></span> <%= schedule.subject_name %></h4>
+                      <p>Teacher: <%= schedule.teacher_name %></p>
+                      <p>Room: <%= schedule.room || 'To be announced' %></p>
+                    </div>
+                    <% if (!isActiveAssignment) { %><span class="schedule-entry__status schedule-entry__status--revoked">Assignment revoked</span><% } %>
+                  </div>
                   <% if (isActiveAssignment) { %>
                     <details class="schedule-edit" <%= isEditing ? 'open' : '' %>>
                       <summary>Edit class time</summary>
@@ -110,12 +130,12 @@
                         <button class="button button--danger" type="submit">Remove class time</button>
                       </form>
                     </details>
-                  <% } else { %><span class="record-status record-status--archived">Assignment revoked</span><% } %>
-                </td>
-              </tr>
-            <% } %>
-          </tbody>
-        </table>
+                  <% } %>
+                </li>
+              <% } %>
+            </ol>
+          </article>
+        <% } %>
       </div>
     <% } else { %><p class="empty-state">No class times match this context yet. Select an active class above to add its first time.</p><% } %>
   </section>
