@@ -4,7 +4,7 @@ const { PassThrough, Writable } = require('node:stream');
 const { readHidden } = require('../scripts/bootstrap-admin');
 const { verifyPassword } = require('../src/routes');
 const { isDevelopmentPasswordLoginEnabled, createAuthFingerprint, hasMatchingAuthFingerprint, createRequireAuth } = require('../src/middleware/auth');
-const { getListenHost } = require('../src/server');
+const { getListenHost } = require('../src/config/server');
 const twoFactor = require('../src/services/twoFactorService');
 
 test('password-only authentication requires both development gate settings', () => {
