@@ -14,7 +14,7 @@ The source SQL Server data was classified as dummy and disposable. The deploymen
 
 ## Environment and release checks
 
-Set `NODE_ENV=production`, a unique `SESSION_SECRET` of at least 32 characters, the exact hPanel database credentials, `APP_BASE_URL` with the public HTTPS origin, SMTP configuration for email two-factor authentication, an absolute private `DOCUMENT_STORAGE_DIR` outside the checkout, and the approved Gemini configuration. Production startup rejects missing/placeholder SMTP settings, partial SMTP credentials, and relative upload paths inside the checkout or Hostinger deployment-managed `hbuilds/` and `public_html` paths. Keep secrets in the host's environment settings and never commit `.env` files. Do not enable `DEV_PASSWORD_ONLY_LOGIN` in production.
+Set `NODE_ENV=production`, a unique `SESSION_SECRET` of at least 32 characters, the exact hPanel database credentials, `APP_BASE_URL` with the public HTTPS origin, SMTP configuration for email two-factor authentication, an absolute private `DOCUMENT_STORAGE_DIR` outside the checkout, and the approved Gemini configuration. Production startup rejects missing/placeholder SMTP settings, partial SMTP credentials, and relative upload paths inside the checkout or Hostinger deployment-managed `hbuilds/` and `public_html` paths. Keep secrets in the host's environment settings and never commit `.env` files. Keep `DEV_PASSWORD_ONLY_LOGIN=false` in production. The temporary demo-only OTP exception is opt-in and separately allowlisted below.
 
 Configure Hostinger's application entry file as `src/server.js`. Hostinger loads this file as the app entry point; it starts the HTTP listener immediately and runs the database probe and document-recovery scheduler in the background. A database outage is reported through safe server logs and `/health`, while the listener remains available. `/health` checks database connectivity with `SELECT 1`; an empty database can report `connected`, so use `npm run db:setup` and `npm run db:check` separately to verify schema setup and migrations before role-based checks.
 
@@ -38,6 +38,23 @@ npm run demo:seed-hostinger -- --apply --target-database 'PREFIX_database' --con
 ```
 
 Apply is allowed only when the database contains no business records apart from the exact baseline physical-requirement reference rows. It inserts five fictional role accounts, one fictional student with a single term/section/subject, and an audit marker. It never prints the account passwords, has no reset mode, and refuses a second application. Keep the passwords in an approved private store, test each role through its email-code sign-in, and remove or rotate demo accounts before real student data is used. Do not point the seed at an existing school database.
+
+### Temporary password-only sign-in for the dummy-data demo
+
+Email two-factor authentication remains the production default. If groupmates need direct access to the seeded dummy-data deployment, configure these environment variables in Hostinger hPanel for that app:
+
+```text
+NODE_ENV=production
+DEV_PASSWORD_ONLY_LOGIN=false
+DEMO_PASSWORD_ONLY_LOGIN=true
+DEMO_PASSWORD_ONLY_EMAILS=admin@example.edu,registrar@example.edu,teacher@example.edu,finance@example.edu,student@example.edu
+```
+
+Replace the five example addresses with the exact `DEMO_ADMIN_EMAIL`, `DEMO_REGISTRAR_EMAIL`, `DEMO_TEACHER_EMAIL`, `DEMO_FINANCE_EMAIL`, and `DEMO_STUDENT_EMAIL` addresses used by the one-time seed. Enter only those accounts, separated by commas. Keep production SMTP configured: it is still required at startup and accounts outside this list continue to receive email verification codes. The mode does not change `NODE_ENV`, does not use `DEV_PASSWORD_ONLY_LOGIN`, and keeps the normal login rate limiter, password checks, CSRF checks, session regeneration, role authorization, and forced password changes.
+
+The app enables the exception only when `DEMO_PASSWORD_ONLY_LOGIN` is exactly `true` and every allowlist entry is a valid email. A missing or malformed list disables password-only demo access. Removing an address or turning the flag off revokes that account's existing demo session on its next protected request. Keep this setting enabled only while the database contains disposable demo data.
+
+To restore OTP for all accounts, set `DEMO_PASSWORD_ONLY_LOGIN=false` in hPanel and apply the environment change by restarting or redeploying the app. Keep `DEV_PASSWORD_ONLY_LOGIN=false` and retain working SMTP settings. Existing password-only demo sessions will be redirected to sign-in when they next access a protected page; subsequent sign-ins use email OTP. You can also remove `DEMO_PASSWORD_ONLY_EMAILS` after disabling the mode.
 
 For both schema setup and this seed, temporarily allow only the trusted machine's current IP through Hostinger Remote MySQL. Run the setup, `npm run db:check`, the production-shaped seed, and a second `npm run db:check`; then remove the Remote MySQL allowlist entry. The application itself should connect using Hostinger's normal application environment, usually `localhost:3306`.
 

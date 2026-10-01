@@ -10,6 +10,8 @@ const {
   createAuthFingerprint,
   hasMatchingAuthFingerprint,
   isDevelopmentPasswordLoginEnabled,
+  isDemoPasswordOnlyLoginEnabled,
+  isDemoPasswordOnlyEmailAllowed,
   createRequireAuth,
   destroySession
 } = require('../middleware/auth');
@@ -141,7 +143,9 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   const renderLogin = (req, res, error, status = 200) => res.status(status).render('auth/login', {
     title: 'Login',
     csrfToken: ensureCsrfToken(req),
-    twoFactorRequired: !isDevelopmentPasswordLoginEnabled(environment),
+    developmentPasswordLoginEnabled: isDevelopmentPasswordLoginEnabled(environment),
+    demoPasswordOnlyLoginEnabled: isDemoPasswordOnlyLoginEnabled(environment),
+    twoFactorRequired: !isDevelopmentPasswordLoginEnabled(environment) && !isDemoPasswordOnlyLoginEnabled(environment),
     notice: loginNotices[req.query.notice] || null,
     error
   });
@@ -282,7 +286,8 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     }
 
     const developmentLogin = isDevelopmentPasswordLoginEnabled(environment);
-    if (!developmentLogin && !smtpReady()) {
+    const demoPasswordLoginCandidate = isDemoPasswordOnlyEmailAllowed(environment, credentials.email);
+    if (!developmentLogin && !demoPasswordLoginCandidate && !smtpReady()) {
       return res.status(503).render('error', {
         title: 'Login Unavailable',
         message: 'Sign in is temporarily unavailable.'
@@ -303,17 +308,18 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
 
       const mustChangePassword = user.must_change_password === true || user.must_change_password === 1;
       const passwordOnlyLogin = developmentLogin && !mustChangePassword;
-      if (!passwordOnlyLogin && !smtpReady()) {
+      const demoPasswordOnlyLogin = isDemoPasswordOnlyEmailAllowed(environment, user.email);
+      if (!passwordOnlyLogin && !demoPasswordOnlyLogin && !smtpReady()) {
         return res.status(503).render('error', {
           title: 'Login Unavailable',
           message: 'Sign in is temporarily unavailable.'
         });
       }
 
-      if (passwordOnlyLogin) {
+      if (passwordOnlyLogin || demoPasswordOnlyLogin) {
         await regenerateSession(req);
         req.session.userId = user.id;
-        req.session.authLevel = 'password_only_dev';
+        req.session.authLevel = demoPasswordOnlyLogin ? 'password_only_demo' : 'password_only_dev';
         req.session.authFingerprint = createAuthFingerprint(user, environment);
         req.session.authSessionVersion = user.auth_session_version || '';
         await saveSession(req);

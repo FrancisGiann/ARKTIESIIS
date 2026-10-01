@@ -7,6 +7,23 @@ function isDevelopmentPasswordLoginEnabled(environment = defaultEnvironment) {
   return environment.nodeEnv === 'development' && environment.devPasswordOnlyLogin === true;
 }
 
+function isDemoPasswordOnlyLoginEnabled(environment = defaultEnvironment) {
+  const emails = environment.demoPasswordOnlyEmails;
+  return environment.nodeEnv === 'production'
+    && environment.demoPasswordOnlyLogin === true
+    && Array.isArray(emails)
+    && emails.length > 0
+    && emails.every((email) => typeof email === 'string'
+      && email.length <= 255
+      && email === email.trim().toLowerCase()
+      && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email));
+}
+
+function isDemoPasswordOnlyEmailAllowed(environment, email) {
+  if (!isDemoPasswordOnlyLoginEnabled(environment) || typeof email !== 'string') return false;
+  return environment.demoPasswordOnlyEmails.includes(email.trim().toLowerCase());
+}
+
 function createCsrfToken() {
   return crypto.randomBytes(32).toString('hex');
 }
@@ -64,11 +81,15 @@ function createRequireAuth({ getPool = defaultGetPool, sql = defaultSql, environ
     if (!Number.isSafeInteger(userId) || userId < 1) return res.redirect('/login');
 
     const developmentLogin = req.session.authLevel === 'password_only_dev';
+    const demoPasswordLogin = req.session.authLevel === 'password_only_demo';
     const emailTwoFactorLogin = req.session.authLevel === 'email_2fa';
     if (developmentLogin && !isDevelopmentPasswordLoginEnabled(environment)) {
       return destroySession(req, res, environment, () => res.redirect('/login'));
     }
-    if (!developmentLogin && !emailTwoFactorLogin) return res.redirect('/login');
+    if (demoPasswordLogin && !isDemoPasswordOnlyLoginEnabled(environment)) {
+      return destroySession(req, res, environment, () => res.redirect('/login'));
+    }
+    if (!developmentLogin && !demoPasswordLogin && !emailTwoFactorLogin) return res.redirect('/login');
 
     try {
       const pool = await getPool();
@@ -78,6 +99,9 @@ function createRequireAuth({ getPool = defaultGetPool, sql = defaultSql, environ
       const user = result.recordset?.[0];
 
       if (!user || !(user.is_active === true || user.is_active === 1)) {
+        return destroySession(req, res, environment, () => res.redirect('/login'));
+      }
+      if (demoPasswordLogin && !isDemoPasswordOnlyEmailAllowed(environment, user.email)) {
         return destroySession(req, res, environment, () => res.redirect('/login'));
       }
 
@@ -128,6 +152,8 @@ module.exports = {
   createAuthFingerprint,
   hasMatchingAuthFingerprint,
   isDevelopmentPasswordLoginEnabled,
+  isDemoPasswordOnlyLoginEnabled,
+  isDemoPasswordOnlyEmailAllowed,
   createRequireAuth,
   destroySession,
   clearSessionCookie

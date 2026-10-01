@@ -517,6 +517,73 @@ test('non-development login requires OTP even when the development bypass flag i
   });
 });
 
+test('production demo mode skips OTP only for allowlisted accounts and revokes access after configuration changes', async () => {
+  const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
+  const demoUser = { id: 71, email: 'demo-student@example.edu', password_hash: passwordHash, role: 'student', is_active: true };
+  const otherUser = { id: 72, email: 'staff@example.edu', password_hash: passwordHash, role: 'registrar', is_active: true };
+  const twoFactorService = createTestTwoFactorService(otherUser);
+  const environment = emailTwoFactorEnvironment({
+    nodeEnv: 'production',
+    demoPasswordOnlyLogin: true,
+    demoPasswordOnlyEmails: [demoUser.email]
+  });
+  const app = createApp({
+    databasePool: createAuthDatabase([demoUser, otherUser]).getPool,
+    environment,
+    twoFactorService
+  });
+  app.set('trust proxy', 1);
+
+  await withServer(app, async (baseUrl) => {
+    const loginPage = await fetch(`${baseUrl}/login`, { headers: { 'x-forwarded-proto': 'https' } });
+    const loginHtml = await loginPage.text();
+    assert.match(loginHtml, /Temporary demo mode is active for designated demo accounts/);
+    assert.match(loginHtml, /email verification remains required for everyone else/);
+    const anonymousCookie = getSessionCookie(loginPage);
+    const demoLogin = await postForm(baseUrl, '/login', anonymousCookie, {
+      _csrf: csrfFromHtml(loginHtml),
+      email: demoUser.email,
+      password: 'Correct-Horse-Battery-12'
+    }, { headers: { cookie: anonymousCookie, 'content-type': 'application/x-www-form-urlencoded', 'x-forwarded-proto': 'https' } });
+    assert.equal(demoLogin.status, 303);
+    assert.equal(demoLogin.headers.get('location'), '/student');
+    assert.equal(twoFactorService.state.sends, 0);
+    let demoCookie = getSessionCookie(demoLogin);
+
+    const otherLoginPage = await fetch(`${baseUrl}/login`, { headers: { 'x-forwarded-proto': 'https' } });
+    const otherLoginCookie = getSessionCookie(otherLoginPage);
+    const otherLoginHtml = await otherLoginPage.text();
+    const otherLogin = await postForm(baseUrl, '/login', otherLoginCookie, {
+      _csrf: csrfFromHtml(otherLoginHtml),
+      email: otherUser.email,
+      password: 'Correct-Horse-Battery-12'
+    }, { headers: { cookie: otherLoginCookie, 'content-type': 'application/x-www-form-urlencoded', 'x-forwarded-proto': 'https' } });
+    assert.equal(otherLogin.status, 303);
+    assert.equal(otherLogin.headers.get('location'), '/login/verify');
+    assert.equal(twoFactorService.state.sends, 1);
+
+    environment.demoPasswordOnlyEmails = [];
+    let protectedPage = await fetch(`${baseUrl}/dashboard`, { headers: { cookie: demoCookie, 'x-forwarded-proto': 'https' }, redirect: 'manual' });
+    assert.equal(protectedPage.status, 302);
+    assert.equal(protectedPage.headers.get('location'), '/login');
+    assert.match(protectedPage.headers.get('set-cookie'), /Expires=Thu, 01 Jan 1970/);
+
+    environment.demoPasswordOnlyEmails = [demoUser.email];
+    const retryPage = await fetch(`${baseUrl}/login`, { headers: { 'x-forwarded-proto': 'https' } });
+    const retryCookie = getSessionCookie(retryPage);
+    const retryHtml = await retryPage.text();
+    const retryLogin = await postForm(baseUrl, '/login', retryCookie, {
+      _csrf: csrfFromHtml(retryHtml), email: demoUser.email, password: 'Correct-Horse-Battery-12'
+    }, { headers: { cookie: retryCookie, 'content-type': 'application/x-www-form-urlencoded', 'x-forwarded-proto': 'https' } });
+    demoCookie = getSessionCookie(retryLogin);
+    environment.demoPasswordOnlyLogin = false;
+    protectedPage = await fetch(`${baseUrl}/dashboard`, { headers: { cookie: demoCookie, 'x-forwarded-proto': 'https' }, redirect: 'manual' });
+    assert.equal(protectedPage.status, 302);
+    assert.equal(protectedPage.headers.get('location'), '/login');
+    assert.match(protectedPage.headers.get('set-cookie'), /Expires=Thu, 01 Jan 1970/);
+  });
+});
+
 test('a pending OTP session cannot gain a newly upgraded role', async () => {
   const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
   const user = { id: 39, email: 'staff@example.edu', password_hash: passwordHash, role: 'registrar', is_active: true };
@@ -900,10 +967,11 @@ test('development password login skips only the login limiter while retaining CS
   });
 });
 
-test('production login remains limited to ten attempts per IP even if the development bypass flag is set', async () => {
+test('production demo password mode remains limited to ten login attempts per IP', async () => {
   const database = createAuthDatabase([]);
   const environment = {
-    nodeEnv: 'production', devPasswordOnlyLogin: true, sessionSecret: 'production-login-limiter-test-secret',
+    nodeEnv: 'production', devPasswordOnlyLogin: true, demoPasswordOnlyLogin: true,
+    demoPasswordOnlyEmails: ['demo@example.edu'], sessionSecret: 'production-login-limiter-test-secret',
     smtp: { host: 'smtp.test.invalid', from: 'ARKTIESIIS <test@example.edu>' }
   };
   const app = createApp({ databasePool: database.getPool, environment });

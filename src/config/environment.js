@@ -24,6 +24,18 @@ function required(name) {
   return value;
 }
 
+function parseDemoPasswordOnlyLogin(value) {
+  return value === 'true';
+}
+
+function parseDemoPasswordOnlyEmails(value) {
+  if (typeof value !== 'string' || value.trim() === '' || value.length > 8192) return [];
+
+  const emails = value.split(',').map((email) => email.trim().toLowerCase());
+  if (emails.some((email) => email.length > 255 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) return [];
+  return [...new Set(emails)];
+}
+
 function parseUploadMegabytes(value) {
   const rawValue = value === undefined || value === '' ? '10' : String(value);
   const megabytes = Number(rawValue);
@@ -139,6 +151,8 @@ validateProductionSmtp(smtp);
 module.exports = {
   nodeEnv,
   devPasswordOnlyLogin: process.env.DEV_PASSWORD_ONLY_LOGIN === 'true',
+  demoPasswordOnlyLogin: parseDemoPasswordOnlyLogin(process.env.DEMO_PASSWORD_ONLY_LOGIN),
+  demoPasswordOnlyEmails: parseDemoPasswordOnlyEmails(process.env.DEMO_PASSWORD_ONLY_EMAILS),
   port: parsePort('PORT', process.env.PORT, 3000),
   sessionSecret: normalizedSessionSecret || 'dev-only-change-me',
   appBaseUrl,
@@ -163,5 +177,7 @@ module.exports = {
     maxMb: parseUploadMegabytes(process.env.MAX_UPLOAD_MB),
     storageDirectory: configuredStorageDirectory(process.env.DOCUMENT_STORAGE_DIR, nodeEnv)
   },
-  required
+  required,
+  parseDemoPasswordOnlyLogin,
+  parseDemoPasswordOnlyEmails
 };

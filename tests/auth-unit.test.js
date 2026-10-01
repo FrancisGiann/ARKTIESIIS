@@ -3,7 +3,15 @@ const assert = require('node:assert/strict');
 const { PassThrough, Writable } = require('node:stream');
 const { readHidden } = require('../scripts/bootstrap-admin');
 const { verifyPassword } = require('../src/routes');
-const { isDevelopmentPasswordLoginEnabled, createAuthFingerprint, hasMatchingAuthFingerprint, createRequireAuth } = require('../src/middleware/auth');
+const {
+  isDevelopmentPasswordLoginEnabled,
+  isDemoPasswordOnlyLoginEnabled,
+  isDemoPasswordOnlyEmailAllowed,
+  createAuthFingerprint,
+  hasMatchingAuthFingerprint,
+  createRequireAuth
+} = require('../src/middleware/auth');
+const { parseDemoPasswordOnlyLogin, parseDemoPasswordOnlyEmails } = require('../src/config/environment');
 const { getListenHost } = require('../src/config/server');
 const twoFactor = require('../src/services/twoFactorService');
 
@@ -12,6 +20,32 @@ test('password-only authentication requires both development gate settings', () 
   assert.equal(isDevelopmentPasswordLoginEnabled({ nodeEnv: 'development', devPasswordOnlyLogin: false }), false);
   assert.equal(isDevelopmentPasswordLoginEnabled({ nodeEnv: 'production', devPasswordOnlyLogin: true }), false);
   assert.equal(isDevelopmentPasswordLoginEnabled({ nodeEnv: 'test', devPasswordOnlyLogin: true }), false);
+});
+
+test('production demo password mode requires an exact enabled flag and a fully valid allowlist', () => {
+  const enabled = {
+    nodeEnv: 'production',
+    demoPasswordOnlyLogin: true,
+    demoPasswordOnlyEmails: ['demo@example.edu', 'staff@example.edu']
+  };
+  assert.equal(isDemoPasswordOnlyLoginEnabled(enabled), true);
+  assert.equal(isDemoPasswordOnlyEmailAllowed(enabled, 'DEMO@example.edu'), true);
+  assert.equal(isDemoPasswordOnlyEmailAllowed(enabled, 'other@example.edu'), false);
+  assert.equal(isDemoPasswordOnlyLoginEnabled({ ...enabled, nodeEnv: 'test' }), false);
+  assert.equal(isDemoPasswordOnlyLoginEnabled({ ...enabled, demoPasswordOnlyLogin: false }), false);
+  assert.equal(isDemoPasswordOnlyLoginEnabled({ ...enabled, demoPasswordOnlyEmails: [] }), false);
+  assert.equal(isDemoPasswordOnlyLoginEnabled({ ...enabled, demoPasswordOnlyEmails: ['demo@example.edu', 'invalid'] }), false);
+  assert.equal(parseDemoPasswordOnlyLogin('true'), true);
+  assert.equal(parseDemoPasswordOnlyLogin('false'), false);
+  assert.equal(parseDemoPasswordOnlyLogin('True'), false);
+  assert.equal(parseDemoPasswordOnlyLogin(undefined), false);
+  assert.deepEqual(parseDemoPasswordOnlyEmails(undefined), []);
+  assert.deepEqual(parseDemoPasswordOnlyEmails(''), []);
+  assert.deepEqual(parseDemoPasswordOnlyEmails('DEMO@example.edu, staff@example.edu, demo@example.edu'), [
+    'demo@example.edu', 'staff@example.edu'
+  ]);
+  assert.deepEqual(parseDemoPasswordOnlyEmails('demo@example.edu,not-an-email'), []);
+  assert.deepEqual(parseDemoPasswordOnlyEmails('demo@example.edu,'), []);
 });
 
 test('server binds password-only development mode to loopback only', () => {
@@ -36,7 +70,10 @@ test('auth fingerprints change with role, password hash, or account update times
 });
 
 test('temporary-password gate checks current database state and blocks direct protected routes until password change', async () => {
-  const environment = { nodeEnv: 'production', devPasswordOnlyLogin: false, sessionSecret: 'mandatory-password-change-test-secret' };
+  const environment = {
+    nodeEnv: 'production', devPasswordOnlyLogin: false, demoPasswordOnlyLogin: true,
+    demoPasswordOnlyEmails: ['student@example.edu'], sessionSecret: 'mandatory-password-change-test-secret'
+  };
   const user = {
     id: 12, email: 'student@example.edu', role: 'student', is_active: true,
     password_hash: 'temporary-bcrypt-hash', must_change_password: true,
@@ -94,9 +131,78 @@ test('temporary-password gate checks current database state and blocks direct pr
   const logout = await request('/logout', 'POST');
   assert.equal(logout.continued, true);
 
+  const demoRolePage = await request('/student', 'GET', 'password_only_demo');
+  assert.equal(demoRolePage.continued, false);
+  assert.equal(demoRolePage.res.location, '/account/password/required');
+  const demoPasswordChangePage = await request('/account/password/required', 'GET', 'password_only_demo');
+  assert.equal(demoPasswordChangePage.continued, true);
+
   const passwordOnlySession = await request('/account/password/required', 'GET', 'password_only_dev');
   assert.equal(passwordOnlySession.continued, false);
   assert.equal(passwordOnlySession.res.location, '/login');
+});
+
+test('demo password sessions are destroyed when the feature is disabled or their email leaves the allowlist', async () => {
+  const environment = {
+    nodeEnv: 'production', demoPasswordOnlyLogin: true,
+    demoPasswordOnlyEmails: ['student@example.edu'], sessionSecret: 'demo-session-revocation-test-secret'
+  };
+  const user = {
+    id: 25, email: 'student@example.edu', role: 'student', is_active: true,
+    password_hash: 'demo-bcrypt-hash', must_change_password: false,
+    auth_session_version: 'session-v1', updated_at_fingerprint: '2026-09-28T01:02:03.0000000'
+  };
+  const requireAuth = createRequireAuth({
+    environment,
+    sql: { Int: 'Int' },
+    getPool: async () => ({
+      request() {
+        return {
+          input() { return this; },
+          async query() { return { recordset: [{ ...user }] }; }
+        };
+      }
+    })
+  });
+
+  async function checkDemoSession() {
+    let destroyed = false;
+    const res = {
+      headers: {}, locals: {},
+      set(name, value) { this.headers[name.toLowerCase()] = value; return this; },
+      redirect(status, location) {
+        this.statusCode = location === undefined ? 302 : status;
+        this.location = location === undefined ? status : location;
+        return this;
+      },
+      clearCookie() {},
+      get destroyed() { return destroyed; }
+    };
+    const req = {
+      originalUrl: '/student', method: 'GET', session: {
+        userId: user.id, authLevel: 'password_only_demo', authFingerprint: createAuthFingerprint(user, environment),
+        authSessionVersion: 'session-v1', destroy(callback) { destroyed = true; callback(null); }
+      }
+    };
+    let continued = false;
+    await requireAuth(req, res, () => { continued = true; });
+    return { res, continued };
+  }
+
+  assert.equal((await checkDemoSession()).continued, true);
+  environment.demoPasswordOnlyEmails = [];
+  const removedAddress = await checkDemoSession();
+  assert.equal(removedAddress.continued, false);
+  assert.equal(removedAddress.res.location, '/login');
+  assert.equal(removedAddress.res.destroyed, true);
+
+  environment.demoPasswordOnlyEmails = ['student@example.edu'];
+  assert.equal((await checkDemoSession()).continued, true);
+  environment.demoPasswordOnlyLogin = false;
+  const disabled = await checkDemoSession();
+  assert.equal(disabled.continued, false);
+  assert.equal(disabled.res.location, '/login');
+  assert.equal(disabled.res.destroyed, true);
 });
 
 test('missing and inactive accounts each perform one dummy bcrypt comparison', async () => {
