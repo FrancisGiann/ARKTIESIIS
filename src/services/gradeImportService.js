@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const path = require('node:path');
 const defaultEnvironment = require('../config/environment');
-const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
+const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
 const readExcelFile = require('read-excel-file/node').default;
 
 const PREVIEW_TTL_MS = 30 * 60 * 1000;
@@ -189,20 +189,20 @@ function createGradeImportService({
   async function requireRegistrar(request, actorId) {
     const actor = await request.input('actorId', sql.Int, actorId)
       .input('registrarRole', sql.NVarChar(30), 'registrar')
-      .query('SELECT id, role FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE id = @actorId AND is_active = 1 AND role = @registrarRole');
+      .query('SELECT id, role FROM users WHERE id = @actorId AND is_active = 1 AND role = @registrarRole FOR UPDATE');
     if (!actor.recordset?.length) throw new GradeImportError('Registrar grade-import access is no longer active. Sign in again.', 403);
     return actor.recordset[0];
   }
 
   async function requireImporter(request, actorId) {
     const actor = await request.input('actorId', sql.Int, actorId)
-      .query('SELECT id, role FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE id = @actorId AND is_active = 1 AND role IN (N\'registrar\', N\'teacher\')');
+      .query('SELECT id, role FROM users WHERE id = @actorId AND is_active = 1 AND role IN (\'registrar\', \'teacher\') FOR UPDATE');
     if (!actor.recordset?.length) throw new GradeImportError('Grade-import access is no longer active. Sign in again.', 403);
     return actor.recordset[0];
   }
 
   async function removeExpired(pool) {
-    await pool.request().query('DELETE FROM dbo.grade_import_previews WHERE expires_at <= SYSUTCDATETIME()');
+    await pool.request().query('DELETE FROM grade_import_previews WHERE expires_at <= UTC_TIMESTAMP(3)');
   }
 
   async function listImportContexts(actorId) {
@@ -216,20 +216,20 @@ function createGradeImportService({
       .query(`SELECT DISTINCT term.school_year, term.id AS academic_term_id, term.term,
           sec.grade_level, sec.name AS section_name,
           sub.id AS subject_id, sub.subject_code, sub.subject_name
-        FROM dbo.academic_terms AS term
-        INNER JOIN dbo.sections AS sec ON sec.academic_term_id = term.id
-        INNER JOIN dbo.subjects AS sub ON 1 = 1
+        FROM academic_terms AS term
+        INNER JOIN sections AS sec ON sec.academic_term_id = term.id
+        INNER JOIN subjects AS sub ON 1 = 1
         WHERE term.school_year = @schoolYear AND (
-          (@actorRole = N'registrar' AND EXISTS (
-            SELECT 1 FROM dbo.enrollments AS e
-            INNER JOIN dbo.students AS st ON st.id = e.student_id AND st.status = N'active'
-            INNER JOIN dbo.student_subjects AS ss ON ss.enrollment_id = e.id AND ss.subject_id = sub.id
-            WHERE e.academic_term_id = term.id AND e.section_id = sec.id AND e.enrollment_status = N'enrolled'))
+          (@actorRole = 'registrar' AND EXISTS (
+            SELECT 1 FROM enrollments AS e
+            INNER JOIN students AS st ON st.id = e.student_id AND st.status = 'active'
+            INNER JOIN student_subjects AS ss ON ss.enrollment_id = e.id AND ss.subject_id = sub.id
+            WHERE e.academic_term_id = term.id AND e.section_id = sec.id AND e.enrollment_status = 'enrolled'))
           OR EXISTS (
-            SELECT 1 FROM dbo.teacher_assignments AS ta
+            SELECT 1 FROM teacher_assignments AS ta
             WHERE ta.teacher_id = @actorId AND ta.is_active = 1 AND ta.academic_term_id = term.id
-              AND ta.section_id = sec.id AND ta.subject_id = sub.id AND @actorRole = N'teacher'))
-          AND EXISTS (SELECT 1 FROM dbo.users AS current_actor WHERE current_actor.id = @actorId
+              AND ta.section_id = sec.id AND ta.subject_id = sub.id AND @actorRole = 'teacher'))
+          AND EXISTS (SELECT 1 FROM users AS current_actor WHERE current_actor.id = @actorId
             AND current_actor.is_active = 1 AND current_actor.role = @actorRole)
         ORDER BY sec.grade_level, sec.name, sub.subject_code`);
     return (result.recordset || []).map((context) => ({
@@ -305,25 +305,25 @@ function createGradeImportService({
           st.first_name, st.middle_name, st.last_name, st.suffix, st.status AS student_status,
           e.id AS enrollment_id, e.enrollment_status, e.school_year, e.section_name, e.grade_level,
           ss.id AS student_subject_id, g.id AS grade_id, g.grading_period, g.grade_value
-        FROM dbo.students AS st
+        FROM students AS st
         LEFT JOIN (
           SELECT en.id, en.student_id, en.enrollment_status, term.school_year,
             sec.name AS section_name, sec.grade_level, en.academic_term_id, en.section_id
-          FROM dbo.enrollments AS en
-          INNER JOIN dbo.academic_terms AS term ON term.id = en.academic_term_id
-          LEFT JOIN dbo.sections AS sec ON sec.id = en.section_id AND sec.academic_term_id = en.academic_term_id
+          FROM enrollments AS en
+          INNER JOIN academic_terms AS term ON term.id = en.academic_term_id
+          LEFT JOIN sections AS sec ON sec.id = en.section_id AND sec.academic_term_id = en.academic_term_id
           WHERE term.school_year = @schoolYear
             AND (@academicTermId IS NULL OR en.academic_term_id = @academicTermId)
         ) AS e ON e.student_id = st.id
-        LEFT JOIN dbo.student_subjects AS ss ON ss.enrollment_id = e.id AND ss.subject_id = @subjectId
-        LEFT JOIN dbo.grades AS g ON g.student_subject_id = ss.id
-          AND g.grading_period IN (N'Term 1', N'Term 2', N'Term 3', N'Final Grade')
+        LEFT JOIN student_subjects AS ss ON ss.enrollment_id = e.id AND ss.subject_id = @subjectId
+        LEFT JOIN grades AS g ON g.student_subject_id = ss.id
+          AND g.grading_period IN ('Term 1', 'Term 2', 'Term 3', 'Final Grade')
         WHERE st.lrn IN (${parameters.join(', ')})
           AND (@teacherId IS NULL OR (
-            EXISTS (SELECT 1 FROM dbo.users AS active_teacher WHERE active_teacher.id = @teacherId
-              AND active_teacher.role = N'teacher' AND active_teacher.is_active = 1)
+            EXISTS (SELECT 1 FROM users AS active_teacher WHERE active_teacher.id = @teacherId
+              AND active_teacher.role = 'teacher' AND active_teacher.is_active = 1)
             AND EXISTS (
-              SELECT 1 FROM dbo.teacher_assignments AS teacher_assignment
+              SELECT 1 FROM teacher_assignments AS teacher_assignment
               WHERE teacher_assignment.teacher_id = @teacherId AND teacher_assignment.is_active = 1
                 AND teacher_assignment.academic_term_id = e.academic_term_id
                 AND teacher_assignment.section_id = e.section_id AND teacher_assignment.subject_id = @subjectId)))`);
@@ -394,13 +394,13 @@ function createGradeImportService({
           .input('sectionName', sql.NVarChar(100), context.sectionName)
           .input('gradeLevel', sql.NVarChar(50), context.gradeLevel)
           .input('subjectId', sql.Int, subject.id)
-          .query(`SELECT a.id FROM dbo.teacher_assignments AS a WITH (UPDLOCK, HOLDLOCK)
-            INNER JOIN dbo.academic_terms AS term ON term.id = a.academic_term_id
-            INNER JOIN dbo.sections AS sec ON sec.id = a.section_id AND sec.academic_term_id = a.academic_term_id
-            INNER JOIN dbo.subjects AS sub ON sub.id = a.subject_id
+          .query(`SELECT a.id FROM teacher_assignments AS a
+            INNER JOIN academic_terms AS term ON term.id = a.academic_term_id
+            INNER JOIN sections AS sec ON sec.id = a.section_id AND sec.academic_term_id = a.academic_term_id
+            INNER JOIN subjects AS sub ON sub.id = a.subject_id
             WHERE a.teacher_id = @teacherId AND a.is_active = 1
               AND a.academic_term_id = @academicTermId AND a.subject_id = @subjectId
-              AND term.school_year = @schoolYear AND sec.name = @sectionName AND sec.grade_level = @gradeLevel`);
+              AND term.school_year = @schoolYear AND sec.name = @sectionName AND sec.grade_level = @gradeLevel FOR UPDATE`);
         if (!assignment.recordset?.length) {
           throw new GradeImportError('This class is no longer assigned to your account. Upload the workbook again.', 403);
         }
@@ -421,7 +421,7 @@ function createGradeImportService({
         .input('workbookSubjectName', sql.NVarChar(200), workbookContext.subjectName)
         .input('contextMismatch', sql.Bit, contextMismatch)
         .input('expiresAt', sql.DateTime2, expiresAt)
-        .query(`INSERT INTO dbo.grade_import_previews
+        .query(`INSERT INTO grade_import_previews
           (id, uploaded_by, session_fingerprint, school_year, grade_level, section_name, subject_id, subject_name,
             academic_term_id, original_filename,
             workbook_grade_level, workbook_section_name, workbook_subject_name, context_mismatch, expires_at)
@@ -441,11 +441,10 @@ function createGradeImportService({
           .input('lrnFingerprint', sql.Char(64), row.lrnFingerprint || null)
           .input('nameMismatch', sql.Bit, Boolean(row.nameMismatch))
           .input('issue', sql.NVarChar(500), row.issue || null)
-          .query(`INSERT INTO dbo.grade_import_preview_rows
+          .query(`INSERT INTO grade_import_preview_rows
             (preview_id, source_row, student_id, enrollment_id, student_subject_id, student_no, workbook_name, student_name, lrn_fingerprint, name_mismatch, issue)
-            OUTPUT INSERTED.id AS id
             VALUES (@previewId, @sourceRow, @studentId, @enrollmentId, @studentSubjectId, @studentNo, @workbookName, @studentName, @lrnFingerprint, @nameMismatch, @issue)`);
-        const previewRowId = inserted.recordset?.[0]?.id;
+        const previewRowId = inserted.insertId;
         if (!previewRowId) throw new Error('Grade preview row insert returned no identifier.');
         for (const grade of row.grades) {
           if (grade.gradeValue === null) continue;
@@ -456,7 +455,7 @@ function createGradeImportService({
             .input('gradeValue', sql.Decimal(6, 2), grade.gradeValue)
             .input('existingGradeId', sql.Int, existing?.id || null)
             .input('existingGradeValue', sql.Decimal(6, 2), existing?.value ?? null)
-            .query(`INSERT INTO dbo.grade_import_preview_grades
+            .query(`INSERT INTO grade_import_preview_grades
               (preview_row_id, grading_period, grade_value, existing_grade_id, existing_grade_value)
               VALUES (@previewRowId, @gradingPeriod, @gradeValue, @existingGradeId, @existingGradeValue)`);
         }
@@ -485,19 +484,19 @@ function createGradeImportService({
           r.id AS preview_row_id, r.source_row, r.student_id, r.enrollment_id, r.student_subject_id, r.student_no,
           r.workbook_name, r.student_name, r.name_mismatch, r.issue,
           g.grading_period, g.grade_value, g.existing_grade_id, g.existing_grade_value
-        FROM dbo.grade_import_previews AS p
-        LEFT JOIN dbo.academic_terms AS term ON term.id = p.academic_term_id
-        LEFT JOIN dbo.grade_import_preview_rows AS r ON r.preview_id = p.id
-        LEFT JOIN dbo.grade_import_preview_grades AS g ON g.preview_row_id = r.id
+        FROM grade_import_previews AS p
+        LEFT JOIN academic_terms AS term ON term.id = p.academic_term_id
+        LEFT JOIN grade_import_preview_rows AS r ON r.preview_id = p.id
+        LEFT JOIN grade_import_preview_grades AS g ON g.preview_row_id = r.id
         WHERE p.id = @previewId AND p.uploaded_by = @actorId
-          AND p.session_fingerprint = @sessionFingerprint AND p.status = N'ready'
-          AND p.expires_at > SYSUTCDATETIME()
-          AND EXISTS (SELECT 1 FROM dbo.users AS current_actor WHERE current_actor.id = @actorId
+          AND p.session_fingerprint = @sessionFingerprint AND p.status = 'ready'
+          AND p.expires_at > UTC_TIMESTAMP(3)
+          AND EXISTS (SELECT 1 FROM users AS current_actor WHERE current_actor.id = @actorId
             AND current_actor.is_active = 1 AND current_actor.role = @actorRole)
-          AND (@actorRole = N'registrar' OR EXISTS (
-            SELECT 1 FROM dbo.teacher_assignments AS ta
-            INNER JOIN dbo.academic_terms AS assigned_term ON assigned_term.id = ta.academic_term_id
-            INNER JOIN dbo.sections AS assigned_section ON assigned_section.id = ta.section_id
+          AND (@actorRole = 'registrar' OR EXISTS (
+            SELECT 1 FROM teacher_assignments AS ta
+            INNER JOIN academic_terms AS assigned_term ON assigned_term.id = ta.academic_term_id
+            INNER JOIN sections AS assigned_section ON assigned_section.id = ta.section_id
               AND assigned_section.academic_term_id = ta.academic_term_id
             WHERE ta.teacher_id = @actorId AND ta.is_active = 1
               AND ta.academic_term_id = p.academic_term_id AND ta.subject_id = p.subject_id
@@ -597,17 +596,17 @@ function createGradeImportService({
         .input('sessionFingerprint', sql.Char(64), digestSession(secret, sessionId));
       const headerResult = await headerRequest.query(submissionId
         ? `SELECT s.id, a.academic_term_id, s.school_year, s.grade_level, s.section_name, s.subject_id, s.subject_name, s.context_mismatch
-          FROM dbo.teacher_grade_submissions AS s WITH (UPDLOCK, HOLDLOCK)
-          INNER JOIN dbo.teacher_assignments AS a WITH (UPDLOCK, HOLDLOCK) ON a.id = s.assignment_id
-          WHERE s.id = @submissionId AND s.status = N'pending' AND a.is_active = 1
+          FROM teacher_grade_submissions AS s
+          INNER JOIN teacher_assignments AS a ON a.id = s.assignment_id
+          WHERE s.id = @submissionId AND s.status = 'pending' AND a.is_active = 1
             AND a.teacher_id = s.submitted_by
-            AND EXISTS (SELECT 1 FROM dbo.users AS submitter WHERE submitter.id = s.submitted_by
-              AND submitter.role = N'teacher')`
+            AND EXISTS (SELECT 1 FROM users AS submitter WHERE submitter.id = s.submitted_by
+              AND submitter.role = 'teacher') FOR UPDATE`
         : `SELECT id, academic_term_id, school_year, grade_level, section_name, subject_id, subject_name, context_mismatch
-          FROM dbo.grade_import_previews WITH (UPDLOCK, HOLDLOCK)
+          FROM grade_import_previews
           WHERE id = @previewId AND uploaded_by = @actorId
-            AND session_fingerprint = @sessionFingerprint AND status = N'ready'
-            AND expires_at > SYSUTCDATETIME()`);
+            AND session_fingerprint = @sessionFingerprint AND status = 'ready'
+            AND expires_at > UTC_TIMESTAMP(3) FOR UPDATE`);
       const header = headerResult.recordset?.[0];
       if (!header) throw new GradeImportError(submissionId
         ? 'This submission has already been reviewed or its teacher assignment is no longer valid.'
@@ -622,15 +621,15 @@ function createGradeImportService({
         ? `SELECT r.id, r.source_row, r.student_id, r.enrollment_id, r.student_subject_id, r.student_no,
             r.workbook_name, r.student_name, r.lrn_fingerprint, r.name_mismatch, r.issue,
             g.grading_period, g.grade_value, g.existing_grade_id, g.existing_grade_value
-          FROM dbo.teacher_grade_submission_rows AS r WITH (UPDLOCK, HOLDLOCK)
-          LEFT JOIN dbo.teacher_grade_submission_grades AS g WITH (UPDLOCK, HOLDLOCK) ON g.submission_row_id = r.id
-          WHERE r.submission_id = @submissionId ORDER BY r.source_row, g.id`
+          FROM teacher_grade_submission_rows AS r
+          LEFT JOIN teacher_grade_submission_grades AS g ON g.submission_row_id = r.id
+          WHERE r.submission_id = @submissionId ORDER BY r.source_row, g.id FOR UPDATE`
         : `SELECT r.id, r.source_row, r.student_id, r.enrollment_id, r.student_subject_id, r.student_no,
             r.workbook_name, r.student_name, r.lrn_fingerprint, r.name_mismatch, r.issue,
             g.grading_period, g.grade_value, g.existing_grade_id, g.existing_grade_value
-          FROM dbo.grade_import_preview_rows AS r WITH (UPDLOCK, HOLDLOCK)
-          LEFT JOIN dbo.grade_import_preview_grades AS g WITH (UPDLOCK, HOLDLOCK) ON g.preview_row_id = r.id
-          WHERE r.preview_id = @previewId ORDER BY r.source_row, g.id`);
+          FROM grade_import_preview_rows AS r
+          LEFT JOIN grade_import_preview_grades AS g ON g.preview_row_id = r.id
+          WHERE r.preview_id = @previewId ORDER BY r.source_row, g.id FOR UPDATE`);
       const rowMap = new Map();
       for (const record of previewRowsResult.recordset || []) {
         let row = rowMap.get(record.id);
@@ -719,15 +718,15 @@ function createGradeImportService({
             e.id AS enrollment_id, e.enrollment_status, term.school_year, sec.name AS section_name,
             sec.grade_level, ss.id AS student_subject_id, sub.id AS subject_id, sub.subject_name,
             g.id AS grade_id, g.grading_period, g.grade_value
-          FROM dbo.students AS st WITH (UPDLOCK, HOLDLOCK)
-          INNER JOIN dbo.enrollments AS e WITH (UPDLOCK, HOLDLOCK) ON e.student_id = st.id
-          INNER JOIN dbo.academic_terms AS term WITH (UPDLOCK, HOLDLOCK) ON term.id = e.academic_term_id
-          LEFT JOIN dbo.sections AS sec WITH (UPDLOCK, HOLDLOCK) ON sec.id = e.section_id AND sec.academic_term_id = e.academic_term_id
-          INNER JOIN dbo.student_subjects AS ss WITH (UPDLOCK, HOLDLOCK) ON ss.enrollment_id = e.id
-          INNER JOIN dbo.subjects AS sub WITH (UPDLOCK, HOLDLOCK) ON sub.id = ss.subject_id
-          LEFT JOIN dbo.grades AS g WITH (UPDLOCK, HOLDLOCK) ON g.student_subject_id = ss.id
-            AND g.grading_period IN (N'Term 1', N'Term 2', N'Term 3', N'Final Grade')
-          WHERE (${pairs.join(' OR ')}) AND (@academicTermId IS NULL OR e.academic_term_id = @academicTermId)`);
+          FROM students AS st
+          INNER JOIN enrollments AS e ON e.student_id = st.id
+          INNER JOIN academic_terms AS term ON term.id = e.academic_term_id
+          LEFT JOIN sections AS sec ON sec.id = e.section_id AND sec.academic_term_id = e.academic_term_id
+          INNER JOIN student_subjects AS ss ON ss.enrollment_id = e.id
+          INNER JOIN subjects AS sub ON sub.id = ss.subject_id
+          LEFT JOIN grades AS g ON g.student_subject_id = ss.id
+            AND g.grading_period IN ('Term 1', 'Term 2', 'Term 3', 'Final Grade')
+          WHERE (${pairs.join(' OR ')}) AND (@academicTermId IS NULL OR e.academic_term_id = @academicTermId) FOR UPDATE`);
         const currentByAssignment = new Map();
         for (const current of currentResult.recordset || []) {
           const list = currentByAssignment.get(current.student_subject_id) || [];
@@ -769,8 +768,8 @@ function createGradeImportService({
               .input('gradeId', sql.Int, grade.existingGradeId)
               .input('gradeValue', sql.Decimal(6, 2), grade.gradeValue)
               .input('actorId', sql.Int, actor.id)
-              .query(`UPDATE dbo.grades SET grade_value = @gradeValue, recorded_by = @actorId,
-                recorded_at = SYSUTCDATETIME() WHERE id = @gradeId`);
+              .query(`UPDATE grades SET grade_value = @gradeValue, recorded_by = @actorId,
+                recorded_at = UTC_TIMESTAMP(3) WHERE id = @gradeId`);
             replaced += 1;
           } else {
             await transaction.request()
@@ -778,7 +777,7 @@ function createGradeImportService({
               .input('gradingPeriod', sql.NVarChar(50), grade.gradingPeriod)
               .input('gradeValue', sql.Decimal(6, 2), grade.gradeValue)
               .input('actorId', sql.Int, actor.id)
-              .query(`INSERT INTO dbo.grades (student_subject_id, grading_period, grade_value, recorded_by)
+              .query(`INSERT INTO grades (student_subject_id, grading_period, grade_value, recorded_by)
                 VALUES (@studentSubjectId, @gradingPeriod, @gradeValue, @actorId)`);
             inserted += 1;
           }
@@ -808,17 +807,17 @@ function createGradeImportService({
         .input('action', sql.NVarChar(100), 'registrar.grade_import_completed')
         .input('entityId', sql.NVarChar(100), String(sourceId))
         .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify(auditDetails))
-        .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
-          VALUES (@actorId, @action, N'grade_import', @entityId, @detailsJson)`);
+        .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
+          VALUES (@actorId, @action, 'grade_import', @entityId, @detailsJson)`);
       if (submissionId) {
         await transaction.request()
           .input('submissionId', sql.UniqueIdentifier, submissionId).input('actorId', sql.Int, actor.id)
-          .query(`UPDATE dbo.teacher_grade_submissions SET status = N'approved', decided_by = @actorId,
-            decided_at = SYSUTCDATETIME(), decision_reason = NULL WHERE id = @submissionId AND status = N'pending'`);
+          .query(`UPDATE teacher_grade_submissions SET status = 'approved', decided_by = @actorId,
+            decided_at = UTC_TIMESTAMP(3), decision_reason = NULL WHERE id = @submissionId AND status = 'pending'`);
         await transaction.request()
           .input('submissionId', sql.UniqueIdentifier, submissionId).input('actorId', sql.Int, actor.id)
-          .query(`INSERT INTO dbo.teacher_grade_submission_events (submission_id, actor_id, event_type)
-            VALUES (@submissionId, @actorId, N'approved')`);
+          .query(`INSERT INTO teacher_grade_submission_events (submission_id, actor_id, event_type)
+            VALUES (@submissionId, @actorId, 'approved')`);
         await transaction.request()
           .input('actorId', sql.Int, actor.id)
           .input('action', sql.NVarChar(100), 'registrar.grade_workbook_approved')
@@ -827,12 +826,12 @@ function createGradeImportService({
             rowsProcessed: acceptedRows.length, rowsExcluded: excludedRows, gradesInserted: inserted,
             gradesReplaced: replaced, gradesUnchanged: unchangedGrades, gradeConflictsSkipped: skippedGrades
           }))
-          .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
-            VALUES (@actorId, @action, N'teacher_grade_submission', @entityId, @detailsJson)`);
+          .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
+            VALUES (@actorId, @action, 'teacher_grade_submission', @entityId, @detailsJson)`);
       } else {
         await transaction.request()
           .input('previewId', sql.UniqueIdentifier, previewId)
-          .query('DELETE FROM dbo.grade_import_previews WHERE id = @previewId');
+          .query('DELETE FROM grade_import_previews WHERE id = @previewId');
       }
       await transaction.commit();
       started = false;
@@ -840,7 +839,7 @@ function createGradeImportService({
     } catch (error) {
       if (started) await transaction.rollback().catch(() => {});
       if (error instanceof GradeImportError) throw error;
-      if (error?.number === 2601 || error?.number === 2627) {
+      if (isDuplicateKeyError(error)) {
         throw new GradeImportError('A grade changed during confirmation. Upload the workbook again.', 409);
       }
       throw error;

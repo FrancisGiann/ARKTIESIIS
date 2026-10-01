@@ -1,0 +1,60 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page finance-departures-page" id="main-content">
+  <a class="context-back" href="/finance">Back to annual finance roster</a>
+  <header class="dashboard-heading"><div><h1>Departure finance review</h1><p>Review affected charges after the registrar records a drop or transfer. Academic history and remaining account debt stay on record.</p></div></header>
+  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <% if (!departures.length) { %><section class="finance-panel"><p class="empty-state">No pending departure cases need finance review.</p></section><% } %>
+  <div class="finance-departure-list">
+    <% for (const departure of departures) { %>
+      <%
+        const chargeCount = departure.terms.reduce((count, term) => count + term.charges.length, 0);
+        const effectiveDate = departure.effective_date instanceof Date
+          ? departure.effective_date.toISOString().slice(0, 10)
+          : String(departure.effective_date).slice(0, 10);
+      %>
+      <details class="finance-departure-case">
+        <summary>
+          <span class="finance-departure-identity"><strong><%= departure.student_name %></strong><span><%= departure.student_no %></span></span>
+          <span class="finance-departure-type"><strong><%= departure.departure_type === 'dropped' ? 'Dropped' : 'Transferred' %></strong><time datetime="<%= effectiveDate %>">Effective <%= effectiveDate %></time></span>
+          <span class="finance-departure-context"><strong><%= departure.school_year %> · <%= departure.grade_level %></strong><span><%= departure.terms.length %> affected terms · <%= chargeCount %> charges to review</span></span>
+        </summary>
+        <div class="finance-departure-case-body">
+          <p><strong>Registrar reason:</strong> <%= departure.reason %></p>
+          <form class="form-stack" method="post" action="/finance/departure-cases/<%= departure.departure_case_id %>/review">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= departure.idempotencyKey %>">
+            <div class="admin-section__heading"><div><h3>Affected term placements and charge corrections</h3><p>Enter an amount only for a correction Finance approves. Blank rows stay unchanged. Corrections above the unpaid amount release prior allocations back to account credit.</p></div></div>
+            <div class="finance-departure-terms">
+              <% for (const term of departure.terms) { %>
+                <% if (!term.charges.length) { %>
+                  <div class="finance-departure-term-status">
+                    <strong>Term <%= term.annual_term_number %></strong>
+                    <span>No annual charges are linked to this placement.</span>
+                    <% if (term.academic_activity_review_required === true || term.academic_activity_review_required === 1) { %><span class="finance-review-flag">Academic activity exists; verify grade and schedule history separately.</span><% } %>
+                  </div>
+                <% } else { %>
+                  <section class="finance-departure-term">
+                    <h4>Term <%= term.annual_term_number %></h4>
+                    <% if (term.academic_activity_review_required === true || term.academic_activity_review_required === 1) { %><p class="finance-review-flag">Academic activity exists in this affected placement; verify grade and schedule history separately.</p><% } %>
+                    <div class="finance-departure-charge-list">
+                      <% for (const charge of term.charges) { %>
+                        <div class="finance-departure-charge">
+                          <input type="hidden" name="departureChargeId" value="<%= charge.charge_id %>">
+                          <label class="field"><span><%= charge.line_name %> · <%= charge.installment %> · remaining ₱<%= formatMoney(charge.amount_due) %></span><input name="departureAdjustmentAmount" inputmode="decimal" maxlength="14" placeholder="No correction"></label>
+                          <label class="field"><span>Correction reason</span><input name="departureAdjustmentReason" maxlength="1000" placeholder="Required when amount is entered"></label>
+                        </div>
+                      <% } %>
+                    </div>
+                  </section>
+                <% } %>
+              <% } %>
+            </div>
+            <label class="field"><span>Finance review reason</span><textarea name="reason" rows="3" maxlength="1000" required></textarea></label>
+            <button class="button button--primary" type="submit">Review departure and selected corrections</button>
+          </form>
+        </div>
+      </details>
+    <% } %>
+  </div>
+</main>
+<%- include('../partials/foot') %>

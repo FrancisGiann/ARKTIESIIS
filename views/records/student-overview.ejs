@@ -9,8 +9,11 @@
     <div class="admin-heading-actions">
       <a class="button button--secondary" href="/registrar/records/students/<%= student.id %>/edit">Edit profile</a>
       <a class="button button--primary" href="/documents/students/<%= student.id %>">Open document review</a>
+      <a class="button button--secondary" href="/registrar/records/grades/missing">Grade completion overview</a>
     </div>
   </header>
+
+  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
 
   <section class="student-record-status-grid" aria-label="Student record status">
     <article class="admin-section">
@@ -40,6 +43,98 @@
     </article>
   </section>
 
+  <section class="admin-section" aria-labelledby="document-request-ledger-title">
+    <div class="admin-section__heading">
+      <div><h2 id="document-request-ledger-title">Document requests and release history</h2><p>Staff tracking only. This ledger does not create a certificate, send a file, or change document access.</p></div>
+    </div>
+    <form class="form-stack records-compact-form" method="post" action="/registrar/records/students/<%= student.id %>/document-requests">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <input type="hidden" name="idempotencyKey" value="<%= newDocumentRequestKey %>">
+      <div class="admin-form-grid">
+        <div class="field"><label for="request-document-type">Document type</label><input id="request-document-type" name="documentType" maxlength="50" required placeholder="e.g. Transcript of Records"></div>
+        <div class="field"><label for="request-document-name">Document name or description</label><input id="request-document-name" name="documentName" maxlength="150" required></div>
+        <div class="field"><label for="request-requested-on">Request date</label><input id="request-requested-on" name="requestedOn" type="date" required></div>
+        <div class="field"><label for="request-reference">Reference (optional)</label><input id="request-reference" name="reference" maxlength="200"></div>
+      </div>
+      <button class="button button--primary button--align-start" type="submit">Record document request</button>
+    </form>
+    <% if (documentRequests.length) { %>
+      <div class="records-request-list">
+        <% for (const request of documentRequests) { const requestDate = request.requested_on instanceof Date ? request.requested_on.toISOString().slice(0, 10) : String(request.requested_on || '').slice(0, 10); const releaseDate = request.released_on instanceof Date ? request.released_on.toISOString().slice(0, 10) : String(request.released_on || '').slice(0, 10); const requestKey = requestIdempotencyKeys[request.id]; %>
+          <article class="academic-enrollment" aria-labelledby="document-request-<%= request.id %>">
+            <h3 id="document-request-<%= request.id %>"><%= request.document_name %> <span class="record-status"><%= request.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></span></h3>
+            <p><strong><%= request.document_type %></strong> · Requested <%= requestDate %> · Reference: <%= request.reference_text || 'None' %></p>
+            <% if (request.status === 'released') { %><p>Release recorded <%= releaseDate %> to <%= request.recipient %>.</p><% } %>
+            <% if (['requested', 'processing', 'ready'].includes(request.status)) { %>
+              <details><summary>Update request status</summary>
+                <form class="form-stack records-compact-form document-request-status-form" method="post" action="/registrar/records/students/<%= student.id %>/document-requests/<%= request.id %>/status">
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= requestKey %>">
+                  <div class="admin-form-grid">
+                    <div class="field"><label for="request-status-<%= request.id %>">Status</label><select id="request-status-<%= request.id %>" name="status" required><% const nextStatuses = { requested: ['processing', 'ready', 'cancelled'], processing: ['ready', 'cancelled'], ready: ['released', 'cancelled'] }; for (const nextStatus of nextStatuses[request.status] || []) { %><option value="<%= nextStatus %>"><%= nextStatus.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></option><% } %></select></div>
+                    <div class="field request-status-conditional" data-status-only="released" hidden><label for="request-release-date-<%= request.id %>">Release date</label><input id="request-release-date-<%= request.id %>" name="releasedOn" type="date" data-required-status="released" disabled></div>
+                    <div class="field request-status-conditional" data-status-only="released" hidden><label for="request-recipient-<%= request.id %>">Recipient</label><input id="request-recipient-<%= request.id %>" name="recipient" maxlength="150" data-required-status="released" disabled></div>
+                    <div class="field request-status-conditional" data-status-only="cancelled" hidden><label for="request-cancel-reason-<%= request.id %>">Cancellation reason</label><input id="request-cancel-reason-<%= request.id %>" name="reason" maxlength="500" data-required-status="cancelled" disabled></div>
+                  </div>
+                  <button class="button button--secondary button--align-start" type="submit">Save status</button>
+                </form>
+              </details>
+            <% } %>
+            <details><summary>Correct request details</summary>
+              <form class="form-stack records-compact-form" method="post" action="/registrar/records/students/<%= student.id %>/document-requests/<%= request.id %>/correct">
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= correctionIdempotencyKeys[request.id] %>">
+                <div class="admin-form-grid">
+                  <div class="field"><label for="correct-type-<%= request.id %>">Document type</label><input id="correct-type-<%= request.id %>" name="documentType" maxlength="50" value="<%= request.document_type %>" required></div>
+                  <div class="field"><label for="correct-name-<%= request.id %>">Document name</label><input id="correct-name-<%= request.id %>" name="documentName" maxlength="150" value="<%= request.document_name %>" required></div>
+                  <div class="field"><label for="correct-date-<%= request.id %>">Request date</label><input id="correct-date-<%= request.id %>" name="requestedOn" type="date" value="<%= requestDate %>" required></div>
+                  <div class="field"><label for="correct-reference-<%= request.id %>">Reference</label><input id="correct-reference-<%= request.id %>" name="reference" maxlength="200" value="<%= request.reference_text || '' %>"></div>
+                  <% if (request.status === 'released') { %>
+                    <div class="field"><label for="correct-release-date-<%= request.id %>">Release date</label><input id="correct-release-date-<%= request.id %>" name="releasedOn" type="date" value="<%= releaseDate %>" required></div>
+                    <div class="field"><label for="correct-recipient-<%= request.id %>">Recipient</label><input id="correct-recipient-<%= request.id %>" name="recipient" maxlength="150" value="<%= request.recipient %>" required></div>
+                  <% } %>
+                  <div class="field"><label for="correct-reason-<%= request.id %>">Correction reason</label><input id="correct-reason-<%= request.id %>" name="reason" maxlength="500" required></div>
+                </div>
+                <button class="button button--secondary button--align-start" type="submit">Record correction</button>
+              </form>
+            </details>
+            <details><summary>Request event history (<%= request.history.length %>)</summary>
+              <ol class="records-request-history"><% for (const event of request.history) { %><li>
+                <strong><%= event.event_type.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></strong>
+                <% if (event.status_from && event.status_from !== event.status_to) { %> · <%= event.status_from %> → <%= event.status_to %><% } else { %> · <%= event.status_to %><% } %>
+                · <%= [event.actor_first_name, event.actor_last_name].filter(Boolean).join(' ') || 'Staff' %>
+                <% if (event.released_on) { const eventReleaseDate = event.released_on instanceof Date ? event.released_on.toISOString().slice(0, 10) : String(event.released_on).slice(0, 10); %> · Release date <%= eventReleaseDate %> to <%= event.recipient %><% } %>
+                <% if (event.reason) { %><p>Reason: <%= event.reason %></p><% } %>
+                <% if (event.event_type === 'corrected') { const oldRequestedDate = event.requested_on_before instanceof Date ? event.requested_on_before.toISOString().slice(0, 10) : String(event.requested_on_before || '').slice(0, 10); const newRequestedDate = event.requested_on_after instanceof Date ? event.requested_on_after.toISOString().slice(0, 10) : String(event.requested_on_after || '').slice(0, 10); %>
+                  <% if (event.document_name_before !== event.document_name_after) { %><p>Document name: <%= event.document_name_before %> → <%= event.document_name_after %></p><% } %>
+                  <% if (event.document_type_before !== event.document_type_after) { %><p>Document type: <%= event.document_type_before %> → <%= event.document_type_after %></p><% } %>
+                  <% if (oldRequestedDate !== newRequestedDate) { %><p>Request date: <%= oldRequestedDate %> → <%= newRequestedDate %></p><% } %>
+                  <% if ((event.reference_before || '') !== (event.reference_after || '')) { %><p>Reference: <%= event.reference_before || 'None' %> → <%= event.reference_after || 'None' %></p><% } %>
+                  <% const oldReleaseDate = event.released_on_before instanceof Date ? event.released_on_before.toISOString().slice(0, 10) : String(event.released_on_before || '').slice(0, 10); const newReleaseDate = event.released_on_after instanceof Date ? event.released_on_after.toISOString().slice(0, 10) : String(event.released_on_after || '').slice(0, 10); %>
+                  <% if (oldReleaseDate !== newReleaseDate) { %><p>Release date: <%= oldReleaseDate || 'None' %> → <%= newReleaseDate || 'None' %></p><% } %>
+                  <% if ((event.recipient_before || '') !== (event.recipient_after || '')) { %><p>Recipient: <%= event.recipient_before || 'None' %> → <%= event.recipient_after || 'None' %></p><% } %>
+                <% } %>
+              </li><% } %></ol>
+            </details>
+          </article>
+        <% } %>
+      </div>
+    <% } else { %><p class="empty-state">No document requests have been recorded.</p><% } %>
+  </section>
+
+  <section class="admin-section" aria-labelledby="profile-revision-history-title">
+    <div class="admin-section__heading"><div><h2 id="profile-revision-history-title">Student profile revision history</h2><p>Staff-only history records changed profile fields from the first saved edit onward.</p></div></div>
+    <% if (profileRevisions.length) { %>
+      <div class="table-scroll" tabindex="0" aria-label="Student profile revision history"><table class="admin-table">
+        <thead><tr><th scope="col">Changed</th><th scope="col">Field</th><th scope="col">Before</th><th scope="col">After</th><th scope="col">Staff</th></tr></thead>
+        <tbody><% const profileFieldLabel = (field) => ({ student_no: 'Student number', lrn: 'LRN', first_name: 'First name', middle_name: 'Middle name', last_name: 'Last name', suffix: 'Suffix', birth_date: 'Birth date', sex: 'Gender', address: 'Address', phone: 'Phone' })[field] || field; for (const revision of profileRevisions) { %>
+          <tr><td data-label="Changed"><%= revision.created_at instanceof Date ? revision.created_at.toLocaleString('en-PH', { timeZone: 'Asia/Manila' }) : revision.created_at %></td>
+            <td data-label="Field"><%= profileFieldLabel(revision.field_name) %></td>
+            <td data-label="Before"><%= revision.before_value ?? '—' %></td><td data-label="After"><%= revision.after_value ?? '—' %></td>
+            <td data-label="Staff"><%= [revision.actor_first_name, revision.actor_last_name].filter(Boolean).join(' ') || 'Staff' %></td></tr>
+        <% } %></tbody>
+      </table></div>
+    <% } else { %><p class="empty-state">No profile field revisions are recorded.</p><% } %>
+  </section>
+
   <section class="admin-section student-record-academics" aria-labelledby="academic-history-title">
     <div class="admin-section__heading">
       <div><h2 id="academic-history-title">Enrollment, subjects, and grades</h2><p>Grades appear here after registrar approval of a teacher’s corrected SSHS E-Class Record workbook.</p></div>
@@ -67,4 +162,5 @@
     <% } else { %><p class="empty-state">No enrollment history is available for this student.</p><% } %>
   </section>
 </main>
+<script src="/js/registrar-records-followup.js" defer></script>
 <%- include('../partials/foot') %>

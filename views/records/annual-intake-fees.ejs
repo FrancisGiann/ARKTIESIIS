@@ -1,0 +1,100 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page admin-page records-page annual-fee-review" id="main-content">
+  <a class="context-back" href="/registrar/intake">Back to annual intake</a>
+  <header class="dashboard-heading">
+    <div>
+      <h1>Review fees and confirm enrollment</h1>
+      <% if (preview?.parent) { %>
+        <p><strong><%= [preview.parent.first_name, preview.parent.middle_name, preview.parent.last_name, preview.parent.suffix].filter(Boolean).join(' ') %></strong>
+          · <%= preview.parent.student_no %> · <%= preview.parent.school_year %> · <%= preview.parent.grade_level %> · <%= preview.parent.voucher_code %></p>
+      <% } else { %><p>Check the configured student-payable assessment before confirming.</p><% } %>
+    </div>
+  </header>
+  <nav class="intake-progress" aria-label="Enrollment steps">
+    <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Documents received</span><span class="intake-step-label--short">Documents</span></li><li aria-current="step"><span class="intake-step-label--full">Fees and confirmation</span><span class="intake-step-label--short">Fees</span></li></ol>
+  </nav>
+  <% if (successNotice) { %><p class="form-success" role="status"><%= successNotice %></p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <% if (!preview) { %>
+    <section class="admin-section"><p>The fee summary is unavailable. Return to the intake roster and review it again.</p><a class="button button--secondary" href="/registrar/intake">Return to annual intake</a></section>
+  <% } else { %>
+    <section class="admin-section" aria-labelledby="fee-context-title">
+      <div class="admin-section__heading"><div><h2 id="fee-context-title">Annual fee assessment</h2>
+        <p>Schedule version <%= preview.scheduleVersion %> · <%= preview.existingAssessment ? 'Saved assessment' : 'Current approved schedule' %></p></div><p class="fee-total-line"><span>Payable total</span><strong>₱<%= formatMoney(preview.total) %></strong></p></div>
+      <% if (preview.existingAssessment) { %>
+        <p>This assessment was already saved. Its fee choices and amounts are fixed for this confirmation.</p>
+      <% } else { %>
+        <p>Required fees are included. Optional items are included only when selected. The amount below comes from the active approved schedule and any approved fee coverage.</p>
+      <% } %>
+      <% if (!preview.existingAssessment && preview.optionalLines?.length) { %>
+        <form method="get" action="/registrar/intake/<%= annualId %>/fees" class="fee-optional-choice" aria-label="Choose optional fees">
+          <p class="fee-confirmation__refresh" data-fee-refresh-message hidden role="status">Update the fee total to confirm your new optional fee choices.</p>
+          <fieldset><legend>Optional fees</legend>
+            <% for (const line of preview.optionalLines) { %>
+              <label class="checkbox-field fee-optional-choice__row">
+                <input type="checkbox" name="optionalLineIds" value="<%= line.id %>" <%= line.selected ? 'checked' : '' %>>
+                <span><strong>Term <%= line.termNumber %> · <%= line.lineName %></strong><small><%= line.installment %> · ₱<%= formatMoney(line.amount) %></small></span>
+              </label>
+            <% } %>
+          </fieldset>
+          <button class="button button--secondary" type="submit">Update fee total</button>
+        </form>
+        <noscript><p class="muted-copy">After changing an optional fee, choose “Update fee total” before confirming. The confirmation form uses the choices shown in the current fee summary.</p></noscript>
+      <% } %>
+      <div class="fee-term-summary" aria-label="Payable by term">
+        <% for (const subtotal of preview.termTotals) { %><p><span>Term <%= subtotal.termNumber %></span><strong>₱<%= formatMoney(subtotal.amount) %></strong></p><% } %>
+      </div>
+      <details class="fee-tuition-installment-breakdown" open>
+        <summary>Tuition payable by installment</summary>
+        <p class="muted-copy">Amounts include approved coverage. A zero amount is a recorded staff-entered zero; “Not configured” means an older schedule has no matching tuition line.</p>
+        <div class="table-scroll" tabindex="0" aria-label="Tuition payable by installment for all three terms">
+          <table class="admin-table"><thead><tr><th scope="col">Term</th><th scope="col">DP</th><th scope="col">Prelim</th><th scope="col">Midterm</th><th scope="col">Finals</th></tr></thead>
+            <tbody><% for (const term of preview.tuitionBreakdown || []) { %><tr><th scope="row">Term <%= term.termNumber %></th><% for (const installment of term.installments) { %><td data-label="<%= installment.label %>"><%= installment.configured ? `₱${formatMoney(installment.amount)}` : installment.notApplicable ? 'Not applicable' : 'Not configured' %></td><% } %></tr><% } %></tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+    <section class="admin-section fee-confirmation" aria-labelledby="fee-confirmation-title">
+      <div class="admin-section__heading"><div><h2 id="fee-confirmation-title">Confirm enrollment</h2>
+        <p>Confirming saves this assessment and activates the entry term. Finance records payments separately.</p></div></div>
+      <p class="fee-confirmation__amount"><strong>Payable assessment: ₱<%= formatMoney(preview.total) %></strong></p>
+      <form method="post" action="/registrar/intake/<%= annualId %>/confirm" class="fee-confirmation__form" data-fee-confirmation data-selected-lines="<%= preview.optionalLineIds.join(',') %>">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <input type="hidden" name="idempotencyKey" value="<%= values.idempotencyKey %>">
+        <input type="hidden" name="scheduleId" value="<%= preview.scheduleId %>">
+        <input type="hidden" name="scheduleVersion" value="<%= preview.scheduleVersion %>">
+        <input type="hidden" name="voucherCode" value="<%= preview.voucherCode %>">
+        <input type="hidden" name="assessmentId" value="<%= preview.assessmentId || '' %>">
+        <input type="hidden" name="snapshotFingerprint" value="<%= preview.snapshotFingerprint %>">
+        <% for (const lineId of preview.optionalLineIds) { %><input type="hidden" name="optionalLineIds" value="<%= lineId %>"><% } %>
+        <button class="button button--primary" type="submit" data-fee-confirm>Confirm enrollment</button>
+        <a class="button button--secondary" href="/registrar/intake/<%= annualId %>/manage">Back to student record</a>
+      </form>
+    </section>
+    <details class="admin-section fee-breakdown">
+      <summary>View itemized fee breakdown</summary>
+      <div class="table-scroll" tabindex="0" aria-label="Itemized fee assessment lines">
+        <table class="admin-table fee-assessment-table">
+          <thead><tr><th scope="col">Term</th><th scope="col">Fee</th><th scope="col">Installment</th><th scope="col">Amount</th><th scope="col">Approved coverage</th><th scope="col">Payable</th></tr></thead>
+          <tbody>
+            <% if (preview.lines.length) { %>
+              <% for (const line of preview.lines) { %>
+                <tr>
+                  <td data-label="Term">Term <%= line.termNumber %></td>
+                  <td data-label="Fee"><%= line.lineName %><small><%= line.category.replaceAll('_', ' ') %><% if (line.isOptional) { %> · Optional<% } %></small></td>
+                  <td data-label="Installment"><%= line.installment %></td>
+                  <td data-label="Amount">₱<%= formatMoney(line.grossAmount) %></td>
+                  <td data-label="Approved coverage"><%= line.waivedAmount === '0.00' ? '—' : `₱${formatMoney(line.waivedAmount)}` %></td>
+                  <td data-label="Payable"><strong>₱<%= formatMoney(line.amount) %></strong></td>
+                </tr>
+              <% } %>
+            <% } else { %><tr><td colspan="6">No payable fee lines apply to this entry term and selection.</td></tr><% } %>
+          </tbody>
+          <tfoot><tr><th scope="row" colspan="5">Total payable</th><td data-label="Total payable"><strong>₱<%= formatMoney(preview.total) %></strong></td></tr></tfoot>
+        </table>
+      </div>
+    </details>
+  <% } %>
+</main>
+<script src="/js/annual-fee-confirmation.js" defer></script>
+<%- include('../partials/foot') %>

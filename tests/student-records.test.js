@@ -122,6 +122,15 @@ async function signIn(baseUrl, role) {
 
 test('student record, term, section, and enrollment inputs are bounded and validated', () => {
   assert.equal(validateStudent({ studentNo: ' S-1 ', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee', birthDate: '2008-02-29' }).studentNo, 'S-1');
+  const workbookProfile = validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee',
+    birthplace: 'Lucena City', facebookName: 'Jamie Lee', emergencyContactPerson: 'Alex Lee', emergencyContactRelationship: 'Parent',
+    emergencyContactPhone: '+63 900 000 0000', emergencyContactAddress: 'Lucena', motherName: 'Morgan Lee', motherPhone: '09000000001',
+    fatherName: 'Taylor Lee', fatherPhone: '09000000002' });
+  assert.equal(workbookProfile.birthplace, 'Lucena City');
+  assert.equal(workbookProfile.emergencyContactPerson, 'Alex Lee');
+  assert.equal(workbookProfile.fatherPhone, '09000000002');
+  assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee', facebookName: 'x'.repeat(121) }), /optional profile field/);
+  assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee', emergencyContactPhone: '555\n1000' }), /optional profile field/);
   assert.equal(validateStudent({ lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee' }, { requireStudentNo: false }).studentNo, null);
   assert.throws(() => normalizeLrn('12345678901'), /exactly 12 digits/);
   assert.throws(() => normalizeLrn('12345678901 '), /exactly 12 digits/);
@@ -138,8 +147,8 @@ test('student record, term, section, and enrollment inputs are bounded and valid
 test('LRN is required for new students, registrars can backfill blanks, and only administrators create profiles or change recorded LRNs', async () => {
   const input = { studentNo: 'S-13', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee' };
   const registrarEdit = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.students WITH')) return { recordset: [{ id: 12, status: 'active', student_no: 'S-12', lrn: input.lrn }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM students WHERE id = @studentId')) return { recordset: [{ id: 12, status: 'active', student_no: 'S-12', lrn: input.lrn }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   await assert.rejects(registrarEdit.service.saveStudent(7, 12, input), (error) => {
@@ -149,13 +158,13 @@ test('LRN is required for new students, registrars can backfill blanks, and only
     return true;
   });
   assert.equal(registrarEdit.log.rolledBack, true);
-  assert.equal(registrarEdit.log.queries.some(({ statement }) => statement.includes('UPDATE dbo.students')), false);
-  assert.equal(registrarEdit.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(registrarEdit.log.queries.some(({ statement }) => statement.includes('UPDATE students')), false);
+  assert.equal(registrarEdit.log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 
   const registrarCreate = transactionalService(({ statement, values }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('INSERT INTO dbo.students')) return { recordset: [{ id: 13 }] };
-    if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('INSERT INTO students')) return { recordset: [{ id: 13 }] };
+    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   await assert.rejects(registrarCreate.service.saveStudent(7, null, input), (error) => {
@@ -165,70 +174,75 @@ test('LRN is required for new students, registrars can backfill blanks, and only
     return true;
   });
   assert.equal(registrarCreate.log.rolledBack, true);
-  assert.equal(registrarCreate.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.students')), false);
+  assert.equal(registrarCreate.log.queries.some(({ statement }) => statement.includes('INSERT INTO students')), false);
 
   const databaseAdminCreate = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
-    if (statement.includes('FROM dbo.academic_terms WITH')) return { recordset: [{ school_year: '2026-2027' }] };
-    if (statement.includes('sp_getapplock')) return { recordset: [{ lock_result: 0 }] };
-    if (statement.includes('DECLARE @prefix')) return { recordset: [{ student_no: 'SHS-2026-0321' }] };
-    if (statement.includes('INSERT INTO dbo.students')) return { recordset: [{ id: 13 }] };
-    if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
+    if (statement.includes('FROM academic_terms') && statement.includes('is_current = 1')) return { recordset: [{ school_year: '2026-2027' }] };
+    if (statement.includes('application_locks')) return { recordset: [] };
+    if (statement.includes('FROM students') && statement.includes('student_no LIKE')) return { recordset: [{ sequence: '0320' }] };
+    if (statement.includes('INSERT INTO students')) return { insertId: 13 };
+    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   assert.equal(await databaseAdminCreate.service.saveStudent(7, null, { ...input, studentNo: 'FORGED-999' }), 13);
-  const createInsert = databaseAdminCreate.log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.students'));
+  const createInsert = databaseAdminCreate.log.queries.find(({ statement }) => statement.includes('INSERT INTO students'));
   assert.equal(createInsert.values.studentNo, 'SHS-2026-0321');
-  assert.match(createInsert.statement, /OUTPUT INSERTED\.id INTO @insertedStudents/);
-  assert.ok(databaseAdminCreate.log.queries.some(({ statement }) => statement.includes('sp_getapplock')));
+  assert.doesNotMatch(createInsert.statement, /OUTPUT INSERTED/i);
+  assert.ok(databaseAdminCreate.log.queries.some(({ statement }) => statement.includes('application_locks')));
   assert.equal(databaseAdminCreate.log.committed, true);
 
   const noCurrentTerm = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
-    if (statement.includes('FROM dbo.academic_terms WITH')) return { recordset: [] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
+    if (statement.includes('FROM academic_terms') && statement.includes('is_current = 1')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   await assert.rejects(noCurrentTerm.service.saveStudent(7, null, input), /Set a current academic term/);
   assert.equal(noCurrentTerm.log.rolledBack, true);
-  assert.equal(noCurrentTerm.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.students')), false);
+  assert.equal(noCurrentTerm.log.queries.some(({ statement }) => statement.includes('INSERT INTO students')), false);
 
   const invalidCurrentTerm = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
-    if (statement.includes('FROM dbo.academic_terms WITH')) return { recordset: [{ school_year: '2026/2027' }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
+    if (statement.includes('FROM academic_terms') && statement.includes('is_current = 1')) return { recordset: [{ school_year: '2026/2027' }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   await assert.rejects(invalidCurrentTerm.service.saveStudent(7, null, input), /invalid school year/);
-  assert.equal(invalidCurrentTerm.log.queries.some(({ statement }) => statement.includes('sp_getapplock')), false);
+  assert.equal(invalidCurrentTerm.log.queries.some(({ statement }) => statement.includes('application_locks')), false);
 
   const registrarBackfill = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.students WITH')) return { recordset: [{ id: 12, status: 'active', student_no: 'S-13', lrn: null }] };
-    if (statement.includes('UPDATE dbo.students')) return { recordset: [] };
-    if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM students WHERE id = @studentId')) return { recordset: [{ id: 12, status: 'active', student_no: 'S-13', lrn: null, first_name: 'Jamie', middle_name: null, last_name: 'Lee', suffix: null, birth_date: null, sex: null, address: null, phone: null }] };
+    if (statement.includes('UPDATE students')) return { recordset: [] };
+    if (statement.includes('INSERT INTO student_profile_revisions')) return { recordset: [] };
+    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   assert.equal(await registrarBackfill.service.saveStudent(7, 12, input), 12);
-  assert.equal(registrarBackfill.log.queries.find(({ statement }) => statement.includes('UPDATE dbo.students')).values.lrn, input.lrn);
+  assert.equal(registrarBackfill.log.queries.find(({ statement }) => statement.includes('UPDATE students')).values.lrn, input.lrn);
+  assert.deepEqual(registrarBackfill.log.queries.filter(({ statement }) => statement.includes('INSERT INTO student_profile_revisions')).map(({ values }) => values.fieldName), ['lrn']);
 
   const registrarLrnChange = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.students WITH')) return { recordset: [{ id: 12, status: 'active', student_no: 'S-13', lrn: '123456789011' }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM students WHERE id = @studentId')) return { recordset: [{ id: 12, status: 'active', student_no: 'S-13', lrn: '123456789011' }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   await assert.rejects(registrarLrnChange.service.saveStudent(7, 12, input), /Only database administrators can change a recorded LRN/);
-  assert.equal(registrarLrnChange.log.queries.some(({ statement }) => statement.includes('UPDATE dbo.students')), false);
+  assert.equal(registrarLrnChange.log.queries.some(({ statement }) => statement.includes('UPDATE students')), false);
 
   const databaseAdminEdit = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
-    if (statement.includes('FROM dbo.students WITH')) return { recordset: [{ id: 12, status: 'active', student_no: 'S-12', lrn: '123456789011' }] };
-    if (statement.includes('UPDATE dbo.students')) return { recordset: [] };
-    if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
+    if (statement.includes('FROM students WHERE id = @studentId')) return { recordset: [{ id: 12, status: 'active', student_no: 'S-12', lrn: '123456789011', first_name: 'Jamie', middle_name: null, last_name: 'Lee', suffix: null, birth_date: null, sex: null, address: null, phone: null, birthplace: null, facebook_name: null, emergency_contact_person: null, emergency_contact_relationship: null, emergency_contact_phone: null, emergency_contact_address: null, mother_name: null, mother_phone: null, father_name: null, father_phone: null }] };
+    if (statement.includes('UPDATE students')) return { recordset: [] };
+    if (statement.includes('INSERT INTO student_profile_revisions')) return { recordset: [] };
+    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
-  assert.equal(await databaseAdminEdit.service.saveStudent(7, 12, input), 12);
-  const update = databaseAdminEdit.log.queries.find(({ statement }) => statement.includes('UPDATE dbo.students'));
+  assert.equal(await databaseAdminEdit.service.saveStudent(7, 12, { ...input, birthplace: 'Lucena City', emergencyContactPerson: 'Alex Lee' }), 12);
+  const update = databaseAdminEdit.log.queries.find(({ statement }) => statement.includes('UPDATE students'));
   assert.equal(update.values.studentNo, 'S-13');
   assert.equal(update.values.lrn, input.lrn);
+  assert.equal(update.values.birthplace, 'Lucena City');
+  assert.deepEqual(databaseAdminEdit.log.queries.filter(({ statement }) => statement.includes('INSERT INTO student_profile_revisions')).map(({ values }) => values.fieldName), ['student_no', 'lrn', 'birthplace', 'emergency_contact_person']);
   assert.equal(databaseAdminEdit.log.queries.at(-1).values.action, 'database_admin.student_updated');
   assert.equal(databaseAdminEdit.log.committed, true);
 });
@@ -242,9 +256,9 @@ test('master list search binds escaped input, applies term filter, and pages acr
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values: { ...values } });
-          if (statement.includes('FROM dbo.academic_terms')) return { recordset: [{ id: 3, school_year: '2026-2027', term: 'First', is_current: true }] };
-          if (statement.includes('FROM dbo.sections')) return { recordset: [] };
-          if (statement.includes('COUNT_BIG(*) AS total_students')) return { recordset: [{ total_students: 57 }] };
+          if (statement.includes('FROM academic_terms')) return { recordset: [{ id: 3, school_year: '2026-2027', term: 'First', is_current: true }] };
+          if (statement.includes('FROM sections')) return { recordset: [] };
+          if (statement.includes('COUNT(*) AS total_students')) return { recordset: [{ total_students: 57 }] };
           return { recordset: [] };
         }
       };
@@ -253,7 +267,7 @@ test('master list search binds escaped input, applies term filter, and pages acr
   const service = createStudentRecordsService({ getPool: async () => pool, sql: fakeSql() });
   const result = await service.listWorkspace('A_%[b]~', '3', '2');
   const studentsCall = calls.at(-1);
-  const countCall = calls.find(({ statement }) => statement.includes('COUNT_BIG(*) AS total_students'));
+  const countCall = calls.find(({ statement }) => statement.includes('COUNT(*) AS total_students'));
   assert.equal(result.searchTerm, 'A_%[b]~');
   assert.equal(result.academicTermId, 3);
   assert.equal(result.totalStudents, 57);
@@ -264,16 +278,17 @@ test('master list search binds escaped input, applies term filter, and pages acr
   assert.equal(studentsCall.values.academicTermId, 3);
   assert.equal(studentsCall.values.offset, 25);
   assert.equal(studentsCall.values.pageSize, 25);
-  assert.match(studentsCall.statement, /OUTER APPLY/);
+  assert.match(studentsCall.statement, /ROW_NUMBER\(\) OVER/);
   assert.match(countCall.statement, /s\.lrn LIKE @searchPattern/);
-  assert.match(countCall.statement, /CONCAT_WS\(N' ', s\.first_name, NULLIF\(s\.middle_name, N''\), s\.last_name\)/);
+  assert.match(countCall.statement, /CONCAT_WS\(' ', s\.first_name, NULLIF\(s\.middle_name, ''\), s\.last_name\)/);
   assert.match(studentsCall.statement, /s\.lrn LIKE @searchPattern/);
-  assert.match(studentsCall.statement, /CONCAT_WS\(N' ', s\.first_name, NULLIF\(s\.middle_name, N''\), s\.last_name\)/);
+  assert.match(studentsCall.statement, /CONCAT_WS\(' ', s\.first_name, NULLIF\(s\.middle_name, ''\), s\.last_name\)/);
   assert.match(studentsCall.statement, /AS good_moral_status/);
   assert.match(studentsCall.statement, /AS psa_status/);
   assert.match(studentsCall.statement, /AS form137_status/);
   assert.match(studentsCall.statement, /@academicTermId IS NULL OR EXISTS \([\s\S]*filtered_enrollment\.academic_term_id = @academicTermId/);
-  assert.match(studentsCall.statement, /OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY/);
+  assert.match(studentsCall.statement, /LIMIT @pageSize OFFSET @offset/);
+  assert.doesNotMatch(studentsCall.statement, /OUTER APPLY|SELECT TOP|OFFSET\s+@offset ROWS FETCH/i);
   assert.doesNotMatch(studentsCall.statement, /SELECT TOP \(250\)/);
   assert.doesNotMatch(studentsCall.statement, /A_%\[b\]/);
   const lastPage = await service.listWorkspace('', '', '999');
@@ -291,7 +306,7 @@ test('own student view queries only the student linked to the authenticated user
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values: { ...values } });
-          if (statement.includes('FROM dbo.students WHERE user_id = @userId')) {
+          if (statement.includes('FROM students WHERE user_id = @userId')) {
             return { recordset: [{ id: 21, student_no: 'S-21', first_name: 'Ari', last_name: 'Lee' }] };
           }
           return { recordset: [{ id: 91, school_year: '2026-2027', term: 'First' }] };
@@ -316,7 +331,7 @@ test('unified student record reads only the active student-origin report-card sc
         input() { return this; },
         async query(statement) {
           statements.push(statement);
-          if (statement.includes('FROM dbo.students AS s LEFT JOIN dbo.users')) {
+          if (statement.includes('FROM students AS s LEFT JOIN users')) {
             return { recordset: [{ id: 44, previous_report_card_status: 'needs_review', previous_school_report_card_physical_status: 'received', form137_status: 'verified' }] };
           }
           return { recordset: [] };
@@ -329,7 +344,7 @@ test('unified student record reads only the active student-origin report-card sc
   assert.equal(result.student.previous_report_card_status, 'needs_review');
   assert.equal(result.student.previous_school_report_card_physical_status, 'received');
   assert.equal(result.student.form137_status, 'verified');
-  const profileQuery = statements.find((statement) => statement.includes('FROM dbo.students AS s LEFT JOIN dbo.users'));
+  const profileQuery = statements.find((statement) => statement.includes('FROM students AS s LEFT JOIN users'));
   assert.match(profileQuery, /d\.document_type = 'report_card'[\s\S]*d\.is_legacy_archive = 0 AND d\.upload_source = 'student'/);
   assert.match(profileQuery, /previous_school_report_card_status_events/);
   assert.match(profileQuery, /form137_status_events/);
@@ -337,62 +352,63 @@ test('unified student record reads only the active student-origin report-card sc
 
 test('a section from another academic term is rejected before enrollment writes', async () => {
   const { service, log } = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.students')) return { recordset: [{ id: 12 }] };
-    if (statement.includes('FROM dbo.enrollments AS enrollment')) return { recordset: [] };
-    if (statement.includes('FROM dbo.academic_terms')) return { recordset: [{ id: 5 }] };
-    if (statement.includes('FROM dbo.sections')) return { recordset: [] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM students')) return { recordset: [{ id: 12 }] };
+    if (statement.includes('FROM annual_enrollments')) return { recordset: [] };
+    if (statement.includes('FROM enrollments AS enrollment')) return { recordset: [] };
+    if (statement.includes('FROM academic_terms')) return { recordset: [{ id: 5 }] };
+    if (statement.includes('FROM sections')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
 
   await assert.rejects(service.saveEnrollment(7, { studentId: '12', academicTermId: '5', sectionId: '9' }), /belongs to the selected academic term/);
   assert.equal(log.committed, false);
   assert.equal(log.rolledBack, true);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.enrollments')), false);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO enrollments')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 });
 
 test('setting the current term clears the previous value and audits inside one transaction', async () => {
   const { service, log } = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
-    if (statement.includes('FROM dbo.academic_terms WITH (UPDLOCK')) return { recordset: [{ id: 4 }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
+    if (statement.includes('FROM academic_terms WHERE id = @termId')) return { recordset: [{ id: 4 }] };
     return { recordset: [] };
   });
   await service.setCurrentTerm(7, '4');
   assert.equal(log.committed, true);
   assert.equal(log.rolledBack, false);
   assert.equal(log.isolation, 'SERIALIZABLE');
-  const clearIndex = log.queries.findIndex(({ statement }) => statement === 'UPDATE dbo.academic_terms SET is_current = 0 WHERE is_current = 1');
+  const clearIndex = log.queries.findIndex(({ statement }) => statement === 'UPDATE academic_terms SET is_current = 0 WHERE is_current = 1');
   const setIndex = log.queries.findIndex(({ statement }) => statement.includes('SET is_current = 1'));
-  const auditIndex = log.queries.findIndex(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs'));
+  const auditIndex = log.queries.findIndex(({ statement }) => statement.includes('INSERT INTO audit_logs'));
   assert.ok(clearIndex >= 0 && clearIndex < setIndex && setIndex < auditIndex);
   assert.equal(log.queries[auditIndex].values.entityType, 'academic_term');
 });
 
 test('enrollment update changes only the section and keeps the schema-managed enrollment status', async () => {
   const { service, log } = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.students')) return { recordset: [{ id: 12 }] };
-    if (statement.includes('FROM dbo.enrollments AS enrollment')) return { recordset: [] };
-    if (statement.includes('FROM dbo.academic_terms')) return { recordset: [{ id: 5 }] };
-    if (statement.includes('FROM dbo.sections')) return { recordset: [{ id: 9 }] };
-    if (statement.includes('FROM dbo.enrollments')) return { recordset: [{ id: 44, enrollment_status: 'enrolled' }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM students')) return { recordset: [{ id: 12 }] };
+    if (statement.includes('FROM enrollments AS enrollment')) return { recordset: [] };
+    if (statement.includes('FROM academic_terms')) return { recordset: [{ id: 5 }] };
+    if (statement.includes('FROM sections')) return { recordset: [{ id: 9 }] };
+    if (statement.includes('FROM enrollments')) return { recordset: [{ id: 44, enrollment_status: 'enrolled' }] };
     return { recordset: [] };
   });
   const enrollmentId = await service.saveEnrollment(7, { studentId: '12', academicTermId: '5', sectionId: '9' });
-  const update = log.queries.find(({ statement }) => statement.includes('UPDATE dbo.enrollments'));
+  const update = log.queries.find(({ statement }) => statement.includes('UPDATE enrollments'));
   assert.equal(enrollmentId, 44);
   assert.equal(update.values.sectionId, 9);
   assert.doesNotMatch(update.statement, /enrollment_status/);
   assert.equal(log.committed, true);
-  assert.ok(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')));
+  assert.ok(log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')));
 });
 
 test('legacy enrollment writes cannot bypass a pending new-student intake', async () => {
   const { service, log } = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.students')) return { recordset: [{ id: 12, status: 'active' }] };
-    if (statement.includes('FROM dbo.enrollments AS enrollment')) return { recordset: [{ id: 45 }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM students')) return { recordset: [{ id: 12, status: 'active' }] };
+    if (statement.includes('FROM enrollments AS enrollment')) return { recordset: [{ id: 45 }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   await assert.rejects(service.saveEnrollment(7, { studentId: '12', academicTermId: '5', sectionId: '9' }), (error) => {
@@ -402,24 +418,24 @@ test('legacy enrollment writes cannot bypass a pending new-student intake', asyn
     return true;
   });
   assert.equal(log.rolledBack, true);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.enrollments')), false);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('UPDATE dbo.enrollments')), false);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
-  assert.match(log.queries.find(({ statement }) => statement.includes('FROM dbo.enrollments AS enrollment')).statement,
-    /enrollment_status = N'pending_payment'[\s\S]*created_for_intake = 1/);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO enrollments')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('UPDATE enrollments')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
+  assert.match(log.queries.find(({ statement }) => statement.includes('FROM enrollments AS enrollment')).statement,
+    /enrollment_status = 'pending_payment'[\s\S]*created_for_intake = 1/);
 });
 
 test('database administrator archives a student, disables the linked account, consumes OTPs, and audits atomically', async () => {
   const { service, log } = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
-    if (statement.includes('FROM dbo.students WITH')) return { recordset: [{ id: 12, user_id: 44, student_no: 'S-12', status: 'active' }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
+    if (statement.includes('FROM students WHERE id = @studentId')) return { recordset: [{ id: 12, user_id: 44, student_no: 'S-12', status: 'active' }] };
     return { recordset: [] };
   });
   assert.equal(await service.archiveStudent(7, '12', 'S-12'), 12);
-  const archive = log.queries.find(({ statement }) => statement.includes("SET status = N'archived'"));
-  const deactivate = log.queries.find(({ statement }) => statement.includes('UPDATE dbo.users SET is_active = 0'));
-  const invalidate = log.queries.find(({ statement }) => statement.includes('UPDATE dbo.two_factor_codes'));
-  const audit = log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs'));
+  const archive = log.queries.find(({ statement }) => statement.includes("SET status = 'archived'"));
+  const deactivate = log.queries.find(({ statement }) => statement.includes('UPDATE users SET is_active = 0'));
+  const invalidate = log.queries.find(({ statement }) => statement.includes('UPDATE two_factor_codes'));
+  const audit = log.queries.find(({ statement }) => statement.includes('INSERT INTO audit_logs'));
   assert.ok(archive && deactivate && invalidate && audit);
   assert.ok(log.queries.indexOf(archive) < log.queries.indexOf(deactivate));
   assert.equal(deactivate.values.userId, 44);
@@ -431,38 +447,38 @@ test('database administrator archives a student, disables the linked account, co
 
 test('student archival requires matching confirmation and an active database administrator', async () => {
   const mismatch = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
-    if (statement.includes('FROM dbo.students WITH')) return { recordset: [{ id: 12, user_id: null, student_no: 'S-12', status: 'active' }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
+    if (statement.includes('FROM students WHERE id = @studentId')) return { recordset: [{ id: 12, user_id: null, student_no: 'S-12', status: 'active' }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   await assert.rejects(mismatch.service.archiveStudent(7, '12', 'S-13'), /Type this student’s number/);
   assert.equal(mismatch.log.rolledBack, true);
-  assert.equal(mismatch.log.queries.some(({ statement }) => statement.includes('UPDATE dbo.students')), false);
-  assert.equal(mismatch.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(mismatch.log.queries.some(({ statement }) => statement.includes('UPDATE students')), false);
+  assert.equal(mismatch.log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 
   const registrar = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   await assert.rejects(registrar.service.archiveStudent(7, '12', 'S-12'), /Only database administrators/);
   assert.equal(registrar.log.rolledBack, true);
-  assert.equal(registrar.log.queries.some(({ statement }) => statement.includes('FROM dbo.students')), false);
+  assert.equal(registrar.log.queries.some(({ statement }) => statement.includes('FROM students')), false);
 });
 
 test('registrar deactivates only an active linked student login and preserves the master record', async () => {
   const { service, log } = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users') && statement.includes('actorId')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.students WITH')) return { recordset: [{ id: 12, user_id: 44, status: 'active' }] };
-    if (statement.includes('FROM dbo.users WITH') && statement.includes('userId')) return { recordset: [{ id: 44, is_active: true }] };
+    if (statement.includes('FROM users') && statement.includes('actorId')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM students WHERE id = @studentId')) return { recordset: [{ id: 12, user_id: 44, status: 'active' }] };
+    if (statement.includes('FROM users WHERE id = @userId')) return { recordset: [{ id: 44, is_active: true }] };
     return { recordset: [] };
   });
   assert.equal(await service.deactivateStudentLogin(7, '12', 'DEACTIVATE'), 12);
-  const deactivate = log.queries.find(({ statement }) => statement.includes('UPDATE dbo.users SET is_active = 0'));
-  const audit = log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs'));
+  const deactivate = log.queries.find(({ statement }) => statement.includes('UPDATE users SET is_active = 0'));
+  const audit = log.queries.find(({ statement }) => statement.includes('INSERT INTO audit_logs'));
   assert.ok(deactivate);
   assert.equal(deactivate.values.userId, 44);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('UPDATE dbo.students')), false);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('UPDATE dbo.two_factor_codes')), true);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('UPDATE students')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('UPDATE two_factor_codes')), true);
   assert.equal(audit.values.action, 'registrar.student_login_deactivated');
   assert.equal(log.committed, true);
 });
@@ -477,6 +493,55 @@ test('finance cannot access the student master list and denied requests do not l
     const response = await fetch(`${baseUrl}/registrar/records`, { headers: { cookie } });
     assert.equal(response.status, 403);
     assert.equal(listReads, 0);
+  });
+});
+
+test('student records workspace keeps create forms collapsed, opens failed forms with values, and groups sections by term', async () => {
+  const currentTerm = { id: 2, school_year: '2026-2027', term: 'First term', is_current: true };
+  const previousTerm = { id: 1, school_year: '2025-2026', term: 'Third term', is_current: false };
+  const studentRecordsService = {
+    async listWorkspace() {
+      return {
+        students: [], terms: [currentTerm, previousTerm],
+        sections: [
+          { id: 31, academic_term_id: 2, school_year: currentTerm.school_year, term: currentTerm.term, name: 'STEM A', grade_level: 'Grade 11' },
+          { id: 30, academic_term_id: 1, school_year: previousTerm.school_year, term: previousTerm.term, name: 'ABM B', grade_level: 'Grade 12' }
+        ],
+        searchTerm: '', academicTermId: null, totalStudents: 0, page: 1, pageSize: 25, totalPages: 1
+      };
+    },
+    async createTerm() { throw new StudentRecordsError('The academic term is invalid.', 400); },
+    async createSection() { throw new StudentRecordsError('The section is invalid.', 400); }
+  };
+  await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment, studentRecordsService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'registrar');
+    const response = await fetch(`${baseUrl}/registrar/records`, { headers: { cookie } });
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(html, /<details class="records-create-disclosure"\s*>\s*<summary>Add academic term/);
+    assert.match(html, /<details class="records-create-disclosure"\s*>\s*<summary>Add section/);
+    assert.match(html, /<details class="records-section-group" open>\s*<summary><strong>2026-2027 · First term/);
+    assert.match(html, /<details class="records-section-group"\s*>\s*<summary><strong>2025-2026 · Third term/);
+
+    const token = csrfFromHtml(html);
+    const termError = await postForm(baseUrl, '/registrar/records/terms', cookie, {
+      _csrf: token, schoolYear: 'bad-year', term: 'Fall', isCurrent: '1'
+    });
+    assert.equal(termError.status, 400);
+    const termErrorHtml = await termError.text();
+    assert.match(termErrorHtml, /<details class="records-create-disclosure" open>\s*<summary>Add academic term/);
+    assert.match(termErrorHtml, /name="schoolYear"[^>]*value="bad-year"/);
+    assert.match(termErrorHtml, /name="isCurrent" value="1" type="checkbox" checked/);
+
+    const sectionError = await postForm(baseUrl, '/registrar/records/sections', cookie, {
+      _csrf: token, name: 'STEM C', academicTermId: '2', gradeLevel: 'Grade 11', modality: 'hybrid'
+    });
+    assert.equal(sectionError.status, 400);
+    const sectionErrorHtml = await sectionError.text();
+    assert.match(sectionErrorHtml, /<details class="records-create-disclosure" open>\s*<summary>Add section/);
+    assert.match(sectionErrorHtml, /name="name"[^>]*value="STEM C"/);
+    assert.match(sectionErrorHtml, /option value="2" selected/);
+    assert.match(sectionErrorHtml, /option value="hybrid" selected/);
   });
 });
 
@@ -535,7 +600,7 @@ test('database administrators can search the master list and open a unified prof
         return { enrollments: [{ id: 5, school_year: '2026-2027', term: 'First', is_current: true, grade_level: 'Grade 11', section_name: 'Mabini', enrollment_status: 'enrolled', subjects: [{ subjectCode: 'ENG1', subjectName: 'English', grades: [{ gradingPeriod: 'Quarter 1', gradeValue: 94 }] }] }] };
     }
   };
-  const dependencies = { studentRecordsService, academicRecordsService };
+  const dependencies = { studentRecordsService, academicRecordsService, documentRequestService: { async getStudentRequests() { return []; } } };
   await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, ...dependencies }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'database_admin');
     const list = await fetch(`${baseUrl}/registrar/records?search=Jamie%20Lee`, { headers: { cookie } });
@@ -660,6 +725,101 @@ test('records mutations reject missing CSRF tokens before calling the service', 
     const response = await postForm(baseUrl, '/registrar/records/terms', cookie, { schoolYear: '2026-2027', term: 'First' });
     assert.equal(response.status, 403);
     assert.equal(createCalls, 0);
+  });
+});
+
+test('registrar follow-up ledgers are linked from student records and protected by staff role and CSRF', async () => {
+  const documentCalls = [];
+  const overviewCalls = [];
+  const student = { id: 12, student_no: 'S-12', first_name: 'Jamie', last_name: 'Lee', status: 'active' };
+  const recordsService = {
+    async getStudent() { return { student, terms: [], sections: [], enrollments: [] }; },
+    async listStudentProfileRevisions() { return []; },
+    async listWorkspace() { return { students: [], terms: [], sections: [], totalStudents: 0, page: 1, pageSize: 25, totalPages: 1 }; }
+  };
+  const documentRequestService = {
+    async getStudentRequests() { return [
+      { id: '81111111-1111-4111-8111-111111111111', document_type: 'Transcript', document_name: 'Grade 11 Transcript', requested_on: new Date('2026-09-30T00:00:00Z'), status: 'requested', history: [{ event_type: 'corrected', status_to: 'requested', document_name_before: 'Transcript', document_name_after: 'Grade 11 Transcript', document_type_before: 'Transcript', document_type_after: 'Transcript', requested_on_before: new Date('2026-09-29T00:00:00Z'), requested_on_after: new Date('2026-09-30T00:00:00Z'), reference_before: null, reference_after: 'REF-1', actor_first_name: 'Rae', actor_last_name: 'G.' }] },
+      { id: '82222222-2222-4222-8222-222222222222', document_type: 'Certificate', document_name: 'Enrollment Certificate', requested_on: new Date('2026-09-01T00:00:00Z'), released_on: new Date('2026-09-10T00:00:00Z'), recipient: 'Original Recipient', status: 'released', history: [{ event_type: 'corrected', status_from: 'released', status_to: 'released', document_name_before: 'Enrollment Certificate', document_name_after: 'Enrollment Certificate', document_type_before: 'Certificate', document_type_after: 'Certificate', requested_on_before: new Date('2026-09-01T00:00:00Z'), requested_on_after: new Date('2026-09-01T00:00:00Z'), reference_before: null, reference_after: null, released_on_before: new Date('2026-09-09T00:00:00Z'), released_on_after: new Date('2026-09-10T00:00:00Z'), recipient_before: 'Mistyped Recipient', recipient_after: 'Original Recipient', actor_first_name: 'Rae', actor_last_name: 'G.' }] }
+    ]; },
+    async createRequest(...args) { documentCalls.push(['create', ...args]); },
+    async transitionRequest(...args) { documentCalls.push(['transition', ...args]); },
+    async correctRequest(...args) { documentCalls.push(['correct', ...args]); }
+  };
+  const gradeOverviewService = {
+    async listContexts() { return { terms: [{ id: 4, school_year: '2026-2027', term: 'Term 1', is_current: true }], sections: [], subjects: [] }; },
+    async getOverview(...args) {
+      overviewCalls.push(args);
+      return { context: { school_year: '2026-2027', term: 'Term 1', grade_level: 'Grade 11', section_name: 'A', subject_code: 'ENG', subject_name: 'English', is_current: true },
+        periods: ['Term 1'], selectedPeriod: '', entries: [], totals: { distinctLearners: 0, periodEntries: 0, published: 0, pendingReview: 0 } };
+    }
+  };
+  const app = createApp({
+    databasePool: makeAuthPool('registrar'), environment,
+    studentRecordsService: recordsService,
+    academicRecordsService: { async getStudentAcademicRecord() { return { student, enrollments: [] }; } },
+    documentRequestService,
+    gradeOverviewService
+  });
+  await withServer(app, async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'registrar');
+    const profilePage = await fetch(`${baseUrl}/registrar/records/students/12`, { headers: { cookie } });
+    assert.equal(profilePage.status, 200);
+    const html = await profilePage.text();
+    assert.match(html, /Document requests and release history/);
+    assert.match(html, /Student profile revision history/);
+    assert.match(html, /Grade completion overview/);
+    assert.match(html, /<option value="processing">Processing<\/option><option value="ready">Ready<\/option><option value="cancelled">Cancelled<\/option>/);
+    assert.doesNotMatch(html, /<option value="released">Released<\/option><option value="cancelled">Cancelled<\/option>/);
+    assert.match(html, /data-status-only="released" hidden/);
+    assert.match(html, /name="releasedOn" type="date" data-required-status="released" disabled/);
+    assert.match(html, /name="recipient" maxlength="150" data-required-status="released" disabled/);
+    assert.match(html, /Document name: Transcript → Grade 11 Transcript/);
+    assert.match(html, /Request date: 2026-09-29 → 2026-09-30/);
+    assert.match(html, /Reference: None → REF-1/);
+    assert.match(html, /Release date: 2026-09-09 → 2026-09-10/);
+    assert.match(html, /Recipient: Mistyped Recipient → Original Recipient/);
+    assert.match(html, /name="releasedOn" type="date" value="2026-09-10" required/);
+    const csrfToken = csrfFromHtml(html);
+    const key = html.match(/name="idempotencyKey" value="([\da-f-]{36})"/)?.[1];
+    assert.ok(key);
+    const denied = await postForm(baseUrl, '/registrar/records/students/12/document-requests', cookie, {
+      documentType: 'Transcript', documentName: 'Grade 11 Transcript', requestedOn: '2026-09-30', idempotencyKey: key
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(documentCalls.length, 0);
+    const created = await postForm(baseUrl, '/registrar/records/students/12/document-requests', cookie, {
+      _csrf: csrfToken, documentType: 'Transcript', documentName: 'Grade 11 Transcript',
+      requestedOn: '2026-09-30', idempotencyKey: key
+    });
+    assert.equal(created.status, 303);
+    assert.match(created.headers.get('location'), /notice=documentRequestCreated/);
+    assert.equal(documentCalls[0][0], 'create');
+    const corrected = await postForm(baseUrl, '/registrar/records/students/12/document-requests/82222222-2222-4222-8222-222222222222/correct', cookie, {
+      _csrf: csrfToken, idempotencyKey: '83333333-3333-4333-8333-333333333333', documentType: 'Certificate',
+      documentName: 'Enrollment Certificate', requestedOn: '2026-09-01', releasedOn: '2026-09-10',
+      recipient: 'Original Recipient', reason: 'Corrected a transcription error.'
+    });
+    assert.equal(corrected.status, 303);
+    assert.equal(documentCalls[1][0], 'correct');
+
+    const overview = await fetch(`${baseUrl}/registrar/records/grades/missing?termId=4&sectionId=8&subjectId=9`, { headers: { cookie } });
+    assert.equal(overview.status, 200);
+    const overviewHtml = await overview.text();
+    assert.match(overviewHtml, /Distinct enrolled learners/);
+    assert.match(overviewHtml, /Current terms include the four ECR grading periods/);
+    assert.match(overviewHtml, /All grading periods/);
+    assert.match(overviewHtml, /registrar-records-followup\.js/);
+    assert.equal(overviewCalls.length, 1);
+  });
+
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, studentRecordsService: recordsService,
+    documentRequestService, gradeOverviewService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'finance');
+    const response = await fetch(`${baseUrl}/registrar/records/grades/missing`, { headers: { cookie } });
+    assert.equal(response.status, 403);
+    assert.equal(overviewCalls.length, 1);
+    assert.equal(documentCalls.length, 2);
   });
 });
 

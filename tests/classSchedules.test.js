@@ -8,7 +8,7 @@ const { formatStudentPlacement } = require('../src/utils/formatStudentPlacement'
 function scheduleViewData(overrides = {}) {
   return {
     title: 'Class schedules', csrfToken: 'test-token', notice: null, error: null, contextNotice: null,
-    values: {}, editScheduleId: null, terms: [{ id: 6, school_year: '2026-2027', term: 'First', is_current: true }],
+    values: {}, editScheduleId: null, focusScheduleId: null, showCreate: false, terms: [{ id: 6, school_year: '2026-2027', term: 'First', is_current: true }],
     sections: [{ id: 12, name: 'STEM A', grade_level: 'Grade 11' }], academicTermId: 6,
     selectedSectionId: null, selectedAssignmentId: null,
     assignments: [
@@ -55,13 +55,13 @@ function scheduleDatabase({ overlap = false, assignment = true } = {}) {
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           state.queries.push({ statement, values: { ...values } });
-          if (statement.includes("role = N'registrar'")) return { recordset: [{ id: 5 }] };
-          if (statement.includes('FROM dbo.teacher_assignments AS assignment')) {
+          if (statement.includes("role = 'registrar'")) return { recordset: [{ id: 5 }] };
+          if (statement.includes('FROM teacher_assignments AS assignment')) {
             return { recordset: assignment ? [{ id: 44, section_id: 12, teacher_id: 19, academic_term_id: 6 }] : [] };
           }
-          if (statement.includes('SELECT TOP (1) schedule.id')) return { recordset: overlap ? [{ id: 91 }] : [] };
-          if (statement.includes('INSERT INTO dbo.class_schedules')) return { recordset: [{ id: 92 }] };
-          if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+          if (statement.includes('SELECT schedule.id') && statement.includes('assigned_class.academic_term_id')) return { recordset: overlap ? [{ id: 91 }] : [] };
+          if (statement.includes('INSERT INTO class_schedules')) return { insertId: 92 };
+          if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
           throw new Error(`Unexpected schedule query: ${statement}`);
         }
       };
@@ -85,14 +85,14 @@ function workspaceService({ sectionId = 12, assignmentId = 44 } = {}) {
         async query(statement) {
           const call = { statement, values: { ...values } };
           calls.push(call);
-          if (statement.includes('SELECT id FROM dbo.users WHERE id = @actorId')) return { recordset: [{ id: 5 }] };
-          if (statement.includes('FROM dbo.academic_terms ORDER BY')) return { recordset: [currentTerm, oldTerm] };
-          if (statement.includes('FROM dbo.sections AS section')) {
+          if (statement.includes('SELECT id FROM users WHERE id = @actorId')) return { recordset: [{ id: 5 }] };
+          if (statement.includes('FROM academic_terms ORDER BY')) return { recordset: [currentTerm, oldTerm] };
+          if (statement.includes('FROM sections AS section')) {
             return { recordset: values.academicTermId === 6
               ? [{ id: sectionId, name: 'STEM A', grade_level: 'Grade 11', academic_term_id: 6 }]
               : [{ id: 91, name: 'Old A', grade_level: 'Grade 12', academic_term_id: 19 }] };
           }
-          if (statement.includes('FROM dbo.teacher_assignments AS assignment')) {
+          if (statement.includes('FROM teacher_assignments AS assignment')) {
             const termId = values.academicTermId;
             const section = values.sectionId;
             const rows = termId === 6 ? [{ id: assignmentId, academic_term_id: 6, section_id: sectionId,
@@ -100,7 +100,7 @@ function workspaceService({ sectionId = 12, assignmentId = 44 } = {}) {
               subject_name: 'Oral Communication', teacher_id: 8, teacher_name: 'Jamie Lee' }] : [];
             return { recordset: section ? rows.filter((row) => row.section_id === section) : rows };
           }
-          if (statement.includes('FROM dbo.class_schedules AS schedule')) return { recordset: [{
+          if (statement.includes('FROM class_schedules AS schedule')) return { recordset: [{
             id: 72, assignment_id: assignmentId, academic_term_id: values.academicTermId,
             section_id: values.sectionId, day_of_week: 1, start_time: '08:00', end_time: '09:00',
             assignment_is_active: true
@@ -124,7 +124,7 @@ test('schedule save is serializable and only checks active assignments in the se
   assert.equal(state.isolation, 'SERIALIZABLE');
   assert.equal(state.committed, true);
   assert.equal(state.rolledBack, false);
-  const conflictCheck = state.queries.find(({ statement }) => statement.includes('SELECT TOP (1) schedule.id'));
+  const conflictCheck = state.queries.find(({ statement }) => statement.includes('SELECT schedule.id') && statement.includes('assigned_class.academic_term_id'));
   assert.ok(conflictCheck);
   assert.match(conflictCheck.statement, /assigned_class\.academic_term_id = @academicTermId/);
   assert.match(conflictCheck.statement, /assigned_class\.is_active = 1/);
@@ -141,8 +141,8 @@ test('same-term section, teacher, or room overlap rejects the schedule and rolls
 
   assert.equal(state.committed, false);
   assert.equal(state.rolledBack, true);
-  assert.equal(state.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.class_schedules')), false);
-  assert.equal(state.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(state.queries.some(({ statement }) => statement.includes('INSERT INTO class_schedules')), false);
+  assert.equal(state.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 });
 
 test('registrar workspace defaults to the marked current term and scopes class and schedule filters', async () => {
@@ -154,12 +154,12 @@ test('registrar workspace defaults to the marked current term and scopes class a
   assert.equal(workspace.selectedAssignmentId, 44);
   assert.equal(workspace.assignments.length, 1);
   assert.equal(workspace.schedules.length, 1);
-  const terms = calls.find(({ statement }) => statement.includes('FROM dbo.academic_terms ORDER BY'));
+  const terms = calls.find(({ statement }) => statement.includes('FROM academic_terms ORDER BY'));
   assert.match(terms.statement, /is_current DESC/);
-  const assignments = calls.find(({ statement }) => statement.includes('FROM dbo.teacher_assignments AS assignment'));
+  const assignments = calls.find(({ statement }) => statement.includes('FROM teacher_assignments AS assignment'));
   assert.equal(assignments.values.academicTermId, 6);
   assert.equal(assignments.values.sectionId, 12);
-  const schedules = calls.find(({ statement }) => statement.includes('FROM dbo.class_schedules AS schedule'));
+  const schedules = calls.find(({ statement }) => statement.includes('FROM class_schedules AS schedule'));
   assert.equal(schedules.values.academicTermId, 6);
   assert.equal(schedules.values.sectionId, 12);
   assert.equal(schedules.values.assignmentId, 44);
@@ -176,12 +176,12 @@ test('query context from another term is cleared and cannot expose another term 
   assert.equal(workspace.selectedSectionId, null);
   assert.equal(workspace.selectedAssignmentId, null);
   assert.match(workspace.contextNotice, /different term/);
-  const sectionQuery = calls.find(({ statement }) => statement.includes('FROM dbo.sections AS section'));
+  const sectionQuery = calls.find(({ statement }) => statement.includes('FROM sections AS section'));
   assert.equal(sectionQuery.values.academicTermId, 6);
-  const assignmentQuery = calls.find(({ statement }) => statement.includes('FROM dbo.teacher_assignments AS assignment'));
+  const assignmentQuery = calls.find(({ statement }) => statement.includes('FROM teacher_assignments AS assignment'));
   assert.equal(assignmentQuery.values.academicTermId, 6);
   assert.equal(assignmentQuery.values.sectionId, null);
-  const scheduleQuery = calls.find(({ statement }) => statement.includes('FROM dbo.class_schedules AS schedule'));
+  const scheduleQuery = calls.find(({ statement }) => statement.includes('FROM class_schedules AS schedule'));
   assert.equal(scheduleQuery.values.academicTermId, 6);
   assert.equal(scheduleQuery.values.sectionId, null);
   assert.equal(scheduleQuery.values.assignmentId, null);
@@ -195,13 +195,15 @@ test('schedule save rejects a class that does not match the posted section conte
   }), (error) => error instanceof ClassScheduleError && error.status === 409);
 
   assert.equal(state.rolledBack, true);
-  assert.equal(state.queries.some(({ statement }) => statement.includes('SELECT TOP (1) schedule.id')), false);
-  assert.equal(state.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.class_schedules')), false);
+  assert.equal(state.queries.some(({ statement }) => statement.includes('SELECT schedule.id') && statement.includes('assigned_class.academic_term_id')), false);
+  assert.equal(state.queries.some(({ statement }) => statement.includes('INSERT INTO class_schedules')), false);
 });
 
-test('registrar weekly schedule renders ordered, section-grouped cards with intact edit and remove forms', async () => {
+test('registrar weekly schedule renders ordered section and weekday groups with intact edit and remove forms', async () => {
   const html = await renderScheduleView();
 
+  assert.match(html, /<details class="schedule-create-disclosure"\s*>/);
+  assert.doesNotMatch(html, /<details class="schedule-create-disclosure" open>/);
   assert.doesNotMatch(html, /<table\b/);
   assert.match(html, /class="schedule-section-grid" aria-label="Class times grouped by section"/);
   assert.equal((html.match(/class="schedule-section-card"/g) || []).length, 2);
@@ -209,7 +211,7 @@ test('registrar weekly schedule renders ordered, section-grouped cards with inta
   assert.match(html, /Grade 11 · STEM B/);
   const rowIds = [...html.matchAll(/<li class="schedule-entry" id="schedule-(\d+)"/g)].map((match) => match[1]);
   assert.deepEqual(rowIds, ['74', '73', '72', '75'], 'entries sort by section, then day and start time');
-  assert.match(html, /Monday<\/span><strong>08:00–09:00/);
+  assert.match(html, /<details class="schedule-day"\s*>[\s\S]*?<summary class="schedule-day__summary"><strong>Monday<\/strong>[\s\S]*?08:00–11:00/);
   assert.match(html, /Oral Communication/);
   assert.match(html, /Teacher: Jamie Lee/);
   assert.match(html, /Room: A12/);
@@ -221,7 +223,7 @@ test('registrar weekly schedule renders ordered, section-grouped cards with inta
   assert.match(html, /name="_csrf" value="test-token"/);
   assert.match(html, /name="filterSectionId" value=""/);
   assert.match(html, /name="filterAssignmentId" value=""/);
-  assert.match(html, /#schedule-72">Cancel<\/a>/);
+  assert.match(html, /focusScheduleId=72#schedule-72">Cancel<\/a>/);
 
   const revokedRow = html.match(/<li class="schedule-entry" id="schedule-75">([\s\S]*?)<\/li>/)?.[1] || '';
   assert.ok(revokedRow);
@@ -232,6 +234,22 @@ test('registrar weekly schedule renders ordered, section-grouped cards with inta
   assert.ok(activeRow);
   assert.match(activeRow, /class="schedule-entry__overview"/);
   assert.doesNotMatch(activeRow, /schedule-entry__overview--revoked|schedule-entry__status/);
+});
+
+test('schedule focus opens the containing weekday so edit deep links remain visible', async () => {
+  const html = await renderScheduleView({ focusScheduleId: 72 });
+  const tuesday = html.match(/<details class="schedule-day" open>([\s\S]*?)<\/details>/);
+  assert.ok(tuesday);
+  assert.match(tuesday[1], /<summary class="schedule-day__summary"><strong>Tuesday<\/strong>/);
+  assert.match(tuesday[1], /id="schedule-72"/);
+  assert.match(html, /<details class="schedule-day"\s*>\s*<summary class="schedule-day__summary"><strong>Monday<\/strong>/);
+});
+
+test('class time creation disclosure opens for an intentional deep link or validation error', async () => {
+  const linkedHtml = await renderScheduleView({ showCreate: true });
+  assert.match(linkedHtml, /<details class="schedule-create-disclosure" open>/);
+  const errorHtml = await renderScheduleView({ error: 'Choose a valid class.' });
+  assert.match(errorHtml, /<details class="schedule-create-disclosure" open>/);
 });
 
 test('schedule edit remains open with posted values after validation errors and empty schedule has a clear state', async () => {
@@ -272,7 +290,7 @@ test('student schedule binds the authenticated account and only returns currentl
   assert.equal(calls.length, 1);
   assert.equal(calls[0].values.userId, 7);
   assert.match(calls[0].statement, /user_account\.id = @userId/);
-  assert.match(calls[0].statement, /enrollment\.enrollment_status = N'enrolled'/);
+  assert.match(calls[0].statement, /enrollment\.enrollment_status = 'enrolled'/);
   assert.match(calls[0].statement, /term\.is_current = 1/);
-  assert.match(calls[0].statement, /INNER JOIN dbo\.student_subjects AS enrolled_subject/);
+  assert.match(calls[0].statement, /INNER JOIN student_subjects AS enrolled_subject/);
 });

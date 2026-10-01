@@ -40,6 +40,9 @@ function makeHarness({ documentType = 'good_moral', status = 'pending', isLegacy
               if (transaction.document.status !== 'pending' || transaction.document.document_type === 'form_137'
                 || (transaction.document.document_type === 'report_card' && transaction.document.is_legacy_archive === 1)) return { recordset: [] };
               transaction.document.status = 'processing';
+              return { rowsAffected: [1] };
+            }
+            if (statement.includes('SELECT id, stored_filename, mime_type, document_type, is_legacy_archive')) {
               return { recordset: [{ ...transaction.document }] };
             }
             if (statement.includes('SELECT d.original_filename, s.first_name')) return { recordset: [{
@@ -50,9 +53,9 @@ function makeHarness({ documentType = 'good_moral', status = 'pending', isLegacy
               if (transaction.document.status !== 'processing') return { recordset: [] };
               transaction.document.status = values.documentStatus;
               transaction.document.processing_started_at = null;
-              return { recordset: [{ id: transaction.document.id }] };
+              return { rowsAffected: [1] };
             }
-            if (statement.includes('INSERT INTO dbo.document_validations')) {
+            if (statement.includes('INSERT INTO document_validations')) {
               transaction.validations.push({ ...values });
               return { recordset: [] };
             }
@@ -305,8 +308,8 @@ test('queue claim and stale recovery scope report cards to active lifecycle rows
           input() { return this; },
           async query(statement) {
             statements.push(statement);
-            if (statement.includes('DECLARE @recovered TABLE')) return { recordset: [{ recovered_count: 0 }] };
-            if (statement.includes('WITH next_pending')) return { recordset: [] };
+            if (statement.includes('FROM documents') && statement.includes("status = 'pending'")) return { recordset: [] };
+            if (statement.includes('FROM documents') && statement.includes("status = 'processing'")) return { recordset: [] };
             throw new Error('Unexpected test query.');
           }
         };
@@ -321,8 +324,8 @@ test('queue claim and stale recovery scope report cards to active lifecycle rows
   try {
     assert.equal(await service.processPendingQueue(), 0);
     assert.equal(await service.recoverStaleProcessing(), 0);
-    const claim = statements.find((statement) => statement.includes('WITH next_pending'));
-    const recovery = statements.find((statement) => statement.includes('DECLARE @recovered TABLE'));
+    const claim = statements.find((statement) => statement.includes("status = 'pending'"));
+    const recovery = statements.find((statement) => statement.includes("status = 'processing'"));
     for (const statement of [claim, recovery]) {
       assert.match(statement, /document_type <> 'form_137'/);
       assert.match(statement, /document_type <> 'report_card' OR is_legacy_archive = 0/);

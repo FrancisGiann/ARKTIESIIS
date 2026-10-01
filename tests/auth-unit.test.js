@@ -128,34 +128,42 @@ test('OTP values are six-digit cryptographic values and use a cost-12 bcrypt has
 });
 
 test('OTP issuance stores only the code hash and enforces database-backed send limits', async () => {
-  let statement;
-  const values = {};
-  const sql = { Int: 'Int', NVarChar: (length) => `NVarChar(${length})` };
+  const calls = [];
+  const sql = { Int: 'Int', NVarChar: (length) => `NVarChar(${length})`, ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' } };
   const result = await twoFactor.issueOtpChallenge({
     getPool: async () => ({
       request: () => ({
-        input(name, type, value) { values[name] = value; return this; },
+        input(name, type, value) { this.values ||= {}; this.values[name] = value; return this; },
         async query(queryText) {
-          statement = queryText;
-          return { recordset: [{ allowed: 0, codeId: null }] };
+          calls.push({ statement: queryText, values: { ...(this.values || {}) } });
+          if (queryText.includes('SELECT send_count')) return { recordset: [{ send_count: 0, window_expired: 1, cooldown_elapsed: 1 }] };
+          if (queryText.includes('INSERT INTO two_factor_codes')) return { insertId: 52 };
+          return { affectedRows: 1 };
         }
       })
     }),
     sql,
+    transactionFactory: (pool) => ({
+      async begin() {},
+      request() { return pool.request(); },
+      async commit() {},
+      async rollback() {}
+    }),
     userId: 42,
     createCode: () => '004219',
     hash: async (code) => `hash:${code}`
   });
 
-  assert.deepEqual(result, { allowed: false, codeId: null, code: '004219' });
-  assert.equal(values.userId, 42);
-  assert.equal(values.codeHash, 'hash:004219');
-  assert.equal(Object.hasOwn(values, 'code'), false);
-  assert.match(statement, /WITH \(UPDLOCK, HOLDLOCK\)/);
-  assert.match(statement, /@maxSends/);
-  assert.match(statement, /@cooldownSeconds/);
-  assert.match(statement, /DATEADD\(MINUTE, -@sendWindowMinutes/);
-  assert.match(statement, /SET consumed_at = @now/);
+  assert.deepEqual(result, { allowed: true, codeId: 52, code: '004219' });
+  assert.equal(calls[0].values.userId, 42);
+  const inserted = calls.find(({ statement }) => statement.includes('INSERT INTO two_factor_codes'));
+  assert.equal(inserted.values.userId, 42);
+  assert.equal(inserted.values.codeHash, 'hash:004219');
+  assert.equal(Object.hasOwn(inserted.values, 'code'), false);
+  const statement = calls.find(({ statement }) => statement.includes('SELECT send_count')).statement;
+  assert.match(statement, /FROM two_factor_auth_limits WHERE user_id = @userId FOR UPDATE/);
+  assert.match(statement, /DATE_SUB\(UTC_TIMESTAMP\(\), INTERVAL 15 MINUTE\)/);
+  assert.match(statement, /DATE_SUB\(UTC_TIMESTAMP\(\), INTERVAL 30 SECOND\)/);
 });
 
 test('hidden bootstrap password input pauses stdin and restores terminal mode', async () => {

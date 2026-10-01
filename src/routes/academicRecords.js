@@ -30,12 +30,18 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, tea
 
   async function renderSubjects(req, res, { status = 200, error = null, values = {} } = {}) {
     try {
-      const subjects = await service.listSubjects();
+      const allSubjects = await service.listSubjects();
+      const search = typeof req.query?.search === 'string' ? req.query.search.slice(0, 100).trim() : '';
+      const searchNeedle = search.toLocaleLowerCase();
+      const subjects = searchNeedle ? allSubjects.filter((subject) =>
+        `${subject.subject_code} ${subject.subject_name}`.toLocaleLowerCase().includes(searchNeedle)) : allSubjects;
       return res.status(status).render('records/subjects', {
         title: 'Subject Catalog',
         csrfToken: ensureCsrfToken(req),
         currentUser: req.authUser,
         subjects,
+        subjectCount: allSubjects.length,
+        search,
         values: subjectValues(values),
         error,
         notice: notices[req.query.notice] || null

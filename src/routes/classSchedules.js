@@ -19,11 +19,13 @@ function scheduleContext(req) {
   };
 }
 
-function scheduleUrl(context, notice) {
+function scheduleUrl(context, notice, focusScheduleId = null, showCreate = false) {
   const query = new URLSearchParams();
   if (context.termId) query.set('termId', context.termId);
   if (context.sectionId) query.set('sectionId', context.sectionId);
   if (context.assignmentId) query.set('assignmentId', context.assignmentId);
+  if (focusScheduleId) query.set('focusScheduleId', String(focusScheduleId));
+  if (showCreate) query.set('showCreate', '1');
   if (notice) query.set('notice', notice);
   const serialized = query.toString();
   return `/registrar/schedules${serialized ? `?${serialized}` : ''}`;
@@ -45,13 +47,15 @@ function createClassSchedulesRouter({ getPool, sql, classScheduleService } = {})
         error,
         values,
         editScheduleId,
+        focusScheduleId: positiveId(req.query?.focusScheduleId),
+        showCreate: req.query?.showCreate === '1' || Boolean(error),
         ...workspace
       });
     } catch (loadError) {
       if (loadError instanceof ClassScheduleError) {
         return res.status(loadError.status).render('registrar/schedules', {
           title: 'Class schedules', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
-          notice: null, error: loadError.message, values, editScheduleId,
+          notice: null, error: loadError.message, values, editScheduleId, focusScheduleId: null, showCreate: true,
           terms: [], sections: [], academicTermId: null, selectedSectionId: null,
           selectedAssignmentId: null, contextNotice: null, assignments: [], schedules: []
         });
@@ -70,7 +74,7 @@ function createClassSchedulesRouter({ getPool, sql, classScheduleService } = {})
     }
     try {
       await service.saveSchedule(req.authUser.id, null, req.body);
-      return res.redirect(303, `${scheduleUrl(scheduleContext(req), 'scheduleCreated')}#schedule-create-title`);
+      return res.redirect(303, `${scheduleUrl(scheduleContext(req), 'scheduleCreated', null, true)}#schedule-create-title`);
     } catch (error) {
       const status = error instanceof ClassScheduleError ? error.status : 503;
       const message = error instanceof ClassScheduleError ? error.message : 'The class time could not be saved.';
@@ -86,7 +90,7 @@ function createClassSchedulesRouter({ getPool, sql, classScheduleService } = {})
     if (!id) return res.status(404).render('error', { title: 'Not Found', message: 'Class schedule not found.' });
     try {
       await service.saveSchedule(req.authUser.id, id, req.body);
-      return res.redirect(303, `${scheduleUrl(scheduleContext(req), 'scheduleUpdated')}#schedule-${id}`);
+      return res.redirect(303, `${scheduleUrl(scheduleContext(req), 'scheduleUpdated', id)}#schedule-${id}`);
     } catch (error) {
       const status = error instanceof ClassScheduleError ? error.status : 503;
       const message = error instanceof ClassScheduleError ? error.message : 'The class time could not be updated.';

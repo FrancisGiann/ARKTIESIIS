@@ -1,0 +1,100 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page" id="main-content">
+  <a class="context-back" href="/finance">Back to annual finance roster</a>
+  <header class="dashboard-heading"><div><h1>Versioned fee schedules</h1><p>Enter student-payable amounts by school year, grade, voucher, term, fee category, and installment. Optional lines are charged only when selected in an annual assessment.</p></div></header>
+  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <section class="finance-panel" aria-labelledby="schedule-create-title">
+    <details class="finance-schedule-create" <%= error ? 'open' : '' %>>
+      <summary id="schedule-create-title">Create a schedule version</summary>
+      <div class="finance-schedule-create-body">
+        <p>Saving creates a new version and retires the previous active version for the same year, grade, and voucher. Posted assessments keep their snapshot.</p>
+    <form class="form-stack" method="post" action="/finance/schedules" data-finance-schedule-form>
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <input type="hidden" name="idempotencyKey" value="<%= idempotencyKey %>">
+      <div class="admin-form-grid">
+        <div class="field"><label for="schedule-year">School year</label><input id="schedule-year" name="schoolYear" type="text" maxlength="20" placeholder="2026-2027" value="<%= scheduleForm.schoolYear %>" required></div>
+        <div class="field"><label for="schedule-grade">Grade</label><select id="schedule-grade" name="gradeLevel" required><option value="" <%= !scheduleForm.gradeLevel ? 'selected' : '' %>>Choose grade</option><% if (scheduleForm.gradeLevel && !['Grade 11', 'Grade 12'].includes(scheduleForm.gradeLevel)) { %><option value="<%= scheduleForm.gradeLevel %>" selected>Previous selection: <%= scheduleForm.gradeLevel %></option><% } %><option value="Grade 11" <%= scheduleForm.gradeLevel === 'Grade 11' ? 'selected' : '' %>>Grade 11</option><option value="Grade 12" <%= scheduleForm.gradeLevel === 'Grade 12' ? 'selected' : '' %>>Grade 12</option></select></div>
+        <div class="field"><label for="schedule-voucher">Voucher</label><select id="schedule-voucher" name="voucherCode" required><option value="" <%= !scheduleForm.voucherCode ? 'selected' : '' %>>Choose voucher</option><% if (scheduleForm.voucherCode && !['PUB', 'ESC', 'NV'].includes(scheduleForm.voucherCode)) { %><option value="<%= scheduleForm.voucherCode %>" selected>Previous selection: <%= scheduleForm.voucherCode %></option><% } %><option value="PUB" <%= scheduleForm.voucherCode === 'PUB' ? 'selected' : '' %>>PUB</option><option value="ESC" <%= scheduleForm.voucherCode === 'ESC' ? 'selected' : '' %>>ESC</option><option value="NV" <%= scheduleForm.voucherCode === 'NV' ? 'selected' : '' %>>NV</option></select></div>
+      </div>
+      <section class="finance-schedule-tuition" aria-labelledby="schedule-tuition-title">
+        <div class="finance-schedule-tuition-heading"><h3 id="schedule-tuition-title">Tuition by term</h3><p>Enter staff-approved amounts for DP, Prelim, Midterm, and Finals. Use 0.00 when no tuition is payable. Voucher and workbook data do not set amounts.</p></div>
+        <% for (const termNumber of [1, 2, 3]) { const termLines = scheduleForm.lines.filter((line) => line.isRequiredTuition && Number(line.termNumber) === termNumber); %>
+          <details class="finance-schedule-term" data-schedule-term="<%= termNumber %>" <%= termNumber === 1 ? 'open' : '' %>>
+            <summary><strong>Term <%= termNumber %></strong><span>4 tuition amounts</span></summary>
+            <div class="finance-schedule-term-fields">
+              <% for (const formLine of termLines) { const index = scheduleForm.lines.indexOf(formLine); %>
+                <div class="finance-schedule-tuition-field" data-required-tuition-line>
+                  <input type="hidden" name="termNumber" value="<%= formLine.termNumber %>"><input type="hidden" name="feeCategory" value="tuition"><input type="hidden" name="lineName" value="Tuition"><input type="hidden" name="installment" value="<%= formLine.installment %>">
+                  <label for="line-amount-<%= index %>"><%= formLine.installment %></label>
+                  <div class="finance-schedule-tuition-amount"><span aria-hidden="true">₱</span><input id="line-amount-<%= index %>" name="lineAmount" inputmode="decimal" maxlength="14" placeholder="0.00" aria-label="Term <%= termNumber %> tuition <%= formLine.installment %> amount in PHP" value="<%= formLine.amount %>" required></div>
+                </div>
+              <% } %>
+            </div>
+          </details>
+        <% } %>
+      </section>
+      <% const additionalLines = scheduleForm.lines.filter((line) => !line.isRequiredTuition); %>
+      <details class="finance-schedule-additional" <%= additionalLines.length ? 'open' : '' %>>
+        <summary><strong>Additional fee lines</strong><span>Optional activities and other charges</span></summary>
+        <div class="finance-schedule-additional-body">
+          <div class="admin-section__heading"><div><h4>Other fees</h4><p>These lines stay separate from tuition. Optional lines are included in an assessment only when selected.</p></div><button class="button button--secondary" type="button" data-add-finance-line>Add fee line</button></div>
+          <div class="table-scroll" tabindex="0" aria-label="Additional schedule fee lines">
+            <table class="admin-table"><thead><tr><th>Term</th><th>Category</th><th>Fee name</th><th>Installment</th><th>Amount (PHP)</th><th>Optional</th><th></th></tr></thead>
+              <tbody data-finance-line-rows>
+                <% for (let index = 12; index < scheduleForm.lines.length; index += 1) { const formLine = scheduleForm.lines[index]; %>
+                  <tr data-finance-line-row>
+                    <td><label class="visually-hidden" data-label="Term" for="line-term-<%= index %>">Term for fee line <%= index - 11 %></label><select id="line-term-<%= index %>" name="termNumber" required><% if (formLine.termNumber && !['1', '2', '3'].includes(String(formLine.termNumber))) { %><option value="<%= formLine.termNumber %>" selected>Previous selection: <%= formLine.termNumber %></option><% } %><option value="" <%= !formLine.termNumber ? 'selected' : '' %>>Choose term</option><option value="1" <%= String(formLine.termNumber) === '1' ? 'selected' : '' %>>Term 1</option><option value="2" <%= String(formLine.termNumber) === '2' ? 'selected' : '' %>>Term 2</option><option value="3" <%= String(formLine.termNumber) === '3' ? 'selected' : '' %>>Term 3</option></select></td>
+                    <td><label class="visually-hidden" data-label="Category" for="line-category-<%= index %>">Category for fee line <%= index - 11 %></label><select id="line-category-<%= index %>" name="feeCategory" required><% if (formLine.feeCategory && !['tuition','miscellaneous','uniform','id','activity','retake','other'].includes(formLine.feeCategory)) { %><option value="<%= formLine.feeCategory %>" selected>Previous selection: <%= formLine.feeCategory %></option><% } %><option value="" <%= !formLine.feeCategory ? 'selected' : '' %>>Choose category</option><% for (const category of ['tuition','miscellaneous','uniform','id','activity','retake','other']) { %><option value="<%= category %>" <%= formLine.feeCategory === category ? 'selected' : '' %>><%= category.replaceAll('_', ' ') %></option><% } %></select></td>
+                    <td><label class="visually-hidden" data-label="Fee name" for="line-name-<%= index %>">Name for fee line <%= index - 11 %></label><input id="line-name-<%= index %>" name="lineName" maxlength="120" value="<%= formLine.lineName %>" required></td>
+                    <td><label class="visually-hidden" data-label="Installment" for="line-installment-<%= index %>">Installment for fee line <%= index - 11 %></label><input id="line-installment-<%= index %>" name="installment" maxlength="40" placeholder="Prelim / Finals" value="<%= formLine.installment %>" required></td>
+                    <td><label class="visually-hidden" data-label="Amount" for="line-amount-<%= index %>">Amount for fee line <%= index - 11 %></label><input id="line-amount-<%= index %>" name="lineAmount" inputmode="decimal" maxlength="14" placeholder="0.00" value="<%= formLine.amount %>" required></td>
+                    <td><label><input type="checkbox" name="optionalIndex" value="<%= index %>" <%= formLine.isOptional ? 'checked' : '' %>> Optional</label></td>
+                    <td><button class="button button--secondary" type="button" data-remove-finance-line aria-label="Remove fee line <%= index - 11 %>">Remove</button></td>
+                  </tr>
+                <% } %>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </details>
+      <template data-finance-line-template>
+        <tr data-finance-line-row>
+          <td><label class="visually-hidden" data-label="Term">Term</label><select name="termNumber" required><option value="1">Term 1</option><option value="2">Term 2</option><option value="3">Term 3</option></select></td>
+          <td><label class="visually-hidden" data-label="Category">Category</label><select name="feeCategory" required><option value="tuition">tuition</option><option value="miscellaneous">miscellaneous</option><option value="uniform">uniform</option><option value="id">id</option><option value="activity">activity</option><option value="retake">retake</option><option value="other">other</option></select></td>
+          <td><label class="visually-hidden" data-label="Fee name">Fee name</label><input name="lineName" maxlength="120" required></td>
+          <td><label class="visually-hidden" data-label="Installment">Installment</label><input name="installment" maxlength="40" required></td>
+          <td><label class="visually-hidden" data-label="Amount">Amount</label><input name="lineAmount" inputmode="decimal" maxlength="14" required></td>
+          <td><label><input type="checkbox" name="optionalIndex"> Optional</label></td>
+          <td><button class="button button--secondary" type="button" data-remove-finance-line>Remove</button></td>
+        </tr>
+      </template>
+      <button class="button button--primary" type="submit">Save new schedule version</button>
+    </form>
+      </div>
+    </details>
+  </section>
+
+  <section class="finance-panel" aria-labelledby="schedule-history-title">
+    <div class="admin-section__heading"><div><h2 id="schedule-history-title">Schedule versions</h2><p>Amounts below are configured student-payable amounts.</p></div></div>
+    <% const scheduleGroups = new Map(); for (const row of schedules) { if (!scheduleGroups.has(row.id)) scheduleGroups.set(row.id, { ...row, lines: [] }); if (row.line_id) scheduleGroups.get(row.id).lines.push(row); } %>
+    <% if (!scheduleGroups.size) { %><p class="empty-state">No schedules have been configured.</p><% } else { %>
+      <div class="finance-schedule-version-list">
+        <% for (const schedule of scheduleGroups.values()) { %>
+          <details class="finance-schedule-version">
+            <summary>
+              <strong><%= schedule.school_year %> · <%= schedule.grade_level %> · <%= schedule.voucher_code %> · Version <%= schedule.version_no %></strong>
+              <span class="finance-schedule-version-status finance-schedule-version-status--<%= schedule.status === 'active' ? 'active' : 'retired' %>"><%= schedule.status === 'active' ? 'Active' : 'Retired' %></span>
+              <span><%= schedule.lines.length %> fee line<%= schedule.lines.length === 1 ? '' : 's' %><% if (schedule.created_at) { %> · Saved <%= new Date(schedule.created_at).toLocaleString() %><% } %></span>
+            </summary>
+            <div class="finance-schedule-version-body">
+              <% if (schedule.lines.length) { %><div class="table-scroll" tabindex="0" aria-label="Fee lines for <%= schedule.school_year %> <%= schedule.grade_level %> <%= schedule.voucher_code %> version <%= schedule.version_no %>"><table class="admin-table"><thead><tr><th>Term</th><th>Fee</th><th>Installment</th><th>Category</th><th>Amount</th><th>Selection</th></tr></thead><tbody><% for (const line of schedule.lines) { %><tr><td data-label="Term">Term <%= line.term_number %></td><td data-label="Fee"><%= line.line_name %></td><td data-label="Installment"><%= line.installment %></td><td data-label="Category"><%= line.fee_category %></td><td data-label="Amount">₱<%= formatMoney(line.amount) %></td><td data-label="Selection"><%= line.is_optional ? 'Optional' : 'Included' %></td></tr><% } %></tbody></table></div><% } else { %><p class="empty-state">No fee lines are saved in this version.</p><% } %>
+            </div>
+          </details>
+        <% } %>
+      </div>
+    <% } %>
+  </section>
+</main>
+<script src="/js/finance-schedule-form.js" defer></script>
+<%- include('../partials/foot') %>

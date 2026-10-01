@@ -1,0 +1,26 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page admin-page records-page" id="main-content">
+  <a class="context-back" href="<%= basePath %>">Back to historic pending intakes</a>
+  <section class="dashboard-heading"><div><h1>Historic first-login activation review</h1><p>Existing pre-annual intake rows do not activate accounts automatically. Confirm a first activation only after checking the original intake and student identity.</p></div></section>
+  <% if (notice === 'authorized') { %><p class="form-success" role="status">First-login activation authorized. The login activates only when its cleared enrollment is finalized.</p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <section class="admin-section" aria-labelledby="candidate-title">
+    <div class="admin-section__heading"><div><h2 id="candidate-title">Cleared historic intake records</h2><p>Accounts with recorded deactivation or password-reset history are excluded.</p></div></div>
+    <% if (candidates.length) { %>
+      <div class="table-scroll" tabindex="0" aria-label="Historic first-login activation candidates"><table class="admin-table">
+        <thead><tr><th scope="col">Student</th><th scope="col">Term and section</th><th scope="col">Confirmation</th></tr></thead>
+        <tbody><% for (const candidate of candidates) { %><tr>
+          <td data-label="Student"><strong><%= [candidate.first_name, candidate.middle_name, candidate.last_name].filter(Boolean).join(' ') %></strong><br><%= candidate.student_no %></td>
+          <td data-label="Term and section"><%= candidate.school_year %> · <%= candidate.term %><br><%= candidate.section_name || 'No section' %></td>
+          <td data-label="Confirmation"><form class="form-stack records-compact-form" method="post" action="<%= basePath %>/<%= candidate.enrollment_id %>/confirm-first-activation">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+            <label for="activation-confirm-<%= candidate.enrollment_id %>">Type CONFIRM after verifying this is the first activation</label>
+            <input id="activation-confirm-<%= candidate.enrollment_id %>" name="confirmation" pattern="CONFIRM" required>
+            <button class="table-action table-button" type="submit">Authorize first activation</button>
+          </form></td>
+        </tr><% } %></tbody>
+      </table></div>
+    <% } else { %><p class="empty-state">No historic intake needs first-login activation review.</p><% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

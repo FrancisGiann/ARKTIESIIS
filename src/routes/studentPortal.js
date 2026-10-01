@@ -3,6 +3,7 @@ const { requireRole } = require('../middleware/roles');
 const { createStudentRecordsService } = require('../services/studentRecordsService');
 const { createAcademicRecordsService } = require('../services/academicRecordsService');
 const { createFinanceService } = require('../services/financeService');
+const { createAnnualFinanceService } = require('../services/annualFinanceService');
 const { createClassScheduleService } = require('../services/classScheduleService');
 
 const gradeLabelCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
@@ -88,11 +89,12 @@ function makeGradeSelection(grades, enrollments, requestedSemester, requestedPer
   };
 }
 
-function createStudentPortalRouter({ getPool, sql, studentRecordsService, academicRecordsService, financeService, classScheduleService } = {}) {
+function createStudentPortalRouter({ getPool, sql, studentRecordsService, academicRecordsService, financeService, annualFinanceService, classScheduleService } = {}) {
   const router = express.Router();
   const records = studentRecordsService || createStudentRecordsService({ getPool, sql });
   const academics = academicRecordsService || createAcademicRecordsService({ getPool, sql });
   const finances = financeService || createFinanceService({ getPool, sql });
+  const annualFinances = annualFinanceService || createAnnualFinanceService({ getPool, sql });
   const schedules = classScheduleService || createClassScheduleService({ getPool, sql });
 
   router.use(requireRole('student'));
@@ -130,9 +132,30 @@ function createStudentPortalRouter({ getPool, sql, studentRecordsService, academ
     return { ownRecords, gradeSelection };
   }));
 
-  router.get('/finance', (req, res) => renderOwnPage(req, res, 'student/finance', 'My finance account', async (userId) => ({
-    finance: await finances.getOwnStudentAccount(userId)
-  })));
+  router.get('/finance', async (req, res) => {
+    try {
+      const finance = await finances.getOwnStudentAccount(req.authUser.id);
+      const annualLedger = finance.student ? await annualFinances.getStudentLedger(req.authUser.id, finance.student.id, 'student') : null;
+      return res.set('Cache-Control', 'private, no-store').render('student/finance', {
+        title: 'My finance account', currentUser: req.authUser, finance, annualLedger
+      });
+    } catch {
+      return res.status(503).render('error', { title: 'Student finance unavailable', message: 'Your finance account could not be loaded right now.' });
+    }
+  });
+
+  router.get('/finance/statement', async (req, res) => {
+    try {
+      const finance = await finances.getOwnStudentAccount(req.authUser.id);
+      if (!finance.student) return res.status(404).render('error', { title: 'Statement unavailable', message: 'Your linked student record was not found.' });
+      const ledger = await annualFinances.getStudentLedger(req.authUser.id, finance.student.id, 'student');
+      return res.set('Cache-Control', 'private, no-store').render('finance/statement', {
+        title: 'Statement of Account', currentUser: req.authUser, ledger, printMode: true
+      });
+    } catch {
+      return res.status(503).render('error', { title: 'Statement unavailable', message: 'Your statement could not be loaded right now.' });
+    }
+  });
 
   router.get('/records', (req, res) => renderOwnPage(req, res, 'student/records', 'My profile and enrollment history', async (userId) => ({
     ownRecords: await records.getOwnStudentRecord(userId)

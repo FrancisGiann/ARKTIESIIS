@@ -3,9 +3,146 @@
   <header class="dashboard-heading">
     <div>
       <h1>Registrar workspace</h1>
-      <p>Find a student record, review documents, and move enrollment or academic work forward.</p>
+      <p>Check enrollment, find a student record, or continue to a registrar task.</p>
     </div>
   </header>
+
+  <section class="registrar-overview" aria-labelledby="registrar-overview-heading">
+    <div class="registrar-overview__top">
+      <div>
+        <h2 id="registrar-overview-heading">Enrollment overview</h2>
+        <p>Active counts include active students with enrolled placements. Legacy archive rows are excluded.</p>
+      </div>
+      <% if (overview.schoolYears.length) { %>
+        <div class="dashboard-filter-stack">
+          <form class="dashboard-filter dashboard-filter--year" method="get" action="/registrar">
+            <label class="field">
+              <span>School year</span>
+              <select name="schoolYear">
+                <option value="" <%= !overview.selectedSchoolYear ? 'selected' : '' %>>Select a school year</option>
+                <% overview.schoolYears.forEach((schoolYear) => { %><option value="<%= schoolYear %>" <%= overview.selectedSchoolYear === schoolYear ? 'selected' : '' %>><%= schoolYear %></option><% }); %>
+              </select>
+            </label>
+            <button class="button button--secondary" type="submit">View school year</button>
+          </form>
+          <% if (overview.selectedSchoolYear) { %>
+            <form class="dashboard-filter dashboard-filter--term" method="get" action="/registrar">
+              <input type="hidden" name="schoolYear" value="<%= overview.selectedSchoolYear %>">
+              <label class="field">
+                <span>Configured term</span>
+                <select name="termId">
+                  <option value="">Select a term</option>
+                  <% overview.schoolYearTerms.forEach((term) => { %>
+                    <% const termName = typeof term.term === 'string' ? term.term.trim() : ''; %>
+                    <% const termLabel = termName.toLocaleLowerCase() === `term ${term.termNumber}`.toLocaleLowerCase() ? `Term ${term.termNumber}` : [ `Term ${term.termNumber}`, termName ].filter(Boolean).join(' · '); %>
+                    <option value="<%= term.academicTermId %>" <%= overview.selectedTerm?.academicTermId === term.academicTermId ? 'selected' : '' %>><%= termLabel %></option>
+                  <% }); %>
+                </select>
+              </label>
+              <button class="button button--secondary" type="submit">Apply term</button>
+            </form>
+          <% } %>
+        </div>
+      <% } %>
+    </div>
+
+    <% if (!overview.schoolYears.length) { %>
+      <p class="dashboard-empty" role="status">No school-year terms are configured yet. Configure the term order before reviewing term enrollment counts.</p>
+    <% } else if (!overview.selectedSchoolYear) { %>
+      <p class="dashboard-empty" role="status">No current school year is configured. Choose a school year to review enrollment.</p>
+    <% } else { %>
+      <% const selectedTermCounts = overview.selectedTerm && overview.termCounts.find((term) => term.academicTermId === overview.selectedTerm.academicTermId); %>
+      <dl class="registrar-overview__selected">
+        <div class="registrar-overview__lead">
+          <dt><%= overview.selectedTerm ? `Active enrolled students · ${overview.selectedTerm.term}` : 'Active enrolled students' %></dt>
+          <dd>
+            <% if (overview.selectedTerm && overview.activeEnrolledCount !== null) { %>
+              <% const activeTermQuery = new URLSearchParams({ schoolYear: overview.selectedSchoolYear, termId: String(overview.selectedTerm.academicTermId), status: 'enrolled', studentStatus: 'active' }); %>
+              <a href="/registrar/intake?<%= activeTermQuery %>" aria-label="View <%= overview.activeEnrolledCount.toLocaleString('en-US') %> active enrolled students for <%= overview.selectedTerm.term %>"><%= overview.activeEnrolledCount.toLocaleString('en-US') %></a>
+            <% } else { %><%= overview.activeEnrolledCount === null ? '—' : overview.activeEnrolledCount.toLocaleString('en-US') %><% } %>
+          </dd>
+          <% if (overview.needsTermSelection) { %><small>Select a configured term to view its active enrollment.</small><% } %>
+        </div>
+        <% if (overview.selectedTerm) { %>
+          <% for (const [gradeLabel, gradeCount] of [['Grade 11', selectedTermCounts?.grade11], ['Grade 12', selectedTermCounts?.grade12]]) { %>
+            <div class="registrar-overview__grade">
+              <dt><%= gradeLabel %></dt>
+              <dd>
+                <% if (gradeCount !== undefined) { %>
+                  <% const selectedGradeQuery = new URLSearchParams({ schoolYear: overview.selectedSchoolYear, termId: String(overview.selectedTerm.academicTermId), gradeLevel: gradeLabel, status: 'enrolled', studentStatus: 'active' }); %>
+                  <a href="/registrar/intake?<%= selectedGradeQuery %>" aria-label="View <%= gradeCount.toLocaleString('en-US') %> active <%= gradeLabel %> enrolled students for Term <%= overview.selectedTerm.termNumber %>"><%= gradeCount.toLocaleString('en-US') %></a>
+                <% } else { %>—<% } %>
+              </dd>
+            </div>
+          <% } %>
+        <% } %>
+      </dl>
+
+      <dl class="registrar-overview__secondary">
+        <div>
+          <dt>Students finalized this year</dt>
+          <dd><%= overview.everFinalizedCount.toLocaleString('en-US') %></dd>
+          <small>Distinct students with a finalized applicable placement in <%= overview.selectedSchoolYear %>.</small>
+        </div>
+        <div>
+          <dt>Pending activation</dt>
+          <dd>
+            <% if (overview.selectedTerm) { %>
+              <% const pendingTermQuery = new URLSearchParams({ schoolYear: overview.selectedSchoolYear, termId: String(overview.selectedTerm.academicTermId), status: 'pending_payment', studentStatus: 'active' }); %>
+              <a href="/registrar/intake?<%= pendingTermQuery %>" aria-label="View <%= overview.pendingActivationCount.toLocaleString('en-US') %> active pending placements for <%= overview.selectedTerm.term %>"><%= overview.pendingActivationCount.toLocaleString('en-US') %></a>
+            <% } else { %><%= overview.pendingActivationCount.toLocaleString('en-US') %><% } %>
+          </dd>
+        </div>
+        <div>
+          <dt>Departed placements</dt>
+          <dd><%= overview.departedCount.toLocaleString('en-US') %></dd>
+          <% if (overview.selectedTerm) { %>
+            <small>
+              <a href="/registrar/intake?<%= new URLSearchParams({ schoolYear: overview.selectedSchoolYear, termId: String(overview.selectedTerm.academicTermId), status: 'dropped' }) %>">Dropped <%= overview.droppedCount.toLocaleString('en-US') %></a>
+              ·
+              <a href="/registrar/intake?<%= new URLSearchParams({ schoolYear: overview.selectedSchoolYear, termId: String(overview.selectedTerm.academicTermId), status: 'transferred' }) %>">Transferred <%= overview.transferredCount.toLocaleString('en-US') %></a>
+            </small>
+          <% } %>
+        </div>
+      </dl>
+
+      <details class="registrar-overview__comparison">
+        <summary>Compare configured terms</summary>
+        <figure class="dashboard-chart" aria-labelledby="registrar-term-chart-title">
+          <figcaption>
+            <h3 id="registrar-term-chart-title">Active enrollment by term</h3>
+            <p>Grade 11 and Grade 12 students enrolled in <%= overview.selectedSchoolYear %>.</p>
+          </figcaption>
+          <% if (overview.termCounts.length) { %>
+            <% const chartMaximum = Math.max(1, ...overview.termCounts.flatMap((term) => [term.grade11, term.grade12])); %>
+            <ol class="dashboard-comparison" aria-label="Active enrollment by configured term">
+              <% overview.termCounts.forEach((term) => { %>
+                <% const termName = typeof term.term === 'string' ? term.term.trim() : ''; %>
+                <% const termLabel = termName.toLocaleLowerCase() === `term ${term.termNumber}`.toLocaleLowerCase() ? `Term ${term.termNumber}` : [ `Term ${term.termNumber}`, termName ].filter(Boolean).join(' · '); %>
+                <li class="dashboard-comparison__row">
+                  <h4 class="dashboard-comparison__term"><%= termLabel %></h4>
+                  <dl class="dashboard-comparison__metrics">
+                    <% for (const [gradeLabel, value] of [['Grade 11', term.grade11], ['Grade 12', term.grade12]]) { %>
+                      <div>
+                        <dt><%= gradeLabel %></dt>
+                        <dd>
+                          <% const enrolledTermQuery = new URLSearchParams({ schoolYear: overview.selectedSchoolYear, termId: String(term.academicTermId), gradeLevel: gradeLabel, status: 'enrolled', studentStatus: 'active' }); %>
+                          <a href="/registrar/intake?<%= enrolledTermQuery %>" aria-label="View <%= value.toLocaleString('en-US') %> active <%= gradeLabel %> enrolled students for Term <%= term.termNumber %>"><%= value.toLocaleString('en-US') %></a>
+                          <span class="dashboard-chart__track" aria-hidden="true"><span style="width: <%= Math.round(value / chartMaximum * 100) %>%"></span></span>
+                        </dd>
+                      </div>
+                    <% } %>
+                  </dl>
+                </li>
+              <% }); %>
+            </ol>
+          <% } else { %>
+            <p class="dashboard-empty" role="status">No configured terms are available for <%= overview.selectedSchoolYear %>.</p>
+          <% } %>
+        </figure>
+      </details>
+    <% } %>
+  </section>
 
   <section class="registrar-lookup" aria-labelledby="find-student-title">
     <h2 id="find-student-title">Find a student</h2>

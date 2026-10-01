@@ -12,7 +12,7 @@
 <a class="skip-link" href="#main-content">Skip to main content</a>
 <% if (typeof currentUser !== 'undefined' && currentUser && typeof navigationItems !== 'undefined') { %>
   <% const roleLabels = { database_admin: 'Database administrator', registrar: 'Registrar', teacher: 'Teacher', finance: 'Finance', student: 'Student' }; %>
-  <% const workspaceHomes = { database_admin: '/admin', registrar: '/registrar', teacher: '/teacher', finance: '/finance', student: '/student' }; %>
+  <% const workspaceHomes = { database_admin: '/admin', registrar: '/registrar', teacher: '/teacher', finance: '/finance/overview', student: '/student' }; %>
   <% const currentNavItem = navigationItems.find((item) => item.current); %>
   <div class="app-shell">
     <header class="app-header">

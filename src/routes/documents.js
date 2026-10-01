@@ -1,11 +1,13 @@
 const express = require('express');
 const multer = require('multer');
+const crypto = require('node:crypto');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
 const { DocumentServiceError, createDocumentService, normalizeId, verificationChecklistItems } = require('../services/documentService');
 const { createDocumentProcessingService } = require('../services/documentProcessingService');
 const { createGeminiFieldExtractionService } = require('../services/geminiFieldExtractionService');
 const { Form137ScanError, createForm137ScanService } = require('../services/form137ScanService');
+const { PhysicalChecklistError, createPhysicalChecklistService } = require('../services/physicalChecklistService');
 
 const STAFF_ROLES = ['registrar', 'database_admin'];
 const PREVIEW_FILE_EXTENSIONS = Object.freeze({
@@ -77,7 +79,7 @@ function clearUploadBuffer(file) {
   if (Buffer.isBuffer(file?.buffer)) file.buffer.fill(0);
 }
 
-function createDocumentsRouter({ getPool, sql, environment, documentService, documentProcessingService, form137ScanService } = {}) {
+function createDocumentsRouter({ getPool, sql, environment, documentService, documentProcessingService, form137ScanService, physicalChecklistService } = {}) {
   const router = express.Router();
   const maxUploadBytes = configuredMaxBytes(environment);
   const uploadMaxMb = configuredMaxMegabytes(environment);
@@ -108,6 +110,7 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
     timeoutMs: environment?.gemini?.timeoutMs,
     concurrency: environment?.documentProcessing?.concurrency
   });
+  const checklistService = physicalChecklistService || createPhysicalChecklistService({ getPool, sql });
   const parseSingleUpload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: maxUploadBytes, files: 1, fields: 5, fieldSize: 2048 }
@@ -182,8 +185,14 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
 
   async function renderStudentDocuments(req, res, studentId, { status = 200, error = null, form137Scan = null } = {}) {
     try {
-      const workspace = await service.getStudentDocuments(req.authUser.id, studentId);
+      const [workspace, physicalChecklist] = await Promise.all([
+        service.getStudentDocuments(req.authUser.id, studentId),
+        checklistService.getStudentChecklist(req.authUser.id, studentId)
+      ]);
       if (!workspace) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+      physicalChecklist.idempotencyKeys = Object.fromEntries(physicalChecklist.requirements.map((item) => [item.requirement_code, crypto.randomUUID()]));
+      physicalChecklist.additionalIdempotencyKey = crypto.randomUUID();
+      physicalChecklist.additionalIdempotencyKeys = Object.fromEntries(physicalChecklist.additionalItems.map((item) => [item.requirement_code, crypto.randomUUID()]));
       return res.status(status).render('documents/student', {
         title: 'Student Documents',
         currentUser: req.authUser,
@@ -196,15 +205,20 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
         form137StatusHistory: workspace.form137StatusHistory,
         previousSchoolReportCardPhysicalStatus: workspace.previousSchoolReportCardPhysicalStatus,
         previousSchoolReportCardPhysicalStatusHistory: workspace.previousSchoolReportCardPhysicalStatusHistory || [],
+        physicalChecklist,
         form137Scan,
         uploadMaxMb,
         error,
         notice: req.query.notice === 'uploaded'
           ? 'Document uploaded.'
+          : req.query.notice === 'annualIntakeSaved'
+            ? 'Annual enrollment saved. Record the learner’s physical paper requirements below; missing items do not block enrollment.'
           : req.query.notice === 'form137StatusRecorded'
             ? 'Form 137 status recorded.'
             : req.query.notice === 'previousSchoolReportCardStatusRecorded'
-              ? 'Previous-school report-card paper status recorded.'
+            ? 'Previous-school report-card paper status recorded.'
+            : req.query.notice === 'physicalChecklistRecorded'
+              ? 'Paper requirement status recorded in the staff history.'
             : null,
         documentTypeLabel,
         documentStatusLabel
@@ -217,6 +231,8 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
   async function renderPhysicalRequirements(req, res) {
     try {
       const workspace = await service.listPhysicalRequirements(req.authUser.id, req.query.search, req.query.page);
+      const summaries = await checklistService.getStudentSummaries(req.authUser.id, workspace.students.map((student) => student.id));
+      workspace.students = workspace.students.map((student) => ({ ...student, physicalChecklistSummary: summaries.get(Number(student.id)) || null }));
       return res.render('documents/physical', {
         title: 'Physical student requirements',
         currentUser: req.authUser,
@@ -227,6 +243,19 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       return renderError(res, error, 'Physical student requirements could not be loaded.');
     }
   }
+
+  router.post('/students/:studentId/physical-checklist', requireRole(...STAFF_ROLES), async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    const studentId = normalizeId(req.params.studentId);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      await checklistService.recordRequirement(req.authUser.id, studentId, req.body || {});
+      return res.redirect(303, `/documents/students/${studentId}?notice=physicalChecklistRecorded#physical-checklist-title`);
+    } catch (error) {
+      if (error instanceof PhysicalChecklistError && error.status < 500) return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message });
+      return renderError(res, error, 'The paper requirement status could not be saved.');
+    }
+  });
 
   router.get('/', (req, res) => renderDocumentList(req, res));
 

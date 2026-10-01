@@ -135,7 +135,7 @@ function createAdminService({
     const actor = await transaction.request()
       .input('actorId', sql.Int, actorId)
       .input('adminRole', sql.NVarChar(30), 'database_admin')
-      .query('SELECT id FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE id = @actorId AND role = @adminRole AND is_active = 1');
+      .query('SELECT id FROM users WHERE id = @actorId AND role = @adminRole AND is_active = 1 FOR UPDATE');
     if (!actor.recordset?.length) throw new AdminServiceError('Your administrator access is no longer active. Sign in again.', 403);
   }
 
@@ -146,13 +146,13 @@ function createAdminService({
       .input('entityType', sql.NVarChar(100), 'user')
       .input('entityId', sql.NVarChar(100), String(entityId))
       .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify(details))
-      .query('INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json) VALUES (@actorId, @action, @entityType, @entityId, @detailsJson)');
+      .query('INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json) VALUES (@actorId, @action, @entityType, @entityId, @detailsJson)');
   }
 
   async function loadTarget(transaction, userId) {
     const result = await transaction.request()
       .input('userId', sql.Int, userId)
-      .query('SELECT id, email, role, is_active FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE id = @userId');
+      .query('SELECT id, email, role, is_active FROM users WHERE id = @userId FOR UPDATE');
     const user = result.recordset?.[0];
     if (!user) throw new AdminServiceError('Account not found.', 404);
     return user;
@@ -167,8 +167,8 @@ function createAdminService({
 
     const result = await transaction.request()
       .input('adminRole', sql.NVarChar(30), 'database_admin')
-      .query('SELECT COUNT_BIG(*) AS activeCount FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE role = @adminRole AND is_active = 1');
-    if (Number(result.recordset?.[0]?.activeCount || 0) <= 1) {
+      .query('SELECT id FROM users WHERE role = @adminRole AND is_active = 1 FOR UPDATE');
+    if ((result.recordset || []).length <= 1) {
       throw new AdminServiceError('At least one active database administrator must remain.');
     }
   }
@@ -176,7 +176,7 @@ function createAdminService({
   async function linkStudent(transaction, { userId, studentNo }) {
     const studentResult = await transaction.request()
       .input('studentNo', sql.NVarChar(50), studentNo)
-      .query('SELECT id, user_id, status FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE student_no = @studentNo');
+      .query('SELECT id, user_id, status FROM students WHERE student_no = @studentNo FOR UPDATE');
     const student = studentResult.recordset?.[0];
     if (!student || student.status === 'archived' || (student.user_id !== null && student.user_id !== userId)) {
       throw new AdminServiceError('That student number is unavailable or does not match an existing student record.', 409);
@@ -185,26 +185,26 @@ function createAdminService({
     await transaction.request()
       .input('userId', sql.Int, userId)
       .input('studentId', sql.Int, student.id)
-      .query('UPDATE dbo.students SET user_id = NULL, updated_at = SYSUTCDATETIME() WHERE user_id = @userId AND id <> @studentId');
+      .query('UPDATE students SET user_id = NULL, updated_at = UTC_TIMESTAMP(6) WHERE user_id = @userId AND id <> @studentId');
     await transaction.request()
       .input('userId', sql.Int, userId)
       .input('studentId', sql.Int, student.id)
-      .query('UPDATE dbo.students SET user_id = @userId, updated_at = SYSUTCDATETIME() WHERE id = @studentId');
+      .query('UPDATE students SET user_id = @userId, updated_at = UTC_TIMESTAMP(6) WHERE id = @studentId');
   }
 
   async function saveStaffProfile(transaction, { userId, firstName, lastName, department }) {
     const existing = await transaction.request()
       .input('userId', sql.Int, userId)
-      .query('SELECT id FROM dbo.staff_profiles WITH (UPDLOCK, HOLDLOCK) WHERE user_id = @userId');
+      .query('SELECT id FROM staff_profiles WHERE user_id = @userId FOR UPDATE');
     const request = transaction.request()
       .input('userId', sql.Int, userId)
       .input('firstName', sql.NVarChar(100), firstName)
       .input('lastName', sql.NVarChar(100), lastName)
       .input('department', sql.NVarChar(100), department);
     if (existing.recordset?.length) {
-      await request.query('UPDATE dbo.staff_profiles SET first_name = @firstName, last_name = @lastName, department = @department WHERE user_id = @userId');
+      await request.query('UPDATE staff_profiles SET first_name = @firstName, last_name = @lastName, department = @department WHERE user_id = @userId');
     } else {
-      await request.query('INSERT INTO dbo.staff_profiles (user_id, first_name, last_name, department) VALUES (@userId, @firstName, @lastName, @department)');
+      await request.query('INSERT INTO staff_profiles (user_id, first_name, last_name, department) VALUES (@userId, @firstName, @lastName, @department)');
     }
   }
 
@@ -215,31 +215,31 @@ function createAdminService({
     const users = await pool.request()
       .input('searchPattern', sql.NVarChar(204), searchPattern)
       .query(`
-      SELECT TOP (250)
+      SELECT
         u.id, u.email, u.role, u.is_active, u.created_at,
-        CASE WHEN u.role = N'student'
-          THEN COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(s.first_name, N' ', s.middle_name, N' ', s.last_name, N' ', s.suffix))), N''), CONCAT(N'User ', u.id))
-          ELSE COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(sp.first_name, N' ', sp.last_name))), N''), CONCAT(N'User ', u.id))
+        CASE WHEN u.role = 'student'
+          THEN COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(s.first_name, ' ', s.middle_name, ' ', s.last_name, ' ', s.suffix))), ''), CONCAT('User ', u.id))
+          ELSE COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(sp.first_name, ' ', sp.last_name))), ''), CONCAT('User ', u.id))
         END AS display_name,
         s.student_no, sp.department
-      FROM dbo.users AS u
-      LEFT JOIN dbo.staff_profiles AS sp ON sp.user_id = u.id
-      LEFT JOIN dbo.students AS s ON s.user_id = u.id
+      FROM users AS u
+      LEFT JOIN staff_profiles AS sp ON sp.user_id = u.id
+      LEFT JOIN students AS s ON s.user_id = u.id
       WHERE @searchPattern IS NULL
-        OR u.email LIKE @searchPattern ESCAPE N'~'
-        OR s.student_no LIKE @searchPattern ESCAPE N'~'
-      ORDER BY u.created_at DESC, u.id DESC`);
+        OR u.email LIKE @searchPattern ESCAPE '~'
+        OR s.student_no LIKE @searchPattern ESCAPE '~'
+      ORDER BY u.created_at DESC, u.id DESC LIMIT 250`);
     return { users: users.recordset || [], searchTerm };
   }
 
   async function listAuditLogs() {
     const pool = await getPool();
     const result = await pool.request().query(`
-      SELECT TOP (100) a.id, a.user_id, actor.email AS actor_email, a.action, a.entity_type,
+      SELECT a.id, a.user_id, actor.email AS actor_email, a.action, a.entity_type,
         a.entity_id, a.created_at
-      FROM dbo.audit_logs AS a
-      LEFT JOIN dbo.users AS actor ON actor.id = a.user_id
-      ORDER BY a.created_at DESC, a.id DESC`);
+      FROM audit_logs AS a
+      LEFT JOIN users AS actor ON actor.id = a.user_id
+      ORDER BY a.created_at DESC, a.id DESC LIMIT 100`);
     return result.recordset || [];
   }
 
@@ -250,12 +250,12 @@ function createAdminService({
     const result = await pool.request()
       .input('actorId', sql.Int, actorId)
       .query(`SELECT
-          (SELECT COUNT_BIG(*) FROM dbo.users WHERE is_active = 1) AS active_user_count,
-          (SELECT COUNT_BIG(*) FROM dbo.users WHERE is_active = 0) AS inactive_user_count,
-          (SELECT COUNT_BIG(*) FROM dbo.students WHERE status = 'active') AS active_student_count,
-          (SELECT COUNT_BIG(*) FROM dbo.students WHERE status = 'archived') AS archived_student_count,
-          (SELECT COUNT_BIG(*) FROM dbo.documents WHERE status IN ('needs_review', 'failed')) AS documents_awaiting_review_count
-        WHERE EXISTS (SELECT 1 FROM dbo.users
+          (SELECT COUNT(*) FROM users WHERE is_active = 1) AS active_user_count,
+          (SELECT COUNT(*) FROM users WHERE is_active = 0) AS inactive_user_count,
+          (SELECT COUNT(*) FROM students WHERE status = 'active') AS active_student_count,
+          (SELECT COUNT(*) FROM students WHERE status = 'archived') AS archived_student_count,
+          (SELECT COUNT(*) FROM documents WHERE status IN ('needs_review', 'failed')) AS documents_awaiting_review_count
+        WHERE EXISTS (SELECT 1 FROM users
           WHERE id = @actorId AND role = 'database_admin' AND is_active = 1)`);
     const summary = result.recordset?.[0];
     if (!summary) throw new AdminServiceError('Your administrator access is no longer active. Sign in again.', 403);
@@ -273,9 +273,9 @@ function createAdminService({
           sp.first_name, sp.last_name, sp.department, s.student_no,
           s.first_name AS student_first_name, s.middle_name AS student_middle_name,
           s.last_name AS student_last_name, s.suffix AS student_suffix
-        FROM dbo.users AS u
-        LEFT JOIN dbo.staff_profiles AS sp ON sp.user_id = u.id
-        LEFT JOIN dbo.students AS s ON s.user_id = u.id
+        FROM users AS u
+        LEFT JOIN staff_profiles AS sp ON sp.user_id = u.id
+        LEFT JOIN students AS s ON s.user_id = u.id
         WHERE u.id = @userId`);
     return result.recordset?.[0] || null;
   }
@@ -289,8 +289,8 @@ function createAdminService({
         .input('email', sql.NVarChar(255), account.email)
         .input('passwordHash', sql.NVarChar(255), passwordHash)
         .input('role', sql.NVarChar(30), account.role)
-        .query('INSERT INTO dbo.users (email, password_hash, role, is_active) OUTPUT INSERTED.id AS id VALUES (@email, @passwordHash, @role, 1)');
-      const userId = inserted.recordset?.[0]?.id;
+        .query('INSERT INTO users (email, password_hash, role, is_active) VALUES (@email, @passwordHash, @role, 1)');
+      const userId = inserted.insertId;
       if (!Number.isSafeInteger(userId) || userId < 1) throw new Error('Account insert failed.');
 
       if (account.role === 'student') {
@@ -319,20 +319,30 @@ function createAdminService({
         .input('role', sql.NVarChar(30), account.role)
         .input('isActive', sql.Bit, account.isActive)
         .input('emailChanged', sql.Bit, String(current.email).toLowerCase() !== account.email.toLowerCase())
-        .query(`UPDATE dbo.users SET email = @email, role = @role, is_active = @isActive, updated_at = SYSUTCDATETIME() WHERE id = @userId;
-          IF @emailChanged = 1 OR @isActive = 0
-          BEGIN
-            UPDATE dbo.two_factor_codes SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL;
-            UPDATE dbo.password_reset_tokens SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL;
-            UPDATE dbo.pending_email_changes SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL;
-          END;`);
+        .query('UPDATE users SET email = @email, role = @role, is_active = @isActive, updated_at = UTC_TIMESTAMP(6) WHERE id = @userId');
+      if (String(current.email).toLowerCase() !== account.email || !account.isActive) {
+        for (const table of ['two_factor_codes', 'password_reset_tokens', 'pending_email_changes']) {
+          await transaction.request().input('userId', sql.Int, id)
+            .query(`UPDATE ${table} SET consumed_at = UTC_TIMESTAMP(6) WHERE user_id = @userId AND consumed_at IS NULL`);
+        }
+      }
 
       if (account.role === 'student') {
         await linkStudent(transaction, { userId: id, studentNo: account.studentNo });
+        if (!account.isActive) {
+          await transaction.request().input('userId', sql.Int, id)
+            .query(`UPDATE annual_enrollments SET account_activation_pending = 0, updated_at = UTC_TIMESTAMP(6)
+              WHERE student_id IN (SELECT id FROM students WHERE user_id = @userId) AND account_activation_pending = 1`);
+          await transaction.request().input('userId', sql.Int, id)
+            .query(`UPDATE enrollment_clearances SET account_activation_pending = 0
+              WHERE created_for_intake = 1 AND account_activation_pending = 1
+                AND enrollment_id IN (SELECT enrollment.id FROM enrollments AS enrollment
+                  INNER JOIN students AS student ON student.id = enrollment.student_id WHERE student.user_id = @userId)`);
+        }
       } else {
         await transaction.request()
           .input('userId', sql.Int, id)
-          .query('UPDATE dbo.students SET user_id = NULL, updated_at = SYSUTCDATETIME() WHERE user_id = @userId');
+          .query('UPDATE students SET user_id = NULL, updated_at = UTC_TIMESTAMP(6) WHERE user_id = @userId');
         await saveStaffProfile(transaction, { userId: id, ...account });
       }
 
@@ -362,10 +372,11 @@ function createAdminService({
       await transaction.request()
         .input('userId', sql.Int, id)
         .input('passwordHash', sql.NVarChar(255), passwordHash)
-        .query(`UPDATE dbo.users SET password_hash = @passwordHash, updated_at = SYSUTCDATETIME() WHERE id = @userId;
-          UPDATE dbo.two_factor_codes SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL;
-          UPDATE dbo.password_reset_tokens SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL;
-          UPDATE dbo.pending_email_changes SET consumed_at = SYSUTCDATETIME() WHERE user_id = @userId AND consumed_at IS NULL;`);
+        .query('UPDATE users SET password_hash = @passwordHash, updated_at = UTC_TIMESTAMP(6) WHERE id = @userId');
+      for (const table of ['two_factor_codes', 'password_reset_tokens', 'pending_email_changes']) {
+        await transaction.request().input('userId', sql.Int, id)
+          .query(`UPDATE ${table} SET consumed_at = UTC_TIMESTAMP(6) WHERE user_id = @userId AND consumed_at IS NULL`);
+      }
       await writeAudit(transaction, {
         actorId,
         action: 'admin.user_password_reset',

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-09-28T00:00:00+08:00",
+  "generatedAt": "2026-10-01T19:29:20+08:00",
   "title": "Design System: ARKTIESIIS",
   "extensions": {
     "colorMeta": {
@@ -29,7 +29,9 @@
       "body": { "displayName": "Interface Body", "purpose": "Readable school and workspace copy." },
       "label": { "displayName": "Control Label", "purpose": "Form controls and concise descriptors." }
     },
-    "shadows": [],
+    "shadows": [
+      { "name": "document-preview", "value": "0 1.5rem 4rem rgb(18 39 46 / 25%)", "purpose": "Separate the document preview dialog from the page." }
+    ],
     "motion": [
       { "name": "control-feedback", "value": "160ms ease", "purpose": "Small color and position feedback for buttons." },
       { "name": "scroll-behavior", "value": "smooth", "purpose": "In-page links; reduced-motion preferences turn it off." }
@@ -46,60 +48,82 @@
       "name": "Grouped Role Navigation",
       "kind": "nav",
       "refersTo": "workspace-navigation",
-      "description": "Desktop shows all role-filtered destinations in light groups; mobile provides the same links in a keyboard-operable native disclosure.",
-      "html": "<details class=\"mobile-nav\"><summary>Menu</summary><nav aria-label=\"Student records\"><a href=\"/registrar/records\">Student records</a></nav></details>",
-      "css": ".desktop-nav { background: #f0f3f3; } .app-nav__link.is-current, .mobile-nav__link.is-current { color: var(--accent); background: var(--accent-wash); font-weight: 700; }"
+      "description": "Desktop keeps role-filtered destinations visible in light groups; narrower screens use the same destinations in a native disclosure menu.",
+      "html": "<aside class=\"ds-desktop-nav\" aria-label=\"Registrar workspace\"><nav aria-label=\"Registrar destinations\"><section class=\"ds-nav-group\"><h2>Student records</h2><a class=\"ds-nav-link ds-nav-link--current\" href=\"#\" aria-current=\"page\">Student records</a><a class=\"ds-nav-link\" href=\"#\">Annual intake</a></section><section class=\"ds-nav-group\"><h2>Academic work</h2><a class=\"ds-nav-link\" href=\"#\">Schedules</a></section></nav></aside><details class=\"ds-mobile-nav\"><summary>Menu</summary><nav aria-label=\"Registrar destinations\"><section class=\"ds-nav-group\"><h2>Student records</h2><a class=\"ds-nav-link ds-nav-link--current\" href=\"#\" aria-current=\"page\">Student records</a><a class=\"ds-nav-link\" href=\"#\">Annual intake</a></section></nav></details>",
+      "css": ".ds-desktop-nav { padding: 1.25rem 0.75rem; background: #f0f3f3; border-right: 1px solid var(--line); } .ds-desktop-nav nav, .ds-nav-group { display: grid; gap: 0.15rem; } .ds-nav-group h2 { margin: 0 0 0.4rem; padding: 0 0.6rem; color: var(--muted); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.035em; } .ds-nav-link { display: flex; min-height: 2.45rem; align-items: center; padding: 0.48rem 0.65rem; color: var(--ink-soft); border-radius: 0.45rem; font-size: 0.86rem; font-weight: 560; text-decoration: none; } .ds-nav-link:hover, .ds-nav-link--current { color: var(--accent); background: var(--accent-soft); } .ds-nav-link:focus-visible, .ds-mobile-nav summary:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 42%, transparent); outline-offset: 3px; } .ds-mobile-nav { display: none; } @media (max-width: 900px) { .ds-desktop-nav { display: none; } .ds-mobile-nav { display: block; position: relative; } .ds-mobile-nav > summary { min-height: 2.6rem; padding: 0.45rem 0.7rem; color: var(--ink); background: #fff; border: 1px solid var(--line-strong); border-radius: var(--radius-control); cursor: pointer; font-size: 0.83rem; font-weight: 700; list-style: none; } .ds-mobile-nav nav { position: absolute; z-index: 1; top: calc(100% + 0.45rem); right: 0; width: min(20rem, calc(100vw - 1.25rem)); max-height: min(72vh, 36rem); overflow: auto; padding: 0.85rem; background: #fff; border: 1px solid var(--line); border-radius: var(--radius-panel); } }"
     },
     {
       "name": "Primary Button",
       "kind": "button",
       "refersTo": "button-primary",
-      "description": "The main action on a task surface.",
-      "html": "<button class=\"button button--primary\" type=\"submit\">Find student</button>",
-      "css": ".button--primary { min-height: 2.65rem; background: var(--accent); color: #fff; } .button--primary:hover { background: var(--accent-hover); } .button:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 42%, transparent); outline-offset: 3px; }"
+      "description": "The main action on a task surface, with a clear focus ring and restrained crimson hover state.",
+      "html": "<button class=\"ds-button ds-button--primary\" type=\"button\">Find student</button>",
+      "css": ".ds-button { display: inline-flex; min-height: 2.65rem; align-items: center; justify-content: center; padding: 0.56rem 0.9rem; border: 1px solid transparent; border-radius: var(--radius-control); cursor: pointer; font-size: 0.88rem; font-weight: 700; line-height: 1.2; text-align: center; transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease; } .ds-button--primary { color: #fff; background: var(--accent); } .ds-button--primary:hover { color: #fff; background: var(--accent-hover); } .ds-button:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 42%, transparent); outline-offset: 3px; } .ds-button:active { transform: translateY(1px); }"
     },
     {
       "name": "Labeled Search Field",
       "kind": "input",
       "refersTo": "field",
-      "description": "A visibly labeled, keyboard-accessible search field for the primary staff task.",
-      "html": "<label for=\"student-search\">Student name, number, or LRN</label><input id=\"student-search\" name=\"search\" type=\"search\">",
-      "css": "input:not([type=checkbox]):not([type=radio]), select, textarea { min-height: 2.65rem; border: 1px solid var(--line-strong); border-radius: 0.5rem; } input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: 3px solid color-mix(in srgb, var(--focus) 19%, transparent); }"
+      "description": "A visibly labeled, keyboard-accessible search field for student lookup.",
+      "html": "<div class=\"ds-field\"><label class=\"ds-field-label\" for=\"student-search\">Student name, number, or LRN</label><input class=\"ds-field-control\" id=\"student-search\" name=\"search\" type=\"search\"><p class=\"ds-field-help\">Search the linked student record.</p></div>",
+      "css": ".ds-field { display: grid; gap: 0.35rem; } .ds-field-label { color: var(--ink); font-size: 0.84rem; font-weight: 700; } .ds-field-control { width: 100%; min-height: 2.65rem; padding: 0.55rem 0.7rem; color: var(--ink); background: #fff; border: 1px solid var(--line-strong); border-radius: var(--radius-control); font-size: 0.92rem; } .ds-field-control:hover { border-color: #82979c; } .ds-field-control:focus { border-color: var(--accent); outline: 3px solid color-mix(in srgb, var(--focus) 19%, transparent); outline-offset: 1px; } .ds-field-help { margin: 0.15rem 0 0; color: var(--muted); font-size: 0.78rem; }"
     },
     {
       "name": "Workspace Panel",
-      "kind": "surface",
+      "kind": "card",
       "refersTo": "workspace-panel",
-      "description": "A compact light surface groups related forms, review context, or student data without decorative metrics.",
-      "html": "<section class=\"admin-section\"><h2>Student records</h2><p>Search and review a school record.</p></section>",
-      "css": ".admin-section { padding: 1.15rem; border: 1px solid var(--line); border-radius: 0.75rem; background: var(--surface); }"
+      "description": "A compact light surface groups related forms, review context, or student data.",
+      "html": "<section class=\"ds-workspace-panel\"><h2>Student records</h2><p>Search and review a school record.</p></section>",
+      "css": ".ds-workspace-panel { padding: 1.15rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); } .ds-workspace-panel h2 { margin: 0 0 0.4rem; color: var(--ink); font-size: 1.18rem; font-weight: 700; line-height: 1.2; } .ds-workspace-panel p { max-width: 70ch; margin: 0; color: var(--ink-soft); font-size: 0.96rem; line-height: 1.5; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "A bordered white action for a secondary task.",
+      "html": "<button class=\"ds-button ds-button--secondary\" type=\"button\">View details</button>",
+      "css": ".ds-button { display: inline-flex; min-height: 2.65rem; align-items: center; justify-content: center; padding: 0.56rem 0.9rem; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-control); cursor: pointer; font-size: 0.88rem; font-weight: 700; line-height: 1.2; text-align: center; transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease; } .ds-button:hover { color: var(--accent); background: #f8fafa; border-color: var(--accent); } .ds-button:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 42%, transparent); outline-offset: 3px; } .ds-button:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Destructive Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "An explicit destructive action, kept separate from the primary action.",
+      "html": "<button class=\"ds-button ds-button--danger\" type=\"button\">Reject record</button>",
+      "css": ".ds-button { display: inline-flex; min-height: 2.65rem; align-items: center; justify-content: center; padding: 0.56rem 0.9rem; color: var(--danger); background: #fff; border: 1px solid #dcb7bf; border-radius: var(--radius-control); cursor: pointer; font-size: 0.88rem; font-weight: 700; line-height: 1.2; text-align: center; transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease; } .ds-button:hover { background: var(--danger-soft); } .ds-button:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 42%, transparent); outline-offset: 3px; } .ds-button:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Pending Status Chip",
+      "kind": "chip",
+      "refersTo": "status-pending",
+      "description": "Text and a warm background communicate a pending workflow state without relying on color alone.",
+      "html": "<span class=\"ds-status-chip ds-status-chip--pending\">Pending</span>",
+      "css": ".ds-status-chip { display: inline-flex; align-items: center; padding: 0.18rem 0.55rem; color: var(--ink-soft); background: var(--surface-soft); border-radius: 0.35rem; font-size: 0.74rem; font-weight: 700; text-transform: capitalize; } .ds-status-chip--pending { color: var(--warning); background: var(--warning-soft); }"
     }
   ],
   "narrative": {
     "northStar": "Calm School App",
-    "overview": "ARKTIESIIS is a centralized school records system. Staff pages make student lookup, enrollment, and document review primary; students use a secondary self-service view. The layout uses a light grouped desktop sidebar, a native mobile disclosure, compact neutral work surfaces, and restrained crimson for actions and current state. The same system covers public entry, authentication, records, finance, documents, teacher grade submission, administration, and account settings.",
+    "overview": "ARKTIESIIS is a centralized school records system. The calm school-app direction keeps the official seal, institution name, and Lucena Branch visible while staff work through searchable records, enrollment, document review, finance, and grade approval. Students see current-term context, today's classes, and their own school information.\n\nNear-white surfaces, readable ink, cool rules, restrained crimson, compact panels, and one system sans family keep dense school work familiar. Desktop authenticated pages use grouped navigation; narrower screens switch to a native disclosure menu.",
     "keyCharacteristics": [
-      "The official seal, institution name, and Lucena Branch stay visible in the shared masthead.",
-      "Staff can find records and reach enrollment, document, grade, schedule, and setup tasks without a horizontal navigation strip.",
-      "The student dashboard begins with current-term context, a document-status action, and today's classes.",
-      "Compact typography and neutral surfaces support long forms, student lists, review histories, and finance ledgers."
+      "The shared masthead keeps the official seal, institution name, and Lucena Branch visible.",
+      "Desktop authenticated pages show role-filtered destinations in grouped sidebar navigation; narrower screens use a native disclosure menu.",
+      "Staff work centers on searchable records, enrollment, document review, finance, and grade approval; student pages start with the current term and today's classes.",
+      "Compact neutral panels and restrained crimson support dense forms, records, review histories, and finance ledgers."
     ],
     "rules": [
-      { "name": "The Record-First Rule", "body": "Lead staff work with student search and put enrollment and document status on the same record path.", "section": "layout" },
-      { "name": "The One Crimson Signal Rule", "body": "Use school crimson for primary actions, focus, current destinations, and errors; keep inactive surfaces neutral.", "section": "colors" },
-      { "name": "The Fit-the-Task Rule", "body": "Use compact bordered surfaces for related work and avoid generic KPI strips, oversized hero panels, and repeated card directories.", "section": "components" }
+      { "name": "The Shared Identity Rule", "body": "Keep the official seal, institution name, and Lucena Branch visible in the shared masthead.", "section": "layout" },
+      { "name": "The Current Task Rule", "body": "The page title and current task begin in the content area.", "section": "layout" },
+      { "name": "The Text-First Status Rule", "body": "Maintain readable contrast on neutral and status backgrounds; do not communicate status by color alone.", "section": "components" }
     ],
     "dos": [
-      "Preserve the official school seal and school name.",
-      "Preserve routes, form names, CSRF fields, EJS escaping, and server-side role checks.",
-      "Keep missing, processing, review, verified, rejected, disabled, and error states readable without color alone.",
-      "Keep layouts usable at 320px and honor reduced-motion preferences."
+      "Keep a visible keyboard focus indicator, a skip link, semantic headings, labeled navigation groups, and explicitly labeled form controls.",
+      "Use native <details> and <summary> controls for the mobile navigation menu.",
+      "Maintain readable contrast on neutral and status backgrounds; do not communicate status by color alone.",
+      "Preserve the supplied official seal and campus image unchanged."
     ],
     "donts": [
-      "Do not invent live queue counts, school policy, document authenticity claims, or spreadsheet compatibility.",
-      "Do not add external fonts, decorative grids, unnecessary motion, or oversized metric cards.",
-      "Do not hide a role destination without an accessible path to it.",
-      "Do not change backend permissions to make an interface appear available."
+      "Do not invent school policy, document-verification claims, live operational counts, or spreadsheet compatibility.",
+      "Do not add page-load choreography or decorative motion."
     ]
   }
 }

@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
+const { sql: databaseTypes, Transaction } = require('../config/database');
 
 const OTP_TTL_MINUTES = 5;
 const VERIFY_WINDOW_MINUTES = 15;
@@ -22,81 +23,68 @@ function compareOtp(code, codeHash) {
   return bcrypt.compare(code, codeHash);
 }
 
-async function issueOtpChallenge({ getPool, sql, userId, createCode = generateOtp, hash = hashOtp }) {
+async function issueOtpChallenge({
+  getPool,
+  sql = databaseTypes,
+  userId,
+  createCode = generateOtp,
+  hash = hashOtp,
+  transactionFactory = (pool) => new Transaction(pool)
+}) {
   const code = createCode();
   const codeHash = await hash(code);
   const pool = await getPool();
-  const result = await pool.request()
-    .input('userId', sql.Int, userId)
-    .input('codeHash', sql.NVarChar(255), codeHash)
-    .input('ttlMinutes', sql.Int, OTP_TTL_MINUTES)
-    .input('sendWindowMinutes', sql.Int, SEND_WINDOW_MINUTES)
-    .input('maxSends', sql.Int, MAX_SENDS_PER_WINDOW)
-    .input('cooldownSeconds', sql.Int, RESEND_COOLDOWN_SECONDS)
-    .query(`
-      SET NOCOUNT ON;
-      SET XACT_ABORT ON;
-      DECLARE @now DATETIME2 = SYSUTCDATETIME();
-      DECLARE @allowed BIT = 0;
-      DECLARE @codeId INT = NULL;
+  const transaction = transactionFactory(pool);
+  let started = false;
+  try {
+    await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    started = true;
+    await transaction.request()
+      .input('userId', sql.Int, userId)
+      .query(`INSERT INTO two_factor_auth_limits
+        (user_id, failed_attempts, failed_window_started_at, send_count, send_window_started_at, last_sent_at)
+        VALUES (@userId, 0, UTC_TIMESTAMP(), 0, UTC_TIMESTAMP(), NULL)
+        ON DUPLICATE KEY UPDATE user_id = VALUES(user_id)`);
+    const limitsResult = await transaction.request().input('userId', sql.Int, userId)
+      .query(`SELECT send_count,
+          CASE WHEN send_window_started_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${SEND_WINDOW_MINUTES} MINUTE) THEN 1 ELSE 0 END AS window_expired,
+          CASE WHEN last_sent_at IS NULL THEN 1
+            WHEN last_sent_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ${RESEND_COOLDOWN_SECONDS} SECOND) THEN 1 ELSE 0 END AS cooldown_elapsed
+        FROM two_factor_auth_limits WHERE user_id = @userId FOR UPDATE`);
+    const limits = limitsResult.recordset?.[0];
+    const windowExpired = Number(limits?.window_expired) === 1;
+    const allowed = windowExpired
+      || (Number(limits?.send_count) < MAX_SENDS_PER_WINDOW && Number(limits?.cooldown_elapsed) === 1);
+    if (!allowed) {
+      await transaction.commit();
+      started = false;
+      return { allowed: false, codeId: null, code };
+    }
 
-      BEGIN TRY
-        BEGIN TRANSACTION;
-
-        IF EXISTS (
-          SELECT 1 FROM dbo.two_factor_auth_limits WITH (UPDLOCK, HOLDLOCK)
-          WHERE user_id = @userId
-        )
-        BEGIN
-          UPDATE dbo.two_factor_auth_limits
-          SET send_count = CASE
-                WHEN send_window_started_at <= DATEADD(MINUTE, -@sendWindowMinutes, @now) THEN 1
-                ELSE send_count + 1
-              END,
-              send_window_started_at = CASE
-                WHEN send_window_started_at <= DATEADD(MINUTE, -@sendWindowMinutes, @now) THEN @now
-                ELSE send_window_started_at
-              END,
-              last_sent_at = @now
-          WHERE user_id = @userId
-            AND (
-              send_window_started_at <= DATEADD(MINUTE, -@sendWindowMinutes, @now)
-              OR (
-                send_count < @maxSends
-                AND (last_sent_at IS NULL OR last_sent_at <= DATEADD(SECOND, -@cooldownSeconds, @now))
-              )
-            );
-          IF @@ROWCOUNT = 1 SET @allowed = 1;
-        END
-        ELSE
-        BEGIN
-          INSERT INTO dbo.two_factor_auth_limits
-            (user_id, failed_attempts, failed_window_started_at, send_count, send_window_started_at, last_sent_at)
-          VALUES (@userId, 0, @now, 1, @now, @now);
-          SET @allowed = 1;
-        END;
-
-        IF @allowed = 1
-        BEGIN
-          UPDATE dbo.two_factor_codes
-          SET consumed_at = @now
-          WHERE user_id = @userId AND consumed_at IS NULL;
-
-          INSERT INTO dbo.two_factor_codes (user_id, code_hash, expires_at, created_at)
-          VALUES (@userId, @codeHash, DATEADD(MINUTE, @ttlMinutes, @now), @now);
-          SET @codeId = CONVERT(INT, SCOPE_IDENTITY());
-        END;
-
-        COMMIT TRANSACTION;
-        SELECT @allowed AS allowed, @codeId AS codeId;
-      END TRY
-      BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
-        THROW;
-      END CATCH;
-    `);
-  const row = result.recordset?.[0];
-  return { allowed: row?.allowed === true || row?.allowed === 1, codeId: row?.codeId ?? null, code };
+    await transaction.request().input('userId', sql.Int, userId).input('windowExpired', sql.Bit, windowExpired)
+      .query(`UPDATE two_factor_auth_limits
+        SET send_count = CASE WHEN @windowExpired = 1 THEN 1 ELSE send_count + 1 END,
+          send_window_started_at = CASE WHEN @windowExpired = 1 THEN UTC_TIMESTAMP() ELSE send_window_started_at END,
+          last_sent_at = UTC_TIMESTAMP()
+        WHERE user_id = @userId`);
+    await transaction.request().input('userId', sql.Int, userId)
+      .query(`UPDATE two_factor_codes SET consumed_at = UTC_TIMESTAMP()
+        WHERE user_id = @userId AND consumed_at IS NULL`);
+    const inserted = await transaction.request()
+      .input('userId', sql.Int, userId)
+      .input('codeHash', sql.NVarChar(255), codeHash)
+      .input('ttlMinutes', sql.Int, OTP_TTL_MINUTES)
+      .query(`INSERT INTO two_factor_codes (user_id, code_hash, expires_at, created_at)
+        VALUES (@userId, @codeHash, DATE_ADD(UTC_TIMESTAMP(), INTERVAL @ttlMinutes MINUTE), UTC_TIMESTAMP())`);
+    await transaction.commit();
+    started = false;
+    return { allowed: true, codeId: inserted.insertId || null, code };
+  } catch (error) {
+    if (started) {
+      try { await transaction.rollback(); } catch { /* Keep the original error. */ }
+    }
+    throw error;
+  }
 }
 
 async function sendOtpEmail(smtp, to, code) {
@@ -130,8 +118,8 @@ async function invalidateOtpChallenge({ getPool, sql, userId, codeId }) {
     .input('userId', sql.Int, userId)
     .input('codeId', sql.Int, codeId)
     .query(`
-      UPDATE dbo.two_factor_codes
-      SET consumed_at = SYSUTCDATETIME()
+      UPDATE two_factor_codes
+      SET consumed_at = UTC_TIMESTAMP()
       WHERE user_id = @userId AND id = @codeId AND consumed_at IS NULL;
     `);
 }
@@ -140,7 +128,7 @@ async function getActiveUser({ getPool, sql, userId }) {
   const pool = await getPool();
   const result = await pool.request()
     .input('userId', sql.Int, userId)
-    .query('SELECT id, email, role, password_hash, is_active, must_change_password, auth_session_version, CONVERT(NVARCHAR(33), updated_at, 126) AS updated_at_fingerprint FROM dbo.users WHERE id = @userId');
+    .query("SELECT id, email, role, password_hash, is_active, must_change_password, auth_session_version, DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%s.%f') AS updated_at_fingerprint FROM users WHERE id = @userId");
   return result.recordset?.[0] || null;
 }
 
@@ -151,9 +139,9 @@ async function getOtpChallenge({ getPool, sql, userId, codeId }) {
     .input('codeId', sql.Int, codeId)
     .query(`
       SELECT id, code_hash, expires_at
-      FROM dbo.two_factor_codes
+      FROM two_factor_codes
       WHERE id = @codeId AND user_id = @userId
-        AND consumed_at IS NULL AND expires_at > SYSUTCDATETIME();
+        AND consumed_at IS NULL AND expires_at > UTC_TIMESTAMP();
     `);
   return result.recordset?.[0] || null;
 }
@@ -164,71 +152,57 @@ async function reserveOtpAttempt({ getPool, sql, userId }) {
     .input('userId', sql.Int, userId)
     .input('windowMinutes', sql.Int, VERIFY_WINDOW_MINUTES)
     .input('maxAttempts', sql.Int, MAX_VERIFY_ATTEMPTS)
-    .query(`
-      DECLARE @now DATETIME2 = SYSUTCDATETIME();
-      UPDATE dbo.two_factor_auth_limits
+    .query(`UPDATE two_factor_auth_limits
       SET failed_attempts = CASE
-            WHEN failed_window_started_at <= DATEADD(MINUTE, -@windowMinutes, @now) THEN 1
+            WHEN failed_window_started_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL @windowMinutes MINUTE) THEN 1
             ELSE failed_attempts + 1
           END,
           failed_window_started_at = CASE
-            WHEN failed_window_started_at <= DATEADD(MINUTE, -@windowMinutes, @now) THEN @now
+            WHEN failed_window_started_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL @windowMinutes MINUTE) THEN UTC_TIMESTAMP()
             ELSE failed_window_started_at
           END
-      OUTPUT inserted.failed_attempts AS attempts
       WHERE user_id = @userId
         AND (
-          failed_window_started_at <= DATEADD(MINUTE, -@windowMinutes, @now)
+          failed_window_started_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL @windowMinutes MINUTE)
           OR failed_attempts < @maxAttempts
-        );
-    `);
-  return Boolean(result.recordset?.length);
+        )`);
+  return result.rowsAffected?.[0] === 1;
 }
 
-async function consumeOtpChallenge({ getPool, sql, userId, codeId, codeHash }) {
+async function consumeOtpChallenge({ getPool, sql = databaseTypes, userId, codeId, codeHash, transactionFactory = (pool) => new Transaction(pool) }) {
   const pool = await getPool();
-  const result = await pool.request()
-    .input('userId', sql.Int, userId)
-    .input('codeId', sql.Int, codeId)
-    .input('codeHash', sql.NVarChar(255), codeHash)
-    .query(`
-      SET NOCOUNT ON;
-      SET XACT_ABORT ON;
-      DECLARE @consumed BIT = 0;
-      DECLARE @lockedUserId INT;
-
-      BEGIN TRY
-        BEGIN TRANSACTION;
-        SELECT @lockedUserId = user_id
-        FROM dbo.two_factor_auth_limits WITH (UPDLOCK, HOLDLOCK)
-        WHERE user_id = @userId;
-
-        UPDATE otp
-        SET consumed_at = SYSUTCDATETIME()
-        FROM dbo.two_factor_codes AS otp
-        INNER JOIN dbo.users AS [user] ON [user].id = otp.user_id
-        WHERE otp.id = @codeId AND otp.user_id = @userId
-          AND otp.code_hash = @codeHash
-          AND otp.consumed_at IS NULL AND otp.expires_at > SYSUTCDATETIME()
-          AND [user].is_active = 1;
-        IF @@ROWCOUNT = 1
-        BEGIN
-          SET @consumed = 1;
-          UPDATE dbo.two_factor_auth_limits
-          SET failed_attempts = 0, failed_window_started_at = SYSUTCDATETIME()
-          WHERE user_id = @userId;
-        END;
-
-        COMMIT TRANSACTION;
-        SELECT @consumed AS consumed;
-      END TRY
-      BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
-        THROW;
-      END CATCH;
-    `);
-  const consumed = result.recordset?.[0]?.consumed;
-  return consumed === true || consumed === 1;
+  const transaction = transactionFactory(pool);
+  let started = false;
+  try {
+    await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    started = true;
+    await transaction.request().input('userId', sql.Int, userId)
+      .query('SELECT user_id FROM two_factor_auth_limits WHERE user_id = @userId FOR UPDATE');
+    const consumed = await transaction.request()
+      .input('userId', sql.Int, userId)
+      .input('codeId', sql.Int, codeId)
+      .input('codeHash', sql.NVarChar(255), codeHash)
+      .query(`UPDATE two_factor_codes AS otp
+        INNER JOIN users AS account ON account.id = otp.user_id
+        SET otp.consumed_at = UTC_TIMESTAMP()
+        WHERE otp.id = @codeId AND otp.user_id = @userId AND otp.code_hash = @codeHash
+          AND otp.consumed_at IS NULL AND otp.expires_at > UTC_TIMESTAMP() AND account.is_active = 1`);
+    const didConsume = consumed.rowsAffected?.[0] === 1;
+    if (didConsume) {
+      await transaction.request().input('userId', sql.Int, userId)
+        .query(`UPDATE two_factor_auth_limits
+          SET failed_attempts = 0, failed_window_started_at = UTC_TIMESTAMP()
+          WHERE user_id = @userId`);
+    }
+    await transaction.commit();
+    started = false;
+    return didConsume;
+  } catch (error) {
+    if (started) {
+      try { await transaction.rollback(); } catch { /* Keep the original error. */ }
+    }
+    throw error;
+  }
 }
 
 module.exports = {

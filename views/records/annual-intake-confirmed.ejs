@@ -1,0 +1,24 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page admin-page records-page annual-confirmation-result" id="main-content">
+  <header class="dashboard-heading"><div><h1>Enrollment confirmed</h1><p>The fee assessment was saved and the entry term is active. Finance will record payments separately.</p></div></header>
+  <section class="admin-section" aria-labelledby="confirmed-student-title">
+    <div class="admin-section__heading"><div><h2 id="confirmed-student-title"><%= [enrollment.firstName, enrollment.middleName, enrollment.lastName, enrollment.suffix].filter(Boolean).join(' ') %></h2><p>Student number <%= enrollment.studentNo %></p></div></div>
+    <dl class="enrollment-summary-list">
+      <div><dt>School year and grade</dt><dd><%= enrollment.schoolYear %> · <%= enrollment.gradeLevel %></dd></div>
+      <div><dt>Entry term</dt><dd><%= enrollment.term %></dd></div>
+      <div><dt>Section</dt><dd><%= enrollment.sectionName %></dd></div>
+      <div><dt>Payable assessment</dt><dd>₱<%= formatMoney(enrollment.total) %></dd></div>
+    </dl>
+    <% if (enrollment.temporaryPassword) { %>
+      <section class="notice-panel" aria-labelledby="temporary-password-title"><h2 id="temporary-password-title">One-time temporary password</h2>
+        <p><strong><%= enrollment.temporaryPassword %></strong></p>
+        <p>Give this to the student privately. It cannot be recovered after leaving this page. The student must complete email verification and change it at sign-in.</p></section>
+    <% } %>
+    <div class="admin-form-actions">
+      <a class="button button--primary" href="/documents/students/<%= enrollment.studentId %>#physical-checklist-title">Open paper requirements checklist</a>
+      <a class="button button--secondary" href="/registrar/intake/<%= enrollment.annualEnrollmentId %>/manage">Open annual student record</a>
+      <a class="button button--secondary" href="/registrar/intake">Return to annual intake</a>
+    </div>
+  </section>
+</main>
+<%- include('../partials/foot') %>

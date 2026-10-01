@@ -1,0 +1,104 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell admin-page records-page" id="main-content">
+  <% const placementLabels = { pending_payment: 'Pending', enrolled: 'Active', cancelled: 'Cancelled', dropped: 'Dropped', transferred: 'Transferred', not_applicable: 'Not applicable before entry' }; %>
+  <section class="dashboard-heading">
+    <div><h1>Annual enrollment details</h1><p><strong><%= [record.parent.first_name, record.parent.middle_name, record.parent.last_name, record.parent.suffix].filter(Boolean).join(' ') %></strong> · <%= record.parent.student_no %> · <%= record.parent.school_year %> · <%= record.parent.grade_level %></p><p>LRN <%= record.parent.lrn || 'Not recorded' %> · <%= record.parent.sex || 'Gender not recorded' %> · <%= ({ standard: 'New student', returning: 'Returning student', transferee: 'Transferee' })[record.parent.intake_kind] || 'Intake type not recorded' %> · Entry Term <%= record.parent.entry_term_number %> · Start <%= record.parent.enrollment_start_date ? new Date(record.parent.enrollment_start_date).toISOString().slice(0, 10) : 'Not recorded' %></p></div>
+    <div class="admin-heading-actions"><% const entryPlacement = record.terms.find((term) => Number(term.annual_term_number) === Number(record.parent.entry_term_number)); if (!record.parent.registrar_confirmation_id && record.parent.intake_status === 'pending' && entryPlacement?.section_id) { %><a class="button button--primary" href="/registrar/intake/<%= record.parent.annual_enrollment_id %>/fees">Review fees and confirm enrollment</a><% } %><a class="button button--secondary" href="/documents/students/<%= record.parent.student_id %>#physical-checklist-title">Record paper requirements</a><a class="button button--secondary" href="/registrar/intake">Back to annual intake</a></div>
+  </section>
+  <% if (notice === 'saved') { %><p class="form-success" role="status">Annual enrollment details saved.</p><% } %>
+  <% if (notice === 'departureRecorded') { %><p class="form-success" role="status">The dated departure and later applicable placement changes were recorded. Finance must review any affected charges separately.</p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+
+  <section class="admin-section" aria-labelledby="annual-terms-title">
+    <div class="admin-section__heading"><div><h2 id="annual-terms-title">Term placements</h2><p>The entry term is activated with this fee confirmation. Later sections can be assigned and activated when ready; finance records payments and clearance separately.</p></div></div>
+    <div class="table-scroll" tabindex="0" aria-label="Term placement history"><table class="admin-table"><thead><tr><th>Term</th><th>Applicability and status</th><th>Section, cluster, strand and adviser</th><th>Modality</th><th>Enrollment action</th></tr></thead><tbody>
+      <% for (const term of record.terms) { %><tr><td data-label="Term"><%= term.term %> · Term <%= term.annual_term_number %></td><td data-label="Applicability and status"><%= term.term_scope_status === 'not_applicable' ? placementLabels.not_applicable : placementLabels[term.enrollment_status] || 'Status review required' %></td><td data-label="Section, cluster, strand and adviser"><%= term.section_name || 'Unassigned' %><% if (term.cluster || term.strand || term.adviser) { %><br><%= [term.cluster ? `Cluster ${term.cluster}` : '', term.strand, term.adviser ? `Adviser ${term.adviser}` : ''].filter(Boolean).join(' · ') %><% } %></td><td data-label="Modality"><%= [term.modality?.replaceAll('_', ' '), term.modular_subtype?.replaceAll('_', ' ')].filter(Boolean).join(' · ') || 'Not recorded' %></td><td data-label="Enrollment action">
+        <% if (term.term_scope_status === 'not_applicable') { %>Not applicable
+        <% } else if (term.enrollment_status === 'enrolled') { %>Active
+        <% } else if (term.enrollment_status === 'pending_payment' && !record.parent.registrar_confirmation_id && Number(term.annual_term_number) === Number(record.parent.entry_term_number)) { %>
+          <% if (term.section_id) { %><a href="/registrar/intake/<%= record.parent.annual_enrollment_id %>/fees">Review fees and confirm</a><% } else { %>Assign an entry section first<% } %>
+        <% } else if (term.enrollment_status === 'pending_payment' && !record.parent.registrar_confirmation_id) { %>Waiting for entry confirmation
+        <% } else if (term.enrollment_status === 'pending_payment' && !term.section_id) { %>Assign a section before activation
+        <% } else if (term.enrollment_status === 'pending_payment') { %><form method="post" action="/registrar/intake/<%= term.enrollment_id %>/finalize"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><button class="table-action table-button" type="submit">Activate term</button></form>
+        <% } else { %><%= placementLabels[term.enrollment_status] || 'Status review required' %><% } %>
+      </td></tr><% } %>
+    </tbody></table></div>
+  </section>
+
+  <% const dateValue = (value) => value instanceof Date ? value.toISOString().slice(0, 10) : value ? String(value).slice(0, 10) : ''; %>
+  <% const currentAdminValue = (key, databaseValue) => Object.prototype.hasOwnProperty.call(values, key) ? values[key] : (databaseValue ?? ''); %>
+  <% const adminHistory = record.administrationHistory || []; %>
+  <section class="admin-section annual-admin-details" aria-labelledby="annual-admin-details-title">
+    <div class="admin-section__heading"><div><h2 id="annual-admin-details-title">Annual administration details</h2><p>Optional staff records for this school year. These statuses, remarks, and claimed dates do not set fees or change enrollment.</p></div></div>
+    <details class="annual-admin-details__editor" <%= error ? 'open' : '' %>>
+      <summary>Review or update school-year details</summary>
+      <form class="form-stack admin-form" method="post" action="/registrar/intake/<%= record.parent.annual_enrollment_id %>/administration-details">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <fieldset <%= record.parent.intake_status === 'legacy' || record.parent.student_status === 'archived' ? 'disabled' : '' %>>
+          <h3>School records</h3>
+          <div class="admin-form-grid">
+            <div class="field"><label for="annual-esc-id">ESC ID</label><input id="annual-esc-id" name="escId" maxlength="80" value="<%= currentAdminValue('escId', record.parent.esc_id) %>"></div>
+            <% const recordStatusOptions = [['not_recorded', 'Not recorded'], ['pending', 'Pending'], ['submitted', 'Submitted'], ['complete', 'Complete'], ['not_applicable', 'Not applicable']]; %>
+            <% for (const [name, label] of [['eformStatus', 'E-form status'], ['lisStatus', 'LIS status'], ['vmsStatus', 'VMS status']]) { const databaseKey = name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`); %>
+              <div class="field"><label for="annual-<%= name %>"><%= label %></label><select id="annual-<%= name %>" name="<%= name %>" required><% for (const [value, optionLabel] of recordStatusOptions) { %><option value="<%= value %>" <%= currentAdminValue(name, record.parent[databaseKey]) === value ? 'selected' : '' %>><%= optionLabel %></option><% } %></select></div>
+            <% } %>
+            <% for (const [name, label] of [['eformRemarks', 'E-form remarks'], ['lisRemarks', 'LIS remarks'], ['vmsRemarks', 'VMS remarks']]) { const databaseKey = name.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`); %>
+              <div class="field"><label for="annual-<%= name %>"><%= label %></label><textarea id="annual-<%= name %>" name="<%= name %>" maxlength="500" rows="2"><%= currentAdminValue(name, record.parent[databaseKey]) %></textarea></div>
+            <% } %>
+          </div>
+          <h3>Other school-year notes</h3>
+          <div class="admin-form-grid">
+            <div class="field"><label for="acquaintance-waiver-status">Acquaintance waiver status</label><select id="acquaintance-waiver-status" name="acquaintanceWaiverStatus" required><% for (const [value, label] of [['not_recorded', 'Not recorded'], ['complete', 'Complete'], ['not_applicable', 'Not applicable']]) { %><option value="<%= value %>" <%= currentAdminValue('acquaintanceWaiverStatus', record.parent.acquaintance_waiver_status) === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
+            <div class="field"><label for="acquaintance-party">Acquaintance party or reference</label><input id="acquaintance-party" name="acquaintanceParty" maxlength="120" value="<%= currentAdminValue('acquaintanceParty', record.parent.acquaintance_party) %>"></div>
+            <div class="field"><label for="educational-tour-status">Educational-tour participation</label><select id="educational-tour-status" name="educationalTourStatus" required><% for (const [value, label] of [['not_recorded', 'Not recorded'], ['participating', 'Participating'], ['not_participating', 'Not participating']]) { %><option value="<%= value %>" <%= currentAdminValue('educationalTourStatus', record.parent.educational_tour_status) === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
+            <div class="field field--full"><label for="internal-agreement-remarks">Internal-agreement remarks</label><textarea id="internal-agreement-remarks" name="internalAgreementRemarks" maxlength="1000" rows="3"><%= currentAdminValue('internalAgreementRemarks', record.parent.internal_agreement_remarks) %></textarea></div>
+          </div>
+          <h3>Materials claimed</h3>
+          <p class="field-help">Record the date when the item was claimed, if known.</p>
+          <div class="admin-form-grid">
+            <% for (const [name, databaseKey, label] of [['modulesClaimedDate', 'modules_claimed_date', 'Modules'], ['studentIdClaimedDate', 'student_id_claimed_date', 'Student ID'], ['uniformClaimedDate', 'uniform_claimed_date', 'Uniform'], ['peUniformClaimedDate', 'pe_uniform_claimed_date', 'PE uniform']]) { %>
+              <div class="field"><label for="annual-<%= name %>"><%= label %> claimed date</label><input id="annual-<%= name %>" name="<%= name %>" type="date" value="<%= currentAdminValue(name, dateValue(record.parent[databaseKey])) %>"></div>
+            <% } %>
+          </div>
+          <div class="admin-form-actions"><button class="button button--primary" type="submit">Save annual administration details</button></div>
+        </fieldset>
+      </form>
+    </details>
+    <details class="annual-admin-details__history">
+      <summary>Change history <span class="section-count"><%= adminHistory.length %> field change<%= adminHistory.length === 1 ? '' : 's' %></span></summary>
+      <% const adminFieldLabels = { esc_id: 'ESC ID', eform_status: 'E-form status', eform_remarks: 'E-form remarks', lis_status: 'LIS status', lis_remarks: 'LIS remarks', vms_status: 'VMS status', vms_remarks: 'VMS remarks', acquaintance_waiver_status: 'Acquaintance waiver status', acquaintance_party: 'Acquaintance party', educational_tour_status: 'Educational-tour participation', internal_agreement_remarks: 'Internal-agreement remarks', modules_claimed_date: 'Modules claimed date', student_id_claimed_date: 'Student ID claimed date', uniform_claimed_date: 'Uniform claimed date', pe_uniform_claimed_date: 'PE uniform claimed date' }; %>
+      <% if (adminHistory.length) { %><ul class="document-review-history"><% for (const item of adminHistory) { %><li><strong><%= adminFieldLabels[item.field_name] || item.field_name %></strong><span><%= new Date(item.created_at).toLocaleString() %> · <%= [item.actor_first_name, item.actor_last_name].filter(Boolean).join(' ') || `Staff ${item.actor_id}` %></span><p><%= item.before_value || 'Blank' %> → <%= item.after_value || 'Blank' %></p></li><% } %></ul><% } else { %><p class="empty-state">No school-year administration details have changed.</p><% } %>
+    </details>
+  </section>
+
+  <section class="admin-section" aria-labelledby="annual-tags-title">
+    <div class="admin-section__heading"><div><h2 id="annual-tags-title">Enrollment tags</h2><p>Tags such as athlete or performer do not change assessed fees. Only a finance-approved exemption case changes charges.</p></div></div>
+    <% if (record.tags.length) { %><ul><% for (const tag of record.tags) { %><li><strong><%= tag.label %></strong> · <%= tag.tag_type %><%= tag.effective_term_from ? ` · Terms ${tag.effective_term_from}–${tag.effective_term_to}` : ' · Full year' %><% if (tag.note) { %> · <%= tag.note %><% } %></li><% } %></ul><% } else { %><p class="muted-copy">No tags recorded.</p><% } %>
+    <form class="admin-form" method="post" action="/registrar/intake/<%= record.parent.annual_enrollment_id %>/tags">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= tagToken %>">
+      <div class="admin-form-grid"><div class="field"><label for="tag-type">Tag type</label><select id="tag-type" name="tagType" required><option value="internal">Internal</option><option value="athlete">Athlete</option><option value="performer">Performer</option><option value="named_arrangement">Named arrangement</option></select></div><div class="field"><label for="tag-label">Name</label><input id="tag-label" name="label" maxlength="120" required></div><div class="field"><label for="tag-from">Effective term from (optional)</label><select id="tag-from" name="effectiveTermFrom"><option value="">Full year</option><% for (const n of [record.parent.entry_term_number, 2, 3].filter((n, i, all) => n && all.indexOf(n) === i && n >= record.parent.entry_term_number)) { %><option value="<%= n %>">Term <%= n %></option><% } %></select></div><div class="field"><label for="tag-to">Effective term through</label><select id="tag-to" name="effectiveTermTo"><option value="">Full year</option><% for (const n of [record.parent.entry_term_number, 2, 3].filter((n, i, all) => n && all.indexOf(n) === i && n >= record.parent.entry_term_number)) { %><option value="<%= n %>">Term <%= n %></option><% } %></select></div><div class="field"><label for="tag-note">Staff note</label><input id="tag-note" name="note" maxlength="500"></div></div>
+      <div class="admin-form-actions"><button class="button button--primary" type="submit">Record tag</button></div>
+    </form>
+  </section>
+
+  <section class="admin-section" aria-labelledby="annual-subjects-title">
+    <div class="admin-section__heading"><div><h2 id="annual-subjects-title">Assigned subjects and special arrangements</h2><p>Special-subject records reference an existing student subject assignment. Finance adds any approved billable line from the linked record.</p></div></div>
+    <% if (record.subjects.length) { %><div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Term</th><th>Subject</th><th>Arrangement</th><th>Finance record</th><th>Record arrangement</th></tr></thead><tbody>
+      <% for (const subject of record.subjects) { %><tr><td data-label="Term">Term <%= subject.annual_term_number %> · <%= subject.term %></td><td data-label="Subject"><%= subject.subject_code %> · <%= subject.subject_name %></td><td data-label="Arrangement"><%= subject.arrangement_type || 'Standard' %><%= subject.modular_subtype ? ` · ${subject.modular_subtype}` : '' %><%= subject.prepaid_arrangement_note ? ` · ${subject.prepaid_arrangement_note}` : '' %></td><td data-label="Finance record"><%= subject.has_billable_charge ? 'Approved finance item recorded' : 'No finance item recorded' %></td><td data-label="Record arrangement">
+        <% if (!subject.special_subject_id && ['pending_payment', 'enrolled'].includes(subject.enrollment_status)) { %><form class="form-stack records-compact-form" method="post" action="/registrar/intake/<%= record.parent.annual_enrollment_id %>/special-subjects"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="studentSubjectId" value="<%= subject.student_subject_id %>"><input type="hidden" name="idempotencyKey" value="<%= subjectTokens[subject.student_subject_id] %>"><label class="sr-only" for="arrangement-<%= subject.student_subject_id %>">Arrangement for <%= subject.subject_name %></label><select id="arrangement-<%= subject.student_subject_id %>" name="arrangementType" required><option value="internal">Internal</option><option value="athlete">Athlete</option><option value="performer">Performer</option><option value="modular">Modular</option><option value="other">Other</option></select><input name="modularSubtype" maxlength="80" placeholder="Modular subtype"><input name="prepaidArrangementNote" maxlength="500" placeholder="Academic arrangement note"><button class="table-action table-button" type="submit">Save arrangement</button></form><% } else { %><%= subject.special_subject_id ? 'Recorded' : 'Historical placement; view only' %><% } %>
+      </td></tr><% } %>
+    </tbody></table></div><% } else { %><p class="empty-state">No subjects are assigned to applicable term contexts.</p><% } %>
+  </section>
+
+  <section class="admin-section" aria-labelledby="departure-title">
+    <div class="admin-section__heading"><div><h2 id="departure-title">Record a dated transfer or dropout</h2><p>Choose the effective placement. Later applicable placements are stopped in term order; academic history remains. Finance reviews affected charges separately.</p></div></div>
+    <form class="admin-form" method="post" action="/registrar/intake/<%= record.parent.annual_enrollment_id %>/departure-preview">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <div class="admin-form-grid"><div class="field"><label for="departure-placement">Effective term placement</label><select id="departure-placement" name="effectiveEnrollmentId" required><option value="">Choose a current or future applicable term</option><% for (const term of record.terms.filter((item) => item.term_scope_status === 'applicable' && ['pending_payment', 'enrolled'].includes(item.enrollment_status))) { %><option value="<%= term.enrollment_id %>" <%= String(values.effectiveEnrollmentId || '') === String(term.enrollment_id) ? 'selected' : '' %>>Term <%= term.annual_term_number %> · <%= term.term %> · <%= term.section_name || 'Unassigned' %></option><% } %></select></div><div class="field"><label for="departure-type">Outcome</label><select id="departure-type" name="departureType" required><option value="transferred" <%= values.departureType === 'transferred' ? 'selected' : '' %>>Transferred</option><option value="dropped" <%= values.departureType === 'dropped' ? 'selected' : '' %>>Dropped</option></select></div><div class="field"><label for="departure-date">Effective date</label><input id="departure-date" name="effectiveDate" type="date" value="<%= values.effectiveDate || '' %>" required></div><div class="field"><label for="departure-reason">Reason</label><textarea id="departure-reason" name="reason" maxlength="1000" required><%= values.reason || '' %></textarea></div></div>
+      <div class="admin-form-actions"><button class="button button--secondary" type="submit">Preview affected placements</button></div>
+    </form>
+    <% if (preview) { %><div class="notice-panel"><h3>Placement review</h3><p><%= preview.length %> applicable placements from the selected term onward will receive the chosen departure status. Any later academic activity is flagged for staff review.</p><div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Term</th><th>Current status</th><th>Section</th><th>Academic activity review</th></tr></thead><tbody><% for (const item of preview) { %><tr><td>Term <%= item.annual_term_number %> · <%= item.term %></td><td><%= item.enrollment_status %></td><td><%= item.section_name || 'Unassigned' %></td><td><%= item.academic_activity_review_required ? 'Review assigned subjects and grades' : 'No assigned subjects found' %></td></tr><% } %></tbody></table></div>
+      <form method="post" action="/registrar/intake/<%= record.parent.annual_enrollment_id %>/departure"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= departureToken %>"><input type="hidden" name="effectiveEnrollmentId" value="<%= values.effectiveEnrollmentId %>"><input type="hidden" name="departureType" value="<%= values.departureType %>"><input type="hidden" name="effectiveDate" value="<%= values.effectiveDate %>"><input type="hidden" name="reason" value="<%= values.reason %>"><div class="admin-form-actions"><button class="button button--primary" type="submit">Confirm dated departure</button></div></form></div><% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

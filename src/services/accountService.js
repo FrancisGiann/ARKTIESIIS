@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const bcrypt = require('bcrypt');
 const nodemailer = require('nodemailer');
-const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
+const { getPool: defaultGetPool, sql: defaultSql, Transaction } = require('../config/database');
 
 const PASSWORD_HASH_ROUNDS = 12;
 const ACTION_TOKEN_TTL_MINUTES = 30;
@@ -74,7 +74,8 @@ function createAccountService({
   hashPassword = bcrypt.hash,
   comparePassword = bcrypt.compare,
   createToken = createActionToken,
-  deliverEmail = sendEmail
+  deliverEmail = sendEmail,
+  transactionFactory = (pool) => new Transaction(pool)
 } = {}) {
   async function execute(statement, bind = () => {}) {
     const pool = await getPool();
@@ -83,10 +84,29 @@ function createAccountService({
     return request.query(statement);
   }
 
+  async function inTransaction(callback) {
+    const pool = await getPool();
+    const transaction = transactionFactory(pool);
+    let started = false;
+    try {
+      await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+      started = true;
+      const result = await callback(transaction);
+      await transaction.commit();
+      started = false;
+      return result;
+    } catch (error) {
+      if (started) {
+        try { await transaction.rollback(); } catch { /* Preserve the original failure. */ }
+      }
+      throw error;
+    }
+  }
+
   async function readPasswordAccount(userId) {
     const result = await execute(`
       SELECT id, email, password_hash, is_active
-      FROM dbo.users WHERE id = @userId;
+      FROM users WHERE id = @userId;
     `, (request) => request.input('userId', sql.Int, userId));
     return result.recordset?.[0] || null;
   }
@@ -102,20 +122,16 @@ function createAccountService({
   async function getAccountDetails(userId) {
     const result = await execute(`
       SELECT u.id, u.email, u.role, u.must_change_password,
-        CASE WHEN u.role = N'student'
-          THEN NULLIF(LTRIM(RTRIM(CONCAT(s.first_name, N' ', s.middle_name, N' ', s.last_name, N' ', s.suffix))), N'')
-          ELSE NULLIF(LTRIM(RTRIM(CONCAT(sp.first_name, N' ', sp.last_name))), N'')
+        CASE WHEN u.role = 'student'
+          THEN NULLIF(CONCAT_WS(' ', NULLIF(TRIM(s.first_name), ''), NULLIF(TRIM(s.middle_name), ''), NULLIF(TRIM(s.last_name), ''), NULLIF(TRIM(s.suffix), '')), '')
+          ELSE NULLIF(CONCAT_WS(' ', NULLIF(TRIM(sp.first_name), ''), NULLIF(TRIM(sp.last_name), '')), '')
         END AS display_name,
-        pending.new_email AS pending_email
-      FROM dbo.users AS u
-      LEFT JOIN dbo.staff_profiles AS sp ON sp.user_id = u.id
-      LEFT JOIN dbo.students AS s ON s.user_id = u.id
-      OUTER APPLY (
-        SELECT TOP (1) new_email
-        FROM dbo.pending_email_changes
-        WHERE user_id = u.id AND consumed_at IS NULL AND expires_at > SYSUTCDATETIME()
-        ORDER BY created_at DESC, id DESC
-      ) AS pending
+        (SELECT pending.new_email FROM pending_email_changes AS pending
+        WHERE user_id = u.id AND consumed_at IS NULL AND expires_at > UTC_TIMESTAMP()
+        ORDER BY created_at DESC, id DESC LIMIT 1) AS pending_email
+      FROM users AS u
+      LEFT JOIN staff_profiles AS sp ON sp.user_id = u.id
+      LEFT JOIN students AS s ON s.user_id = u.id
       WHERE u.id = @userId AND u.is_active = 1;
     `, (request) => request.input('userId', sql.Int, userId));
     return result.recordset?.[0] || null;
@@ -129,72 +145,44 @@ function createAccountService({
     if (await comparePassword(password, account.password_hash)) return 'same_password';
 
     const passwordHash = await hashPassword(password, PASSWORD_HASH_ROUNDS);
-    const result = await execute(`
-      SET XACT_ABORT ON;
-      BEGIN TRY
-        BEGIN TRANSACTION;
-        DECLARE @changed BIT = 0;
-        UPDATE dbo.users
-        SET password_hash = @passwordHash, must_change_password = 0, updated_at = SYSUTCDATETIME()
-        WHERE id = @userId AND is_active = 1 AND password_hash = @currentHash;
-        IF @@ROWCOUNT = 1
-        BEGIN
-          SET @changed = 1;
-          UPDATE dbo.two_factor_codes
-          SET consumed_at = SYSUTCDATETIME()
-          WHERE user_id = @userId AND consumed_at IS NULL;
-          UPDATE dbo.password_reset_tokens
-          SET consumed_at = SYSUTCDATETIME()
-          WHERE user_id = @userId AND consumed_at IS NULL;
-          UPDATE dbo.pending_email_changes
-          SET consumed_at = SYSUTCDATETIME()
-          WHERE user_id = @userId AND consumed_at IS NULL;
-          INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
-          VALUES (@userId, N'account.password_changed', N'user', CONVERT(NVARCHAR(100), @userId), N'{"sessionsInvalidated":true}');
-        END;
-        COMMIT TRANSACTION;
-        SELECT @changed AS changed;
-      END TRY
-      BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
-        THROW;
-      END CATCH;
-    `, (request) => request
-      .input('userId', sql.Int, userId)
-      .input('passwordHash', sql.NVarChar(255), passwordHash)
-      .input('currentHash', sql.NVarChar(255), account.password_hash));
-    return result.recordset?.[0]?.changed === true || result.recordset?.[0]?.changed === 1
-      ? 'changed'
-      : 'invalid_current_password';
+    const changed = await inTransaction(async (transaction) => {
+      const current = await transaction.request().input('userId', sql.Int, userId)
+        .input('currentHash', sql.NVarChar(255), account.password_hash)
+        .query(`SELECT id FROM users WHERE id = @userId AND is_active = 1
+          AND password_hash = @currentHash FOR UPDATE`);
+      if (!current.recordset?.length) return false;
+      await transaction.request().input('userId', sql.Int, userId)
+        .input('passwordHash', sql.NVarChar(255), passwordHash)
+        .query(`UPDATE users SET password_hash = @passwordHash, must_change_password = 0, updated_at = UTC_TIMESTAMP()
+          WHERE id = @userId AND is_active = 1`);
+      await transaction.request().input('userId', sql.Int, userId)
+        .query('UPDATE two_factor_codes SET consumed_at = UTC_TIMESTAMP() WHERE user_id = @userId AND consumed_at IS NULL');
+      await transaction.request().input('userId', sql.Int, userId)
+        .query('UPDATE password_reset_tokens SET consumed_at = UTC_TIMESTAMP() WHERE user_id = @userId AND consumed_at IS NULL');
+      await transaction.request().input('userId', sql.Int, userId)
+        .query('UPDATE pending_email_changes SET consumed_at = UTC_TIMESTAMP() WHERE user_id = @userId AND consumed_at IS NULL');
+      await transaction.request().input('userId', sql.Int, userId)
+        .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
+          VALUES (@userId, 'account.password_changed', 'user', CAST(@userId AS CHAR(100)), '{"sessionsInvalidated":true}')`);
+      return true;
+    });
+    return changed ? 'changed' : 'invalid_current_password';
   }
 
   async function rotateOtherSessions(userId) {
-    const result = await execute(`
-      SET XACT_ABORT ON;
-      BEGIN TRY
-        BEGIN TRANSACTION;
-        DECLARE @updatedVersions TABLE (auth_session_version UNIQUEIDENTIFIER);
-        UPDATE dbo.users
-        SET auth_session_version = NEWID()
-        OUTPUT inserted.auth_session_version INTO @updatedVersions (auth_session_version)
-        WHERE id = @userId AND is_active = 1;
-
-        IF EXISTS (SELECT 1 FROM @updatedVersions)
-        BEGIN
-          INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
-          VALUES (@userId, N'account.sessions_revoked', N'user', CONVERT(NVARCHAR(100), @userId), N'{"otherSessionsInvalidated":true,"currentSessionRetained":true}');
-        END;
-
-        COMMIT TRANSACTION;
-        SELECT CONVERT(NVARCHAR(36), auth_session_version) AS auth_session_version
-        FROM @updatedVersions;
-      END TRY
-      BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
-        THROW;
-      END CATCH;
-    `, (request) => request.input('userId', sql.Int, userId));
-    return result.recordset?.[0]?.auth_session_version || null;
+    return inTransaction(async (transaction) => {
+      const active = await transaction.request().input('userId', sql.Int, userId)
+        .query('SELECT id FROM users WHERE id = @userId AND is_active = 1 FOR UPDATE');
+      if (!active.recordset?.length) return null;
+      await transaction.request().input('userId', sql.Int, userId)
+        .query('UPDATE users SET auth_session_version = UUID() WHERE id = @userId AND is_active = 1');
+      const result = await transaction.request().input('userId', sql.Int, userId)
+        .query('SELECT auth_session_version FROM users WHERE id = @userId');
+      await transaction.request().input('userId', sql.Int, userId)
+        .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
+          VALUES (@userId, 'account.sessions_revoked', 'user', CAST(@userId AS CHAR(100)), '{"otherSessionsInvalidated":true,"currentSessionRetained":true}')`);
+      return result.recordset?.[0]?.auth_session_version || null;
+    });
   }
 
   async function requestEmailChange(userId, currentPassword, emailInput) {
@@ -207,56 +195,37 @@ function createAccountService({
 
     const token = createToken();
     const tokenHash = hashActionToken(token);
-    const result = await execute(`
-      SET XACT_ABORT ON;
-      BEGIN TRY
-        BEGIN TRANSACTION;
-        DECLARE @currentEmail NVARCHAR(255);
-        DECLARE @currentHash NVARCHAR(255);
-        DECLARE @requestId INT = NULL;
-        DECLARE @status NVARCHAR(30) = N'account_changed';
+    const row = await inTransaction(async (transaction) => {
+      const current = await transaction.request().input('userId', sql.Int, userId)
+        .query('SELECT email, password_hash FROM users WHERE id = @userId AND is_active = 1 FOR UPDATE');
+      const currentAccount = current.recordset?.[0];
+      if (!currentAccount || currentAccount.password_hash !== account.password_hash) return { status: 'account_changed' };
 
-        SELECT @currentEmail = email, @currentHash = password_hash
-        FROM dbo.users WITH (UPDLOCK, HOLDLOCK)
-        WHERE id = @userId AND is_active = 1;
+      const userConflict = await transaction.request().input('newEmail', sql.NVarChar(255), newEmail)
+        .input('userId', sql.Int, userId)
+        .query('SELECT id FROM users WHERE email = @newEmail AND id <> @userId FOR UPDATE');
+      if (userConflict.recordset?.length) return { status: 'email_in_use' };
+      const pendingConflict = await transaction.request().input('newEmail', sql.NVarChar(255), newEmail)
+        .input('userId', sql.Int, userId)
+        .query(`SELECT id FROM pending_email_changes
+          WHERE new_email = @newEmail AND user_id <> @userId
+            AND consumed_at IS NULL AND expires_at > UTC_TIMESTAMP() FOR UPDATE`);
+      if (pendingConflict.recordset?.length) return { status: 'email_in_use' };
 
-        IF @currentEmail IS NOT NULL AND @currentHash = @currentHashCheck
-        BEGIN
-          IF EXISTS (SELECT 1 FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE email = @newEmail AND id <> @userId)
-            SET @status = N'email_in_use';
-          ELSE IF EXISTS (
-            SELECT 1 FROM dbo.pending_email_changes WITH (UPDLOCK, HOLDLOCK)
-            WHERE new_email = @newEmail AND user_id <> @userId
-              AND consumed_at IS NULL AND expires_at > SYSUTCDATETIME()
-          ) SET @status = N'email_in_use';
-          ELSE
-          BEGIN
-            UPDATE dbo.pending_email_changes
-            SET consumed_at = SYSUTCDATETIME()
-            WHERE user_id = @userId AND consumed_at IS NULL;
-            INSERT INTO dbo.pending_email_changes (user_id, new_email, token_hash, expires_at)
-            VALUES (@userId, @newEmail, @tokenHash, DATEADD(MINUTE, @ttlMinutes, SYSUTCDATETIME()));
-            SET @requestId = CONVERT(INT, SCOPE_IDENTITY());
-            SET @status = N'created';
-            INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
-            VALUES (@userId, N'account.email_change_requested', N'user', CONVERT(NVARCHAR(100), @userId), N'{"newAddressRequiresConfirmation":true}');
-          END;
-        END;
-
-        COMMIT TRANSACTION;
-        SELECT @status AS status, @requestId AS request_id, @currentEmail AS current_email;
-      END TRY
-      BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
-        THROW;
-      END CATCH;
-    `, (request) => request
-      .input('userId', sql.Int, userId)
-      .input('currentHashCheck', sql.NVarChar(255), account.password_hash)
-      .input('newEmail', sql.NVarChar(255), newEmail)
-      .input('tokenHash', sql.Char(64), tokenHash)
-      .input('ttlMinutes', sql.Int, ACTION_TOKEN_TTL_MINUTES));
-    const row = result.recordset?.[0];
+      await transaction.request().input('userId', sql.Int, userId)
+        .query('UPDATE pending_email_changes SET consumed_at = UTC_TIMESTAMP() WHERE user_id = @userId AND consumed_at IS NULL');
+      const inserted = await transaction.request()
+        .input('userId', sql.Int, userId)
+        .input('newEmail', sql.NVarChar(255), newEmail)
+        .input('tokenHash', sql.Char(64), tokenHash)
+        .input('ttlMinutes', sql.Int, ACTION_TOKEN_TTL_MINUTES)
+        .query(`INSERT INTO pending_email_changes (user_id, new_email, token_hash, expires_at)
+          VALUES (@userId, @newEmail, @tokenHash, DATE_ADD(UTC_TIMESTAMP(), INTERVAL @ttlMinutes MINUTE))`);
+      await transaction.request().input('userId', sql.Int, userId)
+        .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
+          VALUES (@userId, 'account.email_change_requested', 'user', CAST(@userId AS CHAR(100)), '{"newAddressRequiresConfirmation":true}')`);
+      return { status: 'created', request_id: inserted.insertId, current_email: currentAccount.email };
+    });
     if (row?.status !== 'created' || !Number.isSafeInteger(row.request_id)) return row?.status || 'account_changed';
 
     const query = new URLSearchParams({ requestId: String(row.request_id), token });
@@ -275,7 +244,7 @@ function createAccountService({
       return 'created';
     } catch {
       await execute(`
-        UPDATE dbo.pending_email_changes SET consumed_at = SYSUTCDATETIME()
+        UPDATE pending_email_changes SET consumed_at = UTC_TIMESTAMP()
         WHERE id = @requestId AND user_id = @userId AND consumed_at IS NULL;
       `, (request) => request.input('requestId', sql.Int, row.request_id).input('userId', sql.Int, userId));
       return 'delivery_failed';
@@ -288,9 +257,9 @@ function createAccountService({
     if (!requestId || !token) return null;
     const result = await execute(`
       SELECT new_email
-      FROM dbo.pending_email_changes
+      FROM pending_email_changes
       WHERE id = @requestId AND token_hash = @tokenHash
-        AND consumed_at IS NULL AND expires_at > SYSUTCDATETIME() AND attempt_count < @maxAttempts;
+        AND consumed_at IS NULL AND expires_at > UTC_TIMESTAMP() AND attempt_count < @maxAttempts;
     `, (request) => request
       .input('requestId', sql.Int, requestId)
       .input('tokenHash', sql.Char(64), hashActionToken(token))
@@ -302,109 +271,76 @@ function createAccountService({
     const requestId = normalizeTokenId(idInput);
     const token = normalizeActionToken(tokenInput);
     if (!requestId || !token) return 'invalid_token';
-    const result = await execute(`
-      SET XACT_ABORT ON;
-      BEGIN TRY
-        BEGIN TRANSACTION;
-        DECLARE @now DATETIME2 = SYSUTCDATETIME();
-        DECLARE @oldEmail NVARCHAR(255);
-        DECLARE @newEmail NVARCHAR(255);
-        DECLARE @storedHash CHAR(64);
-        DECLARE @attemptCount INT;
-        DECLARE @status NVARCHAR(30) = N'invalid_token';
-        DECLARE @userId INT;
-
-        SELECT @userId = user_id, @newEmail = new_email, @storedHash = token_hash, @attemptCount = attempt_count
-        FROM dbo.pending_email_changes WITH (UPDLOCK, HOLDLOCK)
-        WHERE id = @requestId AND consumed_at IS NULL;
-
-        SELECT @oldEmail = email
-        FROM dbo.users WITH (UPDLOCK, HOLDLOCK)
-        WHERE id = @userId AND is_active = 1;
-
-        IF @oldEmail IS NOT NULL AND @newEmail IS NOT NULL
-        BEGIN
-          IF @attemptCount >= @maxAttempts OR (SELECT expires_at FROM dbo.pending_email_changes WHERE id = @requestId) <= @now
-          BEGIN
-            UPDATE dbo.pending_email_changes SET consumed_at = @now WHERE id = @requestId;
-            SET @status = N'expired';
-          END
-          ELSE IF @storedHash <> @tokenHash
-          BEGIN
-            UPDATE dbo.pending_email_changes
+    return inTransaction(async (transaction) => {
+      const pendingResult = await transaction.request().input('requestId', sql.Int, requestId)
+        .query(`SELECT id, user_id, new_email, token_hash, attempt_count,
+            expires_at <= UTC_TIMESTAMP() AS is_expired
+          FROM pending_email_changes WHERE id = @requestId AND consumed_at IS NULL FOR UPDATE`);
+      const pending = pendingResult.recordset?.[0];
+      if (!pending) return 'invalid_token';
+      const userResult = await transaction.request().input('userId', sql.Int, pending.user_id)
+        .query('SELECT id FROM users WHERE id = @userId AND is_active = 1 FOR UPDATE');
+      if (!userResult.recordset?.length) return 'invalid_token';
+      if (Number(pending.attempt_count) >= MAX_ACTION_TOKEN_ATTEMPTS || Number(pending.is_expired) === 1) {
+        await transaction.request().input('requestId', sql.Int, requestId)
+          .query('UPDATE pending_email_changes SET consumed_at = UTC_TIMESTAMP() WHERE id = @requestId AND consumed_at IS NULL');
+        return 'expired';
+      }
+      if (pending.token_hash !== hashActionToken(token)) {
+        await transaction.request().input('requestId', sql.Int, requestId).input('maxAttempts', sql.Int, MAX_ACTION_TOKEN_ATTEMPTS)
+          .query(`UPDATE pending_email_changes
             SET attempt_count = attempt_count + 1,
-                consumed_at = CASE WHEN attempt_count + 1 >= @maxAttempts THEN @now ELSE NULL END
-            WHERE id = @requestId;
-            SET @status = N'invalid_token';
-          END
-          ELSE IF EXISTS (SELECT 1 FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE email = @newEmail AND id <> @userId)
-          BEGIN
-            UPDATE dbo.pending_email_changes SET consumed_at = @now WHERE id = @requestId;
-            SET @status = N'email_in_use';
-          END
-          ELSE
-          BEGIN
-            UPDATE dbo.users SET email = @newEmail, updated_at = @now
-            WHERE id = @userId AND is_active = 1;
-            IF @@ROWCOUNT = 1
-            BEGIN
-              UPDATE dbo.pending_email_changes SET consumed_at = @now WHERE id = @requestId;
-              UPDATE dbo.two_factor_codes SET consumed_at = @now
-              WHERE user_id = @userId AND consumed_at IS NULL;
-              UPDATE dbo.password_reset_tokens SET consumed_at = @now
-              WHERE user_id = @userId AND consumed_at IS NULL;
-              INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
-              VALUES (@userId, N'account.email_changed', N'user', CONVERT(NVARCHAR(100), @userId), N'{"confirmedByNewAddress":true,"sessionsInvalidated":true}');
-              SET @status = N'changed';
-            END;
-          END;
-        END;
-
-        COMMIT TRANSACTION;
-        SELECT @status AS status;
-      END TRY
-      BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
-        THROW;
-      END CATCH;
-    `, (request) => request
-      .input('requestId', sql.Int, requestId)
-      .input('tokenHash', sql.Char(64), hashActionToken(token))
-      .input('maxAttempts', sql.Int, MAX_ACTION_TOKEN_ATTEMPTS));
-    return result.recordset?.[0]?.status || 'invalid_token';
+              consumed_at = CASE WHEN attempt_count + 1 >= @maxAttempts THEN UTC_TIMESTAMP() ELSE NULL END
+            WHERE id = @requestId AND consumed_at IS NULL`);
+        return 'invalid_token';
+      }
+      const conflict = await transaction.request().input('newEmail', sql.NVarChar(255), pending.new_email)
+        .input('userId', sql.Int, pending.user_id)
+        .query('SELECT id FROM users WHERE email = @newEmail AND id <> @userId FOR UPDATE');
+      if (conflict.recordset?.length) {
+        await transaction.request().input('requestId', sql.Int, requestId)
+          .query('UPDATE pending_email_changes SET consumed_at = UTC_TIMESTAMP() WHERE id = @requestId');
+        return 'email_in_use';
+      }
+      const updated = await transaction.request().input('newEmail', sql.NVarChar(255), pending.new_email)
+        .input('userId', sql.Int, pending.user_id)
+        .query('UPDATE users SET email = @newEmail, updated_at = UTC_TIMESTAMP() WHERE id = @userId AND is_active = 1');
+      if (updated.rowsAffected?.[0] !== 1) return 'invalid_token';
+      await transaction.request().input('requestId', sql.Int, requestId)
+        .query('UPDATE pending_email_changes SET consumed_at = UTC_TIMESTAMP() WHERE id = @requestId');
+      await transaction.request().input('userId', sql.Int, pending.user_id)
+        .query('UPDATE two_factor_codes SET consumed_at = UTC_TIMESTAMP() WHERE user_id = @userId AND consumed_at IS NULL');
+      await transaction.request().input('userId', sql.Int, pending.user_id)
+        .query('UPDATE password_reset_tokens SET consumed_at = UTC_TIMESTAMP() WHERE user_id = @userId AND consumed_at IS NULL');
+      await transaction.request().input('userId', sql.Int, pending.user_id)
+        .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
+          VALUES (@userId, 'account.email_changed', 'user', CAST(@userId AS CHAR(100)), '{"confirmedByNewAddress":true,"sessionsInvalidated":true}')`);
+      return 'changed';
+    });
   }
 
   async function requestPasswordReset(emailInput) {
     const email = normalizeEmail(emailInput);
     if (!email || !smtpReady(smtp)) return false;
     const userResult = await execute(`
-      SELECT id, email FROM dbo.users WHERE email = @email AND is_active = 1;
+      SELECT id, email FROM users WHERE email = @email AND is_active = 1;
     `, (request) => request.input('email', sql.NVarChar(255), email));
     const user = userResult.recordset?.[0];
     if (!user) return false;
 
     const token = createToken();
     const tokenHash = hashActionToken(token);
-    const inserted = await execute(`
-      SET XACT_ABORT ON;
-      BEGIN TRY
-        BEGIN TRANSACTION;
-        UPDATE dbo.password_reset_tokens SET consumed_at = SYSUTCDATETIME()
-        WHERE user_id = @userId AND consumed_at IS NULL;
-        INSERT INTO dbo.password_reset_tokens (user_id, token_hash, expires_at)
-        OUTPUT inserted.id AS request_id
-        VALUES (@userId, @tokenHash, DATEADD(MINUTE, @ttlMinutes, SYSUTCDATETIME()));
-        COMMIT TRANSACTION;
-      END TRY
-      BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
-        THROW;
-      END CATCH;
-    `, (request) => request
-      .input('userId', sql.Int, user.id)
-      .input('tokenHash', sql.Char(64), tokenHash)
-      .input('ttlMinutes', sql.Int, ACTION_TOKEN_TTL_MINUTES));
-    const requestId = inserted.recordset?.[0]?.request_id;
+    const requestId = await inTransaction(async (transaction) => {
+      await transaction.request().input('userId', sql.Int, user.id)
+        .query('UPDATE password_reset_tokens SET consumed_at = UTC_TIMESTAMP() WHERE user_id = @userId AND consumed_at IS NULL');
+      const inserted = await transaction.request()
+        .input('userId', sql.Int, user.id)
+        .input('tokenHash', sql.Char(64), tokenHash)
+        .input('ttlMinutes', sql.Int, ACTION_TOKEN_TTL_MINUTES)
+        .query(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+          VALUES (@userId, @tokenHash, DATE_ADD(UTC_TIMESTAMP(), INTERVAL @ttlMinutes MINUTE))`);
+      return inserted.insertId;
+    });
     if (!Number.isSafeInteger(requestId)) return false;
     const query = new URLSearchParams({ requestId: String(requestId), token });
     const resetUrl = `${appBaseUrl}/password/reset?${query.toString()}`;
@@ -417,7 +353,7 @@ function createAccountService({
       return true;
     } catch {
       await execute(`
-        UPDATE dbo.password_reset_tokens SET consumed_at = SYSUTCDATETIME()
+        UPDATE password_reset_tokens SET consumed_at = UTC_TIMESTAMP()
         WHERE id = @requestId AND user_id = @userId AND consumed_at IS NULL;
       `, (request) => request.input('requestId', sql.Int, requestId).input('userId', sql.Int, user.id));
       return false;
@@ -430,10 +366,10 @@ function createAccountService({
     if (!requestId || !token) return false;
     const result = await execute(`
       SELECT token.id
-      FROM dbo.password_reset_tokens AS token
-      INNER JOIN dbo.users AS [user] ON [user].id = token.user_id AND [user].is_active = 1
+      FROM password_reset_tokens AS token
+      INNER JOIN users AS account_user ON account_user.id = token.user_id AND account_user.is_active = 1
       WHERE token.id = @requestId AND token.token_hash = @tokenHash
-        AND token.consumed_at IS NULL AND token.expires_at > SYSUTCDATETIME()
+        AND token.consumed_at IS NULL AND token.expires_at > UTC_TIMESTAMP()
         AND token.attempt_count < @maxAttempts;
     `, (request) => request
       .input('requestId', sql.Int, requestId)
@@ -448,70 +384,47 @@ function createAccountService({
     const password = validatePassword(passwordInput);
     if (!requestId || !token || !password) return 'invalid_request';
     const passwordHash = await hashPassword(password, PASSWORD_HASH_ROUNDS);
-    const result = await execute(`
-      SET XACT_ABORT ON;
-      BEGIN TRY
-        BEGIN TRANSACTION;
-        DECLARE @now DATETIME2 = SYSUTCDATETIME();
-        DECLARE @userId INT;
-        DECLARE @storedHash CHAR(64);
-        DECLARE @attemptCount INT;
-        DECLARE @expiresAt DATETIME2;
-        DECLARE @status NVARCHAR(30) = N'invalid_token';
-
-        SELECT @userId = user_id, @storedHash = token_hash,
-          @attemptCount = attempt_count, @expiresAt = expires_at
-        FROM dbo.password_reset_tokens WITH (UPDLOCK, HOLDLOCK)
-        WHERE id = @requestId AND consumed_at IS NULL;
-
-        IF @userId IS NOT NULL
-        BEGIN
-          IF @attemptCount >= @maxAttempts OR @expiresAt <= @now
-          BEGIN
-            UPDATE dbo.password_reset_tokens SET consumed_at = @now WHERE id = @requestId;
-            SET @status = N'expired';
-          END
-          ELSE IF @storedHash <> @tokenHash
-          BEGIN
-            UPDATE dbo.password_reset_tokens
+    return inTransaction(async (transaction) => {
+      const result = await transaction.request().input('requestId', sql.Int, requestId)
+        .query(`SELECT id, user_id, token_hash, attempt_count, expires_at <= UTC_TIMESTAMP() AS is_expired
+          FROM password_reset_tokens WHERE id = @requestId AND consumed_at IS NULL FOR UPDATE`);
+      const tokenRecord = result.recordset?.[0];
+      if (!tokenRecord) return 'invalid_token';
+      if (Number(tokenRecord.attempt_count) >= MAX_ACTION_TOKEN_ATTEMPTS || Number(tokenRecord.is_expired) === 1) {
+        await transaction.request().input('requestId', sql.Int, requestId)
+          .query('UPDATE password_reset_tokens SET consumed_at = UTC_TIMESTAMP() WHERE id = @requestId');
+        return 'expired';
+      }
+      if (tokenRecord.token_hash !== hashActionToken(token)) {
+        await transaction.request().input('requestId', sql.Int, requestId).input('maxAttempts', sql.Int, MAX_ACTION_TOKEN_ATTEMPTS)
+          .query(`UPDATE password_reset_tokens
             SET attempt_count = attempt_count + 1,
-                consumed_at = CASE WHEN attempt_count + 1 >= @maxAttempts THEN @now ELSE NULL END
-            WHERE id = @requestId;
-            SET @status = N'invalid_token';
-          END
-          ELSE IF EXISTS (SELECT 1 FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE id = @userId AND is_active = 1)
-          BEGIN
-            UPDATE dbo.password_reset_tokens SET consumed_at = @now WHERE id = @requestId;
-            UPDATE dbo.password_reset_tokens SET consumed_at = @now
-            WHERE user_id = @userId AND consumed_at IS NULL;
-            UPDATE dbo.users SET password_hash = @passwordHash, must_change_password = 0, updated_at = @now
-            WHERE id = @userId AND is_active = 1;
-            UPDATE dbo.two_factor_codes SET consumed_at = @now
-            WHERE user_id = @userId AND consumed_at IS NULL;
-            INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
-            VALUES (@userId, N'account.password_reset_completed', N'user', CONVERT(NVARCHAR(100), @userId), N'{"sessionsInvalidated":true}');
-            SET @status = N'reset';
-          END
-          ELSE
-          BEGIN
-            UPDATE dbo.password_reset_tokens SET consumed_at = @now WHERE id = @requestId;
-            SET @status = N'expired';
-          END;
-        END;
-
-        COMMIT TRANSACTION;
-        SELECT @status AS status;
-      END TRY
-      BEGIN CATCH
-        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
-        THROW;
-      END CATCH;
-    `, (request) => request
-      .input('requestId', sql.Int, requestId)
-      .input('tokenHash', sql.Char(64), hashActionToken(token))
-      .input('passwordHash', sql.NVarChar(255), passwordHash)
-      .input('maxAttempts', sql.Int, MAX_ACTION_TOKEN_ATTEMPTS));
-    return result.recordset?.[0]?.status || 'invalid_token';
+              consumed_at = CASE WHEN attempt_count + 1 >= @maxAttempts THEN UTC_TIMESTAMP() ELSE NULL END
+            WHERE id = @requestId AND consumed_at IS NULL`);
+        return 'invalid_token';
+      }
+      const account = await transaction.request().input('userId', sql.Int, tokenRecord.user_id)
+        .query('SELECT id FROM users WHERE id = @userId AND is_active = 1 FOR UPDATE');
+      if (!account.recordset?.length) {
+        await transaction.request().input('requestId', sql.Int, requestId)
+          .query('UPDATE password_reset_tokens SET consumed_at = UTC_TIMESTAMP() WHERE id = @requestId');
+        return 'expired';
+      }
+      await transaction.request().input('requestId', sql.Int, requestId)
+        .query('UPDATE password_reset_tokens SET consumed_at = UTC_TIMESTAMP() WHERE id = @requestId');
+      await transaction.request().input('userId', sql.Int, tokenRecord.user_id)
+        .query('UPDATE password_reset_tokens SET consumed_at = UTC_TIMESTAMP() WHERE user_id = @userId AND consumed_at IS NULL');
+      await transaction.request().input('userId', sql.Int, tokenRecord.user_id)
+        .input('passwordHash', sql.NVarChar(255), passwordHash)
+        .query(`UPDATE users SET password_hash = @passwordHash, must_change_password = 0, updated_at = UTC_TIMESTAMP()
+          WHERE id = @userId AND is_active = 1`);
+      await transaction.request().input('userId', sql.Int, tokenRecord.user_id)
+        .query('UPDATE two_factor_codes SET consumed_at = UTC_TIMESTAMP() WHERE user_id = @userId AND consumed_at IS NULL');
+      await transaction.request().input('userId', sql.Int, tokenRecord.user_id)
+        .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
+          VALUES (@userId, 'account.password_reset_completed', 'user', CAST(@userId AS CHAR(100)), '{"sessionsInvalidated":true}')`);
+      return 'reset';
+    });
   }
 
   return {

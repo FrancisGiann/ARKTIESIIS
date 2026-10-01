@@ -369,7 +369,7 @@ test('health route reports database failure without exposing SQL details', async
   });
 });
 
-test('environment rejects invalid ports and a missing production session secret', () => {
+test('environment validates production secrets, SMTP, and private upload storage', () => {
   const baseEnv = { PATH: process.env.PATH, NODE_ENV: 'development' };
   const loadEnvironment = (overrides) => spawnSync(
     process.execPath,
@@ -388,7 +388,33 @@ test('environment rejects invalid ports and a missing production session secret'
   assert.notEqual(loadEnvironment({ GEMINI_MODEL: 'not-a-gemini-model' }).status, 0);
   assert.notEqual(loadEnvironment({ GEMINI_API_KEY: 'invalid\nkey' }).status, 0);
   assert.notEqual(loadEnvironment({ NODE_ENV: 'production', SESSION_SECRET: '' }).status, 0);
-  assert.equal(loadEnvironment({ NODE_ENV: 'production', SESSION_SECRET: 'a'.repeat(32), APP_BASE_URL: 'https://school.example.edu' }).status, 0);
+  const productionEnvironment = {
+    NODE_ENV: 'production', SESSION_SECRET: 'a'.repeat(32), APP_BASE_URL: 'https://school.example.edu',
+    SMTP_HOST: 'smtp.school.example.edu', SMTP_FROM: 'ARKTIESIIS <no-reply@school.example.edu>',
+    SMTP_USER: '', SMTP_PASS: '',
+    DOCUMENT_STORAGE_DIR: '/var/lib/arkt/uploads'
+  };
+  assert.notEqual(loadEnvironment({ ...productionEnvironment, SMTP_HOST: '' }).status, 0);
+  assert.notEqual(loadEnvironment({ ...productionEnvironment, SMTP_PASS: 'incomplete' }).status, 0);
+  assert.notEqual(loadEnvironment({ ...productionEnvironment, DOCUMENT_STORAGE_DIR: '' }).status, 0);
+  assert.notEqual(loadEnvironment({ ...productionEnvironment, DOCUMENT_STORAGE_DIR: 'storage/uploads' }).status, 0);
+  assert.notEqual(loadEnvironment({ ...productionEnvironment, DOCUMENT_STORAGE_DIR: `${process.cwd()}/storage/uploads` }).status, 0);
+  assert.notEqual(loadEnvironment({ ...productionEnvironment, DOCUMENT_STORAGE_DIR: '/home/account/domains/school/hbuilds/private/uploads' }).status, 0);
+  assert.notEqual(loadEnvironment({ ...productionEnvironment, DOCUMENT_STORAGE_DIR: '/home/account/domains/school/public_html/uploads' }).status, 0);
+  assert.equal(loadEnvironment(productionEnvironment).status, 0);
+});
+
+test('production trusts the front proxy so HTTPS session cookies are issued behind Hostinger', async () => {
+  const app = createApp({ environment: {
+    nodeEnv: 'production', devPasswordOnlyLogin: false,
+    sessionSecret: 'production-proxy-cookie-test-session-secret'
+  } });
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/login`, { headers: { 'x-forwarded-proto': 'https' } });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('set-cookie') || '', /; Secure(?:;|$)/i);
+  });
 });
 
 test('development login regenerates the session and redirects to the database-backed role dashboard', async () => {
@@ -413,7 +439,17 @@ test('development login regenerates the session and redirects to the database-ba
     }
   };
 
-  await withServer(createApp({ databasePool: database.getPool, environment: developmentEnvironment(), studentRecordsService }), async (baseUrl) => {
+  const registrarDashboardService = {
+    async getDashboard() {
+      return {
+        configuredTerms: [], schoolYears: [], schoolYearTerms: [], selectedSchoolYear: '', selectedTerm: null,
+        activeEnrolledCount: null, pendingActivationCount: 0, departedCount: 0, droppedCount: 0, transferredCount: 0,
+        everFinalizedCount: 0, termCounts: [], needsTermSelection: true
+      };
+    }
+  };
+
+  await withServer(createApp({ databasePool: database.getPool, environment: developmentEnvironment(), studentRecordsService, registrarDashboardService }), async (baseUrl) => {
     const loginPage = await fetch(`${baseUrl}/login`);
     const anonymousCookie = getSessionCookie(loginPage);
     const csrfToken = csrfFromHtml(await loginPage.text());
@@ -908,8 +944,8 @@ test('admin bootstrap validates fields and creates user, staff profile, and audi
           input(name, type, value) { values[name] = value; return this; },
           async query(statement) {
             statements.push({ statement, values });
-            if (statement.startsWith('SELECT TOP')) return { recordset: [] };
-            if (statement.startsWith('INSERT INTO dbo.users')) return { recordset: [{ id: 91 }] };
+            if (statement.startsWith('SELECT id FROM users')) return { recordset: [] };
+            if (statement.startsWith('INSERT INTO users')) return { insertId: 91 };
             return { recordset: [] };
           }
         };
@@ -937,10 +973,10 @@ test('admin bootstrap validates fields and creates user, staff profile, and audi
   assert.equal(transactionState.beginLevel, 'serializable');
   assert.equal(transactionState.committed, true);
   assert.equal(transactionState.rolledBack, false);
-  assert.equal(statements.length, 4);
+  assert.equal(statements.length, 6);
   assert.ok(statements.every(({ statement }) => statement.includes('@')));
-  assert.ok(statements.some(({ statement, values }) => statement.includes('dbo.staff_profiles') && values.firstName === 'Ada'));
-  assert.ok(statements.some(({ statement, values }) => statement.includes('dbo.audit_logs') && values.action === 'admin.bootstrap'));
+  assert.ok(statements.some(({ statement, values }) => statement.includes('staff_profiles') && values.firstName === 'Ada'));
+  assert.ok(statements.some(({ statement, values }) => statement.includes('audit_logs') && values.action === 'admin.bootstrap'));
 });
 
 test('admin bootstrap refuses to create a second database administrator', async () => {
@@ -958,7 +994,10 @@ test('admin bootstrap refuses to create a second database administrator', async 
       request() {
         return {
           input() { return this; },
-          async query() { queryCount += 1; return { recordset: [{ id: 1 }] }; }
+          async query(statement) {
+            queryCount += 1;
+            return statement.startsWith('SELECT id FROM users') ? { recordset: [{ id: 1 }] } : { recordset: [] };
+          }
         };
       }
       async commit() { committed = true; }
@@ -977,7 +1016,7 @@ test('admin bootstrap refuses to create a second database administrator', async 
     hashPassword: async () => 'bcrypt-hash-value'
   }), /A database administrator already exists\./);
 
-  assert.equal(queryCount, 1);
+  assert.equal(queryCount, 3);
   assert.equal(committed, false);
   assert.equal(rolledBack, true);
 });

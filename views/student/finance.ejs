@@ -1,27 +1,160 @@
 <%- include('../partials/head', { title }) %>
-<main class="page-shell student-page" id="main-content">
+<main class="page-shell student-page student-finance-page" id="main-content">
   <a class="context-back" href="/student">Back to my school day</a>
-  <header class="page-heading"><div><h1>My finance account</h1><p>Read-only balance and entries recorded by the finance office.</p></div></header>
+  <header class="page-heading student-finance-heading">
+    <div>
+      <h1>My finance account</h1>
+      <p>Read-only statement of your assessed charges, payments, allocations, and balances.</p>
+    </div>
+    <a class="button button--secondary" href="/student/finance/statement">Statement of Account</a>
+  </header>
+
   <% if (!finance.student) { %>
-    <section class="student-unlinked" aria-labelledby="finance-unlinked-title"><h2 id="finance-unlinked-title">Your student profile is not linked yet</h2><p>Ask the registrar to connect your account before viewing a personal finance ledger.</p></section>
-  <% } else if (!finance.account) { %>
-    <section class="student-section" aria-labelledby="finance-account-title"><h2 id="finance-account-title">Account being prepared</h2><p>Your finance account will appear here when it is ready.</p></section>
+    <section class="student-unlinked" aria-labelledby="finance-unlinked-title">
+      <h2 id="finance-unlinked-title">Your student profile is not linked yet</h2>
+      <p>Ask the registrar to connect your account before viewing a personal finance ledger.</p>
+    </section>
   <% } else { %>
-    <section class="student-section student-ledger" aria-labelledby="finance-ledger-title">
-      <div class="student-section-heading"><div><h2 id="finance-ledger-title">Account ledger</h2><p><%= [finance.student.first_name, finance.student.middle_name, finance.student.last_name, finance.student.suffix].filter(Boolean).join(' ') %> · <%= finance.student.student_no %></p></div></div>
-      <div class="finance-balance-line"><span>Current balance</span><strong>₱<%= formatMoney(finance.account.balance) %></strong></div>
-      <% if (finance.transactions.length) { %>
-        <div class="table-scroll student-ledger-scroll" tabindex="0" aria-label="Your finance ledger">
-          <table class="portal-table"><caption class="visually-hidden">Finance entries for your account</caption><thead><tr><th scope="col">Date</th><th scope="col">Entry</th><th scope="col">Details</th><th scope="col">Amount</th></tr></thead><tbody>
-            <% for (const transaction of finance.transactions) { %><tr>
-              <td data-label="Date"><%= new Date(transaction.created_at).toLocaleDateString() %></td>
-              <td data-label="Entry"><span class="ledger-type"><%= transaction.transaction_type.replaceAll('_', ' ') %></span></td>
-              <td data-label="Details"><%= transaction.description || transaction.reference_no || 'Recorded by finance' %></td>
-              <td data-label="Amount">₱<%= formatMoney(transaction.amount) %></td>
-            </tr><% } %>
-          </tbody></table>
+    <% const summary = annualLedger.summary; %>
+    <% const recentFinanceEvents = annualLedger.events.slice(-5).reverse(); %>
+    <section class="student-finance-ledger" aria-labelledby="finance-ledger-title">
+      <div class="student-finance-ledger__heading">
+        <div>
+          <h2 id="finance-ledger-title">Account ledger</h2>
+          <p><%= [finance.student.first_name, finance.student.middle_name, finance.student.last_name, finance.student.suffix].filter(Boolean).join(' ') %> · <%= finance.student.student_no %></p>
         </div>
-      <% } else { %><p class="empty-state">No finance entries have been recorded yet.</p><% } %>
+        <p class="student-finance-ledger__note">This account is read-only. Contact the finance office about a balance or payment record.</p>
+      </div>
+
+      <section class="student-finance-summary" aria-label="Balance summary">
+        <div class="student-finance-summary__lead">
+          <div>
+            <h3>Combined account balance</h3>
+            <p>Includes annual balances and any legacy or verified opening liability. Positive amounts are owed.</p>
+          </div>
+          <p class="student-finance-summary__amount">₱<%= formatMoney(summary.totalBalance) %></p>
+        </div>
+        <div class="student-finance-summary__credit">
+          <h3>Available payment credit</h3>
+          <p class="student-finance-summary__amount">₱<%= formatMoney(summary.availableCredit) %></p>
+          <p>Shown separately and not deducted from the balance owed.</p>
+        </div>
+      </section>
+
+      <section class="student-finance-details" aria-labelledby="finance-details-title">
+        <h3 id="finance-details-title">Balance details</h3>
+        <dl class="student-finance-details__list">
+          <div>
+            <dt><%= summary.annualBalanceSchoolYear ? `Latest assessed year · ${summary.annualBalanceSchoolYear}` : 'Latest assessed year · none recorded' %></dt>
+            <dd>₱<%= formatMoney(summary.annualBalance) %></dd>
+          </div>
+          <div><dt>All annual years</dt><dd>₱<%= formatMoney(summary.allYearsAnnualBalance) %></dd></div>
+          <div><dt>Unattributed legacy balance</dt><dd>₱<%= formatMoney(summary.unattributedLegacyBalance) %></dd></div>
+          <div><dt>Verified opening liability</dt><dd>₱<%= formatMoney(summary.openingLiabilityDue) %></dd></div>
+          <div><dt>Configured current term due</dt><dd>₱<%= formatMoney(summary.currentTermOutstanding) %></dd></div>
+          <div><dt>Prior term/year debt</dt><dd>₱<%= formatMoney(summary.priorTermYearDebt) %></dd></div>
+        </dl>
+      </section>
+
+      <section class="student-finance-placements" aria-labelledby="finance-placements-title">
+        <div class="student-finance-section-heading">
+          <div>
+            <h3 id="finance-placements-title">Term placements</h3>
+            <p>Each placement shows its outstanding amount, registrar confirmation, and signed clearance separately.</p>
+          </div>
+        </div>
+        <% if (annualLedger.terms.length) { %>
+          <ol class="student-finance-term-list">
+            <% for (const term of annualLedger.terms) { %>
+              <% const isCurrentTerm = term.is_current === true || term.is_current === 1 || term.is_current === '1'; %>
+              <li class="student-finance-term">
+                <div class="student-finance-term__heading">
+                  <div class="student-finance-term__identity">
+                    <h4><%= term.school_year %> · <%= term.term %></h4>
+                    <% if (isCurrentTerm) { %><span class="student-finance-current">Current term</span><% } %>
+                  </div>
+                  <div class="student-finance-term__outstanding">
+                    <span>Outstanding</span>
+                    <strong>₱<%= formatMoney(term.outstanding) %></strong>
+                  </div>
+                </div>
+                <dl class="student-finance-term__details">
+                  <div>
+                    <dt>Placement</dt>
+                    <dd><%= term.enrollment_status ? term.enrollment_status.replaceAll('_', ' ') : 'Not recorded' %></dd>
+                  </div>
+                  <div>
+                    <dt>Registrar confirmation</dt>
+                    <dd><%= term.term_scope_status === 'not_applicable' ? 'Not applicable before entry term' : term.registrar_confirmation_id ? 'Confirmed by registrar' : 'Awaiting registrar confirmation' %></dd>
+                  </div>
+                  <div>
+                    <dt>Signed clearance</dt>
+                    <dd><%= term.signed_clearance_status === 'signed' ? 'Signed' : 'Not signed' %></dd>
+                  </div>
+                </dl>
+              </li>
+            <% } %>
+          </ol>
+        <% } else { %>
+          <p class="student-finance-empty">No term finance activity has been posted yet.</p>
+        <% } %>
+        <p class="student-finance-clearance-note">A signed clearance is a separate record and does not change the outstanding amount shown here.</p>
+      </section>
+
+      <section class="student-finance-activity" aria-labelledby="finance-activity-title">
+        <div class="student-finance-section-heading">
+          <div>
+            <h3 id="finance-activity-title">Recent finance activity</h3>
+            <p><%= annualLedger.events.length %> total entries in your account history.</p>
+          </div>
+        </div>
+        <% if (recentFinanceEvents.length) { %>
+          <ol class="student-finance-activity-list">
+            <% for (const event of recentFinanceEvents) { %>
+              <% const eventDate = new Date(event.event_date); %>
+              <% const hasValidEventDate = Number.isFinite(eventDate.getTime()); %>
+              <li class="student-finance-activity-item">
+                <div class="student-finance-activity-item__entry">
+                  <strong><%= event.event_type.replaceAll('_', ' ') %></strong>
+                  <% if (hasValidEventDate) { %><time datetime="<%= eventDate.toISOString() %>"><%= eventDate.toLocaleString() %></time><% } else { %><span>Date not recorded</span><% } %>
+                </div>
+                <div class="student-finance-activity-item__details">
+                  <span><%= event.details || 'Recorded by finance' %></span>
+                  <span>Reference: <%= event.reference_no || '—' %></span>
+                </div>
+                <p class="student-finance-activity-item__amount"><span>Recorded amount</span><strong><%= event.amount == null ? '—' : `₱${formatMoney(event.amount)}` %></strong></p>
+              </li>
+            <% } %>
+          </ol>
+        <% } else { %>
+          <p class="student-finance-empty">No finance entries have been recorded.</p>
+        <% } %>
+
+        <details class="student-finance-history">
+          <summary>View complete finance history · <%= annualLedger.events.length %> entries</summary>
+          <% if (annualLedger.events.length) { %>
+            <div class="table-scroll student-finance-history__scroll" tabindex="0" aria-label="Complete finance history, oldest entries first">
+              <table class="portal-table student-finance-history__table">
+                <thead><tr><th scope="col">Date</th><th scope="col">Entry</th><th scope="col">Details</th><th scope="col">Reference</th><th scope="col">Recorded amount</th></tr></thead>
+                <tbody>
+                  <% for (const event of annualLedger.events) { %>
+                    <% const eventDate = new Date(event.event_date); %>
+                    <tr>
+                      <td data-label="Date"><%= Number.isFinite(eventDate.getTime()) ? eventDate.toLocaleString() : 'Date not recorded' %></td>
+                      <td data-label="Entry"><%= event.event_type.replaceAll('_', ' ') %></td>
+                      <td data-label="Details"><%= event.details || 'Recorded by finance' %></td>
+                      <td data-label="Reference"><%= event.reference_no || '—' %></td>
+                      <td data-label="Recorded amount"><%= event.amount == null ? '—' : `₱${formatMoney(event.amount)}` %></td>
+                    </tr>
+                  <% } %>
+                </tbody>
+              </table>
+            </div>
+          <% } else { %>
+            <p class="student-finance-empty">No finance entries have been recorded.</p>
+          <% } %>
+        </details>
+      </section>
     </section>
   <% } %>
 </main>

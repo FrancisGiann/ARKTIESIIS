@@ -9,7 +9,7 @@ const {
   normalizeBulkRows,
   createStudentSetupService
 } = require('../src/services/studentSetupService');
-const { createStudentBulkAccountsRouter, createStudentIntakeRouter } = require('../src/routes/studentSetup');
+const { createStudentBulkAccountsRouter, createStudentIntakeRouter, createAnnualStudentIntakeRouter } = require('../src/routes/studentSetup');
 const { validateTransaction, createFinanceService } = require('../src/services/financeService');
 
 function fakeSql() {
@@ -22,7 +22,7 @@ function fakeSql() {
 }
 
 function generatedStudentNumberQuery(statement) {
-  return statement.includes('DECLARE @prefix');
+  return statement.includes('SELECT SUBSTRING(student_no');
 }
 
 function setupFixture(onQuery, { hashPassword = async (password) => 'bcrypt:' + password, createPassword } = {}) {
@@ -94,7 +94,7 @@ test('bulk roster validation reports missing fields and case-insensitive duplica
 
 test('bulk setup revalidates all rows and rolls back if a student became linked', async () => {
   const fixture = setupFixture(({ statement }) => {
-    if (statement.includes('SELECT id, role FROM dbo.users')) return { recordset: [admin] };
+    if (statement.includes('SELECT id, role FROM users')) return { recordset: [admin] };
     if (statement.includes('WITH input_rows AS')) {
       return { recordset: [unlinkedRows[0], { ...unlinkedRows[1], user_id: 77 }] };
     }
@@ -107,18 +107,18 @@ test('bulk setup revalidates all rows and rolls back if a student became linked'
     return true;
   });
   assert.equal(fixture.log.rolledBack, true);
-  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.users')), false);
-  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE dbo.students')), false);
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO users')), false);
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE students')), false);
 });
 
 test('bulk setup returns distinct temporary credentials while storing bcrypt hashes only', async () => {
   let nextUserId = 20;
   const fixture = setupFixture(({ statement, values }) => {
-    if (statement.includes('SELECT id, role FROM dbo.users')) return { recordset: [admin] };
+    if (statement.includes('SELECT id, role FROM users')) return { recordset: [admin] };
     if (statement.includes('WITH input_rows AS')) return { recordset: unlinkedRows };
-    if (statement.includes('INSERT INTO dbo.users')) return { recordset: [{ user_id: nextUserId++ }] };
-    if (statement.includes('UPDATE dbo.students')) return { rowsAffected: [1] };
-    if (statement.includes('INSERT INTO dbo.audit_logs')) {
+    if (statement.includes('INSERT INTO users')) return { insertId: nextUserId++ };
+    if (statement.includes('UPDATE students')) return { affectedRows: 1 };
+    if (statement.includes('INSERT INTO audit_logs')) {
       assert.doesNotMatch(values.detailsJson, /one@example|two@example|temp-/);
       return { recordset: [] };
     }
@@ -133,18 +133,19 @@ test('bulk setup returns distinct temporary credentials while storing bcrypt has
   ]);
   assert.equal(fixture.log.isolation, 'SERIALIZABLE');
   assert.equal(fixture.log.committed, true);
-  const writes = fixture.log.queries.filter(({ statement }) => statement.includes('INSERT INTO dbo.users'));
+  const writes = fixture.log.queries.filter(({ statement }) => statement.includes('INSERT INTO users'));
   assert.deepEqual(writes.map(({ values }) => values.passwordHash), ['bcrypt:temp-1', 'bcrypt:temp-2']);
   assert.ok(writes.every(({ statement }) => statement.includes('must_change_password')));
 });
 
 test('registrar intake rejects existing identifiers before any inserts', async () => {
   const fixture = setupFixture(({ statement }) => {
-    if (statement.includes('SELECT id, role FROM dbo.users')) return { recordset: [registrar] };
+    if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
     if (statement.includes('SELECT section.id, term.school_year')) return { recordset: [{ id: 8, school_year: '2026-2027' }] };
-    if (statement.includes('sp_getapplock')) return { recordset: [{ lock_result: 0 }] };
-    if (generatedStudentNumberQuery(statement)) return { recordset: [{ student_no: 'SHS-2026-0321' }] };
-    if (statement.includes('SELECT\n          CASE WHEN EXISTS')) return { recordset: [{ student_no_exists: 0, lrn_exists: 1, email_exists: 0, pending_email_exists: 0 }] };
+    if (statement.includes('INSERT INTO application_locks')) return { affectedRows: 1 };
+    if (statement.includes('FROM application_locks')) return { recordset: [{ lock_name: 'student-number:2026' }] };
+    if (generatedStudentNumberQuery(statement)) return { recordset: [{ sequence: '320' }] };
+    if (statement.includes('student_no_exists')) return { recordset: [{ student_no_exists: 0, lrn_exists: 1, email_exists: 0, pending_email_exists: 0 }] };
     throw new Error('Unexpected query: ' + statement);
   });
   await assert.rejects(fixture.service.createEnrollmentIntake(5, {
@@ -152,53 +153,53 @@ test('registrar intake rejects existing identifiers before any inserts', async (
     email: 'new@example.edu', academicTermId: '2', sectionId: '8'
   }), /LRN is already in use/);
   assert.equal(fixture.log.rolledBack, true);
-  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.users')), false);
-  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.students')), false);
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO users')), false);
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO students')), false);
 });
 
 test('registrar intake creates an inactive linked login, new profile, pending enrollment, and clearance atomically', async () => {
   let nextUserId = 31;
   const fixture = setupFixture(({ statement, values }) => {
-    if (statement.includes('SELECT id, role FROM dbo.users')) return { recordset: [registrar] };
+    if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
     if (statement.includes('SELECT section.id, term.school_year')) {
       assert.equal(values.termId, 2);
       assert.equal(values.sectionId, 8);
       return { recordset: [{ id: 8, school_year: '2026-2027' }] };
     }
-    if (statement.includes('sp_getapplock')) return { recordset: [{ lock_result: 0 }] };
-    if (generatedStudentNumberQuery(statement)) return { recordset: [{ student_no: 'SHS-2026-0321' }] };
-    if (statement.includes('SELECT\n          CASE WHEN EXISTS')) return { recordset: [{
+    if (statement.includes('INSERT INTO application_locks')) return { affectedRows: 1 };
+    if (statement.includes('FROM application_locks')) return { recordset: [{ lock_name: 'student-number:2026' }] };
+    if (generatedStudentNumberQuery(statement)) return { recordset: [{ sequence: '320' }] };
+    if (statement.includes('student_no_exists')) return { recordset: [{
       student_no_exists: 0, lrn_exists: 0, email_exists: 0, pending_email_exists: 0
     }] };
-    if (statement.includes('FROM dbo.sections AS section')) return { recordset: [{ id: values.sectionId }] };
-    if (statement.includes('INSERT INTO dbo.users')) {
+    if (statement.includes('FROM sections AS section')) return { recordset: [{ id: values.sectionId }] };
+    if (statement.includes('INSERT INTO users')) {
       assert.equal(values.email, 'jamie@example.edu');
       assert.equal(values.mustChangePassword, true);
-      assert.match(statement, /N'student', 0, @mustChangePassword/);
+      assert.match(statement, /'student', 0, @mustChangePassword/);
       assert.notEqual(values.passwordHash, 'inaccessible-placeholder');
-      return { recordset: [{ user_id: nextUserId++ }] };
+      return { insertId: nextUserId++ };
     }
-    if (statement.includes('INSERT INTO dbo.students')) {
+    if (statement.includes('INSERT INTO students')) {
       assert.equal(values.userId, 31);
       assert.equal(values.studentNo, 'SHS-2026-0321');
-      assert.match(statement, /OUTPUT INSERTED\.id INTO @insertedStudents/);
       assert.equal(values.firstName, 'Jamie');
-      return { recordset: [{ student_id: 41 }] };
+      return { insertId: 41 };
     }
-    if (statement.includes('INSERT INTO dbo.enrollments')) {
+    if (statement.includes('INSERT INTO enrollments')) {
       assert.equal(values.studentId, 41);
       assert.equal(values.termId, 2);
       assert.equal(values.sectionId, 8);
-      assert.match(statement, /N'pending_payment'/);
-      return { recordset: [{ enrollment_id: 51 }] };
+      assert.match(statement, /'pending_payment'/);
+      return { insertId: 51 };
     }
-    if (statement.includes('INSERT INTO dbo.enrollment_clearances')) {
+    if (statement.includes('INSERT INTO enrollment_clearances')) {
       assert.equal(values.enrollmentId, 51);
       assert.equal(values.actorId, 5);
-      assert.match(statement, /N'pending'/);
+      assert.match(statement, /'pending'/);
       return { recordset: [] };
     }
-    if (statement.includes('INSERT INTO dbo.audit_logs')) {
+    if (statement.includes('INSERT INTO audit_logs')) {
       assert.doesNotMatch(values.detailsJson, /Jamie|ST-100|jamie@example/);
       return { recordset: [] };
     }
@@ -211,9 +212,9 @@ test('registrar intake creates an inactive linked login, new profile, pending en
   assert.equal(enrollmentId, 51);
   assert.equal(fixture.log.isolation, 'SERIALIZABLE');
   assert.equal(fixture.log.committed, true);
-  assert.equal(fixture.log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.students')).values.studentNo, 'SHS-2026-0321');
-  assert.ok(fixture.log.queries.some(({ statement, values }) => statement.includes('sp_getapplock') && values.resource === 'student-number:2026'));
-  assert.equal(fixture.log.queries.filter(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')).length, 1);
+  assert.equal(fixture.log.queries.find(({ statement }) => statement.includes('INSERT INTO students')).values.studentNo, 'SHS-2026-0321');
+  assert.ok(fixture.log.queries.some(({ statement, values }) => statement.includes('INSERT INTO application_locks') && values.lockName === 'student-number:2026'));
+  assert.equal(fixture.log.queries.filter(({ statement }) => statement.includes('INSERT INTO audit_logs')).length, 1);
 });
 
 test('registrar intake rejects missing or invalid term years before creating records', async () => {
@@ -222,64 +223,126 @@ test('registrar intake rejects missing or invalid term years before creating rec
     academicTermId: '2', sectionId: '8'
   };
   const missingTerm = setupFixture(({ statement }) => {
-    if (statement.includes('SELECT id, role FROM dbo.users')) return { recordset: [registrar] };
+    if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
     if (statement.includes('SELECT section.id, term.school_year')) return { recordset: [] };
     throw new Error('Unexpected query: ' + statement);
   });
   await assert.rejects(missingTerm.service.createEnrollmentIntake(5, validProfile), /Choose an existing academic term/);
-  assert.equal(missingTerm.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.users')), false);
+  assert.equal(missingTerm.log.queries.some(({ statement }) => statement.includes('INSERT INTO users')), false);
 
   const invalidTerm = setupFixture(({ statement }) => {
-    if (statement.includes('SELECT id, role FROM dbo.users')) return { recordset: [registrar] };
+    if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
     if (statement.includes('SELECT section.id, term.school_year')) return { recordset: [{ id: 8, school_year: '2026/2027' }] };
     throw new Error('Unexpected query: ' + statement);
   });
   await assert.rejects(invalidTerm.service.createEnrollmentIntake(5, validProfile), /invalid school year/);
   assert.equal(invalidTerm.log.queries.some(({ statement }) => statement.includes('sp_getapplock')), false);
-  assert.equal(invalidTerm.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.students')), false);
+  assert.equal(invalidTerm.log.queries.some(({ statement }) => statement.includes('INSERT INTO students')), false);
 });
 
-test('student intake form explains automatic numbering and does not request a student number', async () => {
+test('registrar intake opens the guided annual form and links the roster to fee confirmation and paper records', async () => {
   const app = express();
+  let confirmationCall = null;
+  const session = {};
   app.set('views', path.join(__dirname, '..', 'views'));
   app.set('view engine', 'ejs');
   app.locals.formatStudentPlacement = require('../src/utils/formatStudentPlacement').formatStudentPlacement;
+  app.locals.formatMoney = require('../src/utils/formatMoney').formatMoney;
   app.use(express.urlencoded({ extended: false }));
-  app.use((req, _res, next) => { req.authUser = registrar; req.session = {}; next(); });
-  app.use('/registrar/intake', createStudentIntakeRouter({ studentSetupService: {
+  app.use((req, _res, next) => { req.authUser = registrar; req.session = session; next(); });
+  const annualEnrollmentService = {
     async loadIntakeOptions() {
       return {
-        terms: [{ id: 2, school_year: '2026-2027', term: 'First', is_current: true }],
-        sections: [{ id: 8, name: 'Mabini', grade_level: 'Grade 11', academic_term_id: 2, school_year: '2026-2027', term: 'First' }]
+        schoolYears: [{ school_year: '2026-2027' }],
+        terms: [1, 2, 3].map((number) => ({ id: number, school_year: '2026-2027', term: `Term ${number}`, annual_term_number: number, is_current: number === 1 })),
+        sections: [1, 2, 3].map((number) => ({ id: number + 7, name: 'Mabini', grade_level: 'Grade 11', academic_term_id: number, school_year: '2026-2027', term: `Term ${number}`, cluster: 'A', strand: 'STEM', adviser: 'Synthetic Adviser', modality: 'face_to_face' }))
       };
     },
-    async listPendingIntakes() {
-      return [{ enrollment_id: 51, student_id: 41, student_no: 'SHS-2026-0321', first_name: 'Synthetic', last_name: 'Learner', email: 'learner@example.edu', school_year: '2026-2027', term: 'First', section_name: 'Mabini', clearance_status: 'pending' }];
+    async listAnnualEnrollments() { return [{ annual_enrollment_id: 71, enrollment_id: 51, student_id: 41, student_no: 'SHS-2026-0321', first_name: 'Synthetic', last_name: 'Learner', email: 'learner@example.edu', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB', entry_term_number: 1, term: 'Term 1', section_id: 8, section_name: 'Mabini', term_scope_status: 'applicable', annual_term_number: 1, enrollment_status: 'pending_payment', signed_clearance_status: 'not signed' }]; },
+    async listAnnualEnrollmentCounts() { return [{ school_year: '2026-2027', grade_level: 'Grade 11', term: 'Term 1', annual_term_number: 1, section_name: 'Mabini', cluster: 'A', strand: 'STEM', gender: 'Not recorded', enrollment_status: 'pending_payment', student_count: 1 }]; },
+    async confirmAnnualEnrollment(actorId, annualId, input) {
+      confirmationCall = { actorId, annualId, input };
+      return { annualEnrollmentId: 71, studentId: 41, studentNo: 'SHS-2026-0321', firstName: 'Synthetic', lastName: 'Learner', schoolYear: '2026-2027', gradeLevel: 'Grade 11', term: 'Term 1', sectionName: 'Mabini', total: '1234.50', temporaryPassword: null };
     }
-  } }));
+  };
+  const feePreview = {
+    parent: { first_name: 'Synthetic', last_name: 'Learner', student_no: 'SHS-2026-0321', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB' },
+    scheduleId: 9, scheduleVersion: 2, voucherCode: 'PUB', assessmentId: null, existingAssessment: false,
+    total: '1234.50', totalCents: 123450, optionalLineIds: [],
+    optionalLines: [{ id: 90, termNumber: 1, lineName: 'Tour', installment: 'Once', amount: '100.00', selected: false }],
+    termTotals: [{ termNumber: 1, amount: '1234.50' }, { termNumber: 2, amount: '0.00' }, { termNumber: 3, amount: '0.00' }],
+    lines: [{ termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Prelim', grossAmount: '1234.50', waivedAmount: '0.00', amount: '1234.50', isOptional: false }],
+    snapshotFingerprint: 'a'.repeat(64)
+  };
+  app.use('/registrar/intake', createAnnualStudentIntakeRouter({ annualEnrollmentService,
+    annualFinanceService: { async annualAssessmentPreviewForRegistrar() { return feePreview; } }
+  }));
   await withServer(app, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/registrar/intake/new`);
     const html = await response.text();
     assert.equal(response.status, 200);
-    assert.match(html, /assigned automatically/);
-    assert.match(html, /SHS-YYYY-0001/);
-    assert.doesNotMatch(html, /name="studentNo"/);
+    assert.match(html, /Student details/);
+    assert.match(html, /Enrollment details/);
+    assert.match(html, /Documents received/);
+    assert.match(html, /Fees and confirmation/);
+    assert.match(html, /missing papers do not block enrollment/i);
+    assert.match(html, /id="annual-student-mode"/);
+    assert.match(html, /name="studentNo"/);
+    assert.match(html, /src="\/js\/annual-intake-form.js"/);
     assert.match(html, /name="lrn"/);
+    assert.match(html, /name="section1Id"/);
+    assert.match(html, /name="section2Id"/);
+    assert.match(html, /name="section3Id"/);
+    assert.match(html, /does not change the fees/);
     const pending = await fetch(`${baseUrl}/registrar/intake`);
     const pendingHtml = await pending.text();
     assert.equal(pending.status, 200);
     assert.match(pendingHtml, /SHS-2026-0321/);
+    assert.match(pendingHtml, /Enrollment confirmation/);
+    assert.match(pendingHtml, /Review fees and confirm enrollment/);
+    assert.match(pendingHtml, /Record paper requirements checklist/);
+    assert.match(pendingHtml, /Enrollment counts/);
+    assert.match(pendingHtml, /data-label="Students"><strong>1/);
+
+    const fees = await fetch(`${baseUrl}/registrar/intake/71/fees`);
+    const feesHtml = await fees.text();
+    assert.equal(fees.status, 200);
+    assert.match(fees.headers.get('cache-control'), /no-store/);
+    assert.match(feesHtml, /Payable total/);
+    assert.match(feesHtml, /View itemized fee breakdown/);
+    assert.match(feesHtml, /Update fee total/);
+    assert.match(feesHtml, /name="snapshotFingerprint" value="a{64}"/);
+    assert.match(feesHtml, /name="scheduleVersion" value="2"/);
+    assert.match(feesHtml, /Confirm enrollment/);
+    assert.doesNotMatch(feesHtml, /name="paymentAmount"|name="receiptNumber"|financeReviewReason/);
+    const csrfToken = feesHtml.match(/name="_csrf" value="([^"]+)"/)?.[1];
+    assert.ok(csrfToken);
+    const confirmResponse = await fetch(`${baseUrl}/registrar/intake/71/confirm`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey: 'a87e52a5-833d-499d-bca3-86034d83892e',
+        scheduleId: '9', scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64) })
+    });
+    const confirmedHtml = await confirmResponse.text();
+    assert.equal(confirmResponse.status, 200);
+    assert.match(confirmResponse.headers.get('cache-control'), /no-store/);
+    assert.match(confirmedHtml, /Enrollment confirmed/);
+    assert.match(confirmedHtml, /₱1,234\.50/);
+    assert.match(confirmedHtml, /Open paper requirements checklist/);
+    assert.deepEqual(confirmationCall, { actorId: registrar.id, annualId: '71', input: {
+      _csrf: csrfToken, idempotencyKey: 'a87e52a5-833d-499d-bca3-86034d83892e', scheduleId: '9',
+      scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64)
+    } });
   });
 });
 
 test('finalization requires an explicitly cleared pending enrollment and an inactive student login', async () => {
   for (const state of [
-    { clearance_status: 'pending', is_active: false, message: /has not cleared/ },
-    { clearance_status: 'cleared', is_active: true, message: /already active/ }
+    { clearance_status: 'pending', is_active: false, message: /has not cleared/ }
   ]) {
     const fixture = setupFixture(({ statement }) => {
-      if (statement.includes('SELECT id, role FROM dbo.users')) return { recordset: [registrar] };
-      if (statement.includes('FROM dbo.enrollments AS enrollment WITH')) return { recordset: [{
+      if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
+      if (statement.includes('INNER JOIN annual_enrollments AS annual')) return { recordset: [] };
+      if (statement.includes('FROM enrollments AS enrollment')) return { recordset: [{
         enrollment_id: 51, enrollment_status: 'pending_payment', finalized_at: null,
         student_id: 41, student_no: 'ST-100', student_status: 'active', user_id: 31, first_name: 'Jamie',
         last_name: 'Lee', email: 'new@example.edu', is_active: state.is_active ? 1 : 0,
@@ -290,33 +353,60 @@ test('finalization requires an explicitly cleared pending enrollment and an inac
     });
     await assert.rejects(fixture.service.finalizeEnrollment(5, 51), state.message);
     assert.equal(fixture.log.rolledBack, true);
-    assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE dbo.users SET is_active = 1')), false);
+    assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE users SET is_active = 1')), false);
   }
+});
+
+test('a deliberately active legacy student login is not reset during pending placement finalization', async () => {
+  let activationWrites = 0;
+  const fixture = setupFixture(({ statement }) => {
+    if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
+    if (statement.includes('INNER JOIN annual_enrollments AS annual')) return { recordset: [] };
+    if (statement.includes('FROM enrollments AS enrollment')) return { recordset: [{
+      enrollment_id: 51, enrollment_status: 'pending_payment', finalized_at: null,
+      student_id: 41, student_no: 'ST-100', student_status: 'active', user_id: 31,
+      first_name: 'Jamie', last_name: 'Lee', email: 'jamie@example.edu', is_active: 1,
+      school_year: '2026-2027', term: 'Term 1', section_name: 'A', clearance_status: 'cleared',
+      created_for_intake: 1, account_activation_pending: 0
+    }] };
+    if (statement.includes('UPDATE enrollment_clearances SET account_activation_pending')) return { recordset: [] };
+    if (statement.includes('UPDATE enrollments SET enrollment_status')) return { affectedRows: 1 };
+    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
+    if (statement.includes('UPDATE users SET is_active = 1')) activationWrites += 1;
+    throw new Error('Unexpected query: ' + statement);
+  }, { createPassword: () => { throw new Error('Existing active login must not receive a new password.'); } });
+  const result = await fixture.service.finalizeEnrollment(5, 51);
+  assert.equal(result.temporaryPassword, null);
+  assert.equal(activationWrites, 0);
+  assert.equal(fixture.log.committed, true);
 });
 
 test('finalization activates a cleared intake once and returns the temporary password only in the response', async () => {
   const storedHashes = [];
   let finalized = false;
   const fixture = setupFixture(({ statement, values }) => {
-    if (statement.includes('SELECT id, role FROM dbo.users')) return { recordset: [registrar] };
-    if (statement.includes('FROM dbo.enrollments AS enrollment WITH')) return { recordset: [{
+    if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
+    if (statement.includes('INNER JOIN annual_enrollments AS annual')) return { recordset: [] };
+    if (statement.includes('FROM enrollments AS enrollment')) return { recordset: [{
       enrollment_id: 51, enrollment_status: finalized ? 'enrolled' : 'pending_payment',
       finalized_at: finalized ? new Date('2026-09-28T00:00:00Z') : null,
       student_id: 41, student_no: 'ST-100', student_status: 'active', user_id: 31,
       first_name: 'Jamie', last_name: 'Lee', email: 'jamie@example.edu', is_active: 0,
-      school_year: '2026-2027', term: 'Term 1', section_name: 'A', clearance_status: 'cleared', created_for_intake: 1
+      school_year: '2026-2027', term: 'Term 1', section_name: 'A', clearance_status: 'cleared', created_for_intake: 1,
+      account_activation_pending: 1
     }] };
-    if (statement.includes('UPDATE dbo.users SET is_active = 1')) {
+    if (statement.includes('UPDATE users SET is_active = 1')) {
       storedHashes.push(values.passwordHash);
       assert.match(statement, /must_change_password = 1/);
       assert.equal(values.passwordHash, 'bcrypt:temporary-secret-' + storedHashes.length);
-      return { recordset: [{ user_id: 31 }] };
+      return { affectedRows: 1 };
     }
-    if (statement.includes('UPDATE dbo.enrollments SET enrollment_status')) {
+    if (statement.includes('UPDATE enrollments SET enrollment_status')) {
       finalized = true;
-      return { rowsAffected: [1] };
+      return { affectedRows: 1 };
     }
-    if (statement.includes('INSERT INTO dbo.audit_logs')) {
+    if (statement.includes('UPDATE enrollment_clearances SET account_activation_pending')) return { recordset: [] };
+    if (statement.includes('INSERT INTO audit_logs')) {
       assert.doesNotMatch(values.detailsJson, /Jamie|ST-100|jamie@example|temporary-secret/);
       return { recordset: [] };
     }
@@ -361,15 +451,17 @@ test('finance records and clears only the selected pending enrollment with the p
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           log.queries.push({ statement, values: { ...values } });
-          if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: 'finance' }] };
-          if (statement.includes('FROM dbo.financial_accounts AS a')) return { recordset: [{ financial_account_id: 30, balance, status: 'active' }] };
-          if (statement.includes('FROM dbo.enrollments AS enrollment WITH')) return { recordset: [{
+          if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'finance' }] };
+          if (statement.includes('FROM annual_enrollments')) return { recordset: [] };
+          if (statement.includes('FROM finance_legacy_opening_charges')) return { recordset: [] };
+          if (statement.includes('FROM financial_accounts AS a')) return { recordset: [{ financial_account_id: 30, balance, status: 'active' }] };
+          if (statement.includes('FROM enrollments AS enrollment')) return { recordset: [{
             id: 51, enrollment_status: 'pending_payment', finalized_at: null, clearance_status: 'pending', created_for_intake: 1
           }] };
-          if (statement.includes('UPDATE dbo.financial_accounts')) { balance = values.balance; return { rowsAffected: [1] }; }
-          if (statement.includes('INSERT INTO dbo.financial_transactions')) return { recordset: [{ id: 91 }] };
-          if (statement.includes('UPDATE dbo.enrollment_clearances')) return { rowsAffected: failClear ? [0] : [1] };
-          if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+          if (statement.includes('UPDATE financial_accounts')) { balance = values.balance; return { rowsAffected: [1] }; }
+          if (statement.includes('INSERT INTO financial_transactions')) return { insertId: 91 };
+          if (statement.includes('UPDATE enrollment_clearances')) return { rowsAffected: failClear ? [0] : [1] };
+          if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
           throw new Error('Unexpected query: ' + statement);
         }
       };
@@ -382,7 +474,7 @@ test('finance records and clears only the selected pending enrollment with the p
   const result = await service.recordTransaction(7, 22, input);
   assert.equal(result.transactionId, 91);
   assert.equal(result.balance, '8.00');
-  const clearance = log.queries.find(({ statement }) => statement.includes('UPDATE dbo.enrollment_clearances'));
+  const clearance = log.queries.find(({ statement }) => statement.includes('UPDATE enrollment_clearances'));
   assert.equal(clearance.values.enrollmentId, 51);
   assert.equal(clearance.values.transactionId, 91);
   assert.equal(log.committed, true);
@@ -390,7 +482,7 @@ test('finance records and clears only the selected pending enrollment with the p
   failClear = true;
   await assert.rejects(service.recordTransaction(7, 22, input), /cleared by another finance transaction/);
   assert.equal(log.rolledBack, true);
-  assert.equal(log.queries.filter(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')).length, 1);
+  assert.equal(log.queries.filter(({ statement }) => statement.includes('INSERT INTO audit_logs')).length, 1);
 });
 
 test('bulk roster template provides a starter file and print control is compatible with the CSP', async () => {

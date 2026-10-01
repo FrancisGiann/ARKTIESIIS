@@ -66,6 +66,38 @@ function configuredGeminiApiKey(value) {
   return apiKey;
 }
 
+function configuredStorageDirectory(value, environment) {
+  const projectRoot = path.resolve(__dirname, '../..');
+  const configuredPath = typeof value === 'string' ? value.trim() : '';
+  if (environment === 'production') {
+    if (!configuredPath || !path.isAbsolute(configuredPath)) {
+      throw new Error('DOCUMENT_STORAGE_DIR must be an absolute path outside the application checkout in production.');
+    }
+    const resolvedPath = path.resolve(configuredPath);
+    const relativePath = path.relative(projectRoot, resolvedPath);
+    const isInsideProject = relativePath === ''
+      || (relativePath !== '..' && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath));
+    if (isInsideProject) {
+      throw new Error('DOCUMENT_STORAGE_DIR must be outside the application checkout in production.');
+    }
+    const pathSegments = resolvedPath.split(path.sep).map((segment) => segment.toLowerCase());
+    if (pathSegments.includes('hbuilds') || pathSegments.includes('public_html')) {
+      throw new Error('DOCUMENT_STORAGE_DIR must be outside Hostinger deployment-managed directories.');
+    }
+  }
+  return path.resolve(projectRoot, configuredPath || 'storage/uploads');
+}
+
+function validateProductionSmtp(smtp) {
+  if (nodeEnv !== 'production') return;
+  if (!smtp.host || !smtp.from || smtp.from === 'ARKTIESIIS <no-reply@example.com>') {
+    throw new Error('SMTP_HOST and SMTP_FROM must be configured for production email sign-in.');
+  }
+  if (Boolean(smtp.user) !== Boolean(smtp.pass)) {
+    throw new Error('SMTP_USER and SMTP_PASS must either both be set or both be empty.');
+  }
+}
+
 const configuredSessionSecret = process.env.SESSION_SECRET;
 const normalizedSessionSecret = configuredSessionSecret?.trim();
 if (nodeEnv === 'production') {
@@ -94,6 +126,15 @@ function configuredAppBaseUrl(value, environment) {
 }
 
 const appBaseUrl = configuredAppBaseUrl(process.env.APP_BASE_URL, nodeEnv);
+const smtp = {
+  host: process.env.SMTP_HOST?.trim() || undefined,
+  port: parsePort('SMTP_PORT', process.env.SMTP_PORT, 587),
+  secure: String(process.env.SMTP_SECURE || 'false') === 'true',
+  user: process.env.SMTP_USER,
+  pass: process.env.SMTP_PASS,
+  from: process.env.SMTP_FROM?.trim() || 'ARKTIESIIS <no-reply@example.com>'
+};
+validateProductionSmtp(smtp);
 
 module.exports = {
   nodeEnv,
@@ -102,24 +143,14 @@ module.exports = {
   sessionSecret: normalizedSessionSecret || 'dev-only-change-me',
   appBaseUrl,
   database: {
-    server: process.env.DB_SERVER || 'localhost',
-    port: parsePort('DB_PORT', process.env.DB_PORT, 1433),
-    // The active prototype is isolated from the legacy database. DB_NAME is
-    // intentionally ignored so a developer's old .env cannot redirect writes.
-    database: 'ARKTIESIIS_V2',
-    user: process.env.DB_USER || 'sa',
+    host: process.env.DB_HOST || 'localhost',
+    port: parsePort('DB_PORT', process.env.DB_PORT, 3306),
+    database: process.env.DB_NAME || '',
+    user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '',
-    encrypt: String(process.env.DB_ENCRYPT || 'false') === 'true',
-    trustServerCertificate: String(process.env.DB_TRUST_SERVER_CERTIFICATE || 'true') === 'true'
+    socketPath: process.env.DB_SOCKET_PATH || ''
   },
-  smtp: {
-    host: process.env.SMTP_HOST,
-    port: parsePort('SMTP_PORT', process.env.SMTP_PORT, 587),
-    secure: String(process.env.SMTP_SECURE || 'false') === 'true',
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-    from: process.env.SMTP_FROM || 'ARKTIESIIS <no-reply@example.com>'
-  },
+  smtp,
   documentProcessing: {
     concurrency: parseDocumentProcessingConcurrency(process.env.DOCUMENT_PROCESSING_CONCURRENCY)
   },
@@ -130,7 +161,7 @@ module.exports = {
   },
   upload: {
     maxMb: parseUploadMegabytes(process.env.MAX_UPLOAD_MB),
-    storageDirectory: path.resolve(__dirname, '../../', process.env.DOCUMENT_STORAGE_DIR || 'storage/uploads')
+    storageDirectory: configuredStorageDirectory(process.env.DOCUMENT_STORAGE_DIR, nodeEnv)
   },
   required
 };

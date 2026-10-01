@@ -284,6 +284,21 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); outline
 .physical-requirements-item__heading { margin-bottom: 0.8rem; }
 .physical-requirements-item__heading h3, .physical-requirements-item__heading p { margin-bottom: 0.2rem; }
 .physical-requirements-item__heading p { color: var(--muted); font-size: 0.84rem; }
+.physical-requirements-item__status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.9rem; margin: 0.45rem 0; font-size: 0.86rem; }
+.physical-requirements-item__status span { color: var(--muted); }
+.physical-checklist-update { margin-top: 0.55rem; border-top: 1px solid var(--line); padding-top: 0.5rem; }
+.physical-checklist-update > summary, .physical-checklist-history > summary { cursor: pointer; font-weight: 650; text-underline-offset: 0.16em; }
+.physical-checklist-update > summary:focus-visible, .physical-checklist-history > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 2px; }
+.physical-checklist-update[open] > summary { margin-bottom: 0.8rem; }
+.physical-checklist-history { margin-top: 1rem; padding: 0.7rem; background: #fff; border-radius: var(--radius-control); }
+.physical-checklist-new-item { margin-top: 1rem; padding: 0.8rem; border: 1px dashed var(--line); border-radius: var(--radius-control); }
+.student-profile-extra { padding-top: 0.7rem; border-top: 1px solid var(--line); }
+.student-profile-extra > summary { width: fit-content; color: var(--accent); cursor: pointer; font-weight: 700; }
+.student-profile-extra > summary .muted-copy { font-size: 0.8rem; font-weight: 500; }
+.student-profile-extra > .admin-form-grid { padding-top: 0.8rem; }
+.annual-admin-details__editor, .annual-admin-details__history { padding-top: 0.7rem; border-top: 1px solid var(--line); }
+.annual-admin-details__editor > summary, .annual-admin-details__history > summary { min-height: 2.5rem; display: flex; align-items: center; gap: 0.7rem; width: fit-content; color: var(--accent); cursor: pointer; font-weight: 700; }
+.annual-admin-details__history { margin-top: 0.75rem; }
 .physical-requirements-statuses { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; margin: 0; }
 .physical-requirement-status { display: grid; align-content: start; gap: 0.5rem; min-width: 0; padding: 0.85rem; background: #fff; border: 1px solid var(--line); border-radius: var(--radius-control); }
 .physical-requirement-status dt { color: var(--muted); font-size: 0.82rem; font-weight: 650; }
@@ -414,9 +429,124 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); outline
 
 @media print {
   body { background: #fff; }
-  .app-header, .app-nav, .site-footer, .skip-link, .enrollment-print__actions { display: none !important; }
+  .app-header, .app-nav, .desktop-nav, .mobile-nav, .site-footer, .skip-link,
+  .enrollment-print__actions, .finance-statement .statement-actions, .finance-statement .context-back { display: none !important; }
   .page-shell { width: 100%; padding: 0; }
   .enrollment-print { border: 0; }
+  .app-shell, .app-frame, .app-content, .finance-statement { display: block !important; width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
+  .finance-statement { color: #000; font-size: 9pt; }
+  .finance-statement .finance-panel { margin: 0 0 0.65rem; padding: 0.45rem 0; border: 0; box-shadow: none; break-inside: auto; }
+  .finance-statement .table-scroll { width: 100%; overflow: visible !important; }
+  .finance-statement table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 8pt; }
+  .finance-statement th, .finance-statement td { padding: 0.2rem; overflow-wrap: anywhere; vertical-align: top; }
+  .finance-statement thead { display: table-header-group; }
+  .finance-statement tr { break-inside: avoid; page-break-inside: avoid; }
+  .finance-statement a { color: #000; text-decoration: none; }
+}
+
+.registrar-overview, .finance-overview {
+  padding: 1.15rem;
+  margin: 0 0 1.2rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+}
+.registrar-overview__top, .finance-overview__top {
+  display: grid;
+  grid-template-columns: minmax(15rem, 0.8fr) minmax(0, 1.2fr);
+  align-items: start;
+  gap: 1rem 1.4rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid var(--line);
+}
+.registrar-overview__top h2, .finance-overview__top h2 { margin-bottom: 0.25rem; }
+.registrar-overview__top p, .finance-overview__top p { margin: 0; color: var(--muted); font-size: 0.86rem; }
+.dashboard-filter {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) minmax(12rem, 1.4fr) auto;
+  align-items: end;
+  gap: 0.7rem;
+  margin: 0;
+}
+.dashboard-filter-stack { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.7rem; }
+.dashboard-filter--year, .dashboard-filter--term { grid-template-columns: minmax(10rem, 1fr) auto; }
+.dashboard-filter .field { min-width: 0; }
+.dashboard-filter select { width: 100%; min-height: 2.65rem; }
+.dashboard-filter .button { white-space: nowrap; }
+.dashboard-filter--finance { grid-template-columns: minmax(10rem, 1fr) minmax(9rem, 0.8fr) auto; }
+.registrar-overview__selected {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(0, 1fr));
+  gap: 0;
+  padding: 0.65rem 0;
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+}
+.registrar-overview__selected > div { min-width: 0; padding: 0.35rem 1rem; border-right: 1px solid var(--line); }
+.registrar-overview__selected > div:first-child { padding-left: 0; }
+.registrar-overview__selected > div:last-child { padding-right: 0; border-right: 0; }
+.registrar-overview__selected dt { color: var(--muted); font-size: 0.84rem; font-weight: 650; line-height: 1.4; }
+.registrar-overview__selected dd { margin: 0.2rem 0 0; font-size: 1.5rem; font-weight: 730; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.registrar-overview__selected .registrar-overview__lead dd { color: var(--accent); font-size: 2.45rem; }
+.registrar-overview__selected dd a { color: inherit; font-size: inherit; }
+.registrar-overview__selected a { text-underline-offset: 0.16em; }
+.registrar-overview__selected small { display: block; margin-top: 0.4rem; color: var(--muted); font-size: 0.77rem; line-height: 1.4; }
+.registrar-overview__secondary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) repeat(2, minmax(0, 1fr));
+  gap: 0.7rem 1.2rem;
+  padding: 0.85rem 0;
+  margin: 0;
+  border-bottom: 1px solid var(--line);
+}
+.registrar-overview__secondary > div { min-width: 0; }
+.registrar-overview__secondary dt { color: var(--muted); font-size: 0.78rem; font-weight: 650; line-height: 1.4; }
+.registrar-overview__secondary dd { margin: 0.1rem 0 0; font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.registrar-overview__secondary small { display: block; margin-top: 0.25rem; color: var(--muted); font-size: 0.74rem; line-height: 1.4; }
+.registrar-overview__secondary a { text-underline-offset: 0.16em; }
+.registrar-overview__comparison { margin-top: 0.15rem; }
+.registrar-overview__comparison > summary { width: fit-content; padding: 0.5rem 0; color: var(--accent); font-size: 0.84rem; font-weight: 650; cursor: pointer; text-underline-offset: 0.16em; }
+.registrar-overview__comparison[open] > summary { margin-bottom: 0.35rem; }
+.dashboard-chart { margin: 1rem 0 0; }
+.dashboard-chart figcaption { margin-bottom: 0.65rem; }
+.dashboard-chart figcaption h3 { margin: 0 0 0.2rem; }
+.dashboard-chart figcaption p { margin: 0; color: var(--muted); font-size: 0.84rem; }
+.dashboard-comparison { padding: 0; margin: 0; border-block: 1px solid var(--line); list-style: none; }
+.dashboard-comparison__row { display: grid; grid-template-columns: minmax(8rem, 0.62fr) minmax(0, 2.38fr); align-items: center; gap: 1rem; min-width: 0; padding: 0.8rem 0; }
+.dashboard-comparison__row + .dashboard-comparison__row { border-top: 1px solid var(--line); }
+.dashboard-comparison__term { min-width: 0; margin: 0; font-size: 0.9rem; line-height: 1.35; overflow-wrap: anywhere; }
+.dashboard-comparison__metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.9rem 1.2rem; min-width: 0; margin: 0; }
+.dashboard-comparison__metrics--finance { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.dashboard-comparison__metrics > div { min-width: 0; }
+.dashboard-comparison__metrics dt { margin: 0 0 0.35rem; color: var(--muted); font-size: 0.77rem; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
+.dashboard-comparison__metrics dd { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0.55rem; min-width: 0; margin: 0; }
+.dashboard-comparison__metrics dd strong, .dashboard-comparison__metrics dd a { color: var(--ink); font-size: 0.95rem; font-weight: 750; font-variant-numeric: tabular-nums; line-height: 1.2; text-align: right; text-underline-offset: 0.16em; }
+.dashboard-comparison__metrics dd a:hover { color: var(--accent); }
+.dashboard-chart__track { display: block; height: 0.55rem; overflow: hidden; background: var(--surface-soft); border-radius: 999px; }
+.dashboard-chart__track > span { display: block; height: 100%; min-width: 0; background: var(--accent); border-radius: inherit; }
+.dashboard-comparison__metric--settled .dashboard-chart__track > span { background: #526d76; }
+.dashboard-comparison__metric--waiver .dashboard-chart__track > span { background: #477257; }
+.dashboard-empty { padding: 0.85rem 0; margin: 0; color: var(--muted); }
+.finance-overview__method { margin: 0.65rem 0 0; color: var(--muted); font-size: 0.8rem; }
+
+@media (max-width: 1400px) {
+  .registrar-overview__top, .finance-overview__top { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 700px) {
+  .registrar-overview, .finance-overview { padding: 0.9rem; }
+  .dashboard-filter, .dashboard-filter--finance { grid-template-columns: 1fr; }
+  .dashboard-filter-stack { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-filter .button { width: 100%; }
+  .registrar-overview__selected { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .registrar-overview__selected > div:first-child { grid-column: 1 / -1; padding: 0 0 0.75rem; border-right: 0; border-bottom: 1px solid var(--line); }
+  .registrar-overview__selected > .registrar-overview__grade { padding: 0.7rem 0.65rem 0.15rem; }
+  .registrar-overview__selected > .registrar-overview__grade:last-child { padding-right: 0; border-right: 0; }
+  .registrar-overview__secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem; }
+  .registrar-overview__secondary > div:first-child { grid-column: 1 / -1; }
+  .dashboard-comparison__row { grid-template-columns: minmax(0, 1fr); gap: 0.55rem; }
+  .dashboard-comparison__metrics,
+  .dashboard-comparison__metrics--finance { grid-template-columns: minmax(0, 1fr); gap: 0.65rem; }
 }
 
 /* Calm school workspace: keep navigation clear and put the current task first. */
@@ -489,6 +619,8 @@ p { max-width: 70ch; }
 input:not([type=checkbox]):not([type=radio]), textarea, select { min-height: 2.65rem; padding: 0.55rem 0.7rem; border-radius: var(--radius-control); font-size: 0.92rem; }
 label { font-size: 0.84rem; }
 .field { gap: 0.35rem; }
+.annual-intake-form [hidden] { display: none !important; }
+.request-status-conditional[hidden] { display: none !important; }
 .field-help, .field-optional, .field__optional, .muted-copy { font-size: 0.78rem; }
 .admin-table th, .portal-table th, .finance-table th { padding: 0.65rem 0.75rem; background: #f0f3f3; font-size: 0.74rem; }
 .admin-table td, .portal-table td, .finance-table td { padding: 0.65rem 0.75rem; }
@@ -496,6 +628,61 @@ label { font-size: 0.84rem; }
 .status-chip, .record-status, .account-status, .finance-status { border-radius: 0.35rem; font-size: 0.74rem; }
 .notice, .form-success, .form-error, .form-alert, .account-panel__pending, .document-rejection-callout, .finance-empty { border-radius: var(--radius-control); }
 .site-footer { width: min(calc(100% - 3rem), 92rem); padding: 1rem 0 1.25rem; font-size: 0.76rem; }
+
+/* Guided registrar intake and fee confirmation */
+.registrar-intake, .annual-fee-review, .annual-confirmation-result { max-width: 68rem; }
+.intake-steps { display: flex; align-items: stretch; gap: 0.3rem; padding: 0; margin: 0 0 1rem; border-bottom: 1px solid var(--line-strong); list-style: none; }
+.intake-steps li { flex: 1 1 0; min-width: 0; padding: 0.65rem 0.7rem 0.75rem; color: var(--muted); border-bottom: 3px solid transparent; font-size: 0.83rem; font-weight: 650; text-align: center; }
+.intake-steps li[aria-current="step"] { color: var(--accent); border-bottom-color: var(--accent); }
+.intake-steps li[aria-current="step"]::before { content: "Current: "; font-weight: 500; }
+.intake-step-label--short { display: none; }
+.annual-intake-form { min-width: 0; max-width: 100%; gap: 1rem; padding: clamp(1rem, 2.4vw, 1.5rem); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); }
+.intake-step { min-width: 0; }
+.intake-step__heading { margin-bottom: 0.6rem; }
+.intake-step__heading h2 { margin-bottom: 0; }
+.annual-intake-form > .intake-step > p { max-width: 68ch; }
+.annual-intake-form .admin-form-grid { min-width: 0; }
+.annual-intake-form .field, .annual-intake-form input, .annual-intake-form select, .annual-intake-form textarea { min-width: 0; }
+.intake-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; padding-top: 0.9rem; margin-top: 0.8rem; border-top: 1px solid var(--line); }
+.intake-actions > .button--primary, .intake-actions > [data-step-next]:last-child { margin-left: auto; }
+.intake-section-choice { min-width: 0; padding-top: 0.9rem; margin-top: 0.6rem; border-top: 1px solid var(--line); }
+.intake-section-choice > p { margin-bottom: 0.75rem; }
+.intake-term-sections { margin-top: 0.65rem; }
+.section-plan { display: grid; gap: 0.25rem; padding-left: 1.2rem; margin: 0.75rem 0; color: var(--ink-soft); font-size: 0.84rem; }
+.paper-checklist-rows { min-width: 0; }
+.paper-checklist-row { padding: 0.65rem 0; border-top: 1px solid var(--line); }
+.paper-checklist-row__main { min-width: 0; }
+.paper-checklist-row__check { display: flex; align-items: flex-start; gap: 0.65rem; cursor: pointer; }
+.paper-checklist-row__check input { flex: 0 0 auto; width: 1.1rem; height: 1.1rem; margin: 0.15rem 0 0; accent-color: var(--accent); }
+.paper-checklist-row__check span { display: grid; min-width: 0; gap: 0.12rem; }
+.paper-checklist-row__check small { color: var(--muted); font-size: 0.8rem; font-weight: 500; }
+.paper-checklist-row__details { margin: 0.45rem 0 0 1.75rem; }
+.paper-checklist-row__details summary { width: fit-content; color: var(--accent); cursor: pointer; font-size: 0.81rem; font-weight: 700; }
+.paper-checklist-row__fields, .paper-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; margin-top: 0.6rem; }
+.paper-applicability { align-self: end; padding-bottom: 0.75rem; color: var(--muted); font-size: 0.8rem; }
+.paper-note { grid-column: 1 / -1; }
+.intake-progress { margin-bottom: 1rem; }
+.intake-progress ol { display: flex; gap: 0.25rem; padding: 0; margin: 0; border-bottom: 1px solid var(--line-strong); list-style: none; }
+.intake-progress li { flex: 1 1 0; min-width: 0; padding: 0.65rem 0.5rem 0.75rem; color: var(--muted); font-size: 0.82rem; font-weight: 650; text-align: center; }
+.intake-progress li[aria-current="step"] { color: var(--accent); border-bottom: 3px solid var(--accent); }
+.fee-optional-choice { display: grid; justify-items: start; gap: 0.65rem; margin: 0 0 1rem; }
+.fee-optional-choice fieldset { display: grid; width: 100%; gap: 0.4rem; padding: 0; margin: 0; border: 0; }
+.fee-optional-choice legend { margin-bottom: 0.35rem; font-weight: 700; }
+.fee-optional-choice__row { padding: 0.55rem 0; border-top: 1px solid var(--line); }
+.fee-optional-choice__row > span { display: grid; gap: 0.1rem; }
+.fee-optional-choice__row small, .fee-assessment-table td small { display: block; color: var(--muted); font-size: 0.78rem; font-weight: 500; }
+.fee-total-line { display: grid; gap: 0.1rem; justify-items: end; text-align: right; white-space: nowrap; }
+.fee-total-line span, .fee-term-summary span { color: var(--muted); font-size: 0.78rem; font-weight: 650; }
+.fee-total-line strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.fee-term-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.55rem; padding-top: 0.7rem; border-top: 1px solid var(--line); }
+.fee-term-summary p { display: grid; gap: 0.1rem; margin: 0; }
+.fee-term-summary strong { font-variant-numeric: tabular-nums; }
+.fee-confirmation { border-color: var(--line-strong); }
+.fee-confirmation__form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; }
+.enrollment-summary-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem 1.4rem; margin: 0 0 1.2rem; }
+.enrollment-summary-list > div { display: grid; gap: 0.12rem; }
+.enrollment-summary-list dt { color: var(--muted); font-size: 0.79rem; font-weight: 650; }
+.enrollment-summary-list dd { margin: 0; font-weight: 700; }
 
 /* Public entry and authentication */
 .public-content { min-width: 0; }
@@ -569,6 +756,16 @@ label { font-size: 0.84rem; }
 .finance-search .field { flex: 1 1 14rem; }
 .finance-panel { padding: 1.1rem; }
 .finance-panel + .finance-panel { margin-top: 1rem; }
+.finance-reports-page .finance-report-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; min-width: 0; padding: 0; margin: 0; background: #f6f8f8; border: 1px solid var(--line); border-radius: var(--radius-control); }
+.finance-reports-page .finance-report-summary > div { display: grid; align-content: center; gap: 0.18rem; min-width: 0; padding: 0.8rem 1rem; }
+.finance-reports-page .finance-report-summary > div + div { border-left: 1px solid var(--line); }
+.finance-reports-page .finance-report-summary dt { color: var(--muted); font-size: 0.78rem; line-height: 1.35; }
+.finance-reports-page .finance-report-summary dd { margin: 0; overflow-wrap: anywhere; font-size: 1.3rem; font-weight: 750; font-variant-numeric: tabular-nums; }
+.finance-reports-page .finance-report-reversals { padding-top: 1.1rem; margin-top: 1.25rem; border-top: 1px solid var(--line-strong); }
+.finance-reports-page .finance-report-reversals__heading { margin-bottom: 0.7rem; }
+.finance-reports-page .finance-report-reversals__heading h3 { margin: 0; font-size: 1.05rem; }
+.finance-reports-page .finance-report-reversals__heading p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.84rem; }
+.finance-reports-page .finance-report-reversals__summary { margin: 0 0 0.75rem; color: var(--ink-soft); font-size: 0.85rem; }
 .finance-summary-heading, .finance-balance { font-family: var(--body-font); }
 .finance-entry { gap: 0.7rem; }
 .finance-enrollment-clearance { padding: 0.8rem; background: #f7f9f9; border-radius: var(--radius-control); }
@@ -671,6 +868,12 @@ label { font-size: 0.84rem; }
   .records-search .button, .records-search .table-action { justify-self: start; }
   .finance-search { align-items: stretch; flex-direction: column; }
   .finance-search .field { flex: 0 0 auto; width: 100%; }
+  .finance-reports-page .finance-report-summary { grid-template-columns: minmax(0, 1fr); }
+  .finance-reports-page .finance-report-summary > div { display: flex; align-items: baseline; justify-content: space-between; gap: 0.8rem; padding: 0.65rem 0.8rem; }
+  .finance-reports-page .finance-report-summary > div + div { border-top: 1px solid var(--line); border-left: 0; }
+  .finance-reports-page .finance-report-summary dt { min-width: 0; }
+  .finance-reports-page .finance-report-summary dd { text-align: right; }
+  .finance-reports-page .finance-report-reversals { padding-top: 0.9rem; margin-top: 1rem; }
   .finance-overview-table { width: 100%; min-width: 0; }
   .finance-detail-page .finance-account-summary { grid-template-columns: minmax(0, 1fr); align-items: start; gap: 0.85rem; }
   .finance-detail-page .finance-balance-summary { grid-template-columns: minmax(0, 1fr) auto; }
@@ -797,6 +1000,157 @@ label { font-size: 0.84rem; }
 }
 .class-context-panel .admin-section__heading,
 .class-context-panel .section-heading { margin-bottom: 0.9rem; }
+
+/* Student finance account: keep balance owed, credit, placements, and activity distinct. */
+.student-finance-page { padding-bottom: 2rem; }
+.student-finance-heading { align-items: center; }
+.student-finance-ledger {
+  display: grid;
+  gap: 1.2rem;
+  min-width: 0;
+  padding: 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+}
+.student-finance-ledger__heading,
+.student-finance-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.student-finance-ledger__heading h2,
+.student-finance-section-heading h3 { margin-bottom: 0.2rem; }
+.student-finance-ledger__heading p,
+.student-finance-section-heading p { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.student-finance-ledger__note { max-width: 32ch; text-align: right; }
+.student-finance-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(13rem, 0.6fr);
+  background: #f5f8f8;
+  border-block: 1px solid var(--line);
+}
+.student-finance-summary__lead,
+.student-finance-summary__credit { min-width: 0; padding: 1rem 1.1rem; }
+.student-finance-summary__lead { display: flex; align-items: center; justify-content: space-between; gap: 1.25rem; padding-left: 0; }
+.student-finance-summary__credit { border-left: 1px solid var(--line); }
+.student-finance-summary h3 { margin: 0 0 0.25rem; font-size: 0.95rem; }
+.student-finance-summary p { margin: 0; color: var(--muted); font-size: 0.82rem; }
+.student-finance-summary .student-finance-summary__amount {
+  color: var(--ink);
+  font-size: 1.6rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.student-finance-summary__lead .student-finance-summary__amount { font-size: 2rem; }
+.student-finance-details h3,
+.student-finance-placements h3,
+.student-finance-activity h3 { margin-bottom: 0.25rem; font-size: 1.02rem; }
+.student-finance-details__list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  padding: 0;
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+.student-finance-details__list > div { min-width: 0; padding: 0.7rem 0.8rem 0.65rem 0; border-bottom: 1px solid var(--line); }
+.student-finance-details__list dt { color: var(--muted); font-size: 0.78rem; line-height: 1.35; }
+.student-finance-details__list dd { margin: 0.18rem 0 0; color: var(--ink); font-size: 0.9rem; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.student-finance-section-heading { margin-bottom: 0.7rem; }
+.student-finance-term-list,
+.student-finance-activity-list { padding: 0; margin: 0; list-style: none; border-top: 1px solid var(--line); }
+.student-finance-term { padding: 0.85rem 0; border-bottom: 1px solid var(--line); }
+.student-finance-term__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.65rem;
+}
+.student-finance-term__identity { display: flex; flex-wrap: wrap; align-items: center; gap: 0.55rem 0.7rem; min-width: 0; }
+.student-finance-term h4 { margin: 0; font-size: 0.94rem; }
+.student-finance-current { padding: 0.18rem 0.48rem; color: var(--accent); background: #f8eeee; border-radius: 999px; font-size: 0.72rem; font-weight: 750; }
+.student-finance-term__outstanding { display: grid; justify-items: end; gap: 0.08rem; flex: 0 0 auto; }
+.student-finance-term__outstanding span { color: var(--muted); font-size: 0.75rem; font-weight: 650; }
+.student-finance-term__outstanding strong { font-size: 0.98rem; font-variant-numeric: tabular-nums; }
+.student-finance-term__details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem 1rem;
+  margin: 0;
+}
+.student-finance-term__details > div { min-width: 0; }
+.student-finance-term__details dt { color: var(--muted); font-size: 0.75rem; font-weight: 650; }
+.student-finance-term__details dd { margin: 0.15rem 0 0; font-size: 0.84rem; font-weight: 680; line-height: 1.35; overflow-wrap: anywhere; }
+.student-finance-clearance-note { margin: 0.55rem 0 0; color: var(--muted); font-size: 0.79rem; }
+.student-finance-empty { padding: 0.8rem 0; margin: 0; color: var(--muted); }
+.student-finance-activity-item {
+  display: grid;
+  grid-template-columns: minmax(9rem, 0.7fr) minmax(0, 1.6fr) minmax(7rem, auto);
+  align-items: start;
+  gap: 0.8rem 1rem;
+  padding: 0.8rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.student-finance-activity-item__entry,
+.student-finance-activity-item__details { display: grid; gap: 0.18rem; min-width: 0; }
+.student-finance-activity-item__entry strong { font-size: 0.84rem; text-transform: capitalize; }
+.student-finance-activity-item__entry time,
+.student-finance-activity-item__details span:last-child { color: var(--muted); font-size: 0.77rem; }
+.student-finance-activity-item__details span:first-child { font-size: 0.84rem; overflow-wrap: anywhere; }
+.student-finance-activity-item__amount { margin: 0; font-size: 0.9rem; font-weight: 730; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.student-finance-activity-item__amount span { display: block; margin-bottom: 0.12rem; color: var(--muted); font-size: 0.74rem; font-weight: 650; }
+.student-finance-activity-item__amount strong { font: inherit; }
+.student-finance-history { margin-top: 0.8rem; }
+.student-finance-history summary {
+  width: fit-content;
+  min-height: 2.65rem;
+  padding: 0.55rem 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 730;
+  text-underline-offset: 0.18em;
+}
+.student-finance-history summary:hover { text-decoration: underline; }
+.student-finance-history summary:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 30%, transparent); outline-offset: 2px; }
+.student-finance-history__scroll { margin-top: 0.4rem; }
+.student-finance-history__table { min-width: 48rem; }
+
+@media (max-width: 760px) {
+  .student-finance-ledger { padding: 0.9rem; }
+  .student-finance-ledger__heading { flex-direction: column; gap: 0.4rem; }
+  .student-finance-ledger__note { text-align: left; }
+  .student-finance-summary { grid-template-columns: minmax(0, 1fr); }
+  .student-finance-summary__lead,
+  .student-finance-summary__credit { padding: 0.85rem 0; }
+  .student-finance-summary__credit { border-top: 1px solid var(--line); border-left: 0; }
+  .student-finance-details__list { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 0.8rem; }
+  .student-finance-term__details { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem 0.8rem; }
+  .student-finance-history__table { width: 100%; min-width: 0; }
+  .student-finance-activity-item { grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem 0.8rem; }
+  .student-finance-activity-item__entry { grid-column: 1; }
+  .student-finance-activity-item__details { grid-column: 1; }
+  .student-finance-activity-item__amount { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+}
+
+@media (max-width: 430px) {
+  .student-finance-heading .button { width: 100%; }
+  .student-finance-summary__lead { align-items: flex-start; flex-direction: column; gap: 0.5rem; }
+  .student-finance-summary__lead .student-finance-summary__amount { font-size: 1.7rem; }
+  .student-finance-details__list,
+  .student-finance-term__details { grid-template-columns: minmax(0, 1fr); }
+  .student-finance-term__heading { align-items: flex-start; }
+  .student-finance-activity-item { grid-template-columns: minmax(0, 1fr); }
+  .student-finance-activity-item__entry,
+  .student-finance-activity-item__details,
+  .student-finance-activity-item__amount { grid-column: 1; grid-row: auto; }
+  .student-finance-activity-item__amount { justify-self: start; text-align: left; }
+}
 .class-context-filter {
   display: grid;
   grid-template-columns: minmax(12rem, 0.85fr) minmax(12rem, 0.85fr) auto auto;
@@ -829,15 +1183,43 @@ label { font-size: 0.84rem; }
 .assignment-history-panel > details > p { color: var(--muted); font-size: 0.86rem; }
 .schedule-context-panel { margin-bottom: 1rem; }
 .schedule-controls { display: block; margin-bottom: 1rem; }
-.schedule-create-form, .schedule-list {
+.schedule-create-disclosure, .schedule-list {
   padding: 1.1rem;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-panel);
 }
-.schedule-create-form { gap: 0.7rem; }
+.schedule-create-disclosure { margin-bottom: 1rem; }
+.schedule-create-disclosure > summary, .records-create-disclosure > summary, .subject-create-details > summary {
+  min-height: 2.6rem;
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 700;
+  text-underline-offset: 0.16em;
+}
+.schedule-create-disclosure > summary:focus-visible, .records-create-disclosure > summary:focus-visible, .subject-create-details > summary:focus-visible,
+.records-section-group > summary:focus-visible, .annual-record-details > summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 0.2rem;
+}
+.schedule-create-form { gap: 0.7rem; padding: 0.5rem 0 0; background: transparent; border: 0; border-radius: 0; }
 .schedule-create-form > div:first-child p { color: var(--muted); font-size: 0.88rem; }
 .schedule-form-actions { margin-top: 0.25rem; }
+.records-create-disclosure { padding-top: 0.15rem; margin: 0 0 0.85rem; border-top: 1px solid var(--line); }
+.records-create-disclosure .records-compact-form { padding: 0.2rem 0 0.7rem; }
+.records-section-groups { display: grid; gap: 0.5rem; }
+.records-section-group { border-top: 1px solid var(--line); }
+.records-section-group:last-child { border-bottom: 1px solid var(--line); }
+.records-section-group > summary { display: flex; min-height: 2.8rem; align-items: center; justify-content: space-between; gap: 0.8rem; cursor: pointer; list-style-position: inside; }
+.records-section-group > summary strong { overflow-wrap: anywhere; }
+.records-section-group > summary span { color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
+.records-section-group .table-scroll { margin: 0.2rem 0 0.8rem; }
+.subject-create-details > summary { width: fit-content; }
+.subject-create-details > p { margin: 0 0 0.75rem; color: var(--muted); font-size: 0.86rem; }
+.subject-create-details .admin-form { padding-bottom: 0.4rem; }
 .registrar-schedules-page .schedule-list {
   padding: 0;
   margin-top: 1.4rem;
@@ -902,7 +1284,27 @@ label { font-size: 0.84rem; }
 }
 
 @media (max-width: 760px) {
-  .class-context-panel, .schedule-create-form { padding: 0.9rem; }
+  .registrar-intake, .annual-fee-review, .annual-confirmation-result { width: min(calc(100% - 1.5rem), 68rem); }
+  .annual-intake-form { padding: 0.9rem; }
+  .intake-steps { gap: 0; }
+  .intake-steps li { padding-inline: 0.25rem; font-size: 0.72rem; overflow-wrap: anywhere; }
+  .intake-step-label--full { display: none; }
+  .intake-step-label--short { display: inline; }
+  .intake-steps li[aria-current="step"]::before { content: none; }
+  .intake-progress li { padding-inline: 0.2rem; font-size: 0.72rem; overflow-wrap: anywhere; }
+  .intake-actions { align-items: stretch; }
+  .intake-actions > .button { flex: 1 1 9rem; }
+  .intake-actions > .button--primary, .intake-actions > [data-step-next]:last-child { margin-left: 0; }
+  .paper-checklist-row__details { margin-left: 0.25rem; }
+  .paper-checklist-row__fields, .paper-counts { grid-template-columns: minmax(0, 1fr); }
+  .paper-note { grid-column: auto; }
+  .enrollment-summary-list { grid-template-columns: minmax(0, 1fr); }
+  .fee-confirmation__form { align-items: stretch; flex-direction: column; }
+  .fee-confirmation__form .button { width: 100%; }
+  .finance-schedule-create-body .admin-section__heading [data-add-finance-line] { flex: 0 0 auto; width: auto; white-space: nowrap; }
+  .annual-fee-review .admin-section__heading { flex-direction: column; align-items: stretch; gap: 0.4rem; }
+  .fee-total-line { justify-items: start; text-align: left; }
+  .class-context-panel, .schedule-create-disclosure { padding: 0.9rem; }
   .student-grade-filters { grid-template-columns: minmax(0, 1fr); }
   .student-grade-filters .button { justify-self: start; }
   .student-grade-table { width: 100%; min-width: 0; table-layout: fixed; }
@@ -929,4 +1331,362 @@ label { font-size: 0.84rem; }
 
 @media (max-width: 320px) {
   html { min-width: 0; }
+}
+
+/* Registrar record workspaces: lead with lookup and reveal row actions on demand. */
+.annual-intake-list-page .admin-heading-actions .button { min-height: 2.45rem; }
+.annual-search-form { display: grid; gap: 0.7rem; }
+.annual-search-primary {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1.35fr) repeat(2, minmax(10rem, 0.8fr)) auto;
+  align-items: end;
+  gap: 0.7rem;
+}
+.annual-search-primary .field, .annual-filter-grid .field { min-width: 0; margin: 0; }
+.annual-search-primary input, .annual-search-primary select, .annual-filter-grid input, .annual-filter-grid select { width: 100%; min-width: 0; }
+.annual-search-primary .button { white-space: nowrap; }
+.annual-filter-details > summary, .annual-counts-details > summary, .annual-voucher-details > summary,
+.annual-placement__actions > summary, .subject-catalog__disclosure > summary, .teacher-assignment-section > summary {
+  width: fit-content;
+  min-height: 2.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-underline-offset: 0.16em;
+}
+.annual-filter-details > summary:focus-visible, .annual-counts-details > summary:focus-visible,
+.annual-voucher-details > summary:focus-visible, .annual-placement__actions > summary:focus-visible,
+.teacher-assignment-section > summary:focus-visible, .schedule-day > summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 0.2rem;
+}
+.annual-filter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.7rem; padding-top: 0.35rem; }
+.annual-search-actions { margin-top: 0; }
+.annual-counts-details { padding-top: 0.4rem; border-top: 1px solid var(--line); }
+.annual-counts-details > summary { justify-content: flex-start; }
+.annual-counts-details > summary .section-count { color: var(--muted); }
+.annual-counts-table { margin-top: 0.35rem; }
+.annual-record-list { display: grid; gap: 1rem; }
+.annual-record { min-width: 0; padding: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); }
+.annual-record__summary { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(10rem, 0.85fr) auto; align-items: center; gap: 0.7rem 1rem; padding: 1rem 1.1rem 0.45rem; }
+.annual-record-details > summary { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 1.1rem 0.8rem; cursor: pointer; list-style-position: inside; color: var(--accent); font-size: 0.82rem; font-weight: 650; }
+.annual-record-details > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 0.2rem; }
+.annual-record__body { padding: 0 1.1rem 1rem; }
+.annual-record__header { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(11rem, 0.8fr) auto; align-items: start; gap: 0.7rem 1.2rem; }
+.annual-record__identity, .annual-record__context { display: grid; min-width: 0; gap: 0.22rem; }
+.annual-record__identity strong { font-size: 1rem; overflow-wrap: anywhere; }
+.annual-record__identity span, .annual-record__context span { color: var(--muted); font-size: 0.8rem; overflow-wrap: anywhere; }
+.annual-record__identity p strong, .annual-record__context strong { color: var(--ink); }
+.annual-record__placement-count { color: var(--muted); font-size: 0.78rem; font-weight: 650; text-align: right; }
+.annual-pagination-summary { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.7rem 1rem; margin-bottom: 0.8rem; }
+.annual-pagination-summary > p { margin: 0; color: var(--muted); font-size: 0.84rem; }
+.annual-pagination { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+.annual-pagination > span { color: var(--muted); font-size: 0.82rem; font-weight: 650; }
+.annual-record__links { display: grid; justify-items: start; gap: 0.35rem; font-size: 0.82rem; font-weight: 650; }
+.annual-record__links a { overflow-wrap: anywhere; text-underline-offset: 0.16em; }
+.annual-record__primary-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 0.65rem; }
+.annual-record__primary-actions .button { min-height: 2.5rem; }
+.annual-voucher-details { padding-top: 0.4rem; margin-top: 0.65rem; border-top: 1px solid var(--line); }
+.annual-voucher-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; align-items: end; gap: 0.65rem; padding: 0.2rem 0 0.75rem; }
+.annual-voucher-form .field { min-width: 0; margin: 0; }
+.annual-voucher-form select, .annual-voucher-form input { width: 100%; min-width: 0; }
+.annual-voucher-form .table-button { white-space: nowrap; }
+.annual-placement-list { display: grid; padding: 0; margin: 0; list-style: none; }
+.annual-placement { min-width: 0; padding: 0.85rem 0 0.25rem; border-top: 1px solid var(--line); scroll-margin-top: 1rem; }
+.annual-placement__overview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(16rem, 1.15fr); align-items: start; gap: 0.9rem 1.2rem; }
+.annual-placement__overview h4 { margin: 0; font-size: 0.94rem; }
+.annual-placement__overview p { margin: 0.25rem 0 0; color: var(--muted); font-size: 0.81rem; overflow-wrap: anywhere; }
+.annual-placement__status { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.45rem 0.8rem; margin: 0; }
+.annual-placement__status > div { min-width: 0; }
+.annual-placement__status dt { color: var(--muted); font-size: 0.72rem; font-weight: 650; }
+.annual-placement__status dd { margin: 0.1rem 0 0; font-size: 0.81rem; font-weight: 650; overflow-wrap: anywhere; }
+.annual-placement__actions { margin-top: 0.35rem; }
+.annual-placement__actions > summary { font-size: 0.8rem; }
+.annual-placement__action-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; padding: 0.25rem 0 0.65rem; }
+.annual-placement__action { display: grid; align-content: start; min-width: 0; gap: 0.35rem; }
+.annual-placement__action .records-compact-form { width: 100%; max-width: none; }
+.annual-placement__action .field { min-width: 0; margin: 0; }
+.annual-placement__action input, .annual-placement__action select { width: 100%; min-width: 0; }
+.annual-placement__action .button { justify-self: start; white-space: normal; text-align: left; }
+.annual-placement__action--activation { align-content: center; }
+.annual-placement__action--activation > .button { max-width: 100%; }
+.subject-catalog-search { display: grid; grid-template-columns: minmax(12rem, 1fr) auto auto; align-items: end; gap: 0.65rem; margin: 0 0 0.8rem; }
+.subject-catalog-search .field { min-width: 0; margin: 0; }
+.subject-catalog-search input { width: 100%; min-width: 0; }
+.subject-catalog-search .table-action { min-height: 2.65rem; display: inline-flex; align-items: center; }
+.subject-catalog__disclosure > summary { width: 100%; color: var(--ink); }
+.subject-catalog__disclosure > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 0.2rem; }
+.subject-catalog__edit { color: var(--accent); }
+.teacher-assignment-groups { display: grid; gap: 0.45rem; }
+.teacher-assignment-section { border-top: 1px solid var(--line); }
+.teacher-assignment-section:last-child { border-bottom: 1px solid var(--line); }
+.teacher-assignment-section > summary { width: 100%; justify-content: space-between; padding: 0.4rem 0.15rem; color: var(--ink); }
+.teacher-assignment-section__summary strong { overflow-wrap: anywhere; }
+.teacher-assignment-section__summary span { color: var(--muted); font-size: 0.8rem; font-weight: 600; text-align: right; }
+.teacher-assignment-section .table-scroll { margin: 0.35rem 0 0.8rem; }
+.schedule-day-list { display: grid; gap: 0.25rem; padding-top: 0.45rem; }
+.schedule-day { border-top: 1px solid var(--line); }
+.schedule-day:last-child { border-bottom: 1px solid var(--line); }
+.schedule-day__summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 0.5rem 1rem; min-height: 2.8rem; cursor: pointer; list-style-position: inside; }
+.schedule-day__summary strong { font-size: 0.87rem; }
+.schedule-day__summary span, .schedule-day__summary time { color: var(--muted); font-size: 0.77rem; font-variant-numeric: tabular-nums; }
+.schedule-day__summary time { white-space: nowrap; }
+.schedule-day .schedule-entry-list { padding: 0 0 0 1.3rem; }
+.schedule-day .schedule-entry { padding: 0.75rem 0; }
+.schedule-day .schedule-entry__overview { grid-template-columns: minmax(6rem, 0.5fr) minmax(0, 1.5fr); }
+.schedule-day .schedule-entry__overview--revoked { grid-template-columns: minmax(6rem, 0.5fr) minmax(0, 1.5fr) auto; }
+
+@media (max-width: 900px) {
+  .annual-search-primary { grid-template-columns: minmax(12rem, 1.3fr) repeat(2, minmax(8rem, 0.8fr)); }
+  .annual-search-primary .button { grid-column: 1 / -1; justify-self: start; }
+  .annual-record__summary { grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr); }
+  .annual-record__placement-count { grid-column: 1 / -1; text-align: left; }
+  .annual-record__links { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 0.5rem 1.1rem; }
+  .annual-placement__overview { grid-template-columns: minmax(0, 1fr); }
+  .annual-placement__action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .annual-placement__action--activation { grid-column: 1 / -1; }
+}
+
+@media (max-width: 760px) {
+  .annual-intake-list-page .admin-heading-actions { width: 100%; }
+  .annual-intake-list-page .admin-heading-actions .button { flex: 1 1 9rem; }
+  .annual-search-primary, .annual-filter-grid { grid-template-columns: minmax(0, 1fr); }
+  .annual-search-primary .button { width: 100%; grid-column: auto; }
+  .annual-search-actions .button { width: 100%; }
+  .annual-record__summary { grid-template-columns: minmax(0, 1fr); padding: 0.9rem 0.9rem 0.45rem; }
+  .annual-record__body { padding: 0 0.9rem 0.9rem; }
+  .annual-record__placement-count { grid-column: auto; }
+  .annual-record__links { grid-column: auto; display: grid; }
+  .annual-voucher-form, .annual-placement__action-grid { grid-template-columns: minmax(0, 1fr); }
+  .annual-voucher-form .table-button, .annual-placement__action .button { width: 100%; justify-content: center; text-align: center; }
+  .annual-placement__action--activation { grid-column: auto; }
+  .annual-placement__status { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; }
+  .subject-catalog-search { grid-template-columns: minmax(0, 1fr); }
+  .subject-catalog-search .button, .subject-catalog-search .table-action { width: 100%; justify-content: center; text-align: center; }
+  .teacher-assignment-section .table-scroll { margin-inline: -0.15rem; }
+  .schedule-day__summary { grid-template-columns: minmax(0, 1fr) auto; gap: 0.2rem 0.65rem; padding: 0.35rem 0; }
+  .schedule-day__summary time { grid-column: 1 / -1; padding-left: 1.15rem; }
+  .schedule-day .schedule-entry-list { padding-left: 1rem; }
+  .schedule-day .schedule-entry__overview, .schedule-day .schedule-entry__overview--revoked { grid-template-columns: minmax(0, 1fr); gap: 0.35rem; }
+  .schedule-day .schedule-entry__status { grid-column: auto; }
+}
+
+/* Finance browse surfaces keep the common task visible and reveal term-level work on demand. */
+.finance-roster-filters { display: grid; gap: 0.75rem; }
+.finance-roster-primary-filters {
+  display: grid;
+  grid-template-columns: minmax(14rem, 1.35fr) repeat(2, minmax(9rem, 0.75fr)) auto;
+  align-items: end;
+  gap: 0.7rem;
+}
+.finance-roster-primary-filters .field, .finance-roster-filter-grid .field { min-width: 0; margin: 0; }
+.finance-roster-primary-filters input, .finance-roster-primary-filters select,
+.finance-roster-filter-grid input, .finance-roster-filter-grid select { width: 100%; min-width: 0; }
+.finance-roster-primary-filters .button { white-space: nowrap; }
+.finance-roster-more-filters { padding-top: 0.35rem; border-top: 1px solid var(--line); }
+.finance-roster-more-filters > summary {
+  width: fit-content;
+  min-height: 2.45rem;
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+.finance-roster-more-filters > summary:focus-visible,
+.finance-roster-record > summary:focus-visible,
+.finance-departure-case > summary:focus-visible,
+.finance-schedule-create > summary:focus-visible,
+.finance-schedule-term > summary:focus-visible,
+.finance-schedule-additional > summary:focus-visible,
+.finance-schedule-version > summary:focus-visible,
+.finance-term-progress-group > summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 0.2rem;
+}
+.finance-roster-filter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.7rem; padding: 0.3rem 0 0.15rem; }
+.finance-roster-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.7rem; }
+.finance-roster-pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.65rem 1rem; margin-bottom: 0.8rem; }
+.finance-roster-pagination > p, .finance-roster-result-count { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.finance-roster-pagination nav { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+.finance-roster-pagination nav > span { color: var(--muted); font-size: 0.82rem; font-weight: 650; }
+.finance-roster-pagination .button { min-height: 2.35rem; }
+.finance-roster-page-disabled { opacity: 0.62; }
+.finance-roster-record-list { display: grid; gap: 0.55rem; margin-top: 0.65rem; }
+.finance-roster-record, .finance-departure-case {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+}
+.finance-roster-record > summary {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1.25fr) minmax(10rem, 0.9fr) minmax(8.5rem, 0.7fr);
+  align-items: center;
+  gap: 0.7rem 1rem;
+  padding: 0.85rem 1rem;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.finance-roster-record--with-liabilities > summary { grid-template-columns: minmax(12rem, 1.25fr) minmax(10rem, 0.9fr) minmax(8.5rem, 0.7fr) minmax(12rem, 1fr); }
+.finance-roster-record--with-voucher > summary { grid-template-columns: minmax(12rem, 1.25fr) minmax(10rem, 0.9fr) minmax(8.5rem, 0.7fr) minmax(10rem, 0.9fr); }
+.finance-roster-record--with-liabilities.finance-roster-record--with-voucher > summary {
+  grid-template-columns: minmax(12rem, 1.25fr) minmax(10rem, 0.9fr) minmax(8.5rem, 0.7fr) minmax(12rem, 1fr) minmax(10rem, 0.9fr);
+}
+.finance-roster-identity, .finance-roster-context, .finance-roster-balance,
+.finance-roster-liabilities, .finance-roster-voucher { display: grid; min-width: 0; gap: 0.12rem; }
+.finance-roster-identity strong { overflow-wrap: anywhere; }
+.finance-roster-identity span, .finance-roster-context span,
+.finance-roster-balance > span, .finance-roster-liabilities,
+.finance-roster-voucher > span { color: var(--muted); font-size: 0.77rem; overflow-wrap: anywhere; }
+.finance-roster-context strong { font-size: 0.88rem; overflow-wrap: anywhere; }
+.finance-roster-balance strong { font-size: 1.05rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.finance-roster-liabilities { gap: 0.18rem; font-variant-numeric: tabular-nums; }
+.finance-roster-voucher strong { font-size: 0.79rem; overflow-wrap: anywhere; }
+.finance-roster-record-body { padding: 0 1rem 0.9rem; }
+.finance-roster-record-body > p { margin: 0.5rem 0; }
+.finance-roster-record-financials { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.45rem 1rem; padding: 0.2rem 0 0.75rem; margin: 0 0 0.55rem; border-bottom: 1px solid var(--line); }
+.finance-roster-record-financials > div { min-width: 0; }
+.finance-roster-record-financials dt { color: var(--muted); font-size: 0.73rem; font-weight: 650; }
+.finance-roster-record-financials dd { margin: 0.1rem 0 0; font-size: 0.85rem; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.finance-roster-placement-list { padding: 0; margin: 0; list-style: none; }
+.finance-roster-placement { display: grid; grid-template-columns: minmax(12rem, 0.85fr) minmax(0, 1.6fr); align-items: start; gap: 0.7rem 1rem; padding: 0.75rem 0; border-top: 1px solid var(--line); }
+.finance-roster-placement-context { display: grid; min-width: 0; gap: 0.14rem; }
+.finance-roster-placement-context strong { font-size: 0.88rem; }
+.finance-roster-placement-context > span:not(.finance-status) { color: var(--muted); font-size: 0.79rem; overflow-wrap: anywhere; }
+.finance-roster-placement-status { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.45rem 0.8rem; margin: 0; }
+.finance-roster-placement-status > div { min-width: 0; }
+.finance-roster-placement-status dt { color: var(--muted); font-size: 0.71rem; font-weight: 650; }
+.finance-roster-placement-status dd { margin: 0.1rem 0 0; font-size: 0.79rem; font-weight: 650; overflow-wrap: anywhere; }
+.finance-roster-placement-status > div:first-child dd { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.finance-roster-account-link { margin: 0.65rem 0 0; }
+.finance-roster-account-link .button { min-height: 2.4rem; }
+
+.finance-departure-list { display: grid; gap: 0.6rem; }
+.finance-departure-case > summary {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1.2fr) minmax(10rem, 0.8fr) minmax(12rem, 1fr);
+  align-items: center;
+  gap: 0.7rem 1rem;
+  padding: 0.85rem 1rem;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.finance-departure-identity, .finance-departure-type, .finance-departure-context { display: grid; min-width: 0; gap: 0.12rem; }
+.finance-departure-identity strong, .finance-departure-context strong { overflow-wrap: anywhere; }
+.finance-departure-identity span, .finance-departure-type time, .finance-departure-context span { color: var(--muted); font-size: 0.8rem; }
+.finance-departure-type strong { font-size: 0.88rem; }
+.finance-departure-type time { font-variant-numeric: tabular-nums; }
+.finance-departure-case-body { padding: 0.85rem 1rem 1rem; border-top: 1px solid var(--line); }
+.finance-departure-case-body > p:first-child { margin-bottom: 0.85rem; overflow-wrap: anywhere; }
+.finance-departure-case-body form { gap: 0.75rem; }
+.finance-departure-case-body .admin-section__heading { margin: 0; }
+.finance-departure-case-body .admin-section__heading p { margin: 0; font-size: 0.85rem; }
+.finance-departure-terms { display: grid; gap: 0.7rem; }
+.finance-departure-term { padding-top: 0.7rem; border-top: 1px solid var(--line); }
+.finance-departure-term h4 { margin: 0 0 0.45rem; font-size: 0.9rem; }
+.finance-departure-term > p { margin: 0 0 0.5rem; font-size: 0.83rem; }
+.finance-departure-term-status { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.35rem 1rem; padding: 0.45rem 0; border-top: 1px solid var(--line); }
+.finance-departure-term-status strong { white-space: nowrap; font-size: 0.86rem; }
+.finance-departure-term-status span { color: var(--muted); font-size: 0.82rem; }
+.finance-departure-term-status .finance-review-flag { color: var(--warning); font-weight: 700; }
+.finance-departure-charge-list { display: grid; gap: 0.55rem; }
+.finance-departure-charge { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem 0.75rem; padding: 0.65rem 0; border-top: 1px solid var(--line); }
+.finance-departure-charge > input[type='hidden'] { display: none; }
+.finance-departure-charge .field { min-width: 0; margin: 0; }
+.finance-departure-charge .field > span { font-size: 0.82rem; }
+
+.finance-schedule-create { border-top: 1px solid var(--line); }
+.finance-schedule-create > summary { min-height: 2.6rem; display: flex; align-items: center; color: var(--accent); cursor: pointer; font-weight: 700; }
+.finance-schedule-create-body { padding-top: 0.15rem; }
+.finance-schedule-create-body > p { margin-bottom: 0.75rem; color: var(--muted); font-size: 0.85rem; }
+.finance-schedule-create-body > form { padding: 0; background: transparent; border: 0; }
+.finance-schedule-tuition-heading { margin: 0.8rem 0 0.45rem; }
+.finance-schedule-tuition-heading h3 { margin: 0 0 0.25rem; font-size: 1rem; }
+.finance-schedule-tuition-heading p, .finance-schedule-additional .admin-section__heading p { margin: 0; color: var(--muted); font-size: 0.84rem; }
+.finance-schedule-term { border-top: 1px solid var(--line); }
+.finance-schedule-term:last-child { border-bottom: 1px solid var(--line); }
+.finance-schedule-term > summary, .finance-schedule-additional > summary { display: flex; min-height: 3.1rem; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.35rem 1rem; padding: 0.45rem 0.2rem; cursor: pointer; }
+.finance-schedule-term > summary strong, .finance-schedule-additional > summary strong { font-size: 0.92rem; }
+.finance-schedule-term > summary span, .finance-schedule-additional > summary span { color: var(--muted); font-size: 0.8rem; }
+.finance-schedule-term-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem 1rem; padding: 0.2rem 0 0.9rem; }
+.finance-schedule-tuition-field { display: grid; min-width: 0; gap: 0.35rem; }
+.finance-schedule-tuition-field > label { font-size: 0.84rem; font-weight: 650; }
+.finance-schedule-tuition-amount { display: flex; align-items: center; min-width: 0; gap: 0.5rem; }
+.finance-schedule-tuition-amount > span { color: var(--muted); font-size: 0.92rem; }
+.finance-schedule-tuition-amount > input { min-width: 0; flex: 1 1 auto; font-variant-numeric: tabular-nums; }
+.finance-schedule-additional { margin-top: 0.85rem; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.finance-schedule-additional > summary { min-height: 3.25rem; }
+.finance-schedule-additional-body { padding: 0 0 0.85rem; }
+.finance-schedule-additional .admin-section__heading { margin: 0.25rem 0 0.7rem; }
+.finance-schedule-version-list { display: grid; }
+.finance-schedule-version { border-top: 1px solid var(--line); }
+.finance-schedule-version:last-child { border-bottom: 1px solid var(--line); }
+.finance-schedule-version > summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) auto minmax(10rem, 0.8fr);
+  align-items: center;
+  gap: 0.45rem 1rem;
+  min-height: 3rem;
+  padding: 0.45rem 0.2rem;
+  cursor: pointer;
+  list-style-position: inside;
+}
+.finance-schedule-version > summary > strong { font-size: 0.88rem; overflow-wrap: anywhere; }
+.finance-schedule-version > summary > span:last-child { color: var(--muted); font-size: 0.78rem; }
+.finance-schedule-version-status { width: fit-content; padding: 0.12rem 0.42rem; border-radius: 0.35rem; font-size: 0.73rem; font-weight: 700; }
+.finance-schedule-version-status--active { color: var(--success); background: var(--success-soft); }
+.finance-schedule-version-status--retired { color: var(--ink-soft); background: var(--surface-soft); }
+.finance-schedule-version-body { padding: 0.2rem 0 0.8rem; }
+.finance-term-progress-groups { display: grid; }
+.finance-term-progress-group { border-top: 1px solid var(--line); }
+.finance-term-progress-group:last-child { border-bottom: 1px solid var(--line); }
+.finance-term-progress-group > summary { display: flex; min-height: 3rem; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.3rem 1rem; padding: 0.4rem 0.2rem; cursor: pointer; list-style-position: inside; }
+.finance-term-progress-group > summary strong { font-size: 0.9rem; }
+.finance-term-progress-group > summary span { color: var(--muted); font-size: 0.8rem; }
+.finance-term-progress-group .table-scroll { margin: 0.2rem 0 0.75rem; }
+
+@media (max-width: 1100px) {
+  .finance-roster-primary-filters { grid-template-columns: minmax(0, 1.3fr) minmax(9rem, 0.8fr) minmax(9rem, 0.8fr); }
+  .finance-roster-primary-filters .button { grid-column: 1 / -1; justify-self: start; }
+  .finance-roster-record > summary,
+  .finance-roster-record--with-liabilities > summary,
+  .finance-roster-record--with-voucher > summary,
+  .finance-roster-record--with-liabilities.finance-roster-record--with-voucher > summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .finance-roster-voucher { grid-column: 1 / -1; }
+}
+
+@media (max-width: 760px) {
+  .finance-roster-primary-filters, .finance-roster-filter-grid { grid-template-columns: minmax(0, 1fr); }
+  .finance-roster-primary-filters .button { width: 100%; grid-column: auto; }
+  .finance-roster-filter-actions { align-items: stretch; flex-direction: column; }
+  .finance-roster-filter-actions .button, .finance-roster-filter-actions .table-action { width: 100%; text-align: center; }
+  .finance-roster-pagination { align-items: stretch; flex-direction: column; }
+  .finance-roster-pagination nav { justify-content: space-between; }
+  .finance-roster-record > summary, .finance-roster-record--with-liabilities > summary,
+  .finance-roster-record--with-voucher > summary,
+  .finance-roster-record--with-liabilities.finance-roster-record--with-voucher > summary,
+  .finance-departure-case > summary { grid-template-columns: minmax(0, 1fr); padding: 0.8rem; }
+  .finance-roster-voucher { grid-column: auto; }
+  .finance-roster-record-body { padding: 0 0.8rem 0.8rem; }
+  .finance-roster-record-financials { grid-template-columns: minmax(0, 1fr); gap: 0.35rem; }
+  .finance-roster-placement { grid-template-columns: minmax(0, 1fr); gap: 0.45rem; }
+  .finance-roster-placement-status { grid-template-columns: minmax(0, 1fr); gap: 0.3rem; }
+  .finance-roster-account-link .button { width: 100%; justify-content: center; }
+  .finance-departure-case-body { padding-inline: 0.8rem; }
+  .finance-departure-charge { grid-template-columns: minmax(0, 1fr); }
+  .finance-departure-case-body form > .button { width: 100%; justify-content: center; }
+  .finance-schedule-version > summary { grid-template-columns: minmax(0, 1fr) auto; }
+  .finance-schedule-version > summary > span:last-child { grid-column: 1 / -1; padding-left: 1rem; }
+  .finance-schedule-term-fields { grid-template-columns: minmax(0, 1fr); }
+  .finance-schedule-term > summary, .finance-schedule-additional > summary { align-items: flex-start; }
+  .finance-schedule-additional .admin-section__heading { align-items: stretch; flex-direction: column; gap: 0.55rem; }
+  .finance-term-progress-group > summary { align-items: flex-start; flex-direction: column; }
 }

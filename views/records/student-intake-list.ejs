@@ -1,8 +1,9 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/registrar/records">Back to student records</a>
+  <a class="context-back" href="/registrar/intake">Back to annual enrollment intake</a>
   <section class="dashboard-heading">
-    <div><h1>Student enrollment intake</h1><p>Review each pending enrollment and finalize it after finance clears that enrollment.</p></div>
+    <div><h1>Historic pending intake</h1><p>Review pre-annual intake records. New and returning learners enter through annual enrollment.</p></div>
+    <div class="admin-heading-actions"><a class="button button--secondary" href="<%= basePath %>/activation">Review first-login activation</a></div>
     <div class="admin-heading-actions"><a class="button button--primary" href="/registrar/intake/new">Start new intake</a></div>
   </section>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
@@ -21,7 +22,7 @@
             <td data-label="Finance clearance"><%= intake.clearance_status === 'cleared' ? 'Cleared' : 'Pending' %></td>
             <td data-label="Action">
               <% if (intake.clearance_status === 'cleared') { %>
-                <form method="post" action="/registrar/intake/<%= intake.enrollment_id %>/finalize" data-submitting-message="Finalizing enrollment and preparing the private enrollment form. Please wait.">
+                <form method="post" action="<%= basePath %>/<%= intake.enrollment_id %>/finalize" data-submitting-message="Finalizing enrollment and preparing the private enrollment form. Please wait.">
                   <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                   <button class="table-action table-button" type="submit">Finalize and print form</button>
                 </form>

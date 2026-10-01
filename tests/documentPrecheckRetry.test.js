@@ -42,10 +42,10 @@ function retryService({
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           state.queries.push({ statement, values: { ...values } });
-          if (statement.includes('FROM dbo.users')) {
+          if (statement.includes('FROM users')) {
             return { recordset: actorRole ? [{ id: values.actorId, role: actorRole }] : [] };
           }
-          if (statement.includes('FROM dbo.documents AS d WITH (UPDLOCK, HOLDLOCK)')) {
+          if (statement.includes('FROM documents AS d') && statement.includes('FOR UPDATE')) {
             return { recordset: [{
               id: values.documentId,
               student_id: 44,
@@ -56,15 +56,15 @@ function retryService({
               precheck_attempt_count: String(attemptCount)
             }] };
           }
-          if (statement.includes('FROM dbo.document_decision_events')) {
+          if (statement.includes('FROM document_decision_events')) {
             return { recordset: finalDecision ? [{ decision_type: finalDecision }] : [] };
           }
           if (statement.includes("SET status = 'pending'")) {
-            if (state.documentStatus !== 'needs_review') return { recordset: [] };
+            if (state.documentStatus !== 'needs_review') return { affectedRows: 0 };
             state.documentStatus = 'pending';
-            return { recordset: [{ id: values.documentId }] };
+            return { affectedRows: 1 };
           }
-          if (statement.includes('INSERT INTO dbo.audit_logs')) {
+          if (statement.includes('INSERT INTO audit_logs')) {
             state.audit = values;
             return { recordset: [] };
           }
@@ -118,9 +118,9 @@ test('registrar retry atomically queues the same submission and preserves its va
   assert.equal(state.committed, true);
   assert.equal(state.rolledBack, false);
   assert.equal(state.isolation, 'SERIALIZABLE');
-  const documentLock = state.queries.find(({ statement }) => statement.includes('FROM dbo.documents AS d WITH'));
-  assert.match(documentLock.statement, /UPDLOCK, HOLDLOCK/);
-  assert.equal(state.queries.some(({ statement }) => statement.startsWith('DELETE FROM dbo.document_validations')), false);
+  const documentLock = state.queries.find(({ statement }) => statement.includes('FROM documents AS d') && statement.includes('FOR UPDATE'));
+  assert.match(documentLock.statement, /FOR UPDATE/);
+  assert.equal(state.queries.some(({ statement }) => statement.startsWith('DELETE FROM document_validations')), false);
   assert.equal(state.audit.action, 'registrar.document_precheck_retry_queued');
   assert.equal(state.audit.detailsJson.includes('timeout'), false);
 });

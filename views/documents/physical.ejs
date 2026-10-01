@@ -25,6 +25,7 @@
           const name = [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(' ');
           const form137Label = ({ pending: 'Pending', received: 'Received', verified: 'Verified', correction: 'Correction needed', rejected: 'Rejected' })[student.form137_status] || 'Not recorded';
           const paperReportCardLabel = ({ pending: 'Pending', received: 'Received', verified: 'Checked by staff', correction: 'Clearer or replacement copy needed', rejected: 'Not accepted for this requirement' })[student.paper_report_card_status] || 'Not recorded';
+          const checklist = student.physicalChecklistSummary;
         %>
           <article class="physical-requirements-item" aria-labelledby="physical-student-<%= student.id %>">
             <header class="physical-requirements-item__heading">
@@ -38,6 +39,10 @@
               <div class="physical-requirement-status">
                 <dt>Previous-school report-card paper copy</dt>
                 <dd><span class="record-document-status"><%= paperReportCardLabel %></span><% if (student.paper_report_card_updated_at) { %><span class="muted-copy">Updated <%= new Date(student.paper_report_card_updated_at).toLocaleDateString() %></span><% } %><a class="button button--secondary" href="/documents/students/<%= student.id %>#previous-school-report-card-status-title">Record or update paper-copy status</a></dd>
+              </div>
+              <div class="physical-requirement-status">
+                <dt>Student paper-requirement checklist</dt>
+                <dd><span class="record-document-status"><%= checklist ? `${checklist.completed_count || 0} of ${checklist.required_count || 0} required items verified` : 'No summary available' %></span><a class="button button--secondary" href="/documents/students/<%= student.id %>#physical-checklist-title">Review paper checklist</a></dd>
               </div>
             </dl>
           </article>

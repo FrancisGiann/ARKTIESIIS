@@ -69,6 +69,15 @@ function services({ ownStudentRecords = null } = {}) {
       },
       async getOwnStudentRecord() { return ownStudentRecords; }
     },
+    registrarDashboardService: {
+      async getDashboard() {
+        return {
+          configuredTerms: [], schoolYears: [], schoolYearTerms: [], selectedSchoolYear: '', selectedTerm: null,
+          activeEnrolledCount: null, pendingActivationCount: 0, departedCount: 0, droppedCount: 0, transferredCount: 0,
+          everFinalizedCount: 0, termCounts: [], needsTermSelection: true
+        };
+      }
+    },
     academicRecordsService: {
       async listSubjects() { return []; },
       async getStudentAcademicRecord(id) {
@@ -87,6 +96,10 @@ function services({ ownStudentRecords = null } = {}) {
           transactions: []
         };
       }
+    },
+    annualFinanceService: {
+      async listRoster() { return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; },
+      async getStudentLedger() { return { terms: [] }; }
     },
     classScheduleService: { async getOwnStudentSchedule() { return []; } }
   };
@@ -162,12 +175,36 @@ test('student section navigation uses real server pages with path-specific curre
   assert.ok(links.every((item) => !item.href.includes('#')), 'student navigation destinations are not in-page anchors');
 });
 
+test('finance navigation marks one destination for workspace, account, and annual statement routes', () => {
+  const contexts = [
+    ['/finance/overview', 'finance-overview', '/finance/overview'],
+    ['/finance', 'finance-roster', '/finance'],
+    ['/finance/schedules', 'finance-schedules', '/finance/schedules'],
+    ['/finance/reports', 'finance-reports', '/finance/reports'],
+    ['/finance/departures', 'finance-departures', '/finance/departures'],
+    ['/finance/legacy', 'finance-legacy', '/finance/legacy'],
+    ['/finance/students/22', 'finance-legacy', '/finance/legacy'],
+    ['/finance/students/22/annual', 'finance-roster', '/finance'],
+    ['/finance/students/22/statement', 'finance-roster', '/finance']
+  ];
+
+  for (const role of ['finance', 'database_admin']) {
+    for (const [path, expectedId, expectedHref] of contexts) {
+      const navigation = buildNavigation(role, path);
+      const current = navigation.items.filter((item) => item.current);
+      assert.deepEqual(current.map((item) => item.id), [expectedId], `${role} at ${path} marks only its destination`);
+      assert.equal(navigation.currentPage, expectedId);
+      assert.equal(navigation.items.find((item) => item.id === expectedId).href, expectedHref);
+    }
+  }
+});
+
 test('authenticated navigation only exposes destinations available to each role', async () => {
   const cases = [
-    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Audit activity', 'Documents', 'Finance'], forbidden: [] },
+    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Audit activity', 'Documents', 'Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Legacy account history'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/legacy'], forbidden: [] },
     { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollment intake', 'Document review', 'Grade review', 'Class schedules', 'Subject catalog', 'Teacher assignments'], forbidden: ['/finance', '/admin'] },
     { role: 'teacher', path: '/teacher', labels: ['My classes', 'Submit grades'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/admin'] },
-    { role: 'finance', path: '/finance', labels: ['Finance workspace'], forbidden: ['/registrar/records', '/documents', '/admin'] },
+    { role: 'finance', path: '/finance', labels: ['Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Legacy account history'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/legacy'], forbidden: ['/registrar/records', '/documents', '/admin'] },
     { role: 'student', path: '/student', labels: ['Home', 'Schedule', 'Grades', 'Finance', 'My records', 'Documents'], forbidden: ['/registrar/records', '/finance', '/admin'] }
   ];
 
@@ -192,10 +229,13 @@ test('authenticated navigation only exposes destinations available to each role'
       assert.deepEqual(mobileLabels, scenario.labels, `${scenario.role} mobile destinations match its server-filtered desktop menu`);
       const navigationLinks = [...navigation.matchAll(/<a class="app-nav__link[^\"]*"[^>]*>[\s\S]*?<\/a>/g)];
       assert.equal(navigationLinks.length, scenario.labels.length);
+      if (scenario.hrefs) {
+        assert.deepEqual(navigationLinks.map((match) => match[0].match(/href="([^"]+)"/)[1]), scenario.hrefs);
+      }
       for (const [index, match] of navigationLinks.entries()) {
         assert.match(match[0], new RegExp(`>${scenario.labels[index]}</a>`));
       }
-      const expectedHome = { database_admin: '/admin', registrar: '/registrar', teacher: '/teacher', finance: '/finance', student: '/student' }[scenario.role];
+      const expectedHome = { database_admin: '/admin', registrar: '/registrar', teacher: '/teacher', finance: '/finance/overview', student: '/student' }[scenario.role];
       assert.match(html, new RegExp(`<a class="brand" href="${expectedHome}" aria-label="ARKTIESIIS, Ark Technological Institute Education System Incorporated, Lucena Branch">`));
       assert.match(navigation, /<a class="app-nav__link[^\"]*" href="[^\"]+" aria-current="page"/);
       assert.match(html, /<details class="mobile-nav">\s*<summary>/, 'mobile navigation uses a keyboard-operable native disclosure');
@@ -223,9 +263,12 @@ test('authenticated navigation only exposes destinations available to each role'
         assert.match(html, /href="\/teacher\/grades"/);
       }
       if (scenario.role === 'finance') {
-        assert.match(html, /class="finance-panel finance-overview-panel"/);
-        assert.match(html, /id="finance-search-heading"/);
-        assert.match(html, /Find a student account/);
+        assert.match(html, /class="finance-panel"/);
+        assert.match(html, /id="annual-roster-filter-title"/);
+        assert.match(html, /<h2 id="annual-roster-filter-title">Find annual accounts<\/h2>/);
+        const main = html.match(/<main class="page-shell dashboard-page finance-page(?: [^"]*)?"[\s\S]*?<\/main>/)?.[0];
+        assert.ok(main, 'finance roster should render');
+        assert.doesNotMatch(main, /href="\/finance\/(?:schedules|reports|departures|legacy)"/, 'finance destinations appear once in the shared navigation');
         assert.doesNotMatch(html, /finance-dashboard-summary|Finance at a glance/);
       }
       if (scenario.role === 'student') {
@@ -350,7 +393,7 @@ test('nested workspace pages mark the current destination and provide fixed pare
   await withServer(financeApp, async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
     const account = await fetch(`${baseUrl}/finance/students/22`, { headers: { cookie } });
-    assert.match(await account.text(), /class="context-back" href="\/finance"/);
+    assert.match(await account.text(), /class="context-back" href="\/finance\/legacy"/);
   });
 });
 

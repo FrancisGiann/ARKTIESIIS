@@ -75,6 +75,11 @@ test('finance summary exposes account and ledger counts only to finance-authoriz
   const call = harness.calls[0];
   assert.equal(call.values.actorId, 9);
   assert.match(call.statement, /id = @actorId AND is_active = 1 AND role IN \('finance', 'database_admin'\)/);
+  assert.match(call.statement, /annual_totals/);
+  assert.match(call.statement, /v_finance_assessed_charge_due/);
+  assert.match(call.statement, /v_finance_opening_liability_due/);
+  assert.match(call.statement, /v_finance_legacy_account_balance/);
+  assert.match(call.statement, /UNION ALL SELECT student_id, annual_balance AS balance FROM annual_totals\s+UNION ALL SELECT student_id, opening_balance AS balance FROM opening_totals/);
   assert.doesNotMatch(call.statement, /student_no|document_validations|extracted_text/);
 });
 

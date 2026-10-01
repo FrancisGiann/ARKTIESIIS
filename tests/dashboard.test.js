@@ -83,7 +83,7 @@ test('role dashboards lead with useful work and omit decorative summary strips',
       summary: { active_student_count: 8, archived_student_count: 1, current_enrollment_count: 6, documents_awaiting_review_count: 2, documents_processing_count: 1 }
     },
     {
-      role: 'finance', path: '/finance', label: /Find a student account/,
+      role: 'finance', path: '/finance', label: /<h2 id="annual-roster-filter-title">Find annual accounts<\/h2>/,
       summary: { account_count: 10, accounts_due_count: 4, accounts_settled_count: 5, accounts_credit_count: 1, charge_count: 12, payment_count: 8 }
     },
     {
@@ -104,6 +104,15 @@ test('role dashboards lead with useful work and omit decorative summary strips',
         async getStudentDashboardSummary(actorId) { summaryCalls.push(['student', actorId]); return scenario.summary; },
         async getRegistrarDashboardSummary(actorId) { summaryCalls.push(['registrar', actorId]); return scenario.summary; }
       },
+      registrarDashboardService: {
+        async getDashboard() {
+          return {
+            configuredTerms: [], schoolYears: [], schoolYearTerms: [], selectedSchoolYear: '', selectedTerm: null,
+            activeEnrolledCount: null, pendingActivationCount: 0, departedCount: 0, droppedCount: 0,
+            transferredCount: 0, everFinalizedCount: 0, termCounts: [], needsTermSelection: true
+          };
+        }
+      },
       academicRecordsService: { async getOwnGrades() { return []; } },
       classScheduleService: { async getOwnStudentSchedule() { return []; } },
       financeService: {
@@ -112,7 +121,9 @@ test('role dashboards lead with useful work and omit decorative summary strips',
         async getDashboardSummary(actorId) { summaryCalls.push(['finance', actorId]); return scenario.summary; }
       }
     };
-    await withServer(createApp({ databasePool: createAuthPool(scenario.role), environment, ...services }), async (baseUrl) => {
+    await withServer(createApp({ databasePool: createAuthPool(scenario.role), environment, ...services,
+      annualFinanceService: { async listRoster() { return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; } }
+    }), async (baseUrl) => {
       const cookie = await signIn(baseUrl, scenario.role);
       const response = await fetch(`${baseUrl}${scenario.path}`, { headers: { cookie } });
       assert.equal(response.status, 200, scenario.role);
@@ -143,6 +154,16 @@ test('student ledger currency uses grouped peso display without changing finance
           student: { student_no: 'S-7', first_name: 'Alex', last_name: 'Kim' },
           account: { balance: rawAmounts[0] },
           transactions: [{ transaction_type: 'charge', amount: rawAmounts[1], created_at: new Date('2026-09-28T00:00:00Z'), description: 'Synthetic tuition sample' }]
+        };
+      }
+    },
+    annualFinanceService: {
+      async getStudentLedger() {
+        return {
+          summary: { annualBalanceSchoolYear: '2026-2027', annualBalance: rawAmounts[0], allYearsAnnualBalance: rawAmounts[0],
+            unattributedLegacyBalance: '0.00', totalBalance: rawAmounts[0], currentTermOutstanding: rawAmounts[1],
+            priorTermYearDebt: '0.00', availableCredit: '0.00' },
+          terms: [], events: []
         };
       }
     }

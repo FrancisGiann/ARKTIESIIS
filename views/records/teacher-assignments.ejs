@@ -53,24 +53,40 @@
 
   <% const activeAssignments = assignments.filter((assignment) => assignment.is_active === true || assignment.is_active === 1); %>
   <% const historicalAssignments = assignments.filter((assignment) => assignment.is_active !== true && assignment.is_active !== 1); %>
+  <% const activeGroupsBySection = new Map(); %>
+  <% for (const assignment of activeAssignments) {
+    const key = `${assignment.academic_term_id}:${assignment.section_id ?? `${assignment.grade_level || ''}:${assignment.section_name || ''}`}`;
+    if (!activeGroupsBySection.has(key)) activeGroupsBySection.set(key, []);
+    activeGroupsBySection.get(key).push(assignment);
+  } %>
+  <% const activeAssignmentGroups = [...activeGroupsBySection.values()].sort((left, right) =>
+    String(left[0].grade_level).localeCompare(String(right[0].grade_level), undefined, { numeric: true })
+    || String(left[0].section_name).localeCompare(String(right[0].section_name))); %>
   <section class="admin-section" aria-labelledby="active-assignments-title">
-    <div class="admin-section__heading"><div><h2 id="active-assignments-title">Active assignments <span class="section-count"><%= activeAssignments.length %></span></h2><p>Set class times directly from the class you are assigning. Resolve pending workbooks before revoking an assignment.</p></div></div>
-    <% if (activeAssignments.length) { %>
-      <div class="table-scroll" tabindex="0" aria-label="Active teacher assignments"><table class="admin-table teacher-assignment-table">
-        <caption class="visually-hidden">Active term-specific teacher assignments</caption>
-        <thead><tr><th scope="col">Class</th><th scope="col">Teacher</th><th scope="col">Roster</th><th scope="col">Workbook</th><th scope="col">Actions</th></tr></thead>
-        <tbody><% for (const assignment of activeAssignments) { const placement = formatStudentPlacement(assignment.grade_level, assignment.section_name); %><tr>
-          <td data-label="Class"><div class="teacher-assignment-class"><strong><%= placement %></strong><span><%= assignment.school_year %> · <%= assignment.term %></span><span><%= assignment.subject_code %> · <%= assignment.subject_name %></span></div></td>
-          <td data-label="Teacher"><%= assignment.first_name %> <%= assignment.last_name %></td>
-          <td data-label="Roster"><span class="teacher-assignment-roster"><%= assignment.roster_count %> students</span></td>
-          <td data-label="Workbook"><%= assignment.latest_submission_status ? assignment.latest_submission_status.replaceAll('_', ' ') : 'No submission' %></td>
-          <td data-label="Actions"><div class="teacher-assignment-actions">
-            <a class="button button--secondary" href="/registrar/schedules?termId=<%= assignment.academic_term_id %>&amp;sectionId=<%= assignment.section_id %>&amp;assignmentId=<%= assignment.id %>#schedule-create-title">Set class times</a>
-            <form class="teacher-assignment-action" method="post" action="/registrar/records/teacher-assignments/<%= assignment.id %>/revoke"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="filterTermId" value="<%= selectedTermId || '' %>"><input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>"><button class="button button--danger" type="submit">Revoke</button></form>
-          </div></td>
-        </tr><% } %></tbody>
-      </table></div>
-    <% } else { %><p class="empty-state">No active teacher assignments match this context.</p><% } %>
+    <div class="admin-section__heading"><div><h2 id="active-assignments-title">Active assignments <span class="section-count"><%= activeAssignments.length %></span></h2><p>Assignments are grouped by section. Open a section to set class times or revoke an assignment. Resolve pending workbooks before revoking.</p></div></div>
+    <% if (activeAssignmentGroups.length) { %>
+      <div class="teacher-assignment-groups" aria-label="Active assignments grouped by section">
+        <% for (const sectionAssignments of activeAssignmentGroups) { const firstAssignment = sectionAssignments[0]; const placement = formatStudentPlacement(firstAssignment.grade_level, firstAssignment.section_name); %>
+          <details class="teacher-assignment-section" <%= selectedSectionId && String(firstAssignment.section_id) === String(selectedSectionId) ? 'open' : '' %>>
+            <summary class="teacher-assignment-section__summary"><strong><%= placement %></strong><span><%= sectionAssignments.length %> active <%= sectionAssignments.length === 1 ? 'assignment' : 'assignments' %></span></summary>
+            <div class="table-scroll" tabindex="0" aria-label="Active teacher assignments for <%= placement %>"><table class="admin-table teacher-assignment-table">
+              <caption class="visually-hidden">Active assignments for <%= placement %></caption>
+              <thead><tr><th scope="col">Class</th><th scope="col">Teacher</th><th scope="col">Roster</th><th scope="col">Workbook</th><th scope="col">Actions</th></tr></thead>
+              <tbody><% for (const assignment of sectionAssignments) { %><tr>
+                <td data-label="Class"><div class="teacher-assignment-class"><strong><%= assignment.subject_code %> · <%= assignment.subject_name %></strong><span><%= assignment.school_year %> · <%= assignment.term %></span></div></td>
+                <td data-label="Teacher"><%= assignment.first_name %> <%= assignment.last_name %></td>
+                <td data-label="Roster"><span class="teacher-assignment-roster"><%= assignment.roster_count %> students</span></td>
+                <td data-label="Workbook"><%= assignment.latest_submission_status ? assignment.latest_submission_status.replaceAll('_', ' ') : 'No submission' %></td>
+                <td data-label="Actions"><div class="teacher-assignment-actions">
+                  <a class="button button--secondary" href="/registrar/schedules?termId=<%= assignment.academic_term_id %>&amp;sectionId=<%= assignment.section_id %>&amp;assignmentId=<%= assignment.id %>&amp;showCreate=1#schedule-create-title">Set class times</a>
+                  <form class="teacher-assignment-action" method="post" action="/registrar/records/teacher-assignments/<%= assignment.id %>/revoke"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="filterTermId" value="<%= selectedTermId || '' %>"><input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>"><button class="button button--danger" type="submit">Revoke</button></form>
+                </div></td>
+              </tr><% } %></tbody>
+            </table></div>
+          </details>
+        <% } %>
+      </div>
+    <% } else { %><p class="empty-state">No active teacher assignments match this context. Choose another term or section, or create an assignment for a specific section.</p><% } %>
   </section>
 
   <section class="admin-section assignment-history-panel" aria-labelledby="assignment-history-title">

@@ -1,6 +1,7 @@
 const express = require('express');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { AdminServiceError, createAdminService, normalizeUserId } = require('../services/adminService');
+const { isDuplicateKeyError } = require('../config/database');
 
 const notices = {
   created: 'Account created.',
@@ -25,7 +26,7 @@ function formValues(body = {}) {
 }
 
 function isUniqueConflict(error) {
-  return error?.number === 2601 || error?.number === 2627;
+  return isDuplicateKeyError(error);
 }
 
 function createAdminRouter({ getPool, sql, adminService } = {}) {

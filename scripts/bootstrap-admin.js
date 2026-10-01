@@ -2,7 +2,7 @@ const readline = require('node:readline/promises');
 const { stdin, stdout } = require('node:process');
 const { emitKeypressEvents } = require('node:readline');
 const bcrypt = require('bcrypt');
-const { getPool, closePool, sql } = require('../src/config/database');
+const { getPool, closePool, sql, acquireTransactionLock } = require('../src/config/database');
 
 const PASSWORD_HASH_ROUNDS = 12;
 
@@ -93,10 +93,11 @@ async function bootstrapAdmin(input, { getDatabasePool = getPool, sqlTypes = sql
   try {
     await transaction.begin(sqlTypes.ISOLATION_LEVEL.SERIALIZABLE);
     transactionStarted = true;
+    await acquireTransactionLock(transaction, 'bootstrap-database-admin');
 
     const existingAdmin = await transaction.request()
       .input('role', sqlTypes.NVarChar(30), 'database_admin')
-      .query('SELECT TOP (1) id FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE role = @role');
+      .query('SELECT id FROM users WHERE role = @role LIMIT 1 FOR UPDATE');
     if (existingAdmin.recordset?.length) {
       await transaction.rollback();
       transactionStarted = false;
@@ -107,15 +108,15 @@ async function bootstrapAdmin(input, { getDatabasePool = getPool, sqlTypes = sql
       .input('email', sqlTypes.NVarChar(255), admin.email)
       .input('passwordHash', sqlTypes.NVarChar(255), passwordHash)
       .input('role', sqlTypes.NVarChar(30), 'database_admin')
-      .query('INSERT INTO dbo.users (email, password_hash, role, is_active) OUTPUT INSERTED.id AS id VALUES (@email, @passwordHash, @role, 1)');
-    const userId = insertedUser.recordset?.[0]?.id;
+      .query('INSERT INTO users (email, password_hash, role, is_active) VALUES (@email, @passwordHash, @role, 1)');
+    const userId = insertedUser.insertId;
     if (!Number.isSafeInteger(userId) || userId < 1) throw new Error('Bootstrap insert failed.');
 
     await transaction.request()
       .input('userId', sqlTypes.Int, userId)
       .input('firstName', sqlTypes.NVarChar(100), admin.firstName)
       .input('lastName', sqlTypes.NVarChar(100), admin.lastName)
-      .query('INSERT INTO dbo.staff_profiles (user_id, first_name, last_name) VALUES (@userId, @firstName, @lastName)');
+      .query('INSERT INTO staff_profiles (user_id, first_name, last_name) VALUES (@userId, @firstName, @lastName)');
 
     await transaction.request()
       .input('userId', sqlTypes.Int, userId)
@@ -123,7 +124,7 @@ async function bootstrapAdmin(input, { getDatabasePool = getPool, sqlTypes = sql
       .input('entityType', sqlTypes.NVarChar(100), 'user')
       .input('entityId', sqlTypes.NVarChar(100), String(userId))
       .input('detailsJson', sqlTypes.NVarChar(sqlTypes.MAX), JSON.stringify({ source: 'one_time_bootstrap' }))
-      .query('INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json) VALUES (@userId, @action, @entityType, @entityId, @detailsJson)');
+      .query('INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json) VALUES (@userId, @action, @entityType, @entityId, @detailsJson)');
 
     await transaction.commit();
     transactionStarted = false;

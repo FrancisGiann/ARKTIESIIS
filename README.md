@@ -1,58 +1,58 @@
 # ARKTIESIIS School Records Workspace
 
-ARKTIESIIS is a centralized school records system for Ark Technological Institute Education System Incorporated, Lucena Branch. Staff can find a learner by name, student number, or LRN and review the profile, enrollment history, academic records, Good Moral and PSA status, both channels for previous-school report-card enrollment requirements, and staff-only Form 137 physical-record status together. Document review and reliable record maintenance are the core workflows; the student portal provides secondary self-service access to each student's own records.
+ARKTIESIIS is a centralized school records system for Ark Technological Institute Education System Incorporated, Lucena Branch. Staff can find a learner by name, student number, or LRN and review the profile, enrollment history, academic records, Good Moral and PSA status, digital and paper previous-school report-card records, and staff-only Form 137 physical-record status together. Document review and reliable record maintenance are the core workflows; the student portal provides secondary self-service access to each student's own records.
 
 ## Main workflows
 
-- **Registrar:** search the student master list; update records and enrollment; manage terms, sections, subjects, assignments, and weekly class schedules; review documents; approve teacher grade submissions. The staff-only `/documents/physical` workspace searches active students by name, student number, or LRN and links directly to per-student Form 137 and paper previous-school report-card status forms. Uploaded digital documents stay in the separate `/documents` search and review list. Assignment and schedule workspaces default to the marked current term, filter by section, and keep prior assignments available under history. Each active class links directly to its schedule form.
+- **Registrar:** search the student master list; guide new, returning, and transfer intake through student details, enrollment, documents received, and fee confirmation; reuse existing profiles for returning students; maintain voucher and per-term section placement; manage terms, sections, subjects, assignments, and weekly class schedules; review documents; approve teacher grade submissions. The registrar confirms the approved schedule-based payable amount and entry-term enrollment; finance handles payments and term-end clearance. The shared finance roster at `/finance` reflects current registrar placements. The staff-only `/documents/physical` workspace includes the separate paper checklist, Form 137 and previous-school report-card paper status. Student records include staff-only document request/release history, missing-grade overview, and profile change history. See [Registrar and finance workflows](docs/16-registrar-finance-workflows.md).
 - **Database administrator:** manage accounts and audit activity; search and maintain student records; oversee documents and finance records. The database administrator shares the staff-only physical-requirements workspace with the registrar.
 - **Teacher:** `/teacher` shows the assigned-class overview; `/teacher/grades` opens the grade submission picker and links to each assigned class upload. Upload the corrected SSHS E-Class Record workbook for an assigned term, section, and subject. Uploads create a review submission and never write grades. The registrar approves the matched rows atomically.
-- **Finance:** manage student charges, payments, balances, and enrollment clearance.
+- **Finance:** review per-term payment, settled-balance, and no-payment-required summaries at `/finance/overview`; use the annual roster at `/finance` to configure versioned student-payable schedules, record date-specific payments and allocations, sign term-end clearances, and issue printable Statements of Account. Finance does not approve enrollment; finance data stays out of registrar views.
 - **Student:** `/student` is a current-day overview. Separate Schedule, Grades, Finance, and My records pages show only the authenticated student's class schedule, registrar-approved grades, own read-only ledger, and profile/enrollment history. Documents remain on their own page.
 
 Students may upload a scan of a previous-school report card only for their own linked record. A bounded Gemini precheck compares the visible student name and checks the supported file format; staff inspect the source and make every final decision. The precheck does not extract or change grades. Pre-lifecycle report-card archive rows remain staff-only and read-only, outside the processing and retry queues. Staff can separately record the paper copy brought to school, with its own status history; students see only the latest status/date. The paper-copy status vocabulary is a prototype assumption and requires school review. Form 137 keeps its own staff-only physical-status workflow; temporary scan suggestions are not saved.
 
 ## Data entry and spreadsheet support
 
-Registrar intake creates student profiles and enrollment records. New numbers are assigned from the selected academic year's start year in the provisional format `SHS-YYYY-0001`; the sequence continues after the highest matching number in `ARKTIESIIS_V2`. Admin-created profiles use the current academic year. The format is a prototype convention pending school confirmation. A bulk student-login workbook can link existing unlinked student records; it does not import student records. The teacher grade workflow supports the corrected SSHS E-Class Record format that its parser recognizes and requires the teacher's active class assignment. It is not a general-purpose spreadsheet importer. Other school spreadsheets are not assumed compatible; use the registrar forms until the school provides and approves a stable import template.
+Registrar intake creates student profiles and enrollment records. New numbers are assigned from the selected academic year's start year in the provisional format `SHS-YYYY-0001`; the sequence continues after the highest matching number in the configured MariaDB database. Admin-created profiles use the current academic year. The format is a prototype convention pending school confirmation. A bulk student-login workbook can link existing unlinked student records; it does not import student records. The teacher grade workflow supports the corrected SSHS E-Class Record format that its parser recognizes and requires the teacher's active class assignment. It is not a general-purpose spreadsheet importer. Other school spreadsheets are not assumed compatible; use the registrar forms until the school provides and approves a stable import template.
 
 ## Stack
 
 - Node.js 20+, Express, EJS, HTML/CSS/JavaScript
-- Microsoft SQL Server
+- MariaDB using the `mysql2` prepared-query driver
 - Google Gemini API through built-in Node.js `fetch` for bounded field extraction
 - Email-based two-factor authentication
 
 ## Local setup
 
-1. Copy `.env.example` to `.env`; set SQL Server credentials, SMTP settings, a session secret, and any Gemini configuration needed for document prechecks. Keep `.env` private.
+1. Copy `.env.example` to `.env`; set the existing MariaDB host, port, database name, username, and password, plus SMTP settings, a session secret, and any Gemini configuration needed for document prechecks. Keep `.env` private.
 2. Install the locked dependencies with `npm ci`.
-3. Start the local SQL Server container if needed: `docker compose up -d sqlserver`.
-4. Initialize and check the dedicated prototype database:
+3. Create an empty MariaDB database and its user in your local MariaDB or Hostinger hPanel. Hostinger supplies prefixed names; copy them exactly into `.env`. The app setup never creates a database.
+4. Initialize and check the selected empty database once:
 
    ```bash
    npm run db:setup
    npm run db:check
    ```
 
-   These commands target **`ARKTIESIIS_V2`**, its consolidated baseline at `database/v2/schema.sql`, and idempotently apply the new forward-only V2 migrations in `database/v2/migrations/` (currently through `v2.002`). They do not modify the legacy `ARKTIESIIS` database, its one-time baseline, or its migration history. There is no data migration between databases.
+   Setup targets the database selected by `DB_NAME`, applies `database/mariadb/schema.sql` (`v2.001`) only when that database is empty, then applies each forward-only MariaDB migration through `v2.010`. It does not create or drop databases and never runs automatically at app startup. The earlier SQL Server schema and migrations remain unchanged and are not applied to MariaDB.
 
-5. Create the first database administrator with `npm run admin:bootstrap`. Password input is hidden and is never accepted as a command-line argument.
+5. For an empty real database, create the first administrator with `npm run admin:bootstrap`. Password input is hidden and is never accepted as a command-line argument. If deploying the Hostinger dummy dataset, skip this command and follow the one-time `demo:seed-hostinger` path in [the Hostinger deployment guide](docs/17-hostinger-mariadb-deployment.md); that seed creates its own administrator, and the two paths cannot be combined.
 6. Start the app with `npm run dev` and open `http://localhost:3000`.
 
 Email 2FA is required outside the explicit development-only password bypass. The bypass needs both `NODE_ENV=development` and `DEV_PASSWORD_ONLY_LOGIN=true` and is restricted to loopback. Configure a working SMTP relay for regular sign-in.
 The login-attempt limiter is skipped only while that development password-only mode is enabled; OTP and non-development login limits remain active.
 
-## Fictional defense seed
+## Local demo seed
 
-The optional Grade 11–12 seed creates fictional, labeled prototype data, including private synthetic Good Moral and PSA sample files in staff review states. The samples include no Gemini result and make no authenticity claim. Review the plan first:
+The minimal MariaDB seed creates repeatable demo accounts and one student, term, section, subject, enrollment, grade set, and empty finance account. It only inserts missing reserved demo rows and stops if their identifiers are already used by incompatible records. It does not create document files or school-approved fee rates. Set `DEMO_SEED_PASSWORD` to a private 12–72 byte password, and enable `DEV_PASSWORD_ONLY_LOGIN=true` only in local development so the `.test` demo emails can sign in without a real mail relay. Seed application is limited to `NODE_ENV=development`, a loopback database host, and a database name containing `demo`, `dev`, or `test`.
 
 ```bash
 npm run demo:seed-school -- --dry-run
 npm run demo:seed-school -- --apply
 ```
 
-Seed application requires explicit local development mode and a loopback SQL connection to `ARKTIESIIS_V2`. The generated demo sign-in aliases and passwords are kept in the owner-only ignored `.env.school-demo` file; do not paste those credentials into source control or public channels.
+The shared password is never printed or written to the repository. There is no demo reset command; use a new empty local demo database when you need to restart the example.
 
 ## Checks
 
@@ -62,8 +62,8 @@ npm test
 npm run db:check
 ```
 
-The test suite uses mocked SQL/HTTP services for authorization and transaction failure cases. Live database setup and seeded-data verification are separate local checks.
+The test suite uses mocked SQL/HTTP services for authorization and transaction failure cases. Live MariaDB setup and seeded-data verification use separate disposable databases. Never point setup, seeds, or integration probes at a configured school database.
 
 ## Database history
 
-`database/schema.sql` and `database/migrations/` are retained as inert legacy history. For this prototype, use only `database/v2/schema.sql`, `scripts/db-setup-v2.js`, and `scripts/check-db.js`. Do not rerun or edit the old applied schema/migrations to initialize the V2 database.
+`database/schema.sql`, `database/v2/`, and their SQL Server migrations are retained as inert history. For this MariaDB prototype, use only `database/mariadb/schema.sql`, `database/mariadb/migrations/`, `scripts/db-setup-v2.js`, and `scripts/check-db.js`. Never edit or rerun applied baselines/migrations to update an initialized database.

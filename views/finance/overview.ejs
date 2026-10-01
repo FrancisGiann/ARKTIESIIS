@@ -1,0 +1,79 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page finance-overview-page" id="main-content">
+  <header class="dashboard-heading">
+    <div>
+      <h1>Finance overview</h1>
+      <p>Review term payment and balance states for confirmed annual assessments.</p>
+    </div>
+    <a class="button button--secondary" href="/finance">Open roster</a>
+  </header>
+
+  <section class="finance-overview" aria-labelledby="finance-overview-heading">
+    <div class="finance-overview__top">
+      <div>
+        <h2 id="finance-overview-heading">Term account states</h2>
+        <p>Counts use direct net payment allocations to charges in the selected school year.</p>
+      </div>
+      <% if (overview.schoolYears.length) { %>
+        <form class="dashboard-filter dashboard-filter--finance" method="get" action="/finance/overview">
+          <label class="field">
+            <span>School year</span>
+            <select name="schoolYear">
+              <option value="" <%= !overview.selectedSchoolYear ? 'selected' : '' %>>Select a school year</option>
+              <% overview.schoolYears.forEach((schoolYear) => { %><option value="<%= schoolYear %>" <%= overview.selectedSchoolYear === schoolYear ? 'selected' : '' %>><%= schoolYear %></option><% }); %>
+            </select>
+          </label>
+          <label class="field">
+            <span>Grade level</span>
+            <select name="gradeLevel">
+              <option value="">All grades</option>
+              <% overview.gradeLevels.forEach((gradeLevel) => { %><option value="<%= gradeLevel %>" <%= overview.selectedGrade === gradeLevel ? 'selected' : '' %>><%= gradeLevel %></option><% }); %>
+            </select>
+          </label>
+          <button class="button button--secondary" type="submit">Apply filters</button>
+        </form>
+      <% } %>
+    </div>
+
+    <% if (overview.needsSchoolYearSelection && !overview.schoolYears.length) { %>
+      <p class="dashboard-empty" role="status">No school-year terms are configured. Configure the term order before reviewing annual finance counts.</p>
+    <% } else if (overview.needsSchoolYearSelection) { %>
+      <p class="dashboard-empty" role="status">No current school year is configured. Choose a school year to review annual finance counts.</p>
+    <% } else if (!overview.terms.length) { %>
+      <p class="dashboard-empty" role="status">No configured terms are available for <%= overview.selectedSchoolYear %>.</p>
+    <% } else { %>
+      <% const comparisonMaximum = Math.max(1, ...overview.terms.flatMap((term) => [term.studentsWithAllocatedPayment, term.settledTermBalance, term.noPaymentRequired])); %>
+      <figure class="dashboard-chart" aria-labelledby="finance-term-chart-title">
+        <figcaption>
+          <h3 id="finance-term-chart-title"><%= overview.selectedGrade || 'All configured grades' %> · <%= overview.selectedSchoolYear %></h3>
+          <p>Bars use one shared count scale. Each group counts distinct students by term; a student can appear in more than one group.</p>
+        </figcaption>
+        <ol class="dashboard-comparison dashboard-comparison--finance" aria-label="Finance account counts by configured term">
+          <% overview.terms.forEach((term) => { %>
+            <% const termName = typeof term.term === 'string' ? term.term.trim() : ''; %>
+            <% const termLabel = termName.toLocaleLowerCase() === `term ${term.termNumber}`.toLocaleLowerCase() ? `Term ${term.termNumber}` : [ `Term ${term.termNumber}`, termName ].filter(Boolean).join(' · '); %>
+            <li class="dashboard-comparison__row">
+              <h4 class="dashboard-comparison__term"><%= termLabel %></h4>
+              <dl class="dashboard-comparison__metrics dashboard-comparison__metrics--finance">
+                <div class="dashboard-comparison__metric">
+                  <dt>Positive net payment allocated</dt>
+                  <dd><strong><%= term.studentsWithAllocatedPayment.toLocaleString('en-US') %></strong><span class="dashboard-chart__track" aria-hidden="true"><span style="width: <%= Math.round(term.studentsWithAllocatedPayment / comparisonMaximum * 100) %>%"></span></span></dd>
+                </div>
+                <div class="dashboard-comparison__metric dashboard-comparison__metric--settled">
+                  <dt>Settled term balance</dt>
+                  <dd><strong><%= term.settledTermBalance.toLocaleString('en-US') %></strong><span class="dashboard-chart__track" aria-hidden="true"><span style="width: <%= Math.round(term.settledTermBalance / comparisonMaximum * 100) %>%"></span></span></dd>
+                </div>
+                <div class="dashboard-comparison__metric dashboard-comparison__metric--waiver">
+                  <dt>Waiver or zero-payable assessment</dt>
+                  <dd><strong><%= term.noPaymentRequired.toLocaleString('en-US') %></strong><span class="dashboard-chart__track" aria-hidden="true"><span style="width: <%= Math.round(term.noPaymentRequired / comparisonMaximum * 100) %>%"></span></span></dd>
+                </div>
+              </dl>
+            </li>
+          <% }); %>
+        </ol>
+      </figure>
+      <p class="finance-overview__method">Payment date does not affect term attribution. Reversed payments, legacy transactions, unreconciled balances, and unattributed history are excluded. Settled balances may include a credit.</p>
+    <% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

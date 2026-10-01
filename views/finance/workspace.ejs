@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page <%= student ? 'finance-detail-page' : 'finance-workspace-page' %>" id="main-content">
-  <% if (student) { %><a class="context-back" href="/finance<%= searchSuffix %>">Back to finance workspace</a><% } %>
+  <% if (student) { %><a class="context-back" href="/finance/legacy<%= searchSuffix %>">Back to legacy finance workspace</a><% } %>
   <section class="dashboard-heading">
     <div>
       <h1><%= student ? 'Financial account' : 'Finance workspace' %></h1>

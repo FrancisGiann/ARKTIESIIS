@@ -1,3 +1,12 @@
+const financeNavigationItems = [
+  { id: 'finance-overview', label: 'Overview', href: '/finance/overview', group: 'Finance' },
+  { id: 'finance-roster', label: 'Roster', href: '/finance', group: 'Finance' },
+  { id: 'finance-schedules', label: 'Fee schedules', href: '/finance/schedules', group: 'Finance' },
+  { id: 'finance-reports', label: 'Reports', href: '/finance/reports', group: 'Finance' },
+  { id: 'finance-departures', label: 'Departure review', href: '/finance/departures', group: 'Finance' },
+  { id: 'finance-legacy', label: 'Legacy account history', href: '/finance/legacy', group: 'Finance' }
+];
+
 const navigationByRole = {
   database_admin: [
     { id: 'overview', label: 'Overview', href: '/admin', group: 'Workspace' },
@@ -5,7 +14,7 @@ const navigationByRole = {
     { id: 'students', label: 'Student records', href: '/registrar/records', group: 'People and records' },
     { id: 'audit', label: 'Audit activity', href: '/admin/audit', group: 'Oversight' },
     { id: 'documents', label: 'Documents', href: '/documents', group: 'Oversight' },
-    { id: 'finance', label: 'Finance', href: '/finance', group: 'Oversight' }
+    ...financeNavigationItems
   ],
   registrar: [
     { id: 'overview', label: 'Overview', href: '/registrar', group: 'Workspace' },
@@ -21,9 +30,7 @@ const navigationByRole = {
     { id: 'teacher-workspace', label: 'My classes', href: '/teacher', group: 'Teaching' },
     { id: 'grade-upload', label: 'Submit grades', href: '/teacher/grades', group: 'Teaching' }
   ],
-  finance: [
-    { id: 'finance', label: 'Finance workspace', href: '/finance', group: 'Finance' }
-  ],
+  finance: financeNavigationItems,
   student: [
     { id: 'home', label: 'Home', href: '/student', group: 'My school' },
     { id: 'schedule', label: 'Schedule', href: '/student/schedule', group: 'My school' },
@@ -36,6 +43,8 @@ const navigationByRole = {
 
 function buildNavigation(role, currentPath = '') {
   const path = typeof currentPath === 'string' ? currentPath.split(/[?#]/, 1)[0] : '';
+  const annualFinanceStudentPath = /^\/finance\/students\/[^/]+\/(?:annual|statement)(?:\/|$)/.test(path);
+  const legacyFinanceStudentPath = /^\/finance\/students\/[^/]+(?:\/.*)?$/.test(path) && !annualFinanceStudentPath;
   const roleItems = (navigationByRole[role] || []).map((item) => {
     let current = false;
     if (item.id === 'overview') current = path === '/admin' || path === '/registrar';
@@ -54,7 +63,13 @@ function buildNavigation(role, currentPath = '') {
     else if (item.id === 'records') current = path.startsWith('/student/records');
     else if (item.id === 'finance') current = role === 'student'
       ? path.startsWith('/student/finance')
-      : path === '/finance' || path.startsWith('/finance/');
+      : false;
+    else if (item.id === 'finance-overview') current = path === '/finance/overview';
+    else if (item.id === 'finance-roster') current = path === '/finance' || annualFinanceStudentPath;
+    else if (item.id === 'finance-schedules') current = path.startsWith('/finance/schedules');
+    else if (item.id === 'finance-reports') current = path.startsWith('/finance/reports');
+    else if (item.id === 'finance-departures') current = path.startsWith('/finance/departures');
+    else if (item.id === 'finance-legacy') current = path.startsWith('/finance/legacy') || legacyFinanceStudentPath;
     else if (item.id === 'documents') current = path === '/documents' || path.startsWith('/documents/');
     else if (item.id === 'home') current = path === '/student';
     return { ...item, current };

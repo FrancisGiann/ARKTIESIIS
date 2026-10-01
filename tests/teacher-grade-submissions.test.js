@@ -108,20 +108,20 @@ function readerHarness({ actorId = 7, role = 'teacher', active = true, ownerId =
   const pool = {
     request() {
       return requestFor(({ statement, values }) => {
-        if (statement.includes('FROM dbo.users WITH')) {
+        if (statement.includes('SELECT id, role FROM users WHERE id = @actorId')) {
           return { recordset: active ? [{ id: actorId, role }] : [] };
         }
-        if (statement.includes('FROM dbo.teacher_grade_submissions AS s') && statement.includes('WHERE s.id = @submissionId')) {
+        if (statement.includes('FROM teacher_grade_submissions AS s') && statement.includes('WHERE s.id = @submissionId')) {
           const canReadAsOwner = statement.includes('s.submitted_by = @actorId')
             && statement.includes('a.teacher_id = @actorId') && statement.includes('a.is_active = 1');
-          const canReadAsRegistrar = statement.includes('reviewer.role = N\'registrar\'');
+          const canReadAsRegistrar = statement.includes('reviewer.role = \'registrar\'');
           const authorized = canReadAsRegistrar
             || (canReadAsOwner && role === 'teacher' && active && assignmentActive && ownerId === values.actorId);
           return { recordset: authorized ? [header] : [] };
         }
-        if (statement.includes('FROM dbo.teacher_grade_submission_rows AS r')) return { recordset: [] };
-        if (statement.includes('FROM dbo.teacher_grade_submission_events AS e')) return { recordset: [] };
-        if (statement.includes('FROM dbo.teacher_grade_submissions AS s') && statement.includes('WHERE s.status = N\'pending\'')) {
+        if (statement.includes('FROM teacher_grade_submission_rows AS r')) return { recordset: [] };
+        if (statement.includes('FROM teacher_grade_submission_events AS e')) return { recordset: [] };
+        if (statement.includes('FROM teacher_grade_submissions AS s') && statement.includes('WHERE s.status = \'pending\'')) {
           return { recordset: [] };
         }
         throw new Error(`Unexpected SQL: ${statement}`);
@@ -138,17 +138,17 @@ function assignmentOptionsHarness() {
   const pool = {
     request() {
       return requestFor(({ statement, values }) => {
-        if (statement.includes('SELECT id, role FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-        if (statement.includes('FROM dbo.academic_terms ORDER BY')) return { recordset: [
+        if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+        if (statement.includes('FROM academic_terms ORDER BY')) return { recordset: [
           { id: 3, school_year: '2026-2027', term: 'First', is_current: true },
           { id: 9, school_year: '2025-2026', term: 'Second', is_current: false }
         ] };
-        if (statement.includes('FROM dbo.sections AS sec')) return { recordset: values.termId === 3
+        if (statement.includes('FROM sections AS sec')) return { recordset: values.termId === 3
           ? [{ id: 22, academic_term_id: 3, name: 'STEM A', grade_level: 'Grade 11', school_year: '2026-2027', term: 'First' }]
           : [] };
-        if (statement.includes('SELECT id, subject_code, subject_name FROM dbo.subjects')) return { recordset: [{ id: 4, subject_code: 'OCOM', subject_name: 'Oral Communication' }] };
-        if (statement.includes('FROM dbo.users AS u INNER JOIN dbo.staff_profiles')) return { recordset: [{ id: 8, email: 'teacher@example.edu', first_name: 'Jamie', last_name: 'Lee' }] };
-        if (statement.includes('FROM dbo.teacher_assignments AS a')) return { recordset: values.termId === 3
+        if (statement.includes('SELECT id, subject_code, subject_name FROM subjects')) return { recordset: [{ id: 4, subject_code: 'OCOM', subject_name: 'Oral Communication' }] };
+        if (statement.includes('FROM users AS u INNER JOIN staff_profiles')) return { recordset: [{ id: 8, email: 'teacher@example.edu', first_name: 'Jamie', last_name: 'Lee' }] };
+        if (statement.includes('FROM teacher_assignments AS a')) return { recordset: values.termId === 3
           ? [{ id: 44, academic_term_id: 3, section_id: 22, is_active: true, school_year: '2026-2027', term: 'First',
             grade_level: 'Grade 11', section_name: 'STEM A', subject_code: 'OCOM', subject_name: 'Oral Communication',
             first_name: 'Jamie', last_name: 'Lee', roster_count: 18, latest_submission_status: null }]
@@ -169,9 +169,9 @@ test('registrar assignment options default to is_current and bind sections and a
   assert.equal(options.selectedTermId, 3);
   assert.equal(options.selectedSectionId, null);
   assert.equal(options.terms.find((term) => term.is_current).id, 3);
-  const sections = calls.find(({ statement }) => statement.includes('FROM dbo.sections AS sec'));
+  const sections = calls.find(({ statement }) => statement.includes('FROM sections AS sec'));
   assert.equal(sections.values.termId, 3);
-  const assignments = calls.find(({ statement }) => statement.includes('FROM dbo.teacher_assignments AS a'));
+  const assignments = calls.find(({ statement }) => statement.includes('FROM teacher_assignments AS a'));
   assert.equal(assignments.values.termId, 3);
   assert.equal(assignments.values.sectionId, null);
   assert.match(assignments.statement, /a\.academic_term_id = @termId/);
@@ -185,7 +185,7 @@ test('assignment options clear a section from another term instead of returning 
   assert.equal(options.selectedSectionId, null);
   assert.match(options.sectionFilterNotice, /different term/);
   assert.equal(options.sections.some((section) => section.id === 91), false);
-  const assignments = calls.find(({ statement }) => statement.includes('FROM dbo.teacher_assignments AS a'));
+  const assignments = calls.find(({ statement }) => statement.includes('FROM teacher_assignments AS a'));
   assert.equal(assignments.values.termId, 3);
   assert.equal(assignments.values.sectionId, null);
 });
@@ -197,13 +197,13 @@ test('teacher assignment creation rejects a forged term and section pairing befo
     async begin() {},
     request() {
       return requestFor(({ statement }) => {
-        if (statement.includes('FROM dbo.users WITH') && statement.includes('@actorId')) {
+        if (statement.includes('SELECT id, role FROM users WHERE id = @actorId') && statement.includes('@actorId')) {
           return { recordset: [{ id: 7, role: 'registrar' }] };
         }
-        if (statement.includes('FROM dbo.users WITH') && statement.includes('@teacherId')) {
+        if (statement.includes('FROM users') && statement.includes('@teacherId')) {
           return { recordset: [{ id: 8 }] };
         }
-        if (statement.includes('FROM dbo.academic_terms AS term')) return { recordset: [] };
+        if (statement.includes('FROM academic_terms AS term')) return { recordset: [] };
         throw new Error(`Unexpected assignment-create SQL: ${statement}`);
       }, calls);
     },
@@ -216,11 +216,11 @@ test('teacher assignment creation rejects a forged term and section pairing befo
     teacherId: '8', academicTermId: '6', sectionId: '91', subjectId: '3'
   }), (error) => error instanceof TeacherGradeSubmissionError && error.status === 404);
 
-  const context = calls.find(({ statement }) => statement.includes('FROM dbo.academic_terms AS term'));
+  const context = calls.find(({ statement }) => statement.includes('FROM academic_terms AS term'));
   assert.deepEqual(context.values, { termId: 6, sectionId: 91, subjectId: 3 });
   assert.match(context.statement, /sec\.academic_term_id = term\.id AND sec\.id = @sectionId/);
-  assert.equal(calls.some(({ statement }) => statement.includes('INSERT INTO dbo.teacher_assignments')), false);
-  assert.equal(calls.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(calls.some(({ statement }) => statement.includes('INSERT INTO teacher_assignments')), false);
+  assert.equal(calls.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
   assert.equal(rolledBack, true);
 });
 
@@ -241,7 +241,7 @@ test('teacher can only read their own active assignment submission and workbook'
     'another teacher does not receive parsed review rows');
 });
 
-test('registrar can retrieve a private workbook when SQL Server returns an uppercase GUID', async () => {
+test('registrar can retrieve a private workbook when a stored uppercase GUID is returned', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ark-teacher-download-'));
   const submissionDirectory = path.join(directory, 'teacher-grade-submissions');
   const workbook = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
@@ -267,7 +267,7 @@ test('teacher access ends after assignment removal or account revocation; teache
 
   const teacher = readerHarness();
   await assert.rejects(teacher.service.listReviewQueue(7), (error) => error.status === 403);
-  assert.equal(teacher.calls.some(({ statement }) => statement.includes('WHERE s.status = N\'pending\'')), false,
+  assert.equal(teacher.calls.some(({ statement }) => statement.includes('WHERE s.status = \'pending\'')), false,
     'teacher access is rejected before the registrar review list is queried');
 });
 
@@ -278,21 +278,21 @@ test('review reasons stay out of generic audit details', async () => {
     async begin(isolation) { assert.equal(isolation, 'SERIALIZABLE'); },
     request() {
       return requestFor(({ statement, values }) => {
-        if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 11, role: 'registrar' }] };
-        if (statement.includes('FROM dbo.teacher_grade_submissions WITH')) {
+        if (statement.includes('SELECT id, role FROM users WHERE id = @actorId')) return { recordset: [{ id: 11, role: 'registrar' }] };
+        if (statement.includes('FROM teacher_grade_submissions')) {
           return { recordset: [{ id: SUBMISSION_ID, assignment_id: 12, status: 'pending', revision_number: 1 }] };
         }
-        if (statement.includes('UPDATE dbo.teacher_grade_submissions')) return { recordset: [] };
-        if (statement.includes('INSERT INTO dbo.teacher_grade_submission_events')) {
+        if (statement.includes('UPDATE teacher_grade_submissions')) return { recordset: [] };
+        if (statement.includes('INSERT INTO teacher_grade_submission_events')) {
           calls.push({ kind: 'event', values });
           return { recordset: [] };
         }
-        if (statement.includes('INSERT INTO dbo.audit_logs')) {
+        if (statement.includes('INSERT INTO audit_logs')) {
           calls.push({ kind: 'audit', values });
           return { recordset: [] };
         }
         throw new Error(`Unexpected SQL: ${statement}`);
-      });
+      }, calls);
     },
     async commit() {}, async rollback() {}
   });
@@ -302,6 +302,8 @@ test('review reasons stay out of generic audit details', async () => {
 
   await service.decideSubmission(11, SUBMISSION_ID, 'correction_requested', reason);
 
+  const submissionLock = calls.find(({ statement }) => statement.includes('FROM teacher_grade_submissions'));
+  assert.match(submissionLock.statement, /FOR UPDATE$/);
   assert.equal(calls.find(({ kind }) => kind === 'event').values.reason, reason,
     'the restricted decision history retains the complete reason');
   const auditValues = calls.find(({ kind }) => kind === 'audit').values;
@@ -317,13 +319,13 @@ test('assignment and roster reads share a serializable active-assignment check',
     async begin(isolation) { transactionStarted = isolation === 'SERIALIZABLE'; },
     request() {
       return requestFor(({ statement }) => {
-        if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: 'teacher' }] };
-        if (statement.includes('FROM dbo.teacher_assignments AS a')) return { recordset: [{
+        if (statement.includes('SELECT id, role FROM users WHERE id = @actorId')) return { recordset: [{ id: 7, role: 'teacher' }] };
+        if (statement.includes('FROM teacher_assignments AS a')) return { recordset: [{
           assignment_id: 12, academic_term_id: 3, section_id: 4, subject_id: 77,
           school_year: '2026-2027', term: 'Term 1', section_name: 'STEM A', grade_level: 'Grade 11',
           subject_code: 'ENG11', subject_name: 'Oral Communication'
         }] };
-        if (statement.includes('FROM dbo.enrollments AS e')) return { recordset: [{ student_no: 'S-44', first_name: 'Jamie', last_name: 'Garcia' }] };
+        if (statement.includes('FROM enrollments AS e')) return { recordset: [{ student_no: 'S-44', first_name: 'Jamie', last_name: 'Garcia' }] };
         throw new Error(`Unexpected SQL: ${statement}`);
       }, calls);
     },
@@ -335,9 +337,9 @@ test('assignment and roster reads share a serializable active-assignment check',
   const assignment = await service.getTeacherAssignment(7, '12');
   assert.equal(transactionStarted, true);
   assert.equal(assignment.roster.length, 1);
-  const assignmentQuery = calls.find(({ statement }) => statement.includes('FROM dbo.teacher_assignments AS a'));
+  const assignmentQuery = calls.find(({ statement }) => statement.includes('FROM teacher_assignments AS a'));
   assert.match(assignmentQuery.statement, /a\.teacher_id = @teacherId AND a\.is_active = 1/);
-  const rosterQuery = calls.find(({ statement }) => statement.includes('FROM dbo.enrollments AS e'));
+  const rosterQuery = calls.find(({ statement }) => statement.includes('FROM enrollments AS e'));
   assert.match(rosterQuery.statement, /e\.academic_term_id = @termId AND e\.section_id = @sectionId/);
   assert.match(rosterQuery.statement, /ss\.subject_id = @subjectId/);
 });
@@ -346,8 +348,8 @@ test('staged workbook reads and writes recheck the live teacher assignment', asy
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ark-teacher-stage-'));
   const calls = [];
   const queryHandler = ({ statement }) => {
-    if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: 'teacher' }] };
-    if (statement.includes('FROM dbo.grade_import_previews AS p')) return { recordset: [] };
+    if (statement.includes('SELECT id, role FROM users WHERE id = @actorId')) return { recordset: [{ id: 7, role: 'teacher' }] };
+    if (statement.includes('FROM grade_import_previews AS p')) return { recordset: [] };
     throw new Error(`Unexpected SQL: ${statement}`);
   };
   const transactionFactory = () => ({
@@ -365,8 +367,8 @@ test('staged workbook reads and writes recheck the live teacher assignment', asy
   try {
     await assert.rejects(service.stageWorkbook(7, '12', PREVIEW_ID, 'session-a', workbook), (error) => error.status === 404);
     await assert.rejects(service.getStagedWorkbook(7, '12', PREVIEW_ID, 'session-a'), (error) => error.status === 404);
-    assert.equal(calls.filter(({ statement }) => statement.includes('FROM dbo.grade_import_previews AS p')).length, 2);
-    assert.match(calls.find(({ statement }) => statement.includes('FROM dbo.grade_import_previews AS p')).statement,
+    assert.equal(calls.filter(({ statement }) => statement.includes('FROM grade_import_previews AS p')).length, 2);
+    assert.match(calls.find(({ statement }) => statement.includes('FROM grade_import_previews AS p')).statement,
       /a\.teacher_id = p\.uploaded_by[\s\S]*?a\.id = @assignmentId AND a\.is_active = 1/);
     await assert.rejects(fs.stat(stagedPath), { code: 'ENOENT' }, 'revoked assignment creates no staging file');
   } finally {
@@ -383,9 +385,9 @@ test('submission rolls back and removes its staged original if the teacher assig
     async begin(isolation) { assert.equal(isolation, 'SERIALIZABLE'); },
     request() {
       return requestFor(({ statement }) => {
-        if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: 'teacher' }] };
-        if (statement.includes('FROM dbo.grade_import_previews WITH')) return { recordset: [{ id: PREVIEW_ID }] };
-        if (statement.includes('FROM dbo.teacher_assignments AS a')) return { recordset: [] };
+        if (statement.includes('SELECT id, role FROM users WHERE id = @actorId')) return { recordset: [{ id: 7, role: 'teacher' }] };
+        if (statement.includes('FROM grade_import_previews')) return { recordset: [{ id: PREVIEW_ID }] };
+        if (statement.includes('FROM teacher_assignments AS a')) return { recordset: [] };
         throw new Error(`Unexpected SQL: ${statement}`);
       }, calls);
     },
@@ -406,7 +408,7 @@ test('submission rolls back and removes its staged original if the teacher assig
     }), (error) => error.status === 403);
     assert.equal(rolledBack, true);
     assert.equal(committed, false);
-    assert.equal(calls.some(({ statement }) => statement.includes('INSERT INTO dbo.teacher_grade_submissions')), false);
+    assert.equal(calls.some(({ statement }) => statement.includes('INSERT INTO teacher_grade_submissions')), false);
     assert.deepEqual(await fs.readdir(path.join(directory, 'teacher-grade-submissions')), [],
       'the original workbook is removed when authorization changes before commit');
   } finally {
@@ -423,25 +425,25 @@ test('teacher submission carries the server stored LRN fingerprint without retur
     async begin(isolation) { assert.equal(isolation, 'SERIALIZABLE'); },
     request() {
       return requestFor(({ statement, values }) => {
-        if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: 'teacher' }] };
-        if (statement.includes('FROM dbo.grade_import_previews WITH')) return { recordset: [{ id: PREVIEW_ID }] };
-        if (statement.includes('FROM dbo.teacher_assignments AS a WITH')) return { recordset: [{
+        if (statement.includes('SELECT id, role FROM users WHERE id = @actorId')) return { recordset: [{ id: 7, role: 'teacher' }] };
+        if (statement.includes('FROM grade_import_previews')) return { recordset: [{ id: PREVIEW_ID }] };
+        if (statement.includes('FROM teacher_assignments AS a')) return { recordset: [{
           id: 12, academic_term_id: 3, school_year: '2026-2027', grade_level: 'Grade 11',
           section_name: 'STEM A', subject_name: 'Oral Communication'
         }] };
         if (statement.includes('SELECT id, revision_number, status, submitted_by')) return { recordset: [] };
-        if (statement.includes('FROM dbo.grade_import_preview_rows WITH')) {
+        if (statement.includes('FROM grade_import_preview_rows')) {
           calls.push({ statement, values });
           return { recordset: [{ source_row: 17, lrn_fingerprint: fingerprint }] };
         }
-        if (statement.includes('INSERT INTO dbo.teacher_grade_submission_rows')) {
+        if (statement.includes('INSERT INTO teacher_grade_submission_rows')) {
           insertedRow = values;
-          return { recordset: [{ id: 100 }] };
+          return { insertId: 100 };
         }
-        if (statement.includes('INSERT INTO dbo.teacher_grade_submission_grades')) return { recordset: [] };
-        if (statement.includes('INSERT INTO dbo.audit_logs')
-          || statement.includes('INSERT INTO dbo.teacher_grade_submissions')
-          || statement.includes('INSERT INTO dbo.teacher_grade_submission_events')) return { recordset: [] };
+        if (statement.includes('INSERT INTO teacher_grade_submission_grades')) return { recordset: [] };
+        if (statement.includes('INSERT INTO audit_logs')
+          || statement.includes('INSERT INTO teacher_grade_submissions')
+          || statement.includes('INSERT INTO teacher_grade_submission_events')) return { recordset: [] };
         throw new Error(`Unexpected SQL: ${statement}`);
       }, calls);
     },
@@ -467,7 +469,7 @@ test('teacher submission carries the server stored LRN fingerprint without retur
     await service.submitPreview({ actorId: 7, assignmentId: 12, preview, sessionId: 'session-a', buffer: workbook });
     assert.equal(Object.hasOwn(preview.rows[0], 'lrnFingerprint'), false, 'the private fingerprint is not exposed on the preview object');
     assert.equal(insertedRow.lrnFingerprint, fingerprint, 'the submission row uses the transaction scoped preview fingerprint');
-    assert.equal(calls.some(({ statement, values }) => statement.includes('FROM dbo.grade_import_preview_rows WITH')
+    assert.equal(calls.some(({ statement, values }) => statement.includes('FROM grade_import_preview_rows')
       && values.previewId === PREVIEW_ID), true);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });

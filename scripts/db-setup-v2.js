@@ -1,274 +1,195 @@
+'use strict';
+
 const fs = require('node:fs');
 const path = require('node:path');
-const sql = require('mssql');
+const { getPool, closePool } = require('../src/config/database');
 const env = require('../src/config/environment');
 
-const PROJECT_DATABASE = 'ARKTIESIIS_V2';
 const BASELINE_VERSION = 'v2.001';
-const BASELINE_PATH = path.resolve(__dirname, '../database/v2/schema.sql');
-const MIGRATIONS_DIRECTORY = path.resolve(__dirname, '../database/v2/migrations');
-const APPLICATION_LOCK = 'ARKTIESIIS_V2 consolidated schema setup';
+const BASELINE_PATH = path.resolve(__dirname, '../database/mariadb/schema.sql');
+const MIGRATIONS_DIRECTORY = path.resolve(__dirname, '../database/mariadb/migrations');
+const APPLICATION_LOCK = 'ARKTIESIIS MariaDB schema setup';
+const KNOWN_VERSIONS = new Set(Array.from({ length: 10 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 class SetupError extends Error {}
 
-function makeSqlConfig(database, maxPoolSize = 10) {
-  return {
-    server: env.database.server,
-    port: env.database.port,
-    database,
-    user: env.database.user,
-    password: env.database.password,
-    options: {
-      encrypt: env.database.encrypt,
-      trustServerCertificate: env.database.trustServerCertificate
-    },
-    pool: { max: maxPoolSize, min: 0, idleTimeoutMillis: 30000 }
-  };
-}
-
-function splitSqlBatches(contents) {
-  const batches = [];
-  let lines = [];
-  for (const line of contents.split(/\r?\n/)) {
-    if (/^\s*GO\s*(?:--.*)?$/i.test(line)) {
-      const batch = lines.join('\n').trim();
-      if (batch) batches.push(batch);
-      lines = [];
-    } else {
-      lines.push(line);
+function splitSqlStatements(contents) {
+  const statements = [];
+  let current = '';
+  let state = 'code';
+  for (let index = 0; index < contents.length; index += 1) {
+    const character = contents[index];
+    const next = contents[index + 1];
+    if (state === 'code') {
+      if (character === "'") state = 'single';
+      else if (character === '"') state = 'double';
+      else if (character === '`') state = 'backtick';
+      else if (character === '-' && next === '-') state = 'line-comment';
+      else if (character === '/' && next === '*') state = 'block-comment';
+      else if (character === ';') {
+        if (current.trim()) statements.push(current.trim());
+        current = '';
+        continue;
+      }
+    } else if (state === 'single' && character === "'") {
+      if (next === "'") { current += character + next; index += 1; continue; }
+      if (contents[index - 1] !== '\\') state = 'code';
+    } else if (state === 'double' && character === '"') {
+      if (next === '"') { current += character + next; index += 1; continue; }
+      state = 'code';
+    } else if (state === 'backtick' && character === '`') {
+      state = 'code';
+    } else if (state === 'line-comment' && (character === '\n' || character === '\r')) {
+      state = 'code';
+    } else if (state === 'block-comment' && character === '*' && next === '/') {
+      current += '*/'; index += 1; state = 'code'; continue;
     }
+    current += character;
+    if (state === 'line-comment' || state === 'block-comment') continue;
   }
-  const lastBatch = lines.join('\n').trim();
-  if (lastBatch) batches.push(lastBatch);
-  return batches;
+  if (current.trim()) statements.push(current.trim());
+  return statements;
 }
 
-function readBaselineBatches() {
+function readSqlFile(filePath) {
   let contents;
   try {
-    contents = fs.readFileSync(BASELINE_PATH, 'utf8');
+    contents = fs.readFileSync(filePath, 'utf8');
   } catch {
-    throw new SetupError('Could not read the ARKTIESIIS V2 fresh-install schema.');
+    throw new SetupError(`Could not read SQL file ${path.relative(process.cwd(), filePath)}.`);
   }
-  const batches = splitSqlBatches(contents);
-  validateBaselinePrelude(batches);
-  if (batches.length < 4) throw new SetupError('The ARKTIESIIS V2 baseline is incomplete.');
-  return batches;
+  if (/\b(?:CREATE|DROP)\s+DATABASE\b|\bCREATE\s+(?:TRIGGER|PROCEDURE)\b|\bDEFINER\s*=/i.test(contents)) {
+    throw new SetupError(`SQL file ${path.relative(process.cwd(), filePath)} uses DDL disallowed by the Hostinger setup path.`);
+  }
+  const statements = splitSqlStatements(contents);
+  if (!statements.length) throw new SetupError(`SQL file ${path.relative(process.cwd(), filePath)} is empty.`);
+  return statements;
 }
 
-function stripLeadingSqlComments(batch) {
-  return batch.replace(/^(?:\s|\/\*[\s\S]*?\*\/|--[^\r\n]*(?:\r?\n|$))*/, '').trim();
-}
-
-function validateBaselinePrelude(batches) {
-  if (!Array.isArray(batches) || batches.length < 3) {
-    throw new SetupError('The V2 baseline must start with CREATE DATABASE ARKTIESIIS_V2 and USE ARKTIESIIS_V2.');
-  }
-  const create = stripLeadingSqlComments(batches[0]);
-  const use = stripLeadingSqlComments(batches[1]);
-  const createsV2 = /^IF\s+DB_ID\s*\(\s*'ARKTIESIIS_V2'\s*\)\s+IS\s+NULL\b[\s\S]*\bCREATE\s+DATABASE\s+ARKTIESIIS_V2\b[\s\S]*\bEND\s*;?$/i.test(create);
-  const selectsV2 = /^USE\s+\[?ARKTIESIIS_V2\]?\s*;?$/i.test(use);
-  if (!createsV2 || !selectsV2) {
-    throw new SetupError('The V2 baseline must create and select only ARKTIESIIS_V2.');
-  }
-}
-
-function readForwardMigrations(directory = MIGRATIONS_DIRECTORY) {
+function readForwardMigrations() {
   let filenames;
   try {
-    filenames = fs.readdirSync(directory)
+    filenames = fs.readdirSync(MIGRATIONS_DIRECTORY)
       .filter((filename) => /^\d{3}_[a-z0-9_]+\.sql$/i.test(filename))
       .sort();
-  } catch (error) {
-    if (error.code === 'ENOENT') return [];
-    throw new SetupError('Could not read the ARKTIESIIS V2 forward migrations.');
+  } catch {
+    throw new SetupError('Could not read the MariaDB forward migrations.');
   }
-
-  const seenVersions = new Set();
+  const seen = new Set();
   return filenames.map((filename) => {
     const sequence = filename.slice(0, 3);
     const version = `v2.${sequence}`;
-    if (sequence === '001' || seenVersions.has(version)) {
-      throw new SetupError('The V2 forward migration sequence is invalid.');
+    if (sequence === '001' || !KNOWN_VERSIONS.has(version) || seen.has(version)) {
+      throw new SetupError('The MariaDB migration sequence is invalid.');
     }
-    seenVersions.add(version);
-    let contents;
-    try {
-      contents = fs.readFileSync(path.join(directory, filename), 'utf8');
-    } catch {
-      throw new SetupError('Could not read a V2 forward migration.');
-    }
-    const batches = splitSqlBatches(contents);
-    if (!batches.length) throw new SetupError('A V2 forward migration is empty.');
-    return { filename, version, batches };
+    seen.add(version);
+    return { filename, version, statements: readSqlFile(path.join(MIGRATIONS_DIRECTORY, filename)) };
   });
 }
 
-async function databaseExists() {
-  const pool = new sql.ConnectionPool(makeSqlConfig('master', 1));
-  try {
-    await pool.connect();
-    const result = await pool.request()
-      .input('databaseName', sql.NVarChar(128), PROJECT_DATABASE)
-      .query('SELECT DB_ID(@databaseName) AS databaseId;');
-    return result.recordset?.[0]?.databaseId !== null;
-  } finally {
-    await pool.close();
+function readBaseline() {
+  const statements = readSqlFile(BASELINE_PATH);
+  if (!statements.some((statement) => /^INSERT\s+INTO\s+schema_migrations\s*\(\s*version\s*\)\s*VALUES\s*\(\s*'v2\.001'\s*\)$/i.test(statement))) {
+    throw new SetupError('The MariaDB baseline does not record v2.001.');
+  }
+  return statements;
+}
+
+async function tableCount(connection) {
+  const [rows] = await connection.execute(
+    'SELECT COUNT(*) AS table_count FROM information_schema.tables WHERE table_schema = DATABASE()'
+  );
+  return Number(rows[0]?.table_count || 0);
+}
+
+async function tableExists(connection, tableName) {
+  const [rows] = await connection.execute(
+    'SELECT 1 AS present FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ? LIMIT 1',
+    [tableName]
+  );
+  return rows.length > 0;
+}
+
+async function readAppliedVersions(connection) {
+  const [rows] = await connection.execute('SELECT version FROM schema_migrations ORDER BY version');
+  return new Set(rows.map(({ version }) => String(version)));
+}
+
+function validateAppliedVersions(versions) {
+  if (!versions.has(BASELINE_VERSION)) {
+    throw new SetupError('The selected database has tables but no recorded MariaDB v2.001 baseline. Inspect it before setup; the baseline was not rerun.');
+  }
+  const unknown = [...versions].filter((version) => !KNOWN_VERSIONS.has(version));
+  if (unknown.length) throw new SetupError(`Unknown migration version(s): ${unknown.sort().join(', ')}.`);
+  for (let sequence = 2; sequence <= 10; sequence += 1) {
+    const version = `v2.${String(sequence).padStart(3, '0')}`;
+    const prior = `v2.${String(sequence - 1).padStart(3, '0')}`;
+    if (versions.has(version) && !versions.has(prior)) {
+      throw new SetupError(`Migration history is inconsistent: ${version} is recorded while ${prior} is missing.`);
+    }
   }
 }
 
-async function ensureDatabaseExists() {
-  const batches = readBaselineBatches();
-  const pool = new sql.ConnectionPool(makeSqlConfig('master', 1));
-  try {
-    await pool.connect();
-    await pool.request().batch(batches[0]);
-  } finally {
-    await pool.close();
-  }
-  return batches;
+async function executeStatements(connection, statements) {
+  for (const statement of statements) await connection.query(statement);
 }
 
-async function acquireSetupLock(transaction, sqlDriver = sql) {
-  await new sqlDriver.Request(transaction)
-    .input('resource', sql.NVarChar(255), APPLICATION_LOCK)
-    .query(`DECLARE @lockResult INT;
-      EXEC @lockResult = sys.sp_getapplock
-        @Resource = @resource,
-        @LockMode = 'Exclusive',
-        @LockOwner = 'Transaction',
-        @LockTimeout = 60000;
-      IF @lockResult < 0 THROW 51000, 'Could not acquire the V2 setup lock.', 1;`);
-}
+async function runSetup({ getDatabasePool = getPool, closeDatabasePool = closePool, logger = console } = {}) {
+  if (!env.database.password) throw new SetupError('DB_PASSWORD is required. Copy .env.example and configure the existing MariaDB credentials.');
+  if (!env.database.database) throw new SetupError('DB_NAME is required and must name the existing database created in hPanel.');
 
-async function applyFreshBaseline(pool, batches, { sqlDriver = sql, migrations = readForwardMigrations() } = {}) {
-  const transaction = new sqlDriver.Transaction(pool);
-  try {
-    await transaction.begin(sqlDriver.ISOLATION_LEVEL.SERIALIZABLE);
-    await acquireSetupLock(transaction, sqlDriver);
-
-    const state = await new sql.Request(transaction).query(`
-      SELECT OBJECT_ID(N'dbo.schema_migrations', N'U') AS migrationTableId,
-        (SELECT COUNT_BIG(*) FROM sys.tables WHERE is_ms_shipped = 0) AS userTableCount;
-    `);
-    const { migrationTableId, userTableCount } = state.recordset[0];
-
-    if (migrationTableId !== null) {
-      const versions = await new sql.Request(transaction).query('SELECT [version] FROM dbo.schema_migrations;');
-      const applied = new Set((versions.recordset || []).map(({ version }) => String(version)));
-      const knownVersions = new Set([BASELINE_VERSION, ...migrations.map(({ version }) => version)]);
-      if (applied.has(BASELINE_VERSION) && [...applied].every((version) => knownVersions.has(version))) {
-        await transaction.rollback();
-        return false;
-      }
-      throw new SetupError('ARKTIESIIS_V2 already has an unexpected schema version. The baseline was not rerun.');
-    }
-
-    if (Number(userTableCount) > 0) {
-      throw new SetupError('ARKTIESIIS_V2 contains tables but no V2 baseline marker. Inspect it before setup.');
-    }
-
-    for (const batch of batches.slice(2)) {
-      await new sql.Request(transaction).batch(batch);
-    }
-    await transaction.commit();
-    return true;
-  } catch (error) {
-    try {
-      await transaction.rollback();
-    } catch {
-      // SQL Server may already have rolled the transaction back.
-    }
-    if (error instanceof SetupError) throw error;
-    throw new SetupError('The V2 baseline failed and was rolled back. Check SQL Server availability and permissions.');
-  }
-}
-
-async function applyPendingMigrations(pool, migrations = readForwardMigrations(), {
-  sqlDriver = sql,
-  transactionFactory = (databasePool) => new sqlDriver.Transaction(databasePool)
-} = {}) {
-  const appliedNow = [];
-  for (const migration of migrations) {
-    if (!/^v2\.\d{3}$/.test(migration?.version) || !Array.isArray(migration.batches) || !migration.batches.length) {
-      throw new SetupError('A V2 forward migration has invalid metadata.');
-    }
-    const transaction = transactionFactory(pool);
-    let started = false;
-    try {
-      await transaction.begin(sqlDriver.ISOLATION_LEVEL.SERIALIZABLE);
-      started = true;
-      await acquireSetupLock(transaction, sqlDriver);
-      const existing = await new sqlDriver.Request(transaction)
-        .input('version', sqlDriver.NVarChar(50), migration.version)
-        .query('SELECT [version] FROM dbo.schema_migrations WITH (UPDLOCK, HOLDLOCK) WHERE [version] = @version;');
-      if (existing.recordset?.length) {
-        await transaction.rollback();
-        started = false;
-        continue;
-      }
-
-      for (const batch of migration.batches) {
-        await new sqlDriver.Request(transaction).batch(batch);
-      }
-      await new sqlDriver.Request(transaction)
-        .input('version', sqlDriver.NVarChar(50), migration.version)
-        .query('INSERT INTO dbo.schema_migrations ([version]) VALUES (@version);');
-      await transaction.commit();
-      started = false;
-      appliedNow.push(migration.version);
-    } catch {
-      if (started) {
-        try {
-          await transaction.rollback();
-        } catch {
-          // SQL Server may already have rolled back the transaction.
-        }
-      }
-      throw new SetupError(`V2 migration ${migration.version} failed and was rolled back.`);
-    }
-  }
-  return appliedNow;
-}
-
-async function setupDatabase() {
-  if (!env.database.password) {
-    throw new SetupError('DB_PASSWORD is required. Copy .env.example to .env and configure SQL Server credentials.');
-  }
-
-  let batches;
+  const baseline = readBaseline();
   const migrations = readForwardMigrations();
-  const existed = await databaseExists();
-  if (!existed) batches = await ensureDatabaseExists();
-  else batches = readBaselineBatches();
-
-  const pool = new sql.ConnectionPool(makeSqlConfig(PROJECT_DATABASE));
+  const pool = await getDatabasePool();
+  const connection = await pool.source.getConnection();
+  let locked = false;
   try {
-    await pool.connect();
-    const created = await applyFreshBaseline(pool, batches, { migrations });
-    const appliedMigrations = await applyPendingMigrations(pool, migrations);
-    console.log(created
-      ? `Created ${PROJECT_DATABASE} from its consolidated fresh-install baseline (${BASELINE_VERSION}).`
-      : `${PROJECT_DATABASE} already has the expected baseline (${BASELINE_VERSION}); no changes were made.`);
-    if (appliedMigrations.length) console.log(`Applied V2 migrations: ${appliedMigrations.join(', ')}.`);
+    const [lockRows] = await connection.execute('SELECT GET_LOCK(?, 60) AS acquired', [APPLICATION_LOCK]);
+    if (Number(lockRows[0]?.acquired) !== 1) throw new SetupError('Could not acquire the MariaDB setup lock.');
+    locked = true;
+
+    const hasMigrations = await tableExists(connection, 'schema_migrations');
+    if (!hasMigrations) {
+      const count = await tableCount(connection);
+      if (count !== 0) throw new SetupError('The selected database is not empty and has no schema_migrations table. The baseline was not run.');
+      try {
+        await executeStatements(connection, baseline);
+      } catch {
+        throw new SetupError('The MariaDB baseline failed. DDL may have committed partially; inspect the selected database before retrying.');
+      }
+      logger.log(`Created the MariaDB schema in the existing database ${env.database.database} (v2.001).`);
+    }
+
+    let applied = await readAppliedVersions(connection);
+    validateAppliedVersions(applied);
+    for (const migration of migrations) {
+      if (applied.has(migration.version)) continue;
+      try {
+        await executeStatements(connection, migration.statements);
+        await connection.execute('INSERT INTO schema_migrations (version) VALUES (?)', [migration.version]);
+      } catch {
+        throw new SetupError(`MariaDB migration ${migration.version} failed. DDL may have committed partially; inspect the database before retrying.`);
+      }
+      applied.add(migration.version);
+      logger.log(`Applied ${migration.version} (${migration.filename}).`);
+    }
+    if (migrations.every(({ version }) => applied.has(version))) logger.log('MariaDB schema is up to date.');
+    return { created: !hasMigrations, appliedVersions: [...applied].sort() };
   } finally {
-    await pool.close();
+    if (locked) {
+      try { await connection.execute('SELECT RELEASE_LOCK(?)', [APPLICATION_LOCK]); } catch { /* connection is released below */ }
+    }
+    connection.release();
+    await closeDatabasePool();
   }
 }
 
 if (require.main === module) {
-  setupDatabase().catch((error) => {
-    if (error instanceof SetupError) console.error(`V2 database setup failed: ${error.message}`);
-    else console.error('V2 database setup failed. Confirm SQL Server is running and DB_SERVER, DB_PORT, DB_USER, and DB_PASSWORD are correct.');
+  runSetup().catch((error) => {
+    if (error instanceof SetupError) console.error(`MariaDB setup failed: ${error.message}`);
+    else console.error('MariaDB setup failed. Check DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD and database reachability.');
     process.exitCode = 1;
   });
 }
 
-module.exports = {
-  SetupError,
-  splitSqlBatches,
-  readForwardMigrations,
-  validateBaselinePrelude,
-  applyPendingMigrations,
-  setupDatabase
-};
+module.exports = { SetupError, splitSqlStatements, readSqlFile, readForwardMigrations, validateAppliedVersions, runSetup };

@@ -1,0 +1,48 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page records-page" id="main-content">
+  <a class="context-back" href="/registrar/records">Back to student records</a>
+  <header class="dashboard-heading records-heading"><div><h1>Grade completion overview</h1><p>Published grades remain authoritative while a newer teacher workbook is under review.</p></div></header>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <section class="admin-section" aria-labelledby="grade-overview-filter-title">
+    <div class="admin-section__heading"><div><h2 id="grade-overview-filter-title">Choose academic context</h2><p>Current terms include the four ECR grading periods. Historical terms show grading periods observed in the records only; an empty historical table does not mean all expected grades are complete.</p></div></div>
+    <form class="admin-search records-search" method="get" action="/registrar/records/grades/missing">
+      <div class="field"><label for="grade-term">School year and term</label><select id="grade-term" name="termId" required><option value="">Choose a term</option>
+        <% for (const term of contexts.terms) { %><option value="<%= term.id %>" <%= String(filters.termId || '') === String(term.id) ? 'selected' : '' %>><%= term.school_year %> · <%= term.term %><%= term.is_current ? ' (current)' : '' %></option><% } %>
+      </select></div>
+      <div class="field"><label for="grade-section">Section</label><select id="grade-section" name="sectionId" required><option value="">Choose a section</option>
+        <% for (const section of contexts.sections) { %><option value="<%= section.id %>" data-term-id="<%= section.academic_term_id %>" <%= String(filters.sectionId || '') === String(section.id) ? 'selected' : '' %>><%= section.school_year %> · <%= section.term %> · <%= section.grade_level || 'Grade not recorded' %> · <%= section.name %></option><% } %>
+      </select></div>
+      <div class="field"><label for="grade-subject">Subject</label><select id="grade-subject" name="subjectId" required><option value="">Choose a subject</option>
+        <% for (const subject of contexts.subjects) { %><option value="<%= subject.id %>" <%= String(filters.subjectId || '') === String(subject.id) ? 'selected' : '' %>><%= subject.subject_code %> · <%= subject.subject_name %></option><% } %>
+      </select></div>
+      <% if (overview) { %><div class="field"><label for="grade-period">Grading period</label><select id="grade-period" name="gradingPeriod"><option value="">All grading periods</option>
+        <% for (const period of overview.periods) { %><option value="<%= period %>" <%= overview.selectedPeriod === period ? 'selected' : '' %>><%= period %></option><% } %>
+      </select></div><% } %>
+      <button class="button button--primary" type="submit">Show grade status</button>
+    </form>
+  </section>
+  <% if (overview) { %>
+    <section class="admin-section" aria-labelledby="selected-grade-context">
+      <div class="admin-section__heading"><div><h2 id="selected-grade-context"><%= overview.context.school_year %> · <%= overview.context.term %> · <%= overview.context.grade_level %> · <%= overview.context.section_name %></h2><p><%= overview.context.subject_code %> · <%= overview.context.subject_name %><% if (overview.context.is_current) { %> · Current academic term<% } else { %> · Historical context; periods shown are observed records<% } %></p></div></div>
+      <div class="student-record-status-grid" aria-label="Grade overview totals">
+        <article class="admin-section"><h3>Distinct enrolled learners</h3><p><strong><%= overview.totals.distinctLearners %></strong></p></article>
+        <article class="admin-section"><h3>Grading-period entries</h3><p><strong><%= overview.totals.periodEntries %></strong></p></article>
+        <article class="admin-section"><h3>Published grade entries</h3><p><strong><%= overview.totals.published %></strong></p></article>
+        <article class="admin-section"><h3>Awaiting review</h3><p><strong><%= overview.totals.pendingReview %></strong></p></article>
+      </div>
+      <% if (overview.entries.length) { %>
+        <div class="table-scroll" tabindex="0" aria-label="Grade completion by learner and grading period"><table class="admin-table">
+          <thead><tr><th scope="col">Learner</th><th scope="col">Student no.</th><th scope="col">Period</th><th scope="col">Published grade</th><th scope="col">Grade status</th><th scope="col">Workbook review</th></tr></thead>
+          <tbody><% const gradeStatusLabel = (status) => ({ published: 'Published', published_blank: 'Published blank', no_submission: 'No submission', pending_review: 'Pending registrar review', correction_requested: 'Correction requested', rejected: 'Rejected', approved_unpublished: 'Approved; not published' })[status] || status; const submissionStatusLabel = (status) => ({ pending: 'Pending review', approved: 'Approved', correction_requested: 'Correction requested', rejected: 'Rejected' })[status] || 'No submission'; for (const entry of overview.entries) { %>
+            <tr><td data-label="Learner"><%= entry.displayName %></td><td data-label="Student no."><%= entry.student_no %></td><td data-label="Period"><%= entry.grading_period %></td>
+              <td data-label="Published grade"><%= entry.grade_value ?? '—' %></td><td data-label="Grade status"><%= gradeStatusLabel(entry.status) %></td>
+              <td data-label="Workbook review"><%= submissionStatusLabel(entry.submission_status) %><% if ((entry.status === 'published' || entry.status === 'published_blank') && entry.submission_status) { %><span class="muted-copy"> · published grade retained</span><% } else if (entry.status === 'pending_review' && entry.hasCachedGrade) { %><span class="muted-copy"> · workbook value awaiting registrar review</span><% } else if (entry.status === 'approved_unpublished' && entry.hasCachedGrade) { %><span class="muted-copy"> · approved workbook value is not published for this learner and period</span><% } %></td></tr>
+          <% } %></tbody>
+        </table></div>
+        <p class="muted-copy">Totals count learner-period entries separately from distinct learners. They do not imply a deadline or identify a grade as overdue.</p>
+      <% } else if (overview.totals.distinctLearners > 0) { %><p class="empty-state"><%= overview.totals.distinctLearners %> enrolled learners have this subject, but no grading periods were observed in this historical context. No grading-period expectations have been inferred.</p><% } else { %><p class="empty-state">No enrolled, applicable student-subject records are linked to this context.</p><% } %>
+    </section>
+  <% } %>
+</main>
+<script src="/js/registrar-records-followup.js" defer></script>
+<%- include('../partials/foot') %>

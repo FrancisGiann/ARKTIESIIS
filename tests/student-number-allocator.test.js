@@ -49,24 +49,22 @@ test('allocator reuses the highest matching existing number and ignores other ye
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values });
-          if (statement.includes('sp_getapplock')) return { recordset: [{ lock_result: 0 }] };
-          const prefix = `SHS-${values.schoolYearStart}-`;
-          const sequences = rows.filter((value) => value.startsWith(prefix))
-            .map((value) => value.slice(prefix.length))
-            .filter((value) => /^\d+$/.test(value))
-            .map(Number);
-          const next = Math.max(0, ...sequences) + 1;
-          return { recordset: [{ student_no: `${prefix}${String(next).padStart(4, '0')}` }] };
+          if (statement.startsWith('INSERT INTO application_locks')) return { recordset: [] };
+          if (statement.startsWith('SELECT lock_name FROM application_locks')) return { recordset: [{ lock_name: values.lockName }] };
+          const prefix = String(values.prefix);
+          return { recordset: rows.filter((value) => value.startsWith(prefix))
+            .map((value) => value.slice(prefix.length)).filter((value) => /^\d+$/.test(value))
+            .map((sequence) => ({ sequence })) };
         }
       };
     }
   };
   assert.equal(await allocateStudentNumber(transaction, sql, '2026-2027'), 'SHS-2026-0321');
-  assert.equal(calls[0].values.resource, 'student-number:2026');
-  assert.match(calls[0].statement, /@LockOwner = 'Transaction'/);
-  assert.equal(calls[1].values.schoolYearStart, '2026');
-  assert.match(calls[1].statement, /UPDLOCK, HOLDLOCK/);
-  assert.match(calls[1].statement, /TRY_CONVERT/);
+  assert.equal(calls[0].values.lockName, 'student-number:2026');
+  assert.match(calls[0].statement, /INSERT INTO application_locks/);
+  assert.equal(calls[2].values.prefix, 'SHS-2026-');
+  assert.match(calls[2].statement, /REGEXP '\^\[0-9\]\+\$'/);
+  assert.match(calls[2].statement, /FOR UPDATE/);
 });
 
 test('transaction-owned application lock serializes simultaneous allocations for one year', async () => {
@@ -80,15 +78,14 @@ test('transaction-owned application lock serializes simultaneous allocations for
         return {
           input(name, _type, value) { values[name] = value; return this; },
           async query(statement) {
-            if (statement.includes('sp_getapplock')) {
+            if (statement.startsWith('INSERT INTO application_locks')) {
               release = await mutex.acquire();
-              return { recordset: [{ lock_result: 0 }] };
+              return { recordset: [] };
             }
-            const prefix = `SHS-${values.schoolYearStart}-`;
-            const maximum = rows.filter((value) => value.startsWith(prefix))
-              .map((value) => Number(value.slice(prefix.length)))
-              .reduce((max, current) => Math.max(max, current), 0);
-            return { recordset: [{ student_no: `${prefix}${String(maximum + 1).padStart(4, '0')}` }] };
+            if (statement.startsWith('SELECT lock_name FROM application_locks')) return { recordset: [{ lock_name: values.lockName }] };
+            const prefix = String(values.prefix);
+            return { recordset: rows.filter((value) => value.startsWith(prefix))
+              .map((value) => value.slice(prefix.length)).map((sequence) => ({ sequence })) };
           }
         };
       },
@@ -114,10 +111,9 @@ test('allocation rejects invalid years and reports exhausted sequences as a safe
       return {
         input() { return this; },
         async query(statement) {
-          if (statement.includes('sp_getapplock')) return { recordset: [{ lock_result: 0 }] };
-          const error = new Error('database detail');
-          error.number = 51008;
-          throw error;
+          if (statement.startsWith('INSERT INTO application_locks')) return { recordset: [] };
+          if (statement.startsWith('SELECT lock_name FROM application_locks')) return { recordset: [{ lock_name: 'student-number:2026' }] };
+          return { recordset: [{ sequence: '9'.repeat(39) }] };
         }
       };
     }

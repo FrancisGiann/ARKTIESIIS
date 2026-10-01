@@ -1,4 +1,4 @@
-const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
+const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
 
 const ID_PATTERN = /^\d{1,10}$/;
 const MAX_MONEY_CENTS = 999999999999n;
@@ -108,7 +108,7 @@ function validateTransaction(input = {}) {
 }
 
 function isUniqueConflict(error) {
-  return error?.number === 2601 || error?.number === 2627;
+  return isDuplicateKeyError(error);
 }
 
 function createFinanceService({
@@ -146,8 +146,9 @@ function createFinanceService({
       .input('actorId', sql.Int, actorId)
       .input('financeRole', sql.NVarChar(30), 'finance')
       .input('adminRole', sql.NVarChar(30), 'database_admin')
-      .query(`SELECT id, role FROM dbo.users WITH (UPDLOCK, HOLDLOCK)
-        WHERE id = @actorId AND is_active = 1 AND role IN (@financeRole, @adminRole)`);
+      .query(`SELECT id, role FROM users
+        WHERE id = @actorId AND is_active = 1 AND role IN (@financeRole, @adminRole)
+        FOR UPDATE`);
     const actor = result.recordset?.[0];
     if (!actor || !['finance', 'database_admin'].includes(actor.role)) {
       throw new FinanceServiceError('Your finance access is no longer active. Sign in again.', 403);
@@ -164,7 +165,7 @@ function createFinanceService({
       .input('entityType', sql.NVarChar(100), 'financial_account')
       .input('entityId', sql.NVarChar(100), String(entityId))
       .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify(details))
-      .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
+      .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
         VALUES (@actorId, @action, @entityType, @entityId, @detailsJson)`);
   }
 
@@ -175,17 +176,22 @@ function createFinanceService({
     const pool = await getPool();
     const result = await pool.request()
       .input('searchPattern', sql.NVarChar(204), searchPattern)
-      .query(`SELECT TOP (100) s.id AS student_id, s.student_no, s.first_name, s.middle_name,
+      .query(`SELECT s.id AS student_id, s.student_no, s.first_name, s.middle_name,
           s.last_name, s.suffix, a.id AS financial_account_id,
-          CONVERT(NVARCHAR(40), a.balance) AS balance
-        FROM dbo.students AS s
-        LEFT JOIN dbo.financial_accounts AS a ON a.student_id = s.id
-        WHERE s.student_no LIKE @searchPattern ESCAPE N'~'
-          OR s.first_name LIKE @searchPattern ESCAPE N'~'
-          OR s.middle_name LIKE @searchPattern ESCAPE N'~'
-          OR s.last_name LIKE @searchPattern ESCAPE N'~'
-          OR CONCAT_WS(N' ', s.first_name, NULLIF(s.middle_name, N''), s.last_name, NULLIF(s.suffix, N'')) LIKE @searchPattern ESCAPE N'~'
-        ORDER BY s.last_name, s.first_name, s.student_no, s.id`);
+          CAST(balance.remaining_legacy_balance AS CHAR(40)) AS balance
+        FROM students AS s
+        LEFT JOIN financial_accounts AS a ON a.student_id = s.id
+        LEFT JOIN v_finance_legacy_account_balance AS balance ON balance.financial_account_id = a.id
+        WHERE NOT EXISTS (SELECT 1 FROM annual_enrollments AS annual
+            WHERE annual.student_id = s.id AND annual.intake_status <> 'legacy')
+          AND NOT EXISTS (SELECT 1 FROM finance_legacy_opening_charges AS opening WHERE opening.student_id = s.id)
+          AND (s.student_no LIKE @searchPattern ESCAPE '~'
+          OR s.first_name LIKE @searchPattern ESCAPE '~'
+          OR s.middle_name LIKE @searchPattern ESCAPE '~'
+          OR s.last_name LIKE @searchPattern ESCAPE '~'
+          OR CONCAT_WS(' ', s.first_name, NULLIF(s.middle_name, ''), s.last_name, NULLIF(s.suffix, '')) LIKE @searchPattern ESCAPE '~')
+        ORDER BY s.last_name, s.first_name, s.student_no, s.id
+        LIMIT 100`);
     return { students: result.recordset || [], searchTerm };
   }
 
@@ -193,24 +199,28 @@ function createFinanceService({
     const actorId = normalizeId(actorInput);
     if (!actorId) throw new FinanceServiceError('Finance or database administrator access is required.', 403);
     const pool = await getPool();
-    const result = await pool.request()
+    const actorResult = await pool.request()
       .input('actorId', sql.Int, actorId)
-      .query(`SELECT CONVERT(INT, CASE WHEN EXISTS (
-          SELECT 1 FROM dbo.users
-          WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin')
-        ) THEN 1 ELSE 0 END) AS authorized;
-        SELECT TOP (8) s.id AS student_id, s.student_no, s.first_name, s.middle_name,
-          s.last_name, s.suffix, s.status, a.id AS financial_account_id,
-          CONVERT(NVARCHAR(40), a.balance) AS balance, a.updated_at
-        FROM dbo.financial_accounts AS a
-        INNER JOIN dbo.students AS s ON s.id = a.student_id
-        WHERE EXISTS (SELECT 1 FROM dbo.users
-          WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin'))
-        ORDER BY a.updated_at DESC, a.id DESC`);
-    if (Number(result.recordsets?.[0]?.[0]?.authorized) !== 1) {
+      .query(`SELECT id FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin')`);
+    if (!actorResult.recordset?.length) {
       throw new FinanceServiceError('Your finance access is no longer active. Sign in again.', 403);
     }
-    return result.recordsets?.[1] || [];
+    const result = await pool.request()
+      .input('actorId', sql.Int, actorId)
+      .query(`SELECT s.id AS student_id, s.student_no, s.first_name, s.middle_name,
+          s.last_name, s.suffix, s.status, a.id AS financial_account_id,
+          CAST(balance.remaining_legacy_balance AS CHAR(40)) AS balance, a.updated_at
+        FROM financial_accounts AS a
+        INNER JOIN students AS s ON s.id = a.student_id
+        LEFT JOIN v_finance_legacy_account_balance AS balance ON balance.financial_account_id = a.id
+        WHERE EXISTS (SELECT 1 FROM users
+          WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin'))
+          AND NOT EXISTS (SELECT 1 FROM annual_enrollments AS annual
+            WHERE annual.student_id = s.id AND annual.intake_status <> 'legacy')
+          AND NOT EXISTS (SELECT 1 FROM finance_legacy_opening_charges AS opening WHERE opening.student_id = s.id)
+        ORDER BY a.updated_at DESC, a.id DESC
+        LIMIT 8`);
+    return result.recordset || [];
   }
 
   async function getStudentAccount(studentInput) {
@@ -219,53 +229,65 @@ function createFinanceService({
     const pool = await getPool();
     const studentResult = await pool.request()
       .input('studentId', sql.Int, studentId)
-      .query(`SELECT id AS student_id, student_no, first_name, middle_name, last_name, suffix, status
-        FROM dbo.students WHERE id = @studentId`);
+      .query(`SELECT student.id AS student_id, student_no, first_name, middle_name, last_name, suffix, status,
+          CAST(CASE WHEN EXISTS (SELECT 1 FROM annual_enrollments AS annual
+              WHERE annual.student_id = student.id AND annual.intake_status <> 'legacy')
+            OR EXISTS (SELECT 1 FROM finance_legacy_opening_charges AS opening WHERE opening.student_id = student.id)
+            THEN 1 ELSE 0 END AS UNSIGNED) AS annual_finance_required
+        FROM students AS student WHERE student.id = @studentId
+          FOR UPDATE`);
     const student = studentResult.recordset?.[0];
     if (!student) return null;
+    if (student.annual_finance_required === true || student.annual_finance_required === 1) {
+      throw new FinanceServiceError('This student uses the annual finance workspace.', 409);
+    }
 
     const pendingEnrollmentResult = await pool.request()
       .input('studentId', sql.Int, studentId)
       .query(`SELECT enrollment.id AS enrollment_id, term.school_year, term.term,
           section.name AS section_name, clearance.clearance_status
-        FROM dbo.enrollments AS enrollment
-        INNER JOIN dbo.academic_terms AS term ON term.id = enrollment.academic_term_id
-        LEFT JOIN dbo.sections AS section ON section.id = enrollment.section_id
+        FROM enrollments AS enrollment
+        INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
+        LEFT JOIN sections AS section ON section.id = enrollment.section_id
           AND section.academic_term_id = enrollment.academic_term_id
-        LEFT JOIN dbo.enrollment_clearances AS clearance ON clearance.enrollment_id = enrollment.id
+        LEFT JOIN enrollment_clearances AS clearance ON clearance.enrollment_id = enrollment.id
         WHERE enrollment.student_id = @studentId AND clearance.created_for_intake = 1
-          AND enrollment.enrollment_status = N'pending_payment'
+          AND enrollment.enrollment_status = 'pending_payment'
           AND enrollment.finalized_at IS NULL
         ORDER BY enrollment.id DESC`);
     const pendingEnrollments = pendingEnrollmentResult.recordset || [];
 
     const accountResult = await pool.request()
       .input('studentId', sql.Int, studentId)
-      .query(`SELECT id AS financial_account_id, CONVERT(NVARCHAR(40), balance) AS balance
-        FROM dbo.financial_accounts WHERE student_id = @studentId`);
+      .query(`SELECT account.id AS financial_account_id, CAST(balance.remaining_legacy_balance AS CHAR(40)) AS balance
+        FROM financial_accounts AS account
+        INNER JOIN v_finance_legacy_account_balance AS balance ON balance.financial_account_id = account.id
+        WHERE account.student_id = @studentId`);
     const account = accountResult.recordset?.[0] || null;
     if (!account) return { student, account: null, transactions: [], pendingEnrollments };
 
     const transactionResult = await pool.request()
       .input('accountId', sql.Int, account.financial_account_id)
-      .query(`SELECT TOP (100) t.id, t.transaction_type,
-          CONVERT(NVARCHAR(40), t.amount) AS amount, t.description, t.reference_no,
-          t.recorded_by, COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(sp.first_name, N' ', sp.last_name))), N''), CONCAT(N'Staff ', t.recorded_by)) AS recorded_by_name,
+      .query(`SELECT t.id, t.transaction_type,
+          CAST(t.amount AS CHAR(40)) AS amount, t.description, t.reference_no,
+          t.recorded_by, COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(sp.first_name, ' ', sp.last_name))), ''), CONCAT('Staff ', t.recorded_by)) AS recorded_by_name,
           t.created_at
-        FROM dbo.financial_transactions AS t
-        LEFT JOIN dbo.staff_profiles AS sp ON sp.user_id = t.recorded_by
+        FROM financial_transactions AS t
+        LEFT JOIN staff_profiles AS sp ON sp.user_id = t.recorded_by
         WHERE t.financial_account_id = @accountId
-        ORDER BY t.created_at DESC, t.id DESC`);
+        ORDER BY t.created_at DESC, t.id DESC
+        LIMIT 100`);
     const paymentOptionsResult = await pool.request()
       .input('accountId', sql.Int, account.financial_account_id)
-      .query(`SELECT TOP (100) payment.id AS transaction_id,
-          CONVERT(NVARCHAR(40), payment.amount) AS amount, payment.reference_no, payment.created_at
-        FROM dbo.financial_transactions AS payment
-        WHERE payment.financial_account_id = @accountId AND payment.transaction_type = N'payment'
+      .query(`SELECT payment.id AS transaction_id,
+          CAST(payment.amount AS CHAR(40)) AS amount, payment.reference_no, payment.created_at
+        FROM financial_transactions AS payment
+        WHERE payment.financial_account_id = @accountId AND payment.transaction_type = 'payment'
           AND payment.amount > 0
-          AND NOT EXISTS (SELECT 1 FROM dbo.enrollment_clearances AS clearance
+          AND NOT EXISTS (SELECT 1 FROM enrollment_clearances AS clearance
             WHERE clearance.payment_transaction_id = payment.id)
-        ORDER BY payment.created_at DESC, payment.id DESC`);
+        ORDER BY payment.created_at DESC, payment.id DESC
+        LIMIT 100`);
     return {
       student, account, transactions: transactionResult.recordset || [], pendingEnrollments,
       availableEnrollmentPayments: paymentOptionsResult.recordset || []
@@ -280,11 +302,12 @@ function createFinanceService({
       .input('userId', sql.Int, userId)
       .query(`SELECT student.id AS student_id, student.student_no, student.first_name,
           student.middle_name, student.last_name, student.suffix, account.id AS financial_account_id,
-          CONVERT(NVARCHAR(40), account.balance) AS balance
-        FROM dbo.users AS user_account
-        LEFT JOIN dbo.students AS student ON student.user_id = user_account.id
-        LEFT JOIN dbo.financial_accounts AS account ON account.student_id = student.id
-        WHERE user_account.id = @userId AND user_account.is_active = 1 AND user_account.role = N'student'`);
+          CAST(balance.remaining_legacy_balance AS CHAR(40)) AS balance
+        FROM users AS user_account
+        LEFT JOIN students AS student ON student.user_id = user_account.id
+        LEFT JOIN financial_accounts AS account ON account.student_id = student.id
+        LEFT JOIN v_finance_legacy_account_balance AS balance ON balance.financial_account_id = account.id
+        WHERE user_account.id = @userId AND user_account.is_active = 1 AND user_account.role = 'student'`);
     const owner = ownerResult.recordset?.[0];
     if (!owner) throw new FinanceServiceError('Your student finance access is no longer active. Sign in again.', 403);
     if (!owner.student_id) return { student: null, account: null, transactions: [] };
@@ -301,13 +324,14 @@ function createFinanceService({
     const transactions = await pool.request()
       .input('accountId', sql.Int, owner.financial_account_id)
       .input('studentId', sql.Int, owner.student_id)
-      .query(`SELECT TOP (100) transaction_record.id, transaction_record.transaction_type,
-          CONVERT(NVARCHAR(40), transaction_record.amount) AS amount,
+      .query(`SELECT transaction_record.id, transaction_record.transaction_type,
+          CAST(transaction_record.amount AS CHAR(40)) AS amount,
           transaction_record.description, transaction_record.reference_no, transaction_record.created_at
-        FROM dbo.financial_transactions AS transaction_record
-        INNER JOIN dbo.financial_accounts AS account ON account.id = transaction_record.financial_account_id
+        FROM financial_transactions AS transaction_record
+        INNER JOIN financial_accounts AS account ON account.id = transaction_record.financial_account_id
         WHERE account.id = @accountId AND account.student_id = @studentId
-        ORDER BY transaction_record.created_at DESC, transaction_record.id DESC`);
+        ORDER BY transaction_record.created_at DESC, transaction_record.id DESC
+        LIMIT 100`);
     return {
       student,
       account: { id: owner.financial_account_id, balance: owner.balance },
@@ -321,25 +345,25 @@ function createFinanceService({
     const pool = await getPool();
     const actorResult = await pool.request()
       .input('actorId', sql.Int, actorId)
-      .query(`SELECT id FROM dbo.users
-        WHERE id = @actorId AND is_active = 1 AND role IN (N'finance', N'database_admin')`);
+      .query(`SELECT id FROM users
+        WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin')`);
     if (!actorResult.recordset?.length) throw new FinanceServiceError('Your finance access is no longer active. Sign in again.', 403);
     const result = await pool.request()
       .input('actorId', sql.Int, actorId)
       .query(`SELECT enrollment.id AS enrollment_id, student.id AS student_id,
           student.student_no, student.first_name, student.middle_name, student.last_name, student.suffix,
           term.school_year, term.term, section.name AS section_name
-        FROM dbo.enrollments AS enrollment
-        INNER JOIN dbo.students AS student ON student.id = enrollment.student_id
-        INNER JOIN dbo.academic_terms AS term ON term.id = enrollment.academic_term_id
-        LEFT JOIN dbo.sections AS section ON section.id = enrollment.section_id
+        FROM enrollments AS enrollment
+        INNER JOIN students AS student ON student.id = enrollment.student_id
+        INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
+        LEFT JOIN sections AS section ON section.id = enrollment.section_id
           AND section.academic_term_id = enrollment.academic_term_id
-        LEFT JOIN dbo.enrollment_clearances AS clearance ON clearance.enrollment_id = enrollment.id
-        WHERE clearance.created_for_intake = 1 AND enrollment.enrollment_status = N'pending_payment'
+        LEFT JOIN enrollment_clearances AS clearance ON clearance.enrollment_id = enrollment.id
+        WHERE clearance.created_for_intake = 1 AND enrollment.enrollment_status = 'pending_payment'
           AND enrollment.finalized_at IS NULL
-          AND COALESCE(clearance.clearance_status, N'pending') = N'pending'
-          AND EXISTS (SELECT 1 FROM dbo.users
-            WHERE id = @actorId AND is_active = 1 AND role IN (N'finance', N'database_admin'))
+          AND COALESCE(clearance.clearance_status, 'pending') = 'pending'
+          AND EXISTS (SELECT 1 FROM users
+            WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin'))
         ORDER BY enrollment.id DESC`);
     return result.recordset;
   }
@@ -350,14 +374,35 @@ function createFinanceService({
     const pool = await getPool();
     const result = await pool.request()
       .input('actorId', sql.Int, actorId)
-      .query(`SELECT
-          (SELECT COUNT_BIG(*) FROM dbo.financial_accounts) AS account_count,
-          (SELECT COUNT_BIG(*) FROM dbo.financial_accounts WHERE balance > 0) AS accounts_due_count,
-          (SELECT COUNT_BIG(*) FROM dbo.financial_accounts WHERE balance = 0) AS accounts_settled_count,
-          (SELECT COUNT_BIG(*) FROM dbo.financial_accounts WHERE balance < 0) AS accounts_credit_count,
-          (SELECT COUNT_BIG(*) FROM dbo.financial_transactions WHERE transaction_type = 'charge') AS charge_count,
-          (SELECT COUNT_BIG(*) FROM dbo.financial_transactions WHERE transaction_type = 'payment') AS payment_count
-        WHERE EXISTS (SELECT 1 FROM dbo.users
+      .query(`WITH annual_totals AS (
+            SELECT annual.student_id, SUM(due.amount_due) AS annual_balance
+            FROM annual_enrollments AS annual
+            INNER JOIN assessed_charges AS charge ON charge.annual_enrollment_id = annual.id
+            INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
+            WHERE annual.intake_status <> 'legacy'
+            GROUP BY annual.student_id
+          ), opening_totals AS (
+            SELECT student_id, SUM(amount_due) AS opening_balance
+            FROM v_finance_opening_liability_due GROUP BY student_id
+          ), finance_students AS (
+            SELECT combined.student_id, SUM(combined.balance) AS balance
+            FROM (
+              SELECT student_id, remaining_legacy_balance AS balance FROM v_finance_legacy_account_balance
+              UNION ALL SELECT student_id, annual_balance AS balance FROM annual_totals
+              UNION ALL SELECT student_id, opening_balance AS balance FROM opening_totals
+            ) AS combined
+            GROUP BY combined.student_id
+          )
+        SELECT
+          (SELECT COUNT(*) FROM finance_students) AS account_count,
+          (SELECT COUNT(*) FROM finance_students WHERE balance > 0) AS accounts_due_count,
+          (SELECT COUNT(*) FROM finance_students WHERE balance = 0) AS accounts_settled_count,
+          (SELECT COUNT(*) FROM finance_students WHERE balance < 0) AS accounts_credit_count,
+          (SELECT COUNT(*) FROM financial_transactions WHERE transaction_type = 'charge')
+            + (SELECT COUNT(*) FROM assessed_charges AS charge INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id WHERE annual.intake_status <> 'legacy') AS charge_count,
+          (SELECT COUNT(*) FROM financial_transactions WHERE transaction_type = 'payment')
+            + (SELECT COUNT(*) FROM finance_payments) AS payment_count
+        WHERE EXISTS (SELECT 1 FROM users
           WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin'))`);
     const summary = result.recordset?.[0];
     if (!summary) throw new FinanceServiceError('Your finance access is no longer active. Sign in again.', 403);
@@ -371,21 +416,21 @@ function createFinanceService({
       const actor = await requireFinanceActor(transaction, actorInput);
       const studentResult = await transaction.request()
         .input('studentId', sql.Int, studentId)
-        .query('SELECT id, status FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE id = @studentId');
+        .query('SELECT id, status FROM students WHERE id = @studentId FOR UPDATE');
       const student = studentResult.recordset?.[0];
       if (!student) throw new FinanceServiceError('Student record not found.', 404);
       if (student.status === 'archived') throw new FinanceServiceError('Archived students cannot receive new finance records.', 409);
 
       const existingResult = await transaction.request()
         .input('studentId', sql.Int, studentId)
-        .query('SELECT id FROM dbo.financial_accounts WITH (UPDLOCK, HOLDLOCK) WHERE student_id = @studentId');
+        .query('SELECT id FROM financial_accounts WHERE student_id = @studentId FOR UPDATE');
       if (existingResult.recordset?.length) throw new FinanceServiceError('This student already has a financial account.', 409);
 
       const insertResult = await transaction.request()
         .input('studentId', sql.Int, studentId)
-        .query(`INSERT INTO dbo.financial_accounts (student_id, balance)
-          OUTPUT INSERTED.id AS id VALUES (@studentId, 0)`);
-      const accountId = insertResult.recordset?.[0]?.id;
+        .query(`INSERT INTO financial_accounts (student_id, balance)
+          VALUES (@studentId, 0)`);
+      const accountId = Number(insertResult.insertId || insertResult.recordset?.[0]?.id);
       if (!Number.isSafeInteger(accountId) || accountId < 1) throw new Error('Financial account insert returned no identifier.');
       await writeAudit(transaction, {
         actorId: actor.id,
@@ -406,13 +451,28 @@ function createFinanceService({
       const actor = await requireFinanceActor(transaction, actorInput);
       const accountResult = await transaction.request()
         .input('studentId', sql.Int, studentId)
-        .query(`SELECT a.id AS financial_account_id, CONVERT(NVARCHAR(40), a.balance) AS balance, s.status
-          FROM dbo.financial_accounts AS a WITH (UPDLOCK, HOLDLOCK)
-          INNER JOIN dbo.students AS s WITH (UPDLOCK, HOLDLOCK) ON s.id = a.student_id
-          WHERE s.id = @studentId`);
+        .query(`SELECT a.id AS financial_account_id, CAST(a.balance AS CHAR(40)) AS balance, s.status
+          FROM financial_accounts AS a
+          INNER JOIN students AS s  ON s.id = a.student_id
+          WHERE s.id = @studentId
+          FOR UPDATE`);
       const account = accountResult.recordset?.[0];
       if (!account) throw new FinanceServiceError('Financial account not found. Create the account before recording a transaction.', 404);
       if (account.status === 'archived') throw new FinanceServiceError('Archived students cannot receive new finance records.', 409);
+      const annualWorkflow = await transaction.request().input('studentId', sql.Int, studentId)
+        .query(`SELECT id FROM annual_enrollments
+          WHERE student_id = @studentId AND intake_status <> 'legacy'
+          LIMIT 1 FOR UPDATE`);
+      if (annualWorkflow.recordset?.length) {
+        throw new FinanceServiceError('This student uses the annual finance ledger. Record charges and payments in the annual account workspace.', 409);
+      }
+      const openingLiability = await transaction.request().input('accountId', sql.Int, account.financial_account_id)
+        .query(`SELECT id FROM finance_legacy_opening_charges
+          WHERE financial_account_id = @accountId
+          LIMIT 1 FOR UPDATE`);
+      if (openingLiability.recordset?.length) {
+        throw new FinanceServiceError('This account has a reviewed opening liability. Record payments in the annual finance workspace.', 409);
+      }
 
       let clearance = null;
       if (entry.clearEnrollmentId) {
@@ -421,11 +481,12 @@ function createFinanceService({
           .input('studentId', sql.Int, studentId)
           .query(`SELECT enrollment.id, enrollment.enrollment_status, enrollment.finalized_at,
               clearance.clearance_status, clearance.created_for_intake
-            FROM dbo.enrollments AS enrollment WITH (UPDLOCK, HOLDLOCK)
-            INNER JOIN dbo.students AS student WITH (UPDLOCK, HOLDLOCK) ON student.id = enrollment.student_id
-            INNER JOIN dbo.enrollment_clearances AS clearance WITH (UPDLOCK, HOLDLOCK)
+            FROM enrollments AS enrollment
+            INNER JOIN students AS student  ON student.id = enrollment.student_id
+            INNER JOIN enrollment_clearances AS clearance
               ON clearance.enrollment_id = enrollment.id
-            WHERE enrollment.id = @enrollmentId AND enrollment.student_id = @studentId`);
+            WHERE enrollment.id = @enrollmentId AND enrollment.student_id = @studentId
+            FOR UPDATE`);
         clearance = clearanceResult.recordset?.[0];
         if (!clearance || !(clearance.created_for_intake === true || clearance.created_for_intake === 1)
           || clearance.enrollment_status !== 'pending_payment' || clearance.finalized_at
@@ -438,8 +499,9 @@ function createFinanceService({
         const duplicate = await transaction.request()
           .input('accountId', sql.Int, account.financial_account_id)
           .input('referenceNo', sql.NVarChar(100), entry.referenceNo)
-          .query(`SELECT TOP (1) id FROM dbo.financial_transactions WITH (UPDLOCK, HOLDLOCK)
-            WHERE financial_account_id = @accountId AND reference_no = @referenceNo`);
+          .query(`SELECT id FROM financial_transactions
+            WHERE financial_account_id = @accountId AND reference_no = @referenceNo
+            LIMIT 1 FOR UPDATE`);
         if (duplicate.recordset?.length) throw new FinanceServiceError('That reference number is already used for this account.', 409);
       }
 
@@ -454,7 +516,7 @@ function createFinanceService({
       await transaction.request()
         .input('accountId', sql.Int, account.financial_account_id)
         .input('balance', sql.Decimal(12, 2), nextBalance)
-        .query(`UPDATE dbo.financial_accounts SET balance = @balance, updated_at = SYSUTCDATETIME()
+        .query(`UPDATE financial_accounts SET balance = @balance, updated_at = UTC_TIMESTAMP(6)
           WHERE id = @accountId`);
       const inserted = await transaction.request()
         .input('accountId', sql.Int, account.financial_account_id)
@@ -463,21 +525,20 @@ function createFinanceService({
         .input('description', sql.NVarChar(500), entry.description)
         .input('referenceNo', sql.NVarChar(100), entry.referenceNo)
         .input('actorId', sql.Int, actor.id)
-        .query(`INSERT INTO dbo.financial_transactions
+        .query(`INSERT INTO financial_transactions
           (financial_account_id, transaction_type, amount, description, reference_no, recorded_by)
-          OUTPUT INSERTED.id AS id
           VALUES (@accountId, @transactionType, @amount, @description, @referenceNo, @actorId)`);
-      const transactionId = inserted.recordset?.[0]?.id;
+      const transactionId = Number(inserted.insertId || inserted.recordset?.[0]?.id);
       if (!Number.isSafeInteger(transactionId) || transactionId < 1) throw new Error('Financial transaction insert returned no identifier.');
       if (entry.clearEnrollmentId) {
         const cleared = await transaction.request()
           .input('enrollmentId', sql.Int, entry.clearEnrollmentId)
           .input('transactionId', sql.Int, transactionId)
           .input('actorId', sql.Int, actor.id)
-          .query(`UPDATE dbo.enrollment_clearances
-            SET clearance_status = N'cleared', payment_transaction_id = @transactionId,
-              cleared_by = @actorId, cleared_at = SYSUTCDATETIME()
-            WHERE enrollment_id = @enrollmentId AND clearance_status = N'pending'
+          .query(`UPDATE enrollment_clearances
+            SET clearance_status = 'cleared', payment_transaction_id = @transactionId,
+              cleared_by = @actorId, cleared_at = UTC_TIMESTAMP(6)
+            WHERE enrollment_id = @enrollmentId AND clearance_status = 'pending'
               AND payment_transaction_id IS NULL AND cleared_by IS NULL AND cleared_at IS NULL`);
         if (cleared.rowsAffected?.[0] !== 1) throw new FinanceServiceError('This enrollment was cleared by another finance transaction. Nothing was recorded.', 409);
       }
@@ -514,38 +575,56 @@ function createFinanceService({
         const accountResult = await transaction.request()
           .input('studentId', sql.Int, studentId)
           .query(`SELECT account.id AS financial_account_id, student.status
-            FROM dbo.financial_accounts AS account WITH (UPDLOCK, HOLDLOCK)
-            INNER JOIN dbo.students AS student WITH (UPDLOCK, HOLDLOCK) ON student.id = account.student_id
-            WHERE student.id = @studentId`);
+            FROM financial_accounts AS account
+            INNER JOIN students AS student  ON student.id = account.student_id
+            WHERE student.id = @studentId
+          FOR UPDATE`);
         const account = accountResult.recordset?.[0];
         if (!account) throw new FinanceServiceError('Financial account not found.', 404);
         if (account.status === 'archived') throw new FinanceServiceError('Archived students cannot receive new finance records.', 409);
+        const openingLiability = await transaction.request().input('accountId', sql.Int, account.financial_account_id)
+          .query(`SELECT id FROM finance_legacy_opening_charges
+            WHERE financial_account_id = @accountId
+            LIMIT 1 FOR UPDATE`);
+        if (openingLiability.recordset?.length) {
+          throw new FinanceServiceError('This account has a reviewed opening liability. Use the annual finance workflow for payment and clearance records.', 409);
+        }
 
         const enrollmentResult = await transaction.request()
           .input('enrollmentId', sql.Int, enrollmentId)
           .input('studentId', sql.Int, studentId)
           .query(`SELECT enrollment.id, enrollment.enrollment_status, enrollment.finalized_at,
               clearance.clearance_status, clearance.payment_transaction_id, clearance.created_for_intake
-            FROM dbo.enrollments AS enrollment WITH (UPDLOCK, HOLDLOCK)
-            INNER JOIN dbo.enrollment_clearances AS clearance WITH (UPDLOCK, HOLDLOCK)
+            FROM enrollments AS enrollment
+            INNER JOIN enrollment_clearances AS clearance
               ON clearance.enrollment_id = enrollment.id
-            WHERE enrollment.id = @enrollmentId AND enrollment.student_id = @studentId`);
+            WHERE enrollment.id = @enrollmentId AND enrollment.student_id = @studentId
+            FOR UPDATE`);
         const enrollment = enrollmentResult.recordset?.[0];
         if (!enrollment || !(enrollment.created_for_intake === true || enrollment.created_for_intake === 1)
           || enrollment.enrollment_status !== 'pending_payment' || enrollment.finalized_at
           || enrollment.clearance_status !== 'pending' || enrollment.payment_transaction_id) {
           throw new FinanceServiceError('Choose an uncleared pending enrollment for this student.', 409);
         }
+        const annualWorkflow = await transaction.request().input('enrollmentId', sql.Int, enrollmentId)
+          .query(`SELECT annual.id FROM enrollments AS enrollment
+            INNER JOIN annual_enrollments AS annual  ON annual.id = enrollment.annual_enrollment_id
+            WHERE enrollment.id = @enrollmentId AND annual.intake_status <> 'legacy'
+            FOR UPDATE`);
+        if (annualWorkflow.recordset?.length) {
+          throw new FinanceServiceError('This term uses the annual finance approval and clearance workflow.', 409);
+        }
 
         const paymentResult = await transaction.request()
           .input('paymentTransactionId', sql.Int, paymentTransactionId)
           .input('accountId', sql.Int, account.financial_account_id)
           .query(`SELECT payment.id
-            FROM dbo.financial_transactions AS payment WITH (UPDLOCK, HOLDLOCK)
+            FROM financial_transactions AS payment
             WHERE payment.id = @paymentTransactionId AND payment.financial_account_id = @accountId
-              AND payment.transaction_type = N'payment' AND payment.amount > 0
-              AND NOT EXISTS (SELECT 1 FROM dbo.enrollment_clearances AS used WITH (UPDLOCK, HOLDLOCK)
-                WHERE used.payment_transaction_id = payment.id)`);
+              AND payment.transaction_type = 'payment' AND payment.amount > 0
+              AND NOT EXISTS (SELECT 1 FROM enrollment_clearances AS used
+                WHERE used.payment_transaction_id = payment.id)
+            FOR UPDATE`);
         if (!paymentResult.recordset?.length) {
           throw new FinanceServiceError('Choose an unused recorded payment from this student account.', 409);
         }
@@ -554,10 +633,10 @@ function createFinanceService({
           .input('enrollmentId', sql.Int, enrollmentId)
           .input('transactionId', sql.Int, paymentTransactionId)
           .input('actorId', sql.Int, actor.id)
-          .query(`UPDATE dbo.enrollment_clearances
-            SET clearance_status = N'cleared', payment_transaction_id = @transactionId,
-              cleared_by = @actorId, cleared_at = SYSUTCDATETIME()
-            WHERE enrollment_id = @enrollmentId AND clearance_status = N'pending'
+          .query(`UPDATE enrollment_clearances
+            SET clearance_status = 'cleared', payment_transaction_id = @transactionId,
+              cleared_by = @actorId, cleared_at = UTC_TIMESTAMP(6)
+            WHERE enrollment_id = @enrollmentId AND clearance_status = 'pending'
               AND payment_transaction_id IS NULL AND cleared_by IS NULL AND cleared_at IS NULL`);
         if (cleared.rowsAffected?.[0] !== 1) {
           throw new FinanceServiceError('This enrollment was cleared by another finance action. Nothing was changed.', 409);
@@ -572,7 +651,7 @@ function createFinanceService({
         return { enrollmentId, paymentTransactionId };
       });
     } catch (error) {
-      if (error?.number === 2601 || error?.number === 2627) {
+      if (isDuplicateKeyError(error)) {
         throw new FinanceServiceError('That payment has already been assigned to an enrollment clearance.', 409);
       }
       throw error;

@@ -13,22 +13,29 @@
 
   <% if (canManageSubjects) { %>
     <section class="admin-form-section records-form-section" aria-labelledby="new-subject-title">
-      <h2 id="new-subject-title">Add subject</h2>
-      <p>Subject codes are stored in uppercase. Units are optional.</p>
-      <form class="form-stack admin-form" method="post" action="/registrar/records/subjects">
-        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-        <div class="admin-form-grid">
-          <div class="field"><label for="subject-code">Subject code</label><input id="subject-code" name="subjectCode" type="text" maxlength="50" required value="<%= values.subjectCode %>"></div>
-          <div class="field"><label for="subject-name">Subject name</label><input id="subject-name" name="subjectName" type="text" maxlength="200" required value="<%= values.subjectName %>"></div>
-          <div class="field"><label for="subject-units">Units (optional)</label><input id="subject-units" name="units" type="number" min="0.01" max="999.99" step="0.01" value="<%= values.units %>"></div>
-        </div>
-        <button class="button button--primary button--align-start" type="submit">Add subject</button>
-      </form>
+      <details class="subject-create-details" <%= error ? 'open' : '' %>>
+        <summary id="new-subject-title">Add subject</summary>
+        <p>Subject codes are stored in uppercase. Units are optional.</p>
+        <form class="form-stack admin-form" method="post" action="/registrar/records/subjects">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <div class="admin-form-grid">
+            <div class="field"><label for="subject-code">Subject code</label><input id="subject-code" name="subjectCode" type="text" maxlength="50" required value="<%= values.subjectCode %>"></div>
+            <div class="field"><label for="subject-name">Subject name</label><input id="subject-name" name="subjectName" type="text" maxlength="200" required value="<%= values.subjectName %>"></div>
+            <div class="field"><label for="subject-units">Units (optional)</label><input id="subject-units" name="units" type="number" min="0.01" max="999.99" step="0.01" value="<%= values.units %>"></div>
+          </div>
+          <button class="button button--primary button--align-start" type="submit">Add subject</button>
+        </form>
+      </details>
     </section>
   <% } %>
 
   <section class="admin-section" aria-labelledby="catalog-title">
-    <div class="admin-section__heading"><div><h2 id="catalog-title">Subjects</h2><p><%= subjects.length %> subject<%= subjects.length === 1 ? '' : 's' %></p></div></div>
+    <div class="admin-section__heading"><div><h2 id="catalog-title">Subjects</h2><p>Showing <%= subjects.length %> of <%= subjectCount %> subject<%= subjectCount === 1 ? '' : 's' %>.</p></div></div>
+    <form class="subject-catalog-search" method="get" action="/registrar/records/subjects">
+      <div class="field"><label for="subject-catalog-search">Find by code or name</label><input id="subject-catalog-search" name="search" type="search" maxlength="100" value="<%= search %>" placeholder="For example, OCOM or Oral Communication"></div>
+      <button class="button button--secondary" type="submit">Find subjects</button>
+      <% if (search) { %><a class="table-action" href="/registrar/records/subjects">Clear search</a><% } %>
+    </form>
     <% if (subjects.length) { %>
       <ul class="subject-catalog" aria-label="Subjects in the catalog">
         <% for (const subject of subjects) { %>
@@ -61,7 +68,8 @@
           </li>
         <% } %>
       </ul>
-    <% } else { %><p class="empty-state">No subjects have been added.</p><% } %>
+    <% } else if (search) { %><p class="empty-state">No subjects match “<%= search %>”. Try a different code or name, or clear the search.</p>
+    <% } else { %><p class="empty-state">No subjects have been added. Add a subject before creating a teacher assignment.</p><% } %>
   </section>
 </main>
 <%- include('../partials/foot') %>

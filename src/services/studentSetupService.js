@@ -111,8 +111,8 @@ function createStudentSetupService({
     const result = await request
       .input('actorId', sql.Int, actorId)
       .input('requiredRole', sql.NVarChar(30), role)
-      .query(`SELECT id, role FROM dbo.users WITH (UPDLOCK, HOLDLOCK)
-        WHERE id = @actorId AND is_active = 1 AND role = @requiredRole`);
+      .query(`SELECT id, role FROM users
+        WHERE id = @actorId AND is_active = 1 AND role = @requiredRole FOR UPDATE`);
     const actor = result.recordset?.[0];
     if (!actor) throw new StudentSetupError('Your access is no longer active. Sign in again.', 403);
     return actor;
@@ -125,12 +125,8 @@ function createStudentSetupService({
       .input('entityType', sql.NVarChar(100), entityType)
       .input('entityId', sql.NVarChar(100), String(entityId))
       .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify(details))
-      .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
+      .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
         VALUES (@actorId, @action, @entityType, @entityId, @detailsJson)`);
-  }
-
-  function rowsJson(rows) {
-    return JSON.stringify(rows.map(({ rowNumber, studentNo, email }) => ({ rowNumber, studentNo, email })));
   }
 
   function attachDatabaseErrors(rows, databaseRows) {
@@ -150,28 +146,28 @@ function createStudentSetupService({
   }
 
   async function lookupBulkRows(request, rows) {
-    return request
-      .input('rowsJson', sql.NVarChar(sql.MAX), rowsJson(rows))
-      .query(`WITH input_rows AS (
-          SELECT row_number, student_no, email
-          FROM OPENJSON(@rowsJson) WITH (
-            row_number INT '$.rowNumber',
-            student_no NVARCHAR(50) '$.studentNo',
-            email NVARCHAR(255) '$.email'
-          )
+    const inputs = rows.map((row, index) => {
+      const suffix = String(index);
+      request.input(`rowNumber${suffix}`, sql.Int, row.rowNumber)
+        .input(`studentNo${suffix}`, sql.NVarChar(50), row.studentNo)
+        .input(`email${suffix}`, sql.NVarChar(255), row.email);
+      return `SELECT @rowNumber${suffix} AS row_number, @studentNo${suffix} AS student_no, @email${suffix} AS email`;
+    });
+    return request.query(`WITH input_rows AS (
+          ${inputs.join('\n          UNION ALL\n          ')}
         )
         SELECT input.row_number, student.id AS student_id, student.user_id,
           student.status AS student_status, account.id AS email_user_id,
           pending.id AS pending_email_id
         FROM input_rows AS input
-        LEFT JOIN dbo.students AS student WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN students AS student
           ON student.student_no = input.student_no
-        LEFT JOIN dbo.users AS account WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN users AS account
           ON LOWER(account.email) = input.email
-        LEFT JOIN dbo.pending_email_changes AS pending WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN pending_email_changes AS pending
           ON LOWER(pending.new_email) = input.email
-          AND pending.consumed_at IS NULL AND pending.expires_at > SYSUTCDATETIME()
-        ORDER BY input.row_number`);
+          AND pending.consumed_at IS NULL AND pending.expires_at > UTC_TIMESTAMP(6)
+        ORDER BY input.row_number FOR UPDATE`);
   }
 
   async function previewBulkStudentAccounts(actorInput, inputRows) {
@@ -231,17 +227,16 @@ function createStudentSetupService({
           .input('email', sql.NVarChar(255), credential.email)
           .input('passwordHash', sql.NVarChar(255), credential.passwordHash)
           .input('mustChangePassword', sql.Bit, true)
-          .query(`INSERT INTO dbo.users (email, password_hash, role, is_active, must_change_password)
-            OUTPUT INSERTED.id AS user_id
-            VALUES (@email, @passwordHash, N'student', 1, @mustChangePassword)`);
-        const userId = inserted.recordset?.[0]?.user_id;
+          .query(`INSERT INTO users (email, password_hash, role, is_active, must_change_password)
+            VALUES (@email, @passwordHash, 'student', 1, @mustChangePassword)`);
+        const userId = inserted.insertId;
         if (!Number.isSafeInteger(userId) || userId < 1) throw new Error('Student account insert returned no identifier.');
         const linked = await transaction.request()
           .input('userId', sql.Int, userId)
           .input('studentNo', sql.NVarChar(50), credential.studentNo)
-          .query(`UPDATE dbo.students SET user_id = @userId
-            WHERE student_no = @studentNo AND user_id IS NULL AND status <> N'archived'`);
-        if (linked.rowsAffected?.[0] !== 1) {
+          .query(`UPDATE students SET user_id = @userId
+            WHERE student_no = @studentNo AND user_id IS NULL AND status <> 'archived'`);
+        if (linked.affectedRows !== 1) {
           throw new StudentSetupError('A student account changed while the roster was being confirmed. No accounts were created.', 409);
         }
       }
@@ -256,15 +251,15 @@ function createStudentSetupService({
   async function loadIntakeOptions(actorInput) {
     const pool = await getPool();
     await requireActor(pool.request(), actorInput, 'registrar');
-    const result = await pool.request().query(`
-      SELECT id, school_year, term, is_current FROM dbo.academic_terms ORDER BY is_current DESC, id DESC;
-      SELECT section.id, section.name, section.grade_level, section.academic_term_id,
+    const [terms, sections] = await Promise.all([
+      pool.request().query('SELECT id, school_year, term, is_current FROM academic_terms ORDER BY is_current DESC, id DESC'),
+      pool.request().query(`SELECT section.id, section.name, section.grade_level, section.academic_term_id,
         term.school_year, term.term
-      FROM dbo.sections AS section
-      INNER JOIN dbo.academic_terms AS term ON term.id = section.academic_term_id
-      ORDER BY term.is_current DESC, term.id DESC, section.grade_level, section.name;
-    `);
-    return { terms: result.recordsets?.[0] || [], sections: result.recordsets?.[1] || [] };
+      FROM sections AS section
+      INNER JOIN academic_terms AS term ON term.id = section.academic_term_id
+      ORDER BY term.is_current DESC, term.id DESC, section.grade_level, section.name`)
+    ]);
+    return { terms: terms.recordset || [], sections: sections.recordset || [] };
   }
 
   async function listPendingIntakes(actorInput) {
@@ -274,18 +269,81 @@ function createStudentSetupService({
         student.id AS student_id, student.student_no, student.first_name, student.middle_name,
         student.last_name, student.suffix, account.email,
         term.school_year, term.term, section.name AS section_name,
-        COALESCE(clearance.clearance_status, N'pending') AS clearance_status
-      FROM dbo.enrollments AS enrollment
-      INNER JOIN dbo.students AS student ON student.id = enrollment.student_id
-      INNER JOIN dbo.users AS account ON account.id = student.user_id AND account.role = N'student'
-      INNER JOIN dbo.academic_terms AS term ON term.id = enrollment.academic_term_id
-      LEFT JOIN dbo.sections AS section ON section.id = enrollment.section_id
+      COALESCE(clearance.clearance_status, 'pending') AS clearance_status
+      FROM enrollments AS enrollment
+      INNER JOIN students AS student ON student.id = enrollment.student_id
+      INNER JOIN users AS account ON account.id = student.user_id AND account.role = 'student'
+      INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
+      LEFT JOIN sections AS section ON section.id = enrollment.section_id
         AND section.academic_term_id = enrollment.academic_term_id
-      INNER JOIN dbo.enrollment_clearances AS clearance ON clearance.enrollment_id = enrollment.id
+      INNER JOIN enrollment_clearances AS clearance ON clearance.enrollment_id = enrollment.id
       WHERE clearance.created_for_intake = 1
-        AND enrollment.enrollment_status = N'pending_payment' AND enrollment.finalized_at IS NULL
+        AND enrollment.enrollment_status = 'pending_payment' AND enrollment.finalized_at IS NULL
       ORDER BY enrollment.id DESC`);
     return result.recordset || [];
+  }
+
+  async function listLegacyActivationCandidates(actorInput) {
+    const pool = await getPool();
+    await requireActor(pool.request(), actorInput, 'registrar');
+    const result = await pool.request().query(`SELECT enrollment.id AS enrollment_id, student.student_no,
+        student.first_name, student.middle_name, student.last_name, term.school_year, term.term,
+        section.name AS section_name
+      FROM enrollments AS enrollment
+      INNER JOIN students AS student ON student.id = enrollment.student_id
+      INNER JOIN users AS account ON account.id = student.user_id AND account.role = 'student'
+      INNER JOIN enrollment_clearances AS clearance ON clearance.enrollment_id = enrollment.id
+      INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
+      LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
+      WHERE clearance.created_for_intake = 1 AND clearance.clearance_status = 'cleared'
+        AND clearance.account_activation_pending = 0 AND enrollment.enrollment_status = 'pending_payment'
+        AND enrollment.finalized_at IS NULL AND student.status = 'active' AND account.is_active = 0
+        AND account.must_change_password = 1
+        AND NOT EXISTS (SELECT 1 FROM audit_logs AS audit
+          WHERE (audit.entity_type = 'student' AND audit.entity_id = CAST(student.id AS CHAR)
+              AND audit.action LIKE '%.student_login_deactivated')
+            OR (audit.entity_type = 'user' AND audit.entity_id = CAST(account.id AS CHAR)
+              AND ((audit.action = 'admin.user_updated' AND JSON_UNQUOTE(JSON_EXTRACT(audit.details_json, '$.isActive')) = 'false')
+                OR audit.action = 'admin.user_password_reset')))
+      ORDER BY term.school_year DESC, student.last_name, student.first_name, enrollment.id`);
+    return result.recordset || [];
+  }
+
+  async function confirmLegacyInitialActivation(actorInput, enrollmentInput, confirmationInput) {
+    const enrollmentId = normalizeRecordId(enrollmentInput, 'enrollment');
+    if (!enrollmentId) throw new StudentSetupError('Enrollment not found.', 404);
+    if (confirmationInput !== 'CONFIRM') throw new StudentSetupError('Confirm that this is the student’s first login activation.');
+    return runTransaction(async (transaction) => {
+      const actor = await requireActor(transaction.request(), actorInput, 'registrar');
+      const candidate = await transaction.request().input('enrollmentId', sql.Int, enrollmentId)
+        .query(`SELECT enrollment.id, student.id AS student_id, student.user_id, account.id AS account_id
+          FROM enrollments AS enrollment
+          INNER JOIN students AS student ON student.id = enrollment.student_id
+          INNER JOIN users AS account ON account.id = student.user_id AND account.role = 'student'
+          INNER JOIN enrollment_clearances AS clearance ON clearance.enrollment_id = enrollment.id
+          WHERE enrollment.id = @enrollmentId AND enrollment.enrollment_status = 'pending_payment'
+            AND enrollment.finalized_at IS NULL AND student.status = 'active' AND account.is_active = 0
+            AND account.must_change_password = 1 AND clearance.created_for_intake = 1
+            AND clearance.clearance_status = 'cleared' AND clearance.account_activation_pending = 0
+            AND NOT EXISTS (SELECT 1 FROM audit_logs AS audit
+              WHERE (audit.entity_type = 'student' AND audit.entity_id = CAST(student.id AS CHAR)
+                  AND audit.action LIKE '%.student_login_deactivated')
+                OR (audit.entity_type = 'user' AND audit.entity_id = CAST(account.id AS CHAR)
+                  AND ((audit.action = 'admin.user_updated' AND JSON_UNQUOTE(JSON_EXTRACT(audit.details_json, '$.isActive')) = 'false')
+                    OR audit.action = 'admin.user_password_reset')))
+          FOR UPDATE`);
+      const row = candidate.recordset?.[0];
+      if (!row) throw new StudentSetupError('This historic intake is not eligible for initial login activation. The student login remains unchanged.', 409);
+      const update = await transaction.request().input('enrollmentId', sql.Int, enrollmentId)
+        .query(`UPDATE enrollment_clearances SET account_activation_pending = 1
+          WHERE enrollment_id = @enrollmentId AND created_for_intake = 1
+            AND clearance_status = 'cleared' AND account_activation_pending = 0`);
+      if (update.affectedRows !== 1) throw new StudentSetupError('The historic intake changed before activation could be authorized.', 409);
+      await writeAudit(transaction, actor, 'student_initial_login_activation_authorized', 'enrollment', enrollmentId, {
+        studentId: row.student_id, userId: row.user_id, explicitRegistrarConfirmation: true
+      });
+      return enrollmentId;
+    });
   }
 
   async function createEnrollmentIntake(actorInput, input) {
@@ -308,10 +366,10 @@ function createStudentSetupService({
       const sectionResult = await transaction.request()
         .input('sectionId', sql.Int, sectionId)
         .input('termId', sql.Int, termId)
-        .query(`SELECT section.id, term.school_year FROM dbo.academic_terms AS term WITH (UPDLOCK, HOLDLOCK)
-          LEFT JOIN dbo.sections AS section WITH (UPDLOCK, HOLDLOCK)
+        .query(`SELECT section.id, term.school_year FROM academic_terms AS term
+          LEFT JOIN sections AS section
             ON section.academic_term_id = term.id AND section.id = @sectionId
-          WHERE term.id = @termId`);
+          WHERE term.id = @termId FOR UPDATE`);
       const selectedTerm = sectionResult.recordset?.[0];
       if (!selectedTerm) throw new StudentSetupError('Choose an existing academic term.', 404);
       if (!selectedTerm.id) throw new StudentSetupError('Choose a section that belongs to the selected term.', 409);
@@ -326,11 +384,12 @@ function createStudentSetupService({
         .input('lrn', sql.NVarChar(12), profile.lrn)
         .input('email', sql.NVarChar(255), email)
         .query(`SELECT
-          CASE WHEN EXISTS (SELECT 1 FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE student_no = @studentNo) THEN 1 ELSE 0 END AS student_no_exists,
-          CASE WHEN EXISTS (SELECT 1 FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE lrn = @lrn) THEN 1 ELSE 0 END AS lrn_exists,
-          CASE WHEN EXISTS (SELECT 1 FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE LOWER(email) = @email) THEN 1 ELSE 0 END AS email_exists,
-          CASE WHEN EXISTS (SELECT 1 FROM dbo.pending_email_changes WITH (UPDLOCK, HOLDLOCK)
-            WHERE LOWER(new_email) = @email AND consumed_at IS NULL AND expires_at > SYSUTCDATETIME()) THEN 1 ELSE 0 END AS pending_email_exists`);
+          EXISTS (SELECT 1 FROM students WHERE student_no = @studentNo) AS student_no_exists,
+          EXISTS (SELECT 1 FROM students WHERE lrn = @lrn) AS lrn_exists,
+          EXISTS (SELECT 1 FROM users WHERE LOWER(email) = @email) AS email_exists,
+          EXISTS (SELECT 1 FROM pending_email_changes
+            WHERE LOWER(new_email) = @email AND consumed_at IS NULL AND expires_at > UTC_TIMESTAMP(6)) AS pending_email_exists
+          FOR UPDATE`);
       const conflicts = conflictResult.recordset?.[0] || {};
       if (Number(conflicts.student_no_exists)) throw new StudentSetupError('Automatic student number allocation conflicted with an existing record. Retry the intake.', 409);
       if (Number(conflicts.lrn_exists)) throw new StudentSetupError('That LRN is already in use.', 409);
@@ -340,10 +399,9 @@ function createStudentSetupService({
         .input('email', sql.NVarChar(255), email)
         .input('passwordHash', sql.NVarChar(255), placeholderHash)
         .input('mustChangePassword', sql.Bit, true)
-        .query(`INSERT INTO dbo.users (email, password_hash, role, is_active, must_change_password)
-          OUTPUT INSERTED.id AS user_id
-          VALUES (@email, @passwordHash, N'student', 0, @mustChangePassword)`);
-      const userId = userResult.recordset?.[0]?.user_id;
+        .query(`INSERT INTO users (email, password_hash, role, is_active, must_change_password)
+          VALUES (@email, @passwordHash, 'student', 0, @mustChangePassword)`);
+      const userId = userResult.insertId;
       if (!Number.isSafeInteger(userId) || userId < 1) throw new Error('Student login insert returned no identifier.');
 
       const studentResult = await transaction.request()
@@ -358,29 +416,25 @@ function createStudentSetupService({
         .input('sex', sql.NVarChar(20), profile.sex)
         .input('address', sql.NVarChar(500), profile.address)
         .input('phone', sql.NVarChar(50), profile.phone)
-        .query(`DECLARE @insertedStudents TABLE (id INT);
-          INSERT INTO dbo.students
+        .query(`INSERT INTO students
           (user_id, student_no, lrn, first_name, middle_name, last_name, suffix, birth_date, sex, address, phone)
-          OUTPUT INSERTED.id INTO @insertedStudents(id)
-          VALUES (@userId, @studentNo, @lrn, @firstName, @middleName, @lastName, @suffix, @birthDate, @sex, @address, @phone);
-          SELECT id AS student_id FROM @insertedStudents`);
-      const studentId = studentResult.recordset?.[0]?.student_id;
+          VALUES (@userId, @studentNo, @lrn, @firstName, @middleName, @lastName, @suffix, @birthDate, @sex, @address, @phone)`);
+      const studentId = studentResult.insertId;
       if (!Number.isSafeInteger(studentId) || studentId < 1) throw new Error('Student profile insert returned no identifier.');
 
       const enrollmentResult = await transaction.request()
         .input('studentId', sql.Int, studentId)
         .input('termId', sql.Int, termId)
         .input('sectionId', sql.Int, sectionId)
-        .query(`INSERT INTO dbo.enrollments (student_id, academic_term_id, section_id, enrollment_status)
-          OUTPUT INSERTED.id AS enrollment_id
-          VALUES (@studentId, @termId, @sectionId, N'pending_payment')`);
-      const enrollmentId = enrollmentResult.recordset?.[0]?.enrollment_id;
+        .query(`INSERT INTO enrollments (student_id, academic_term_id, section_id, enrollment_status)
+          VALUES (@studentId, @termId, @sectionId, 'pending_payment')`);
+      const enrollmentId = enrollmentResult.insertId;
       if (!Number.isSafeInteger(enrollmentId) || enrollmentId < 1) throw new Error('Enrollment insert returned no identifier.');
       await transaction.request()
         .input('enrollmentId', sql.Int, enrollmentId)
         .input('actorId', sql.Int, actor.id)
-        .query(`INSERT INTO dbo.enrollment_clearances (enrollment_id, clearance_status, created_by, created_for_intake)
-          VALUES (@enrollmentId, N'pending', @actorId, 1)`);
+        .query(`INSERT INTO enrollment_clearances (enrollment_id, clearance_status, created_by, created_for_intake, account_activation_pending)
+          VALUES (@enrollmentId, 'pending', @actorId, 1, 1)`);
 
       await writeAudit(transaction, actor, 'student_enrollment_intake_created', 'enrollment', enrollmentId, {
         clearanceStatus: 'pending',
@@ -393,8 +447,6 @@ function createStudentSetupService({
   async function finalizeEnrollment(actorInput, enrollmentInput) {
     const enrollmentId = normalizeRecordId(enrollmentInput, 'enrollment');
     if (!enrollmentId) throw new StudentSetupError('Enrollment not found.', 404);
-    const temporaryPassword = createPassword();
-    const passwordHash = await hashPassword(temporaryPassword, BCRYPT_ROUNDS);
     return runTransaction(async (transaction) => {
       const actor = await requireActor(transaction.request(), actorInput, 'registrar');
       const selected = await transaction.request()
@@ -403,18 +455,23 @@ function createStudentSetupService({
           enrollment.finalized_at, student.id AS student_id, student.student_no, student.status AS student_status, student.user_id,
           student.first_name, student.middle_name, student.last_name, student.suffix,
           account.email, account.is_active, term.school_year, term.term, section.name AS section_name,
-          clearance.clearance_status, clearance.created_for_intake
-        FROM dbo.enrollments AS enrollment WITH (UPDLOCK, HOLDLOCK)
-        INNER JOIN dbo.students AS student WITH (UPDLOCK, HOLDLOCK) ON student.id = enrollment.student_id
-        INNER JOIN dbo.users AS account WITH (UPDLOCK, HOLDLOCK) ON account.id = student.user_id
-        INNER JOIN dbo.academic_terms AS term WITH (UPDLOCK, HOLDLOCK) ON term.id = enrollment.academic_term_id
-        LEFT JOIN dbo.sections AS section WITH (UPDLOCK, HOLDLOCK) ON section.id = enrollment.section_id
+          clearance.clearance_status, clearance.created_for_intake, clearance.account_activation_pending
+        FROM enrollments AS enrollment
+        INNER JOIN students AS student ON student.id = enrollment.student_id
+        INNER JOIN users AS account ON account.id = student.user_id
+        INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
+        LEFT JOIN sections AS section ON section.id = enrollment.section_id
           AND section.academic_term_id = enrollment.academic_term_id
-        LEFT JOIN dbo.enrollment_clearances AS clearance WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN enrollment_clearances AS clearance
           ON clearance.enrollment_id = enrollment.id
-        WHERE enrollment.id = @enrollmentId AND account.role = N'student'`);
+        WHERE enrollment.id = @enrollmentId AND account.role = 'student' FOR UPDATE`);
       const row = selected.recordset?.[0];
       if (!row) throw new StudentSetupError('Enrollment not found.', 404);
+      const annualWorkflow = await transaction.request().input('enrollmentId', sql.Int, enrollmentId)
+        .query(`SELECT annual.id FROM enrollments AS enrollment
+          INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
+          WHERE enrollment.id = @enrollmentId FOR UPDATE`);
+      if (annualWorkflow.recordset?.length) throw new StudentSetupError('This placement uses the annual finance approval and activation workflow.', 409);
       if (row.enrollment_status !== 'pending_payment' || row.finalized_at) {
         throw new StudentSetupError('This enrollment has already been finalized or is no longer pending.', 409);
       }
@@ -423,28 +480,34 @@ function createStudentSetupService({
       }
       if (row.clearance_status !== 'cleared') throw new StudentSetupError('Finance has not cleared this enrollment.', 409);
       if (row.student_status !== 'active') throw new StudentSetupError('Only an active student record can be finalized.', 409);
-      if (row.is_active === true || row.is_active === 1) {
-        throw new StudentSetupError('This student login is already active and cannot be reactivated through enrollment intake.', 409);
+      let temporaryPassword = null;
+      let activated = false;
+      if ((row.account_activation_pending === true || row.account_activation_pending === 1)
+        && !(row.is_active === true || row.is_active === 1)) {
+        temporaryPassword = createPassword();
+        const passwordHash = await hashPassword(temporaryPassword, BCRYPT_ROUNDS);
+        const activation = await transaction.request()
+          .input('userId', sql.Int, row.user_id)
+          .input('passwordHash', sql.NVarChar(255), passwordHash)
+          .query(`UPDATE users SET is_active = 1, must_change_password = 1,
+              password_hash = @passwordHash, auth_session_version = UUID(), updated_at = UTC_TIMESTAMP(6)
+            WHERE id = @userId AND role = 'student' AND is_active = 0`);
+        activated = activation.affectedRows === 1;
+        if (!activated) throw new StudentSetupError('The new student login changed before finalization. No credentials were issued.', 409);
       }
-
-      const activated = await transaction.request()
-        .input('userId', sql.Int, row.user_id)
-        .input('passwordHash', sql.NVarChar(255), passwordHash)
-        .query(`UPDATE dbo.users SET is_active = 1, must_change_password = 1,
-            password_hash = @passwordHash, auth_session_version = NEWID(), updated_at = SYSUTCDATETIME()
-          OUTPUT INSERTED.id AS user_id
-          WHERE id = @userId AND role = N'student' AND is_active = 0`);
-      if (activated.recordset?.length !== 1) throw new StudentSetupError('The student login changed before finalization. No credentials were issued.', 409);
+      await transaction.request().input('enrollmentId', sql.Int, enrollmentId)
+        .query(`UPDATE enrollment_clearances SET account_activation_pending = 0
+          WHERE enrollment_id = @enrollmentId AND account_activation_pending = 1`);
       const finalized = await transaction.request()
         .input('enrollmentId', sql.Int, enrollmentId)
-        .query(`UPDATE dbo.enrollments SET enrollment_status = N'enrolled', finalized_at = SYSUTCDATETIME()
-          WHERE id = @enrollmentId AND enrollment_status = N'pending_payment' AND finalized_at IS NULL`);
-      if (finalized.rowsAffected?.[0] !== 1) throw new StudentSetupError('The enrollment changed before finalization. No credentials were issued.', 409);
+        .query(`UPDATE enrollments SET enrollment_status = 'enrolled', finalized_at = UTC_TIMESTAMP(6)
+          WHERE id = @enrollmentId AND enrollment_status = 'pending_payment' AND finalized_at IS NULL`);
+      if (finalized.affectedRows !== 1) throw new StudentSetupError('The enrollment changed before finalization. No credentials were issued.', 409);
 
       await writeAudit(transaction, actor, 'student_enrollment_finalized', 'enrollment', enrollmentId, {
         enrollmentStatus: 'enrolled',
-        studentLoginActivated: true,
-        temporaryPasswordIssued: true
+        studentLoginActivated: activated,
+        temporaryPasswordIssued: Boolean(temporaryPassword)
       });
       return {
         enrollmentId,
@@ -467,6 +530,8 @@ function createStudentSetupService({
     createBulkStudentAccounts,
     loadIntakeOptions,
     listPendingIntakes,
+    listLegacyActivationCandidates,
+    confirmLegacyInitialActivation,
     createEnrollmentIntake,
     finalizeEnrollment
   };

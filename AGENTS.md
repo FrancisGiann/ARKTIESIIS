@@ -9,7 +9,7 @@ It is a web-based information management system with AI-assisted document valida
 - Node.js 20+
 - Express.js
 - EJS + HTML/CSS/JavaScript
-- Microsoft SQL Server
+- MariaDB (the active app database; the user approved the SQL Server-to-MariaDB port)
 - Google Gemini API for bounded document-field extraction, using built-in Node.js `fetch`
 - Email-based two-factor authentication
 
@@ -44,7 +44,7 @@ Good Moral/PSA and active student-uploaded report-card bytes are sent to Google 
 
 New student-origin previous-school report-card scans use the bounded worker for visible-name comparison and PDF/JPEG/PNG format checks, then require staff source inspection and a staff checklist decision. Provider failure leaves the submission reviewable; eligible transient failures may be retried within the existing limit. The precheck never writes grades. Rows marked as the pre-lifecycle archive remain read-only for staff and are excluded from processing and retry. Paper copies have a separate staff-recorded event history; neither channel is a grade source.
 
-The former local Tesseract/Poppler service remains inactive legacy code only. It is not used by current digital-document or Form 137 workflows.
+The former local Tesseract/Poppler service remains inactive legacy code only. It is not used by current digital-document or Form 137 workflows. Gemini worker and transient Form 137 scan concurrency limits are per Node.js process, not global across multiple instances.
 
 ## Document access rules
 - Students may only access their own permitted documents.
@@ -71,9 +71,9 @@ The former local Tesseract/Poppler service remains inactive legacy code only. It
 - Do not expose raw database errors in production.
 
 ## Database baseline and migrations
-- `database/schema.sql` is the inert one-time baseline for the former database. Active prototype setup uses `database/v2/schema.sql` (`v2.001`) and numbered forward-only migrations such as V2 `002_report_card_lifecycle.sql`.
-- Apply later schema changes through new, numbered, forward-only migration scripts. Do not edit or rerun the baseline to update an initialized database, and do not rewrite migrations that have already been applied.
-- V2 distinguishes pre-lifecycle report-card archive rows from new active submissions with `documents.is_legacy_archive`. V2 migration `003_previous_school_report_card_physical_status.sql` stores the separate paper-copy status history; migration `004_previous_school_report_card_status_constraint.sql` gives its status check a stable name and preserves the prototype vocabulary. The migration runner applies each known V2 forward migration once; do not edit an applied migration or the V2 baseline. Keep Form 137 restricted to authorized staff and its own workflow.
+- Active prototype setup uses the MariaDB baseline in `database/mariadb/schema.sql` (`v2.001`) and numbered forward-only migrations in `database/mariadb/migrations/` through `v2.010`. Hostinger creates the database and user in hPanel; setup connects to that existing database and does not create or drop databases.
+- `database/schema.sql`, `database/v2/schema.sql`, and the existing SQL Server migration files are historical archive material. Do not apply them to MariaDB or rewrite them as part of the port.
+- Apply later schema changes through new, numbered, forward-only MariaDB migrations. Do not edit or rerun the baseline to update an initialized database, and do not rewrite migrations that have already been applied. Keep Form 137 restricted to authorized staff and its own workflow.
 
 ## Development workflow
 For every requested phase:

@@ -45,32 +45,35 @@ function transactionalService(onQuery) {
   };
 }
 
-function transactionFixture({ actorRole = 'finance', balance = '10.00', duplicate = false, failAt = null, studentExists = true, studentStatus = 'active', accountExists = false, transactionAccountExists = true, enrollmentStatus = 'pending_payment', enrollmentClearanceStatus = 'pending', enrollmentPaymentTransactionId = null, paymentAvailable = true, clearanceUpdateRows = 1 } = {}) {
+function transactionFixture({ actorRole = 'finance', balance = '10.00', duplicate = false, failAt = null, studentExists = true, studentStatus = 'active', accountExists = false, transactionAccountExists = true, enrollmentStatus = 'pending_payment', enrollmentClearanceStatus = 'pending', enrollmentPaymentTransactionId = null, paymentAvailable = true, clearanceUpdateRows = 1, openingLiabilityExists = false } = {}) {
   let stateBalance = balance;
   const { service, log } = transactionalService(({ statement, values }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: actorRole ? [{ id: 7, role: actorRole }] : [] };
-    if (statement.includes('FROM dbo.students WITH')) return { recordset: studentExists ? [{ id: 22, status: studentStatus }] : [] };
-    if (statement.includes('FROM dbo.financial_accounts WITH')) return { recordset: accountExists ? [{ id: 30 }] : [] };
-    if (statement.includes('FROM dbo.financial_accounts AS a')) return { recordset: transactionAccountExists ? [{ financial_account_id: 30, balance: stateBalance, status: studentStatus }] : [] };
-    if (statement.includes('FROM dbo.financial_accounts AS account')) return { recordset: transactionAccountExists ? [{ financial_account_id: 30, status: studentStatus }] : [] };
-    if (statement.includes('FROM dbo.enrollments AS enrollment WITH')) return { recordset: [{ id: 51, enrollment_status: enrollmentStatus, finalized_at: null, clearance_status: enrollmentClearanceStatus, payment_transaction_id: enrollmentPaymentTransactionId, created_for_intake: 1 }] };
-    if (statement.includes('FROM dbo.financial_transactions AS payment')) return { recordset: paymentAvailable ? [{ id: 91 }] : [] };
-    if (statement.includes('FROM dbo.financial_transactions WITH')) return { recordset: duplicate ? [{ id: 90 }] : [] };
-    if (statement.includes('UPDATE dbo.enrollment_clearances')) return { rowsAffected: [clearanceUpdateRows] };
-    if (statement.includes('UPDATE dbo.financial_accounts')) {
+    if (statement.includes('FROM users')) return { recordset: actorRole ? [{ id: 7, role: actorRole }] : [] };
+    if (statement.includes('FROM annual_enrollments')) return { recordset: [] };
+    if (statement.includes('FROM students')) return { recordset: studentExists ? [{ id: 22, status: studentStatus }] : [] };
+    if (statement.includes('FROM financial_accounts WHERE')) return { recordset: accountExists ? [{ id: 30 }] : [] };
+    if (statement.includes('FROM financial_accounts AS a')) return { recordset: transactionAccountExists ? [{ financial_account_id: 30, balance: stateBalance, status: studentStatus }] : [] };
+    if (statement.includes('FROM financial_accounts AS account')) return { recordset: transactionAccountExists ? [{ financial_account_id: 30, status: studentStatus }] : [] };
+    if (statement.includes('FROM finance_legacy_opening_charges')) return { recordset: openingLiabilityExists ? [{ id: 71 }] : [] };
+    if (statement.includes('INNER JOIN annual_enrollments AS annual')) return { recordset: [] };
+    if (statement.includes('FROM enrollments AS enrollment')) return { recordset: [{ id: 51, enrollment_status: enrollmentStatus, finalized_at: null, clearance_status: enrollmentClearanceStatus, payment_transaction_id: enrollmentPaymentTransactionId, created_for_intake: 1 }] };
+    if (statement.includes('FROM financial_transactions AS payment')) return { recordset: paymentAvailable ? [{ id: 91 }] : [] };
+    if (statement.includes('FROM financial_transactions')) return { recordset: duplicate ? [{ id: 90 }] : [] };
+    if (statement.includes('UPDATE enrollment_clearances')) return { rowsAffected: [clearanceUpdateRows] };
+    if (statement.includes('UPDATE financial_accounts')) {
       if (failAt === 'update') throw new Error('simulated account update failure');
       stateBalance = values.balance;
       return { recordset: [] };
     }
-    if (statement.includes('INSERT INTO dbo.financial_accounts')) {
+    if (statement.includes('INSERT INTO financial_accounts')) {
       if (failAt === 'account_insert') throw new Error('simulated account insert failure');
       return { recordset: [{ id: 30 }] };
     }
-    if (statement.includes('INSERT INTO dbo.financial_transactions')) {
+    if (statement.includes('INSERT INTO financial_transactions')) {
       if (failAt === 'transaction_insert') throw new Error('simulated transaction insert failure');
       return { recordset: [{ id: 91 }] };
     }
-    if (statement.includes('INSERT INTO dbo.audit_logs')) {
+    if (statement.includes('INSERT INTO audit_logs')) {
       if (failAt === 'audit') throw new Error('simulated audit failure');
       return { recordset: [] };
     }
@@ -111,10 +114,10 @@ test('student ledger lookup is linked to the authenticated student and hides oth
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values: { ...values } });
-          if (statement.includes('FROM dbo.users AS user_account')) {
+          if (statement.includes('FROM users AS user_account')) {
             return { recordset: [{ student_id: 22, student_no: 'SHS-2026-0001', first_name: 'Alyssa', last_name: 'Reyes', financial_account_id: 31, balance: '240.00' }] };
           }
-          if (statement.includes('FROM dbo.financial_transactions AS transaction_record')) {
+          if (statement.includes('FROM financial_transactions AS transaction_record')) {
             return { recordset: [{ id: 90, transaction_type: 'payment', amount: '60.00', description: 'Tuition payment' }] };
           }
           throw new Error(`Unexpected student ledger query: ${statement}`);
@@ -130,7 +133,7 @@ test('student ledger lookup is linked to the authenticated student and hides oth
   assert.equal(result.transactions[0].id, 90);
   assert.equal(calls[0].values.userId, 7);
   assert.match(calls[0].statement, /student\.user_id = user_account\.id/);
-  assert.match(calls[0].statement, /user_account\.role = N'student'/);
+  assert.match(calls[0].statement, /user_account\.role = 'student'/);
   assert.deepEqual({ accountId: calls[1].values.accountId, studentId: calls[1].values.studentId }, { accountId: 31, studentId: 22 });
   assert.match(calls[1].statement, /account\.student_id = @studentId/);
   assert.doesNotMatch(calls[0].statement, /@studentId/);
@@ -165,8 +168,8 @@ test('finance student search is parameterized, escaped, bounded, and limited to 
   const service = createFinanceService({ getPool: async () => pool, sql: fakeSql() });
   assert.deepEqual(await service.searchStudents(' S_%[1]~ '), { students: [{ student_id: 22, student_no: 'S-22' }], searchTerm: 'S_%[1]~' });
   assert.equal(calls[0].values.searchPattern, '%S~_~%~[1~]~~%');
-  assert.match(calls[0].statement, /SELECT TOP \(100\)/);
-  assert.doesNotMatch(calls[0].statement, /enrollments|grades|birth_date|address/);
+  assert.match(calls[0].statement, /LIMIT 100/);
+  assert.doesNotMatch(calls[0].statement, /\bFROM enrollments|\bJOIN enrollments|grades|birth_date|address/);
   assert.deepEqual(await service.searchStudents(''), { students: [], searchTerm: '' });
   assert.equal(calls.length, 1, 'empty search should not enumerate student accounts');
   await assert.rejects(service.searchStudents('x'.repeat(101)), /100 printable characters or fewer/);
@@ -182,12 +185,10 @@ test('recent finance accounts are limited, ordered, finance-authorized, and expo
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values: { ...values } });
-          return {
-            recordsets: [
-              [{ authorized: authorized ? 1 : 0 }],
-              [{ student_id: 22, student_no: 'DEMO-001', balance: '850.00' }]
-            ]
-          };
+          if (statement.includes('SELECT id FROM users')) {
+            return { recordset: authorized ? [{ id: 7 }] : [] };
+          }
+          return { recordset: [{ student_id: 22, student_no: 'DEMO-001', balance: '850.00' }] };
         }
       };
     }
@@ -196,10 +197,11 @@ test('recent finance accounts are limited, ordered, finance-authorized, and expo
   assert.deepEqual(await service.listRecentAccounts(7), [{ student_id: 22, student_no: 'DEMO-001', balance: '850.00' }]);
   assert.equal(calls[0].values.actorId, 7);
   assert.match(calls[0].statement, /role IN \('finance', 'database_admin'\).*is_active = 1|is_active = 1 AND role IN \('finance', 'database_admin'\)/s);
-  assert.match(calls[0].statement, /SELECT TOP \(8\)/);
-  assert.match(calls[0].statement, /ORDER BY a\.updated_at DESC, a\.id DESC/);
-  assert.match(calls[0].statement, /WHERE EXISTS/);
-  assert.doesNotMatch(calls[0].statement, /grades|enrollments|documents|birth_date|address/);
+  assert.match(calls[1].statement, /LIMIT 8/);
+  assert.match(calls[1].statement, /ORDER BY a\.updated_at DESC, a\.id DESC/);
+  assert.match(calls[1].statement, /WHERE EXISTS/);
+  assert.doesNotMatch(calls[1].statement, /grades|\bFROM enrollments|\bJOIN enrollments|documents|birth_date|address/);
+  assert.match(calls[1].statement, /NOT EXISTS \(SELECT 1 FROM annual_enrollments/);
 
   authorized = false;
   calls.length = 0;
@@ -216,11 +218,11 @@ test('account and transaction history read paths return only the selected studen
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values: { ...values } });
-          if (statement.includes('FROM dbo.students')) return { recordset: [{ student_id: 22, student_no: 'S-22', first_name: 'Alex', last_name: 'Kim', status: 'archived' }] };
-          if (statement.includes('FROM dbo.enrollments AS enrollment')) return { recordset: [] };
-          if (statement.includes('FROM dbo.financial_accounts')) return { recordset: [{ financial_account_id: 30, balance: '-2.50' }] };
-          if (statement.includes('FROM dbo.financial_transactions AS payment')) return { recordset: [{ transaction_id: 91, transaction_type: 'payment', amount: '5.00' }] };
-          if (statement.includes('FROM dbo.financial_transactions')) return { recordset: [{ id: 90, transaction_type: 'adjustment', amount: '-2.50' }] };
+          if (statement.includes('FROM students')) return { recordset: [{ student_id: 22, student_no: 'S-22', first_name: 'Alex', last_name: 'Kim', status: 'archived' }] };
+          if (statement.includes('FROM enrollments AS enrollment')) return { recordset: [] };
+          if (statement.includes('FROM financial_accounts')) return { recordset: [{ financial_account_id: 30, balance: '-2.50' }] };
+          if (statement.includes('FROM financial_transactions AS payment')) return { recordset: [{ transaction_id: 91, transaction_type: 'payment', amount: '5.00' }] };
+          if (statement.includes('FROM financial_transactions')) return { recordset: [{ id: 90, transaction_type: 'adjustment', amount: '-2.50' }] };
           throw new Error(`Unexpected query: ${statement}`);
         }
       };
@@ -246,12 +248,12 @@ test('account creation is finance-checked, student-owned, serializable, and audi
   assert.equal(accountId, 30);
   assert.equal(log.isolation, 'SERIALIZABLE');
   assert.equal(log.committed, true);
-  const studentLock = log.queries.find(({ statement }) => statement.includes('FROM dbo.students WITH'));
-  assert.match(studentLock.statement, /UPDLOCK, HOLDLOCK/);
+  const studentLock = log.queries.find(({ statement }) => statement.includes('FROM students'));
+  assert.match(studentLock.statement, /FOR UPDATE/);
   assert.equal(studentLock.values.studentId, 22);
-  const insert = log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.financial_accounts'));
+  const insert = log.queries.find(({ statement }) => statement.includes('INSERT INTO financial_accounts'));
   assert.equal(insert.values.studentId, 22);
-  const audit = log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs'));
+  const audit = log.queries.find(({ statement }) => statement.includes('INSERT INTO audit_logs'));
   assert.equal(audit.values.action, 'finance.account_created');
   assert.equal(JSON.parse(audit.values.detailsJson).studentId, 22);
 });
@@ -260,8 +262,8 @@ test('registrar actors cannot write finance data while database administrators c
   const deniedAccount = transactionFixture({ actorRole: 'registrar' });
   await assert.rejects(deniedAccount.service.createAccount(7, '22'), /finance access is no longer active/i);
   assert.equal(deniedAccount.log.rolledBack, true);
-  assert.equal(deniedAccount.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.financial_accounts')), false);
-  assert.equal(deniedAccount.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(deniedAccount.log.queries.some(({ statement }) => statement.includes('INSERT INTO financial_accounts')), false);
+  assert.equal(deniedAccount.log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 
   const adminTransaction = transactionFixture({ actorRole: 'database_admin' });
   await adminTransaction.service.recordTransaction(7, '22', { transactionType: 'charge', amount: '1.00' });
@@ -273,33 +275,50 @@ test('account creation rejects missing students and existing accounts without wr
   const missingStudent = transactionFixture({ studentExists: false });
   await assert.rejects(missingStudent.service.createAccount(7, '22'), /Student record not found/);
   assert.equal(missingStudent.log.rolledBack, true);
-  assert.equal(missingStudent.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.financial_accounts')), false);
+  assert.equal(missingStudent.log.queries.some(({ statement }) => statement.includes('INSERT INTO financial_accounts')), false);
 
   const existing = transactionFixture({ accountExists: true });
   await assert.rejects(existing.service.createAccount(7, '22'), /already has a financial account/);
   assert.equal(existing.log.rolledBack, true);
-  assert.equal(existing.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.financial_accounts')), false);
+  assert.equal(existing.log.queries.some(({ statement }) => statement.includes('INSERT INTO financial_accounts')), false);
 });
 
 test('archived students cannot receive new finance accounts or ledger entries', async () => {
   const archivedAccount = transactionFixture({ studentStatus: 'archived' });
   await assert.rejects(archivedAccount.service.createAccount(7, '22'), /Archived students cannot receive new finance records/);
   assert.equal(archivedAccount.log.rolledBack, true);
-  const studentRead = archivedAccount.log.queries.find(({ statement }) => statement.includes('FROM dbo.students WITH'));
+  const studentRead = archivedAccount.log.queries.find(({ statement }) => statement.includes('FROM students'));
   assert.match(studentRead.statement, /SELECT id, status/);
-  assert.match(studentRead.statement, /UPDLOCK, HOLDLOCK/);
-  assert.equal(archivedAccount.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.financial_accounts')), false);
-  assert.equal(archivedAccount.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.match(studentRead.statement, /FOR UPDATE/);
+  assert.equal(archivedAccount.log.queries.some(({ statement }) => statement.includes('INSERT INTO financial_accounts')), false);
+  assert.equal(archivedAccount.log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 
   const archivedLedger = transactionFixture({ studentStatus: 'archived' });
   await assert.rejects(archivedLedger.service.recordTransaction(7, '22', { transactionType: 'charge', amount: '1.00' }), /Archived students cannot receive new finance records/);
   assert.equal(archivedLedger.log.rolledBack, true);
-  const accountRead = archivedLedger.log.queries.find(({ statement }) => statement.includes('FROM dbo.financial_accounts AS a'));
+  const accountRead = archivedLedger.log.queries.find(({ statement }) => statement.includes('FROM financial_accounts AS a'));
   assert.match(accountRead.statement, /s\.status/);
-  assert.match(accountRead.statement, /dbo\.students AS s WITH \(UPDLOCK, HOLDLOCK\)/);
-  assert.equal(archivedLedger.log.queries.some(({ statement }) => statement.includes('UPDATE dbo.financial_accounts')), false);
-  assert.equal(archivedLedger.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.financial_transactions')), false);
-  assert.equal(archivedLedger.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.match(accountRead.statement, /students AS s/);
+  assert.match(accountRead.statement, /FOR UPDATE/);
+  assert.equal(archivedLedger.log.queries.some(({ statement }) => statement.includes('UPDATE financial_accounts')), false);
+  assert.equal(archivedLedger.log.queries.some(({ statement }) => statement.includes('INSERT INTO financial_transactions')), false);
+  assert.equal(archivedLedger.log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
+});
+
+test('legacy opening liability locks out raw legacy transactions and clearance under the account lock', async () => {
+  const transaction = transactionFixture({ openingLiabilityExists: true });
+  await assert.rejects(transaction.service.recordTransaction(7, 22, { transactionType: 'payment', amount: '1.00' }), /reviewed opening liability.*annual finance workspace/i);
+  assert.equal(transaction.log.rolledBack, true);
+  assert.equal(transaction.log.queries.some(({ statement }) => statement.includes('UPDATE financial_accounts')), false);
+  assert.equal(transaction.log.queries.some(({ statement }) => statement.includes('INSERT INTO financial_transactions')), false);
+  const openingLock = transaction.log.queries.find(({ statement }) => statement.includes('FROM finance_legacy_opening_charges'));
+  assert.deepEqual(openingLock.values, { accountId: 30 });
+  assert.match(openingLock.statement, /FOR UPDATE/);
+
+  const clearance = transactionFixture({ openingLiabilityExists: true });
+  await assert.rejects(clearance.service.clearEnrollmentWithExistingPayment(7, 22, 51, 91, true), /reviewed opening liability.*annual finance workflow/i);
+  assert.equal(clearance.log.rolledBack, true);
+  assert.equal(clearance.log.queries.some(({ statement }) => statement.includes('UPDATE enrollment_clearances')), false);
 });
 
 test('charges, payments, and signed adjustments update balance in the correct direction', async () => {
@@ -313,12 +332,12 @@ test('charges, payments, and signed adjustments update balance in the correct di
     const result = await fixture.service.recordTransaction(7, '22', input);
     assert.equal(result.balance, expectedBalance);
     assert.equal(fixture.getBalance(), expectedBalance);
-    const accountLookup = fixture.log.queries.find(({ statement }) => statement.includes('FROM dbo.financial_accounts AS a'));
+    const accountLookup = fixture.log.queries.find(({ statement }) => statement.includes('FROM financial_accounts AS a'));
     assert.match(accountLookup.statement, /a\.student_id/);
     assert.equal(accountLookup.values.studentId, 22);
-    const update = fixture.log.queries.find(({ statement }) => statement.includes('UPDATE dbo.financial_accounts'));
+    const update = fixture.log.queries.find(({ statement }) => statement.includes('UPDATE financial_accounts'));
     assert.equal(update.values.balance, expectedBalance);
-    const insert = fixture.log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.financial_transactions'));
+    const insert = fixture.log.queries.find(({ statement }) => statement.includes('INSERT INTO financial_transactions'));
     assert.equal(insert.values.amount, input.amount === '7.00' ? '7.00' : input.amount);
     assert.equal(fixture.log.queries.at(-1).values.action, 'finance.transaction_recorded');
     assert.equal(fixture.log.committed, true);
@@ -330,13 +349,13 @@ test('duplicate references are rejected for the owned account before balance, tr
   await assert.rejects(fixture.service.recordTransaction(7, '22', {
     transactionType: 'charge', amount: '5.00', referenceNo: 'REF-7'
   }), /already used for this account/);
-  const duplicate = fixture.log.queries.find(({ statement }) => statement.includes('FROM dbo.financial_transactions WITH'));
+  const duplicate = fixture.log.queries.find(({ statement }) => statement.includes('FROM financial_transactions'));
   assert.deepEqual(duplicate.values, { accountId: 30, referenceNo: 'REF-7' });
   assert.match(duplicate.statement, /financial_account_id = @accountId AND reference_no = @referenceNo/);
   assert.equal(fixture.log.rolledBack, true);
-  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE dbo.financial_accounts')), false);
-  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.financial_transactions')), false);
-  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE financial_accounts')), false);
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO financial_transactions')), false);
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 });
 
 test('transactions require an existing account and reject balance overflow before updates', async () => {
@@ -347,7 +366,7 @@ test('transactions require an existing account and reject balance overflow befor
   const overflow = transactionFixture({ balance: '9999999999.99' });
   await assert.rejects(overflow.service.recordTransaction(7, '22', { transactionType: 'charge', amount: '0.01' }), /exceed the supported balance limit/);
   assert.equal(overflow.log.rolledBack, true);
-  assert.equal(overflow.log.queries.some(({ statement }) => statement.includes('UPDATE dbo.financial_accounts')), false);
+  assert.equal(overflow.log.queries.some(({ statement }) => statement.includes('UPDATE financial_accounts')), false);
 });
 
 test('a transaction insert or audit failure rolls back the balance update and transaction as one unit', async () => {
@@ -358,8 +377,8 @@ test('a transaction insert or audit failure rolls back the balance update and tr
     }), /simulated/);
     assert.equal(fixture.log.rolledBack, true);
     assert.equal(fixture.log.committed, false);
-    assert.ok(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE dbo.financial_accounts')));
-    if (failAt === 'audit') assert.ok(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.financial_transactions')));
+    assert.ok(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE financial_accounts')));
+    if (failAt === 'audit') assert.ok(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO financial_transactions')));
   }
 });
 
@@ -369,18 +388,18 @@ test('finance can assign one unused payment from the same student account to a s
   assert.deepEqual(result, { enrollmentId: 51, paymentTransactionId: 91 });
   assert.equal(fixture.log.isolation, 'SERIALIZABLE');
   assert.equal(fixture.log.committed, true);
-  const enrollmentLock = fixture.log.queries.find(({ statement }) => statement.includes('FROM dbo.enrollments AS enrollment WITH'));
+  const enrollmentLock = fixture.log.queries.find(({ statement }) => statement.includes('FROM enrollments AS enrollment'));
   assert.deepEqual(enrollmentLock.values, { enrollmentId: 51, studentId: 22 });
   assert.match(enrollmentLock.statement, /enrollment_status, enrollment\.finalized_at/);
-  const paymentLock = fixture.log.queries.find(({ statement }) => statement.includes('FROM dbo.financial_transactions AS payment'));
+  const paymentLock = fixture.log.queries.find(({ statement }) => statement.includes('FROM financial_transactions AS payment'));
   assert.deepEqual(paymentLock.values, { paymentTransactionId: 91, accountId: 30 });
-  assert.match(paymentLock.statement, /transaction_type = N'payment'/);
+  assert.match(paymentLock.statement, /transaction_type = 'payment'/);
   assert.match(paymentLock.statement, /NOT EXISTS[\s\S]*payment_transaction_id = payment\.id/);
-  const update = fixture.log.queries.find(({ statement }) => statement.includes('UPDATE dbo.enrollment_clearances'));
+  const update = fixture.log.queries.find(({ statement }) => statement.includes('UPDATE enrollment_clearances'));
   assert.deepEqual(update.values, { enrollmentId: 51, transactionId: 91, actorId: 7 });
-  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE dbo.financial_accounts')), false);
-  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.financial_transactions')), false);
-  const audit = fixture.log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs'));
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE financial_accounts')), false);
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO financial_transactions')), false);
+  const audit = fixture.log.queries.find(({ statement }) => statement.includes('INSERT INTO audit_logs'));
   assert.equal(audit.values.action, 'finance.enrollment_clearance_updated');
   assert.deepEqual(JSON.parse(audit.values.detailsJson), {
     enrollmentId: 51, paymentTransactionId: 91, existingPayment: true, financeConfirmedEligibility: true
@@ -400,7 +419,7 @@ test('existing-payment clearance requires explicit finance attestation and rejec
   ]) {
     await assert.rejects(fixture.service.clearEnrollmentWithExistingPayment(7, 22, 51, 91, true), /unused recorded payment|uncleared pending enrollment|another finance action/);
     assert.equal(fixture.log.rolledBack, true);
-    assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+    assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
   }
 });
 
@@ -467,8 +486,89 @@ async function signIn(baseUrl, role) {
   return cookieFrom(response);
 }
 
+test('annual finance correction routes stay student-bound, CSRF-protected, and reachable from the account workflow', async () => {
+  const calls = [];
+  const studentId = 22;
+  const annualFinanceService = {
+    async listRoster() { return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; },
+    async getStudentLedger() {
+      return {
+        student: { id: studentId, student_no: 'SYNTH-22', first_name: 'Synthetic', middle_name: null, last_name: 'Student', suffix: null, status: 'active' },
+        summary: { annualBalanceSchoolYear: null, annualBalance: '0.00', allYearsAnnualBalance: '0.00', annualWaivedAmount: '0.00', unattributedLegacyBalance: '100.00', openingLiabilityDue: '0.00', totalBalance: '100.00', currentTermOutstanding: '0.00', priorTermYearDebt: '0.00', availableCredit: '0.00' },
+        terms: [], events: [], charges: [], availablePayments: [], openingLiabilities: [], allocationHistory: [],
+        legacyReconciliationHistory: [], payments: [], legacyCredits: [], privateClearances: [], adjustments: []
+      };
+    },
+    async recordPayment(...args) { calls.push(['recordPayment', ...args]); return { paymentId: 104 }; },
+    async listSchedules() { return []; },
+    async releasePaymentAllocation(...args) { calls.push(['releaseAllocation', ...args]); return {}; },
+    async releaseLegacyReconciliation(...args) { calls.push(['releaseLegacyReconciliation', ...args]); return {}; },
+    async updatePaymentMetadata(...args) { calls.push(['paymentMetadata', ...args]); return {}; },
+    async previewLegacyOpeningLiability(...args) { calls.push(['openingPreview', ...args]); return { financialAccountId: 30, remainingBalance: '100.00', alreadyTransferred: false, activeReconciliationCount: 0 }; },
+    async transferLegacyOpeningLiability(...args) { calls.push(['openingTransfer', ...args]); return {}; }
+  };
+  const financeService = {
+    async searchStudents() { return { students: [], searchTerm: '' }; },
+    async getDashboardSummary() { return {}; },
+    async listRecentAccounts() { return []; },
+    async getStudentAccount(id) { return { student: { student_id: id, student_no: 'SYNTH-22', first_name: 'Synthetic', last_name: 'Student', status: 'active' }, account: null, transactions: [] }; }
+  };
+  const financeCasesService = {
+    async getStudentCases() { return { specialSubjects: [], exemptions: [], departures: [] }; },
+    async approveExemptionCase(actorId, annualId, input) {
+      calls.push(['approveExemption', actorId, annualId, input]);
+      assert.equal(input.expectedStudentId, studentId);
+      return { studentId };
+    }
+  };
+  const idempotencyKey = '41111111-1111-4111-8111-111111111111';
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService, annualFinanceService, financeCasesService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'finance');
+    const account = await fetch(`${baseUrl}/finance/students/${studentId}/annual`, { headers: { cookie } });
+    const accountHtml = await account.text();
+    const csrfToken = csrfFrom(accountHtml);
+    assert.match(accountHtml, /name="transmittalReference"/);
+    assert.match(accountHtml, /name="privateRemarks"/);
+    assert.match(accountHtml, /name="allocationTarget"/);
+    const post = async (path, fields) => fetch(`${baseUrl}${path}`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, ...fields })
+    });
+    assert.equal((await post(`/finance/students/${studentId}/annual/allocations/101/release`, { amount: '5.00', reason: 'Correction', idempotencyKey })).status, 303);
+    assert.equal((await post(`/finance/students/${studentId}/annual/legacy-reconciliations/102/release`, { amount: '5.00', reason: 'Correction', idempotencyKey })).status, 303);
+    assert.equal((await post(`/finance/students/${studentId}/annual/payments/103/metadata`, { eventType: 'receipt_reference_updated', referenceNo: 'DELAYED-103', idempotencyKey })).status, 303);
+    assert.equal((await post(`/finance/students/${studentId}/annual/payments`, {
+      amount: '20.00', paymentDate: '2026-10-01', referenceNo: 'RECEIPT-104', transmittalReference: 'TRANSMIT-104',
+      privateRemarks: 'Finance-only starting note.', receiptIssued: '0', idempotencyKey
+    })).status, 303);
+    const preview = await post(`/finance/students/${studentId}/annual/legacy-opening/preview`, {});
+    assert.equal(preview.status, 200);
+    const previewHtml = await preview.text();
+    assert.match(previewHtml, /Confirm reviewed opening liability/);
+    assert.match(previewHtml, /name="expectedAmount" value="100\.00"/);
+    assert.equal((await post(`/finance/students/${studentId}/annual/legacy-opening/transfer`, { expectedAmount: '100.00', sourceLabel: 'Reviewed account', reason: 'Reviewed statement', idempotencyKey })).status, 303);
+    assert.equal((await post(`/finance/students/${studentId}/annual/23/exemptions`, { reason: 'Approved', idempotencyKey, ruleTerm: '1', ruleCategory: 'tuition', ruleAmount: '50.00' })).status, 303);
+    const csrfDenied = await fetch(`${baseUrl}/finance/students/${studentId}/annual/allocations/101/release`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: 'amount=5.00'
+    });
+    assert.equal(csrfDenied.status, 403);
+  });
+  assert.deepEqual(calls.map(([name]) => name), [
+    'releaseAllocation', 'releaseLegacyReconciliation', 'paymentMetadata', 'recordPayment', 'openingPreview', 'openingTransfer', 'approveExemption'
+  ]);
+  assert.equal(calls.find(([name]) => name === 'releaseAllocation')[2], studentId);
+  assert.equal(calls.find(([name]) => name === 'openingTransfer')[2], studentId);
+  const paymentInput = calls.find(([name]) => name === 'recordPayment')[3];
+  assert.equal(paymentInput.transmittalReference, 'TRANSMIT-104');
+  assert.equal(paymentInput.privateRemarks, 'Finance-only starting note.');
+});
+
 test('finance routes permit finance staff and database administrators and protect all writes with CSRF', async () => {
   const calls = [];
+  const annualFinanceService = {
+    async listRoster(actorId, filters) { calls.push(['annualRoster', actorId, filters]); return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; },
+    async getStudentLedger() { return { terms: [] }; }
+  };
   const financeService = {
     async searchStudents(searchTerm) { calls.push(['search', searchTerm]); return { students: [], searchTerm }; },
     async getDashboardSummary(actorId) {
@@ -493,22 +593,28 @@ test('finance routes permit finance staff and database administrators and protec
       calls.push(['clear', actorId, studentId, enrollmentId, paymentId, confirmed]); return {};
     }
   };
-  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService }), async (baseUrl) => {
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService, annualFinanceService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
     const redirect = await fetch(`${baseUrl}/dashboard`, { headers: { cookie }, redirect: 'manual' });
-    assert.equal(redirect.headers.get('location'), '/finance');
+    assert.equal(redirect.headers.get('location'), '/finance/overview');
     const workspace = await fetch(`${baseUrl}/finance`, { headers: { cookie } });
     assert.equal(workspace.status, 200);
     const workspaceHtml = await workspace.text();
-    assert.match(workspaceHtml, /Finance workspace/);
-    assert.match(workspaceHtml, /Find a student account/);
-    assert.match(workspaceHtml, /DEMO-001/);
-    assert.match(workspaceHtml, /Demo Learner Two/);
-    assert.match(workspaceHtml, /finance-status--settled/);
-    assert.match(workspaceHtml, /finance-status--credit/);
+    assert.match(workspaceHtml, /Annual finance roster/);
+    assert.ok(calls.some(([name]) => name === 'annualRoster'));
+
+    const legacyWorkspace = await fetch(`${baseUrl}/finance/legacy`, { headers: { cookie } });
+    const legacyHtml = await legacyWorkspace.text();
+    assert.equal(legacyWorkspace.status, 200);
+    assert.match(legacyHtml, /Finance workspace/);
+    assert.match(legacyHtml, /Find a student account/);
+    assert.match(legacyHtml, /DEMO-001/);
+    assert.match(legacyHtml, /Demo Learner Two/);
+    assert.match(legacyHtml, /finance-status--settled/);
+    assert.match(legacyHtml, /finance-status--credit/);
     assert.ok(calls.some(([name]) => name === 'recent'));
     assert.equal(calls.some(([name]) => name === 'summary'), false, 'the workspace does not fetch decorative account totals');
-    assert.equal(calls[0][0], 'search');
+    assert.equal(calls.find(([name]) => name === 'search')[0], 'search');
 
     const accountPage = await fetch(`${baseUrl}/finance/students/22`, { headers: { cookie } });
     const accountHtml = await accountPage.text();
@@ -545,7 +651,7 @@ test('finance routes permit finance staff and database administrators and protec
 
   const serviceCallsBeforeDeniedRequests = calls.length;
   for (const role of ['student', 'registrar']) {
-    const app = createApp({ databasePool: makeAuthPool(role), environment, financeService });
+    const app = createApp({ databasePool: makeAuthPool(role), environment, financeService, annualFinanceService });
     await withServer(app, async (baseUrl) => {
       const cookie = await signIn(baseUrl, role);
       const response = await fetch(`${baseUrl}/finance`, { headers: { cookie }, redirect: 'manual' });
@@ -556,7 +662,7 @@ test('finance routes permit finance staff and database administrators and protec
       assert.equal(write.status, 403, `${role} must be denied finance writes`);
     });
   }
-  await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, financeService }), async (baseUrl) => {
+  await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, financeService, annualFinanceService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'database_admin');
     const accountPage = await fetch(`${baseUrl}/finance/students/22`, { headers: { cookie } });
     const html = await accountPage.text();
@@ -573,6 +679,7 @@ test('finance routes permit finance staff and database administrators and protec
 });
 
 test('archived finance records stay readable without write controls and retain the bounded search', async () => {
+  const annualFinanceService = { async listRoster() { return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; }, async getStudentLedger() { return { terms: [] }; } };
   const financeService = {
     async searchStudents(searchTerm) {
       return { searchTerm, students: [{ student_id: 22, student_no: 'S-22', first_name: 'Alex', last_name: 'Kim' }] };
@@ -586,16 +693,16 @@ test('archived finance records stay readable without write controls and retain t
     }
   };
 
-  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService }), async (baseUrl) => {
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService, annualFinanceService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
-    const workspace = await fetch(`${baseUrl}/finance?search=Alex%20Kim`, { headers: { cookie } });
+    const workspace = await fetch(`${baseUrl}/finance/legacy?search=Alex%20Kim`, { headers: { cookie } });
     const workspaceHtml = await workspace.text();
     assert.match(workspaceHtml, /href="\/finance\/students\/22\?search=Alex%20Kim"/);
     assert.doesNotMatch(workspaceHtml, /Recently updated accounts/);
 
     const account = await fetch(`${baseUrl}/finance/students/22?search=Alex%20Kim`, { headers: { cookie } });
     const accountHtml = await account.text();
-    assert.match(accountHtml, /href="\/finance\?search=Alex%20Kim">Back to finance workspace/);
+    assert.match(accountHtml, /href="\/finance\/legacy\?search=Alex%20Kim">Back to legacy finance workspace/);
     assert.doesNotMatch(accountHtml, /id="finance-search-heading"/);
     assert.match(accountHtml, /Archived history/);
     assert.match(accountHtml, /new accounts and transactions are disabled/i);
@@ -605,6 +712,7 @@ test('archived finance records stay readable without write controls and retain t
 });
 
 test('finance account detail groups identity and balance, separates clearance, and gives transaction history full width', async () => {
+  const annualFinanceService = { async listRoster() { return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; }, async getStudentLedger() { return { terms: [] }; } };
   const financeService = {
     async getStudentAccount(studentId) {
       return {
@@ -617,7 +725,7 @@ test('finance account detail groups identity and balance, separates clearance, a
     }
   };
 
-  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService }), async (baseUrl) => {
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService, annualFinanceService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
     const response = await fetch(`${baseUrl}/finance/students/22`, { headers: { cookie } });
     const html = await response.text();

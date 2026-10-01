@@ -69,8 +69,8 @@ test('document status labels distinguish active report cards from the legacy arc
   assert.equal(documentStatusLabel('pending', null, null, 'report_card', true), 'Historical archive');
 });
 
-function transactionHarness({ actorRole = 'student', ownStudentId = 44, previousOwnerId = 7, previousDocumentType = 'good_moral', previousUploadSource = actorRole === 'student' ? 'student' : 'registrar', previousIsLegacyArchive = false, failAt = null, correctionAction = 'correction_requested', hasRevision = false, hasCorrectedSubmission = false, originalSubmissionExists = false, latestSubmissionStatus = originalSubmissionExists ? 'needs_review' : null, latestSubmissionRows = null, documentStatus = 'needs_review', ocrResultStatus = 'needs_review', validationJson = JSON.stringify({ advisoryChecks: [{ key: 'linked_student_name', found: true }] }), originalFilename = 'report.pdf', storedFilename = '5dd677e1-87fb-4214-a7c1-27aca233ae1f.pdf', previousDecision = null, fileSystem } = {}) {
-  const state = { queries: [], inserted: [], events: [], decisions: [], form137Statuses: [], previousSchoolReportCardStatuses: [], deletedRows: [], documentExists: true, committed: false, rolledBack: false, id: 90, documentStatus, previousDecision };
+function transactionHarness({ actorRole = 'student', ownStudentId = 44, previousOwnerId = 7, previousDocumentType = 'good_moral', previousUploadSource = actorRole === 'student' ? 'student' : 'registrar', previousIsLegacyArchive = false, failAt = null, correctionAction = 'correction_requested', hasRevision = false, hasCorrectedSubmission = false, originalSubmissionExists = false, latestSubmissionStatus = originalSubmissionExists ? 'needs_review' : null, latestSubmissionRows = null, documentStatus = 'needs_review', ocrResultStatus = 'needs_review', validationJson = JSON.stringify({ advisoryChecks: [{ key: 'linked_student_name', found: true }] }), originalFilename = 'report.pdf', storedFilename = '5dd677e1-87fb-4214-a7c1-27aca233ae1f.pdf', previousDecision = null, id = 90, fileSystem } = {}) {
+  const state = { queries: [], inserted: [], events: [], decisions: [], form137Statuses: [], previousSchoolReportCardStatuses: [], deletedRows: [], documentExists: true, committed: false, rolledBack: false, id, documentStatus, previousDecision };
   const transactionFactory = () => ({
     async begin(isolation) {
       state.isolation = isolation;
@@ -93,52 +93,53 @@ function transactionHarness({ actorRole = 'student', ownStudentId = 44, previous
         async query(statement) {
           const call = { statement, values: { ...values } };
           state.queries.push(call);
-          if (statement.includes('FROM dbo.users')) return { recordset: actorRole ? [{ id: 7, role: actorRole }] : [] };
-          if (statement.startsWith('DELETE FROM dbo.document_validations')) { state.deletedRows.push('document_validations'); return { recordset: [] }; }
-          if (statement.startsWith('DELETE FROM dbo.document_review_events')) { state.deletedRows.push('document_review_events'); return { recordset: [] }; }
-          if (statement.startsWith('DELETE FROM dbo.document_decision_events')) { state.deletedRows.push('document_decision_events'); return { recordset: [] }; }
-          if (statement.startsWith('DELETE FROM dbo.documents')) {
+          if (statement.includes('FROM users')) return { recordset: actorRole ? [{ id: 7, role: actorRole }] : [] };
+          if (statement.startsWith('DELETE FROM document_validations')) { state.deletedRows.push('document_validations'); return { recordset: [] }; }
+          if (statement.startsWith('DELETE FROM document_review_events')) { state.deletedRows.push('document_review_events'); return { recordset: [] }; }
+          if (statement.startsWith('DELETE FROM document_decision_events')) { state.deletedRows.push('document_decision_events'); return { recordset: [] }; }
+          if (statement.startsWith('DELETE FROM documents')) {
             state.documentExists = false;
-            return { recordset: [{ id: values.documentId }] };
+            return { affectedRows: 1 };
           }
-          if (statement.includes('FROM dbo.documents AS d WITH (UPDLOCK, HOLDLOCK)') && statement.includes('stored_filename')) {
+          if (statement.includes('FROM documents AS d') && statement.includes('stored_filename')) {
             return { recordset: state.documentExists ? [{ id: values.documentId, student_id: 44, document_type: previousDocumentType, is_legacy_archive: previousIsLegacyArchive ? 1 : 0, stored_filename: storedFilename }] : [] };
           }
-          if (statement.includes('WHERE supersedes_document_id = @documentId') && statement.includes('WITH (UPDLOCK, HOLDLOCK)')) return { recordset: hasCorrectedSubmission ? [{ id: 91 }] : [] };
-          if (statement.includes('OUTER APPLY')) return { recordset: [{ id: values.documentId, student_id: 44, document_type: previousDocumentType, is_legacy_archive: previousIsLegacyArchive ? 1 : 0, status: state.documentStatus, original_filename: originalFilename, mime_type: 'application/pdf', result_status: ocrResultStatus, validation_json: validationJson, precheck_attempt_count: 1 }] };
-          if (statement.includes('FROM dbo.students') && statement.includes('WHERE user_id = @actorId')) return { recordset: ownStudentId ? [{ id: ownStudentId }] : [] };
-          if (statement.includes('FROM dbo.students') && statement.includes('WHERE id = @studentId')) return { recordset: [{ id: values.studentId }] };
-          if (statement.includes('SELECT TOP (1) id, status FROM dbo.documents WITH (UPDLOCK, HOLDLOCK)')) {
+          if (statement.includes('WHERE supersedes_document_id = @documentId') && statement.includes('FOR UPDATE')) return { recordset: hasCorrectedSubmission ? [{ id: 91 }] : [] };
+          if (statement.includes('v_document_latest_validation')) return { recordset: [{ id: values.documentId, student_id: 44, document_type: previousDocumentType, is_legacy_archive: previousIsLegacyArchive ? 1 : 0, status: state.documentStatus, original_filename: originalFilename, mime_type: 'application/pdf', result_status: ocrResultStatus, validation_json: validationJson, precheck_attempt_count: 1 }] };
+          if (statement.includes('SELECT id FROM documents') && statement.includes('supersedes_document_id')) return { recordset: hasRevision ? [{ id: 91 }] : [] };
+          if (statement.includes('FROM students') && statement.includes('WHERE user_id = @actorId')) return { recordset: ownStudentId ? [{ id: ownStudentId }] : [] };
+          if (statement.includes('FROM students') && statement.includes('WHERE id = @studentId')) return { recordset: [{ id: values.studentId }] };
+          if (statement.includes('SELECT id, status FROM documents') && statement.includes('student_id = @studentId')) {
             if (previousDocumentType === 'report_card' && previousIsLegacyArchive) return { recordset: [] };
             return { recordset: latestSubmissionRows || (latestSubmissionStatus ? [{ id: 12, status: latestSubmissionStatus }] : []) };
           }
-          if (statement.includes('FROM dbo.documents AS d')) return { recordset: [{ id: values.documentId, student_id: 44, document_type: previousDocumentType, upload_source: previousUploadSource, is_legacy_archive: previousIsLegacyArchive ? 1 : 0, status: 'needs_review', student_user_id: previousOwnerId }] };
-          if (statement.includes('FROM dbo.documents WITH')) return { recordset: [{ id: values.documentId, student_id: 44, document_type: 'good_moral' }] };
-          if (statement.includes('FROM dbo.document_decision_events')) return { recordset: state.previousDecision ? [{ decision_type: state.previousDecision }] : [] };
-          if (statement.includes('FROM dbo.document_review_events')) return { recordset: correctionAction ? [{ action_type: correctionAction }] : [] };
-          if (statement.includes('SELECT TOP (1) id FROM dbo.documents')) return { recordset: hasRevision ? [{ id: 91 }] : [] };
-          if (statement.includes('INSERT INTO dbo.documents')) {
+          if (statement.includes('FROM documents AS d')) return { recordset: [{ id: values.documentId, student_id: 44, document_type: previousDocumentType, upload_source: previousUploadSource, is_legacy_archive: previousIsLegacyArchive ? 1 : 0, status: state.documentStatus, original_filename: originalFilename, mime_type: 'application/pdf', result_status: ocrResultStatus, validation_json: validationJson, student_user_id: previousOwnerId }] };
+          if (statement.includes('FROM documents')) return { recordset: [{ id: values.documentId, student_id: 44, document_type: 'good_moral' }] };
+          if (statement.includes('FROM document_validations AS validation')) return { recordset: [{ id: 1, processor: 'gemini-document-precheck-v2', extracted_text: '', validation_json: validationJson, result_status: ocrResultStatus, created_at: new Date(), precheck_attempt_count: 1 }] };
+          if (statement.includes('FROM document_decision_events')) return { recordset: state.previousDecision ? [{ decision_type: state.previousDecision }] : [] };
+          if (statement.includes('FROM document_review_events')) return { recordset: correctionAction ? [{ action_type: correctionAction }] : [] };
+          if (statement.includes('INSERT INTO documents')) {
             if (failAt === 'insert') throw new Error('database details are private');
             state.inserted.push(call);
-            return { recordset: [{ id: state.id++ }] };
+            return { insertId: state.id++ };
           }
-          if (statement.includes('INSERT INTO dbo.document_review_events')) { state.events.push(call); return { recordset: [] }; }
-          if (statement.includes('INSERT INTO dbo.document_decision_events')) { state.decisions.push(call); return { recordset: [] }; }
-          if (statement.includes('INSERT INTO dbo.form137_status_events')) { state.form137Statuses.push(call); return { recordset: [] }; }
-          if (statement.includes('INSERT INTO dbo.previous_school_report_card_status_events')) { state.previousSchoolReportCardStatuses.push(call); return { recordset: [] }; }
-          if (statement.includes('UPDATE dbo.documents')) {
+          if (statement.includes('INSERT INTO document_review_events')) { state.events.push(call); return { recordset: [] }; }
+          if (statement.includes('INSERT INTO document_decision_events')) { state.decisions.push(call); return { recordset: [] }; }
+          if (statement.includes('INSERT INTO form137_status_events')) { state.form137Statuses.push(call); return { recordset: [] }; }
+          if (statement.includes('INSERT INTO previous_school_report_card_status_events')) { state.previousSchoolReportCardStatuses.push(call); return { recordset: [] }; }
+          if (statement.includes('UPDATE documents')) {
             if (statement.includes("SET status = 'pending'")) {
               state.documentStatus = 'pending';
-              return { recordset: [{ id: values.documentId }] };
+              return { affectedRows: 1 };
             }
             if (statement.includes('@nextStatus')) {
-              if (state.documentStatus !== values.currentStatus || !['needs_review', 'failed'].includes(state.documentStatus)) return { recordset: [] };
+              if (state.documentStatus !== values.currentStatus || !['needs_review', 'failed'].includes(state.documentStatus)) return { affectedRows: 0 };
               state.documentStatus = values.nextStatus;
-              return { recordset: [{ id: values.documentId }] };
+              return { affectedRows: 1 };
             }
             return { recordset: [] };
           }
-          if (statement.includes('INSERT INTO dbo.audit_logs')) {
+          if (statement.includes('INSERT INTO audit_logs')) {
             if (failAt === 'audit') throw new Error('database details are private');
             state.audit = call;
             return { recordset: [] };
@@ -197,12 +198,12 @@ test('Good Moral upload derives the linked student record, checks private storag
     assert.notEqual(insert.values.storedFilename, 'moral.pdf');
     assert.equal(harness.state.committed, true);
     assert.equal(harness.state.isolation, 'SERIALIZABLE');
-    const originalLookup = harness.state.queries.find(({ statement }) => statement.includes('SELECT TOP (1) id, status FROM dbo.documents'));
-    assert.match(originalLookup.statement, /WITH \(UPDLOCK, HOLDLOCK\)/);
+    const originalLookup = harness.state.queries.find(({ statement }) => statement.includes('SELECT id, status FROM documents') && statement.includes('student_id = @studentId'));
+    assert.match(originalLookup.statement, /FOR UPDATE/);
     assert.match(originalLookup.statement, /ORDER BY created_at DESC, id DESC/);
     assert.doesNotMatch(originalLookup.statement, /supersedes_document_id IS NULL|status\s*=\s*'rejected'/);
     assert.deepEqual([originalLookup.values.studentId, originalLookup.values.documentType], [44, 'good_moral']);
-    assert.match(harness.state.queries.find(({ statement }) => statement.includes('FROM dbo.students')).statement, /UPDLOCK, HOLDLOCK/);
+    assert.match(harness.state.queries.find(({ statement }) => statement.includes('FROM students')).statement, /FOR UPDATE/);
     assert.equal(harness.state.audit.values.action, 'student.document_uploaded');
     assert.equal(harness.state.audit.values.detailsJson.includes('report.pdf'), false);
     assert.equal(harness.state.audit.values.detailsJson.includes('example'), false);
@@ -231,8 +232,8 @@ test('a student and staff cannot create a second original submission for the sam
       assert.equal(harness.state.inserted.length, 0);
       assert.equal(harness.state.rolledBack, true);
       assert.deepEqual(await fs.readdir(directory), [], 'rejected originals never create stored files');
-      const lockQuery = harness.state.queries.find(({ statement }) => statement.includes('SELECT TOP (1) id, status FROM dbo.documents'));
-      assert.match(lockQuery.statement, /UPDLOCK, HOLDLOCK/);
+      const lockQuery = harness.state.queries.find(({ statement }) => statement.includes('SELECT id, status FROM documents') && statement.includes('student_id = @studentId'));
+      assert.match(lockQuery.statement, /FOR UPDATE/);
       assert.match(lockQuery.statement, /ORDER BY created_at DESC, id DESC/);
       assert.deepEqual([lockQuery.values.studentId, lockQuery.values.documentType], [44, 'good_moral']);
     }
@@ -256,7 +257,7 @@ test('a rejected latest Good Moral or PSA submission allows a fresh original whi
         assert.equal(rejected.state.inserted[0].values.supersedesDocumentId, null, 'a post-rejection upload is a new original');
         assert.equal(rejected.state.inserted[0].values.studentId, 44);
         assert.equal(rejected.state.deletedRows.length, 0, 'rejection history is not deleted');
-        const latestLookup = rejected.state.queries.find(({ statement }) => statement.includes('SELECT TOP (1) id, status FROM dbo.documents'));
+        const latestLookup = rejected.state.queries.find(({ statement }) => statement.includes('SELECT id, status FROM documents') && statement.includes('student_id = @studentId'));
         assert.match(latestLookup.statement, /ORDER BY created_at DESC, id DESC/);
         assert.doesNotMatch(latestLookup.statement, /supersedes_document_id IS NULL|status\s*=\s*'rejected'/);
       }
@@ -287,7 +288,7 @@ test('a rejected latest Good Moral or PSA submission allows a fresh original whi
       (error) => error.status === 409
     );
     assert.equal(olderRejectedNewerActive.state.inserted.length, 0, 'the latest active correction controls eligibility when an older row was rejected');
-    assert.match(olderRejectedNewerActive.state.queries.find(({ statement }) => statement.includes('SELECT TOP (1) id, status FROM dbo.documents')).statement, /ORDER BY created_at DESC, id DESC/);
+    assert.match(olderRejectedNewerActive.state.queries.find(({ statement }) => statement.includes('SELECT id, status FROM documents') && statement.includes('student_id = @studentId')).statement, /ORDER BY created_at DESC, id DESC/);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -313,12 +314,12 @@ test('Form 137 cannot be uploaded; students can only upload report cards to thei
     assert.equal(reportCard.state.inserted[0].values.uploadSource, 'student');
     assert.equal(reportCard.state.inserted[0].values.initialStatus, 'pending');
     assert.equal(reportCard.state.inserted[0].values.isLegacyArchive, 0);
-    assert.equal(reportCard.state.queries.some(({ statement }) => statement.includes('SELECT TOP (1) id, status FROM dbo.documents') && statement.includes("@documentType <> 'report_card' OR is_legacy_archive = 0")), true);
+    assert.equal(reportCard.state.queries.some(({ statement }) => statement.includes('SELECT id, status FROM documents') && statement.includes("@documentType <> 'report_card' OR is_legacy_archive = 0")), true);
     const legacyLatest = transactionHarness({ previousDocumentType: 'report_card', previousIsLegacyArchive: true, originalSubmissionExists: true });
     const afterLegacyArchive = await serviceWithStorage(legacyLatest, directory).upload(7, { documentType: 'report_card' }, makeFile({ name: 'new-term-report.pdf' }));
     assert.equal(afterLegacyArchive.status, 'pending', 'an old archive row does not block a new lifecycle submission');
     assert.equal(legacyLatest.state.inserted[0].values.documentType, 'report_card');
-    const legacyGate = legacyLatest.state.queries.find(({ statement }) => statement.includes('SELECT TOP (1) id, status FROM dbo.documents'));
+    const legacyGate = legacyLatest.state.queries.find(({ statement }) => statement.includes('SELECT id, status FROM documents') && statement.includes('student_id = @studentId'));
     assert.match(legacyGate.statement, /@documentType <> 'report_card' OR is_legacy_archive = 0/);
 
     const unlinked = transactionHarness({ ownStudentId: null });
@@ -358,8 +359,15 @@ test('student re-upload creates a linked immutable submission only after a corre
     assert.equal(harness.state.inserted[0].values.documentType, 'good_moral');
     assert.equal(harness.state.inserted[0].values.supersedesDocumentId, 12);
     assert.equal(harness.state.inserted[0].values.originalFilename, 'corrected.pdf');
-    assert.equal(harness.state.queries.some(({ statement }) => statement.startsWith('UPDATE dbo.documents')), false);
+    assert.equal(harness.state.queries.some(({ statement }) => statement.startsWith('UPDATE documents')), false);
     assert.equal(harness.state.audit.values.action, 'student.document_reuploaded');
+
+    const selfSuperseding = transactionHarness({ id: 12 });
+    await assert.rejects(
+      serviceWithStorage(selfSuperseding, directory).reupload(7, '12', makeFile({ name: 'self-linked.pdf' })),
+      /cannot supersede itself/
+    );
+    assert.equal(selfSuperseding.state.rolledBack, true, 'the invalid self-link is rejected before commit');
 
     const legacyReportCard = transactionHarness({ previousDocumentType: 'report_card', previousUploadSource: 'student', previousIsLegacyArchive: true });
     await assert.rejects(serviceWithStorage(legacyReportCard, directory).reupload(7, '12', makeFile({ name: 'corrected-report.pdf' })), /Document not found/);
@@ -413,8 +421,8 @@ test('student document lists include both student and staff PSA submissions for 
       return {
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
-          if (statement.startsWith('SELECT id, role FROM dbo.users')) return { recordset: [{ id: values.actorId, role: 'student' }] };
-          if (statement.includes('dbo.form137_status_events')) return { recordset: [] };
+          if (statement.startsWith('SELECT id, role FROM users')) return { recordset: [{ id: values.actorId, role: 'student' }] };
+          if (statement.includes('form137_status_events')) return { recordset: [] };
           if (statement.includes('WITH latest_submissions AS')) {
             blockedTypesSql = statement;
             return { recordset: [{ document_type: 'good_moral' }] };
@@ -437,7 +445,7 @@ test('student document lists include both student and staff PSA submissions for 
   assert.match(listSql, /THEN latest\.instruction ELSE NULL END AS latest_review_instruction/);
   assert.match(listSql, /d\.upload_source = 'student'/, 'student-facing list query excludes internal PSA instructions by upload origin');
   assert.match(listSql, /latest_decision\.decision_type AS latest_decision_type/);
-  assert.match(listSql, /FROM dbo\.document_decision_events AS e/);
+  assert.match(listSql, /LEFT JOIN v_document_latest_decision_event AS latest_decision/);
   assert.deepEqual(result.blockedNewOriginalTypes, ['good_moral']);
   assert.match(blockedTypesSql, /ORDER BY d\.created_at DESC, d\.id DESC/);
   assert.match(blockedTypesSql, /s\.user_id = @actorId/);
@@ -455,8 +463,8 @@ test('staff document queue supports bounded parameterized review filters and a m
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values: { ...values } });
-          if (statement.startsWith('SELECT id, role FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-          if (statement.includes('SELECT TOP (200)')) return { recordset: [{ id: 20, document_type: 'good_moral', status: 'needs_review' }] };
+          if (statement.startsWith('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+          if (statement.includes('LIMIT 200')) return { recordset: [{ id: 20, document_type: 'good_moral', status: 'needs_review' }] };
           if (statement.includes('GROUP BY required.document_type')) return { recordset: [{ document_type: 'good_moral', missing_count: 12, awaiting_review_count: 4 }] };
           if (statement.includes('WITH ranked_report_cards AS')) return { recordset: [{
             document_type: 'report_card', submitted_count: 3, awaiting_review_count: 1,
@@ -470,13 +478,13 @@ test('staff document queue supports bounded parameterized review filters and a m
   };
   const service = createDocumentService({ getPool: async () => pool, sql: fakeSql() });
   const result = await service.listDocuments(7, 'Juan Dela Cruz', { documentType: 'good_moral', status: 'awaiting_review' });
-  const listCall = calls.find(({ statement }) => statement.includes('SELECT TOP (200)'));
+  const listCall = calls.find(({ statement }) => statement.includes('LIMIT 200'));
   assert.equal(listCall.values.searchPattern, '%Juan Dela Cruz%');
   assert.equal(listCall.values.documentType, 'good_moral');
   assert.equal(listCall.values.statusFilter, 'awaiting_review');
   assert.match(listCall.statement, /s\.lrn LIKE @searchPattern/);
   assert.match(listCall.statement, /@documentType IS NULL OR d\.document_type = @documentType/);
-  assert.match(listCall.statement, /@statusFilter = 'awaiting_review' AND d\.status = 'needs_review'[\s\S]*d\.document_type <> 'report_card' OR ISNULL\(latest_decision\.decision_type, ''\) <> 'correction_requested'/);
+  assert.match(listCall.statement, /@statusFilter = 'awaiting_review' AND d\.status = 'needs_review'[\s\S]*d\.document_type <> 'report_card' OR COALESCE\(latest_decision\.decision_type, ''\) <> 'correction_requested'/);
   assert.equal(result.documents[0].status, 'needs_review');
   assert.equal(result.statusSummary[0].missing_count, 12);
   assert.equal(result.documentType, 'good_moral');
@@ -508,9 +516,9 @@ test('physical requirements workspace searches and paginates latest staff-record
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values: { ...values } });
-          if (statement.startsWith('SELECT id, role FROM dbo.users')) return { recordset: [{ id: values.actorId, role: actorRole }] };
-          if (statement.includes('COUNT_BIG(*) AS total_students')) return { recordset: [{ total_students: 321 }] };
-          if (statement.includes('form137_status_events')) return { recordset: [physicalStudent] };
+          if (statement.startsWith('SELECT id, role FROM users')) return { recordset: [{ id: values.actorId, role: actorRole }] };
+          if (statement.includes('COUNT(*) AS total_students')) return { recordset: [{ total_students: 321 }] };
+          if (statement.includes('v_form137_latest_status_event')) return { recordset: [physicalStudent] };
           throw new Error(`Unexpected physical-requirements query: ${statement}`);
         }
       };
@@ -518,18 +526,18 @@ test('physical requirements workspace searches and paginates latest staff-record
   };
   const service = createDocumentService({ getPool: async () => pool, sql: fakeSql() });
   const result = await service.listPhysicalRequirements(7, 'Maria Santos', '2');
-  const countCall = calls.find(({ statement }) => statement.includes('COUNT_BIG(*) AS total_students'));
-  const pageCall = calls.find(({ statement }) => statement.includes('form137_status_events'));
+  const countCall = calls.find(({ statement }) => statement.includes('COUNT(*) AS total_students'));
+  const pageCall = calls.find(({ statement }) => statement.includes('v_form137_latest_status_event'));
   assert.equal(countCall.values.searchPattern, '%Maria Santos%');
   assert.match(countCall.statement, /s\.student_no LIKE @searchPattern/);
   assert.match(countCall.statement, /s\.lrn LIKE @searchPattern/);
-  assert.match(countCall.statement, /CONCAT_WS\(N' ', s\.first_name, NULLIF\(s\.middle_name, N''\), s\.last_name\) LIKE @searchPattern/);
+  assert.match(countCall.statement, /CONCAT_WS\(' ', s\.first_name, NULLIF\(s\.middle_name, ''\), s\.last_name\) LIKE @searchPattern/);
   assert.match(countCall.statement, /s\.status = 'active'/);
   assert.match(countCall.statement, /role IN \('registrar', 'database_admin'\)/);
   assert.equal(pageCall.values.offset, 25);
   assert.equal(pageCall.values.pageSize, 25);
-  assert.match(pageCall.statement, /ORDER BY e\.created_at DESC, e\.id DESC/);
-  assert.match(pageCall.statement, /previous_school_report_card_status_events/);
+  assert.match(pageCall.statement, /ORDER BY s\.last_name, s\.first_name/);
+  assert.match(pageCall.statement, /v_previous_school_report_card_latest_status_event/);
   assert.doesNotMatch(pageCall.statement, /instruction|recorded_by/);
   assert.deepEqual(result.students, [physicalStudent]);
   assert.deepEqual({ searchTerm: result.searchTerm, totalStudents: result.totalStudents, page: result.page, pageSize: result.pageSize, totalPages: result.totalPages }, {
@@ -539,7 +547,7 @@ test('physical requirements workspace searches and paginates latest staff-record
   const lastPage = await service.listPhysicalRequirements(7, 'Maria %_[', '999');
   assert.equal(lastPage.page, 13);
   assert.equal(lastPage.totalPages, 13);
-  assert.equal(calls.findLast(({ statement }) => statement.includes('COUNT_BIG(*) AS total_students')).values.searchPattern, '%Maria ~%~_~[%');
+  assert.equal(calls.findLast(({ statement }) => statement.includes('COUNT(*) AS total_students')).values.searchPattern, '%Maria ~%~_~[%');
   assert.equal(calls.at(-1).values.offset, 300);
   await assert.rejects(service.listPhysicalRequirements(7, '', ['2']), /valid physical-requirements page/);
   assert.equal(calls.length, 6, 'invalid page input is rejected before SQL queries');
@@ -595,15 +603,15 @@ test('Gemini findings are fetched only for registrar and database administrator 
           input(name, _type, value) { values[name] = value; return this; },
           async query(statement) {
             queries.push({ statement, values: { ...values } });
-            if (statement.includes('SELECT id, role FROM dbo.users')) return { recordset: [{ id: 7, role }] };
-            if (statement.includes('FROM dbo.documents AS d') && statement.includes('WHERE d.id = @documentId')) {
+            if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role }] };
+            if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.id = @documentId')) {
               if (deactivateAfterDocumentRead) staffIsActive = false;
               return { recordset: [{ ...document, document_type: documentType, original_filename: originalFilename, mime_type: mimeType }] };
             }
-            if (statement.includes('FROM dbo.documents AS history_document')) return { recordset: [] };
-            if (statement.includes('FROM dbo.documents AS d') && statement.includes('WHERE d.student_id = @studentId')) return { recordset: [{ id: 88, original_filename: 'report.pdf', status: 'needs_review' }] };
-            if (statement.includes('FROM dbo.document_review_events AS e')) return { recordset: [] };
-            if (statement.includes('FROM dbo.document_decision_events AS e')) return { recordset: [{
+            if (statement.includes('FROM documents AS history_document')) return { recordset: [] };
+            if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.student_id = @studentId')) return { recordset: [{ id: 88, original_filename: 'report.pdf', status: 'needs_review' }] };
+            if (statement.includes('FROM document_review_events AS e')) return { recordset: [] };
+            if (statement.includes('FROM document_decision_events AS e')) return { recordset: [{
               id: 5, decision_type: 'verified', reason: null,
               verification_checklist_json: role === 'student' ? null : JSON.stringify({
                 schemaVersion: checklistSchemaVersion,
@@ -615,7 +623,7 @@ test('Gemini findings are fetched only for registrar and database administrator 
               }),
               created_at: new Date(), reviewer_name: null
             }] };
-            if (statement.includes('FROM dbo.document_validations')) return { recordset: staffIsActive ? [{
+            if (statement.includes('FROM document_validations')) return { recordset: staffIsActive ? [{
               id: 4,
               processor: 'Gemini field extraction',
               extracted_text: null,
@@ -658,9 +666,9 @@ test('Gemini findings are fetched only for registrar and database administrator 
   const student = await readAsRole('student');
   assert.equal(student.result.validation, null);
   assert.deepEqual(student.result.decisions[0].verificationChecklist, []);
-  assert.equal(student.queries.some(({ statement }) => statement.includes('FROM dbo.document_validations')), false);
-  const studentDecisionQuery = student.queries.find(({ statement }) => statement.includes('FROM dbo.document_decision_events AS e'));
-  assert.match(studentDecisionQuery.statement, /CAST\(NULL AS NVARCHAR\(500\)\) AS verification_checklist_json/);
+  assert.equal(student.queries.some(({ statement }) => statement.includes('FROM document_validations')), false);
+  const studentDecisionQuery = student.queries.find(({ statement }) => statement.includes('FROM document_decision_events AS e'));
+  assert.match(studentDecisionQuery.statement, /CAST\(NULL AS CHAR\(500\)\) AS verification_checklist_json/);
 
   const registrar = await readAsRole('registrar');
   assert.equal(registrar.result.validation.extracted_text, null);
@@ -673,7 +681,7 @@ test('Gemini findings are fetched only for registrar and database administrator 
   assert.equal(registrar.result.validation.formatCheckPassed, true);
   assert.equal(registrar.result.validation.requiresOverrideReason, false);
   assert.deepEqual(registrar.result.decisions[0].verificationChecklist, verificationChecklistItems('good_moral').map(({ label }) => label));
-  const validationQuery = registrar.queries.find(({ statement }) => statement.includes('FROM dbo.document_validations'));
+  const validationQuery = registrar.queries.find(({ statement }) => statement.includes('FROM document_validations'));
   assert.ok(validationQuery);
   assert.match(validationQuery.statement, /id = @actorId AND is_active = 1 AND role IN \('registrar', 'database_admin'\)/);
   assert.equal(validationQuery.values.actorId, 7);
@@ -707,7 +715,7 @@ test('Gemini findings are fetched only for registrar and database administrator 
   assert.equal(reportCard.result.validation.automatedCheckOutcome, 'pass');
   assert.deepEqual(reportCard.result.validation.fieldChecks.map(({ key }) => key), ['student_name']);
   assert.deepEqual(reportCard.result.validation.advisoryChecks.map(({ key }) => key), ['linked_student_name']);
-  assert.ok(reportCard.queries.some(({ statement }) => statement.includes('FROM dbo.document_validations')),
+  assert.ok(reportCard.queries.some(({ statement }) => statement.includes('FROM document_validations')),
     'staff can inspect the active report-card precheck result');
 
   const textOnlyGoodMoral = await readAsRole('registrar', { contextEvidenceFound: false, layoutEvidenceFound: false, outcome: 'precheck_attention' });
@@ -730,8 +738,8 @@ test('student decision history exposes own Good Moral rejection reasons and keep
           input(name, _type, value) { values[name] = value; return this; },
           async query(statement) {
             queries.push(statement);
-            if (statement.startsWith('SELECT id, role FROM dbo.users')) return { recordset: [{ id: 7, role: 'student' }] };
-            if (statement.includes('FROM dbo.documents AS d') && statement.includes('WHERE d.id = @documentId')) {
+            if (statement.startsWith('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'student' }] };
+            if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.id = @documentId')) {
               return { recordset: [{
                 id: 88, student_id: 44, document_type: 'good_moral', original_filename: 'report.pdf',
                 stored_filename: '5dd677e1-87fb-4214-a7c1-27aca233ae1f.pdf', mime_type: 'application/pdf',
@@ -740,10 +748,10 @@ test('student decision history exposes own Good Moral rejection reasons and keep
                 student_no: 'S-44', first_name: 'Test', middle_name: null, last_name: 'Student', uploader_role: 'student'
               }] };
             }
-            if (statement.includes('FROM dbo.documents AS history_document')) return { recordset: [] };
-            if (statement.includes('FROM dbo.documents AS d') && statement.includes('WHERE d.student_id = @studentId')) return { recordset: [] };
-            if (statement.includes('FROM dbo.document_review_events AS e')) return { recordset: [] };
-            if (statement.includes('FROM dbo.document_decision_events AS e')) return { recordset: [
+            if (statement.includes('FROM documents AS history_document')) return { recordset: [] };
+            if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.student_id = @studentId')) return { recordset: [] };
+            if (statement.includes('FROM document_review_events AS e')) return { recordset: [] };
+            if (statement.includes('FROM document_decision_events AS e')) return { recordset: [
               { id: 2, decision_type: finalDecision, reason: finalDecision === 'rejected' ? 'The submitted certificate is unreadable.' : null, verification_checklist_json: null, created_at: new Date(), reviewer_name: null },
               { id: 1, decision_type: 'correction_requested', reason: 'Upload a clearer report card.', created_at: new Date(Date.now() - 1000), reviewer_name: null }
             ] };
@@ -758,11 +766,11 @@ test('student decision history exposes own Good Moral rejection reasons and keep
     assert.equal(result.decisions[0].reviewer_name, null);
     assert.deepEqual(result.decisions[0].verificationChecklist, [], 'students do not receive stored staff attestations');
     assert.equal(result.decisions[1].reason, 'Upload a clearer report card.');
-    const studentDecisionSql = queries.find((statement) => statement.includes('FROM dbo.document_decision_events AS e'));
+    const studentDecisionSql = queries.find((statement) => statement.includes('FROM document_decision_events AS e'));
     assert.match(studentDecisionSql, /CASE WHEN e\.decision_type IN \('rejected', 'correction_requested'\)[\s\S]*@documentType NOT IN \('psa_birth_certificate', 'report_card'\) OR @uploadSource = 'student'[\s\S]*THEN e\.reason ELSE NULL END AS reason/);
     assert.doesNotMatch(studentDecisionSql, /AND e\.decision_type = 'correction_requested'/);
-    assert.doesNotMatch(studentDecisionSql, /JOIN dbo\.staff_profiles/);
-    assert.match(studentDecisionSql, /CAST\(NULL AS NVARCHAR\(500\)\) AS verification_checklist_json/);
+    assert.doesNotMatch(studentDecisionSql, /JOIN staff_profiles/);
+    assert.match(studentDecisionSql, /CAST\(NULL AS CHAR\(500\)\) AS verification_checklist_json/);
   }
 });
 
@@ -796,22 +804,22 @@ test('student PSA decision reasons follow submission origin and own-record acces
           input(name, _type, value) { values[name] = value; return this; },
           async query(statement) {
             queries.push({ statement, values: { ...values } });
-            if (statement.startsWith('SELECT id, role FROM dbo.users')) return { recordset: [{ id: 7, role: 'student' }] };
-            if (statement.includes('FROM dbo.documents AS d') && statement.includes('WHERE d.id = @documentId')) {
+            if (statement.startsWith('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'student' }] };
+            if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.id = @documentId')) {
               const allowedByOwnRecord = statement.includes('s.user_id = @actorId')
                 && statement.includes("d.document_type IN ('good_moral', 'psa_birth_certificate')");
               return { recordset: allowedByOwnRecord ? [{ ...document }] : [] };
             }
-            if (statement.includes('FROM dbo.documents AS history_document')) {
+            if (statement.includes('FROM documents AS history_document')) {
               return { recordset: [{ id: 91, upload_source: 'registrar' }, { id: 92, upload_source: 'student' }] };
             }
-            if (statement.includes('FROM dbo.documents AS d') && statement.includes('WHERE d.student_id = @studentId')) return { recordset: [] };
-            if (statement.includes('FROM dbo.document_review_events AS e')) {
+            if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.student_id = @studentId')) return { recordset: [] };
+            if (statement.includes('FROM document_review_events AS e')) {
               return { recordset: values.uploadSource === 'student'
                 ? [{ id: 2, action_type: 'correction_requested', instruction: 'Upload your corrected PSA.', created_at: new Date(), reviewer_name: null }]
                 : [] };
             }
-            if (statement.includes('FROM dbo.document_decision_events AS e')) return { recordset: [
+            if (statement.includes('FROM document_decision_events AS e')) return { recordset: [
               { id: 3, decision_type: 'rejected', reason: values.uploadSource === 'student' ? 'The PSA scan is incomplete.' : null, created_at: new Date(), reviewer_name: null },
               { id: 2, decision_type: 'correction_requested', reason: values.uploadSource === 'student' ? 'Upload your corrected PSA.' : null, created_at: new Date(Date.now() - 1000), reviewer_name: null }
             ] };
@@ -828,8 +836,8 @@ test('student PSA decision reasons follow submission origin and own-record acces
     assert.equal(result.reviewEvents.length, uploadSource === 'student' ? 1 : 0);
     assert.deepEqual(result.history.map(({ id }) => id), [91, 92], 'the student can see both origins in their own history');
     const documentQuery = queries.find(({ statement }) => statement.includes('WHERE d.id = @documentId'));
-    const reviewQuery = queries.find(({ statement }) => statement.includes('FROM dbo.document_review_events AS e'));
-    const decisionQuery = queries.find(({ statement }) => statement.includes('FROM dbo.document_decision_events AS e'));
+    const reviewQuery = queries.find(({ statement }) => statement.includes('FROM document_review_events AS e'));
+    const decisionQuery = queries.find(({ statement }) => statement.includes('FROM document_decision_events AS e'));
     assert.match(documentQuery.statement, /s\.user_id = @actorId/);
     assert.doesNotMatch(documentQuery.statement, /d\.upload_source IN \('registrar', 'database_admin'\)/);
     assert.equal(reviewQuery.values.uploadSource, uploadSource);
@@ -837,7 +845,7 @@ test('student PSA decision reasons follow submission origin and own-record acces
     assert.equal(decisionQuery.values.uploadSource, uploadSource);
     assert.match(decisionQuery.statement, /@documentType NOT IN \('psa_birth_certificate', 'report_card'\) OR @uploadSource = 'student'/);
     assert.match(decisionQuery.statement, /e\.decision_type IN \('rejected', 'correction_requested'\)/);
-    const historyQuery = queries.find(({ statement }) => statement.includes('FROM dbo.documents AS history_document'));
+    const historyQuery = queries.find(({ statement }) => statement.includes('FROM documents AS history_document'));
     assert.match(historyQuery.statement, /history_student\.user_id = @actorId/);
     assert.doesNotMatch(historyQuery.statement, /history_document\.upload_source IN/);
   }
@@ -913,7 +921,7 @@ test('registrar can upload restricted document types and record correction/revie
     await reviewService.addReviewEvent(7, '12', 'correction_requested', 'Upload a clearer report card.');
     assert.equal(reviewHarness.state.events[0].values.reviewerId, 7);
     assert.equal(reviewHarness.state.events[0].values.instruction, 'Upload a clearer report card.');
-    assert.equal(reviewHarness.state.queries.some(({ statement }) => statement.includes('UPDATE dbo.documents')), false, 'recording a correction request does not disturb OCR state');
+    assert.equal(reviewHarness.state.queries.some(({ statement }) => statement.includes('UPDATE documents')), false, 'recording a correction request does not disturb OCR state');
     assert.equal(reviewHarness.state.audit.values.action, 'registrar.document_correction_requested');
     assert.equal(reviewHarness.state.audit.values.detailsJson.includes('clearer'), false);
 
@@ -1002,7 +1010,7 @@ test('student physical report-card status is ownership-scoped and hides staff no
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values: { ...values } });
-          if (statement.includes('FROM dbo.users WHERE id = @actorId')) return { recordset: [{ id: 7, role }] };
+          if (statement.includes('FROM users WHERE id = @actorId')) return { recordset: [{ id: 7, role }] };
           return { recordset: [{ status: 'received', created_at: new Date('2026-09-28T00:00:00Z') }] };
         }
       };
@@ -1027,11 +1035,11 @@ test('staff document workspace keeps physical report-card paper events separate 
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           statements.push(statement);
-          if (statement.startsWith('SELECT id, role FROM dbo.users WHERE id = @actorId')) return { recordset: [{ id: 7, role: 'registrar' }] };
-          if (statement.includes('FROM dbo.students AS s WHERE s.id = @studentId')) {
+          if (statement.startsWith('SELECT id, role FROM users WHERE id = @actorId')) return { recordset: [{ id: 7, role: 'registrar' }] };
+          if (statement.includes('FROM students AS s WHERE s.id = @studentId')) {
             return { recordset: [{ id: 44, student_no: 'S-44', first_name: 'Synthetic', last_name: 'Learner', status: 'active' }] };
           }
-          if (statement.includes('FROM dbo.previous_school_report_card_status_events AS e')) {
+          if (statement.includes('FROM previous_school_report_card_status_events AS e')) {
             return { recordset: [{ id: 8, status: 'received', instruction: 'Paper copy received.', recorded_by_name: 'Registrar' }] };
           }
           return { recordset: [] };
@@ -1046,7 +1054,7 @@ test('staff document workspace keeps physical report-card paper events separate 
   assert.equal(workspace.form137Status.status, 'not_recorded');
   assert.match(statements.find((statement) => statement.includes('previous_school_report_card_status_events')), /student_id = @studentId/);
   assert.match(statements.find((statement) => statement.includes('form137_status_events')), /form137_status_events/);
-  assert.match(statements.find((statement) => statement.includes('FROM dbo.documents AS d')), /document_type/);
+  assert.match(statements.find((statement) => statement.includes('FROM documents AS d')), /document_type/);
 });
 
 test('manual decisions require completed OCR, append history, and only verification sets valid', async () => {
@@ -1084,7 +1092,7 @@ test('manual decisions require completed OCR, append history, and only verificat
     selectedDocumentTypeCorrect: true,
     allSubmittedPagesReadableComplete: true
   });
-  assert.match(warning.state.queries.find(({ statement }) => statement.includes('FROM dbo.documents AS d WITH (UPDLOCK, HOLDLOCK)')).statement, /OUTER APPLY/);
+  assert.match(warning.state.queries.find(({ statement }) => statement.includes('FROM documents AS d') && statement.includes('v_document_latest_validation')).statement, /FOR UPDATE/);
   assert.equal(warning.state.audit.values.action, 'registrar.document_review_verified');
   assert.equal(warning.state.audit.values.detailsJson.includes('confirmed the student details'), false);
   await assert.rejects(warning.service.decideDocument(7, '12', 'rejected', 'Duplicate'), /finish before staff review/);
@@ -1159,7 +1167,7 @@ test('active report cards use a bounded name/file-format precheck and staff-only
     selectedDocumentTypeCorrect: true,
     allSubmittedPagesReadableComplete: true
   });
-  assert.equal(manualVerification.state.queries.some(({ statement }) => statement.includes('FROM dbo.teacher_grade_submissions') || statement.includes('UPDATE dbo.student_grades')), false);
+  assert.equal(manualVerification.state.queries.some(({ statement }) => statement.includes('FROM teacher_grade_submissions') || statement.includes('UPDATE student_grades')), false);
   assert.equal(manualVerification.state.audit.values.action, 'registrar.document_review_verified');
 
   const correction = transactionHarness({ actorRole: 'database_admin', previousDocumentType: 'report_card', validationJson: passingPrecheck });
@@ -1199,7 +1207,7 @@ test('staff can permanently delete Good Moral and PSA submissions with their pri
       assert.deepEqual(harness.state.deletedRows, ['document_validations', 'document_review_events', 'document_decision_events']);
       assert.equal(harness.state.audit.values.action, 'registrar.document_deleted');
       assert.deepEqual(await fs.readdir(directory), []);
-      for (const call of harness.state.queries.filter(({ statement }) => statement.startsWith('DELETE FROM dbo.'))) {
+      for (const call of harness.state.queries.filter(({ statement }) => statement.startsWith('DELETE FROM '))) {
         assert.equal(call.values.documentId, 12 + index);
       }
     }
@@ -1591,6 +1599,18 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
           };
         }
         return { status: 'failed', message: 'Gemini field extraction timed out. Inspect the physical paper and record its status manually.', suggestions: [] };
+      }
+    },
+    physicalChecklistService: {
+      async getStudentChecklist(_actorId, studentId) {
+        return {
+          student: { id: studentId, student_no: 'SHS-2026-0321', first_name: 'Maria', last_name: 'Santos', requestedBy: 'registrar' },
+          requirements: [], history: [], additionalItems: [],
+          summary: { requiredCount: 9, completeCount: 2 }
+        };
+      },
+      async getStudentSummaries(_actorId, studentIds) {
+        return new Map(studentIds.map((studentId) => [Number(studentId), { required_count: 9, completed_count: 2 }]));
       }
     }
   });
@@ -2554,8 +2574,8 @@ test('download authorization hides missing or non-owned document identifiers', a
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values: { ...values } });
-          if (statement.includes('FROM dbo.documents AS d') && statement.includes('WHERE d.id = @documentId')) return { recordset: [] };
-          if (statement.includes('FROM dbo.users WHERE id = @actorId')) return { recordset: [{ id: 7, role: 'student' }] };
+          if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.id = @documentId')) return { recordset: [] };
+          if (statement.includes('FROM users WHERE id = @actorId')) return { recordset: [{ id: 7, role: 'student' }] };
           throw new Error(`Unexpected read SQL: ${statement}`);
         }
       };
@@ -2603,13 +2623,13 @@ test('authorized student download opens the opaque private file only after curre
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push(statement);
-          if (statement.includes('FROM dbo.documents AS d') && statement.includes('WHERE d.id = @documentId')) {
+          if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.id = @documentId')) {
             return { recordset: values.actorId === 7 && values.documentId === 88 ? [{ ...document }] : [] };
           }
-          if (statement.includes('FROM dbo.users WHERE id = @actorId')) return { recordset: [{ id: 7, role: 'student' }] };
-          if (statement.includes('FROM dbo.documents WHERE student_id = @studentId')) return { recordset: [] };
-          if (statement.includes('FROM dbo.document_review_events AS e')) return { recordset: [] };
-          if (statement.includes('FROM dbo.document_decision_events AS e')) return { recordset: [] };
+          if (statement.includes('FROM users WHERE id = @actorId')) return { recordset: [{ id: 7, role: 'student' }] };
+          if (statement.includes('FROM documents WHERE student_id = @studentId')) return { recordset: [] };
+          if (statement.includes('FROM document_review_events AS e')) return { recordset: [] };
+          if (statement.includes('FROM document_decision_events AS e')) return { recordset: [] };
           throw new Error(`Unexpected read SQL: ${statement}`);
         }
       };
@@ -2623,7 +2643,7 @@ test('authorized student download opens the opaque private file only after curre
       assert.equal((await opened.fileHandle.readFile()).toString(), contents.toString());
       assert.equal(opened.document.original_filename, 'my report.pdf');
       assert.equal(opened.size, contents.length);
-      assert.match(calls.find((statement) => statement.includes('FROM dbo.documents AS d')), /s\.user_id = @actorId/);
+      assert.match(calls.find((statement) => statement.includes('FROM documents AS d')), /s\.user_id = @actorId/);
     } finally {
       await opened.fileHandle.close();
     }
@@ -2644,8 +2664,8 @@ test('students can read only their own active student-origin report cards, never
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values: { ...values } });
-          if (statement.startsWith('SELECT id, role FROM dbo.users')) return { recordset: [{ id: 7, role: 'student' }] };
-          if (statement.includes('FROM dbo.documents AS d') && statement.includes('WHERE d.id = @documentId')) {
+          if (statement.startsWith('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'student' }] };
+          if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.id = @documentId')) {
             const rows = {
               88: { id: 88, document_type: 'psa_birth_certificate', upload_source: 'registrar', student_user_id: 7, uploader_role: 'student' },
               89: { id: 89, document_type: 'psa_birth_certificate', upload_source: 'student', student_user_id: 7, uploader_role: 'registrar' },
@@ -2663,10 +2683,10 @@ test('students can read only their own active student-origin report cards, never
               || (row?.document_type === 'report_card' && row.is_legacy_archive === 0 && row.upload_source === 'student');
             return { recordset: studentTypeFilter && row?.student_user_id === values.actorId && allowedType ? [row] : [] };
           }
-          if (statement.includes('FROM dbo.documents AS history_document')) return { recordset: [] };
-          if (statement.includes('FROM dbo.documents AS d') && statement.includes('WHERE d.student_id = @studentId')) return { recordset: [] };
-          if (statement.includes('FROM dbo.document_review_events AS e')) return { recordset: [] };
-          if (statement.includes('FROM dbo.document_decision_events AS e')) return { recordset: [] };
+          if (statement.includes('FROM documents AS history_document')) return { recordset: [] };
+          if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.student_id = @studentId')) return { recordset: [] };
+          if (statement.includes('FROM document_review_events AS e')) return { recordset: [] };
+          if (statement.includes('FROM document_decision_events AS e')) return { recordset: [] };
           throw new Error(`Unexpected PSA read SQL: ${statement}`);
         }
       };
@@ -2698,7 +2718,7 @@ test('students can read only their own active student-origin report cards, never
   assert.match(documentQuery.statement, /s\.user_id = @actorId/);
   assert.match(documentQuery.statement, /d\.document_type IN \('good_moral', 'psa_birth_certificate'\)/);
   assert.match(documentQuery.statement, /d\.document_type = 'report_card' AND d\.is_legacy_archive = 0 AND d\.upload_source = 'student'/);
-  const historyQuery = calls.find(({ statement }) => statement.includes('FROM dbo.documents AS history_document'));
+  const historyQuery = calls.find(({ statement }) => statement.includes('FROM documents AS history_document'));
   assert.match(historyQuery.statement, /history_document\.is_legacy_archive = 0 AND history_document\.upload_source = 'student'/);
   assert.equal(calls.filter(({ statement }) => statement.includes('WHERE d.id = @documentId')).length, 11);
   } finally {
@@ -2726,17 +2746,17 @@ test('legacy report cards remain readable and downloadable only by active staff,
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values: { ...values } });
-          if (statement.startsWith('SELECT id, role FROM dbo.users WHERE id = @actorId')) {
+          if (statement.startsWith('SELECT id, role FROM users WHERE id = @actorId')) {
             return { recordset: [{ id: values.actorId, role: values.actorId === 7 ? 'registrar' : 'student' }] };
           }
-          if (statement.includes('FROM dbo.documents AS d') && statement.includes('WHERE d.id = @documentId')) {
+          if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.id = @documentId')) {
             return { recordset: values.actorId === 7 ? [{ ...archivedDocument }] : [] };
           }
-          if (statement.includes('FROM dbo.documents AS history_document')) return { recordset: [{
+          if (statement.includes('FROM documents AS history_document')) return { recordset: [{
             id: 88, original_filename: 'old-report.pdf', status: 'needs_review', supersedes_document_id: null,
             created_at: new Date(), latest_review_action: null, latest_decision_type: null
           }] };
-          if (statement.startsWith('SELECT CAST(NULL AS INT) AS id WHERE 1 = 0')) return { recordset: [] };
+          if (statement.startsWith('SELECT CAST(NULL AS SIGNED) AS id WHERE 1 = 0')) return { recordset: [] };
           throw new Error(`Unexpected archive SQL: ${statement}`);
         }
       };
@@ -2750,7 +2770,7 @@ test('legacy report cards remain readable and downloadable only by active staff,
     assert.equal(staffView.validation, null);
     assert.deepEqual(staffView.reviewEvents, []);
     assert.deepEqual(staffView.decisions, []);
-  assert.equal(calls.some(({ statement }) => statement.includes('FROM dbo.document_validations')), false);
+  assert.equal(calls.some(({ statement }) => statement.includes('FROM document_validations')), false);
 
     const download = await service.openDownload(7, '88');
     try {

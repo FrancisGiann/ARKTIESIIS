@@ -111,10 +111,10 @@ function makePreviewHarness({ studentName = 'Jamie Garza', sectionName = 'STEM A
   function poolRequest() {
     return requestFor(async (statement, values) => {
       state.queries.push({ statement, values });
-      if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: actorRole }] };
+      if (statement.includes('SELECT id, role FROM users WHERE id = @actorId')) return { recordset: [{ id: 7, role: actorRole }] };
       if (statement.includes('SELECT DISTINCT term.school_year')) return { recordset: [context] };
       if (statement.includes('WHERE st.lrn IN')) return { recordset: [student] };
-      if (statement.includes('FROM dbo.grade_import_previews AS p')) {
+      if (statement.includes('FROM grade_import_previews AS p')) {
         const header = state.header;
         if (!header) return { recordset: [] };
         const recordRows = state.rows.flatMap((row) => {
@@ -141,12 +141,12 @@ function makePreviewHarness({ studentName = 'Jamie Garza', sectionName = 'STEM A
   const transactionFactory = () => ({
     request() {
       return requestFor(async (statement, values) => {
-        if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: actorRole }] };
-        if (statement.includes('FROM dbo.teacher_assignments AS a WITH')) {
+        if (statement.includes('SELECT id, role FROM users WHERE id = @actorId')) return { recordset: [{ id: 7, role: actorRole }] };
+        if (statement.includes('FROM teacher_assignments AS a')) {
           state.assignmentChecks = (state.assignmentChecks || 0) + 1;
           return { recordset: teacherAssignmentActive ? [{ id: 12 }] : [] };
         }
-        if (statement.includes('INSERT INTO dbo.grade_import_previews')) {
+        if (statement.includes('INSERT INTO grade_import_previews')) {
           state.header = {
             id: values.previewId, schoolYear: values.schoolYear, gradeLevel: values.gradeLevel,
             sectionName: values.sectionName, subjectName: values.subjectName,
@@ -157,7 +157,7 @@ function makePreviewHarness({ studentName = 'Jamie Garza', sectionName = 'STEM A
           };
           return { recordset: [] };
         }
-        if (statement.includes('INSERT INTO dbo.grade_import_preview_rows')) {
+        if (statement.includes('INSERT INTO grade_import_preview_rows')) {
           const id = state.nextRowId++;
           state.rows.push({
             preview_row_id: id, sourceRow: values.sourceRow, studentId: values.studentId,
@@ -165,9 +165,9 @@ function makePreviewHarness({ studentName = 'Jamie Garza', sectionName = 'STEM A
             studentNo: values.studentNo, workbookName: values.workbookName, studentName: values.studentName,
             lrnFingerprint: values.lrnFingerprint, nameMismatch: values.nameMismatch, issue: values.issue
           });
-          return { recordset: [{ id }] };
+          return { insertId: id };
         }
-        if (statement.includes('INSERT INTO dbo.grade_import_preview_grades')) {
+        if (statement.includes('INSERT INTO grade_import_preview_grades')) {
           state.grades.push({
             previewRowId: values.previewRowId, gradingPeriod: values.gradingPeriod,
             gradeValue: values.gradeValue, existingGradeId: values.existingGradeId,
@@ -248,7 +248,7 @@ test('preview always supplies four table cells when a cached grade is absent', a
   ]);
 });
 
-function confirmationHarness({ existingGrades = [], nameMismatch = false, failAtInsert = 0, omitGradePeriod = null,
+function confirmationHarness({ existingGrades = [], nameMismatch = false, failAtInsert = 0, insertError = null, omitGradePeriod = null,
   currentRecordsOverride = null, submissionMode = false, activeAssignment = true, submitterIsTeacher = true } = {}) {
   const state = {
     commits: 0, rollbacks: 0, previewExists: true, inserts: 0, replaces: 0, audits: [],
@@ -306,28 +306,28 @@ function confirmationHarness({ existingGrades = [], nameMismatch = false, failAt
       request() {
         return requestFor(async (statement, values) => {
           state.queries.push({ statement, values });
-          if (statement.includes('FROM dbo.users WITH')) return { recordset: [{ id: 7, role: 'registrar' }] };
-          if (statement.includes('FROM dbo.grade_import_previews WITH')) return state.previewExists ? { recordset: [header] } : { recordset: [] };
-          if (statement.includes('FROM dbo.teacher_grade_submissions AS s WITH')) {
+          if (statement.includes('SELECT id, role FROM users WHERE id = @actorId')) return { recordset: [{ id: 7, role: 'registrar' }] };
+          if (statement.startsWith('DELETE FROM grade_import_previews')) { removePreview = true; return { recordset: [] }; }
+          if (statement.includes('FROM grade_import_previews')) return state.previewExists ? { recordset: [header] } : { recordset: [] };
+          if (statement.includes('FROM teacher_grade_submissions AS s')) {
             return submissionMode && activeAssignment && submitterIsTeacher ? { recordset: [header] } : { recordset: [] };
           }
-          if (statement.includes('FROM dbo.grade_import_preview_rows AS r')
-            || statement.includes('FROM dbo.teacher_grade_submission_rows AS r')) {
+          if (statement.includes('FROM grade_import_preview_rows AS r')
+            || statement.includes('FROM teacher_grade_submission_rows AS r')) {
             return { recordset: grades.filter((grade) => grade.grading_period !== omitGradePeriod).map((grade) => ({ ...row, ...grade })) };
           }
-          if (statement.includes('FROM dbo.students AS st WITH')) return { recordset: currentRecords };
-          if (statement.startsWith('INSERT INTO dbo.grades')) {
+          if (statement.includes('FROM students AS st')) return { recordset: currentRecords };
+          if (statement.startsWith('INSERT INTO grades')) {
             localInserts += 1;
-            if (failAtInsert && localInserts === failAtInsert) throw new Error('injected grade write failure');
+            if (failAtInsert && localInserts === failAtInsert) throw insertError || new Error('injected grade write failure');
             return { recordset: [] };
           }
-          if (statement.startsWith('UPDATE dbo.grades')) { localReplaces += 1; return { recordset: [] }; }
-          if (statement.includes('INSERT INTO dbo.audit_logs')) {
+          if (statement.startsWith('UPDATE grades')) { localReplaces += 1; return { recordset: [] }; }
+          if (statement.includes('INSERT INTO audit_logs')) {
             const details = JSON.parse(values.detailsJson || '{}');
             localAudits.push(details);
             return { recordset: [] };
           }
-          if (statement.startsWith('DELETE FROM dbo.grade_import_previews')) { removePreview = true; return { recordset: [] }; }
           return { recordset: [] };
         });
       },
@@ -369,6 +369,9 @@ test('confirmation requires explicit inclusion and reasoned review/replacement w
   assert.equal(state.persistedInserts, 1);
   assert.equal(state.persistedReplaces, 1);
   assert.equal(state.previewExists, false);
+  assert.match(state.queries.find(({ statement }) => statement.includes('FROM grade_import_previews')).statement, /FOR UPDATE$/);
+  assert.match(state.queries.find(({ statement }) => statement.includes('FROM grade_import_preview_rows AS r')).statement, /FOR UPDATE$/);
+  assert.match(state.queries.find(({ statement }) => statement.includes('FROM students AS st')).statement, /FOR UPDATE$/);
   const auditJson = JSON.stringify(state.audits);
   assert.equal(auditJson.includes(LRN), false);
   assert.equal(auditJson.includes('89'), false, 'audit summary omits raw grade values');
@@ -408,6 +411,18 @@ test('confirmation rejects missing review reasons and rolls back all grade write
   assert.equal(atomic.state.persistedInserts, 0);
   assert.equal(atomic.state.audits.length, 0);
   assert.equal(atomic.state.previewExists, true);
+
+  const duplicate = confirmationHarness({ failAtInsert: 1, insertError: Object.assign(new Error('duplicate grade period'), {
+    code: 'ER_DUP_ENTRY', errno: 1062
+  }) });
+  await assert.rejects(duplicate.service.confirmPreview({
+    actorId: 7, sessionId: 'session-a', previewId: duplicate.header.id,
+    decisions: [fullDecision()]
+  }), (error) => error instanceof GradeImportError && error.status === 409);
+  assert.equal(duplicate.state.rollbacks, 1);
+  assert.equal(duplicate.state.persistedInserts, 0);
+  assert.equal(duplicate.state.audits.length, 0);
+  assert.equal(duplicate.state.previewExists, true);
 });
 
 test('concurrent confirmation imports a preview once and expires/repeats safely', async () => {
@@ -460,7 +475,7 @@ test('submission approval requires an active teacher assignment, while an inacti
   }), /teacher assignment is no longer valid/);
   assert.equal(revoked.state.rollbacks, 1);
   assert.equal(revoked.state.persistedInserts, 0);
-  assert.equal(revoked.state.queries.some(({ statement }) => statement.includes('FROM dbo.students AS st WITH')), false);
+  assert.equal(revoked.state.queries.some(({ statement }) => statement.includes('FROM students AS st')), false);
 
   const reassigned = confirmationHarness({ submissionMode: true, activeAssignment: true, submitterIsTeacher: false });
   await assert.rejects(reassigned.service.confirmPreview({
@@ -468,7 +483,7 @@ test('submission approval requires an active teacher assignment, while an inacti
   }), /teacher assignment is no longer valid/);
   assert.equal(reassigned.state.rollbacks, 1);
   assert.equal(reassigned.state.persistedInserts, 0);
-  assert.equal(reassigned.state.queries.some(({ statement }) => statement.includes('FROM dbo.students AS st WITH')), false);
+  assert.equal(reassigned.state.queries.some(({ statement }) => statement.includes('FROM students AS st')), false);
 
   const deactivatedSubmitter = confirmationHarness({ submissionMode: true, activeAssignment: true });
   const result = await deactivatedSubmitter.service.confirmPreview({
@@ -477,13 +492,13 @@ test('submission approval requires an active teacher assignment, while an inacti
   });
   assert.equal(result.inserted, 4, 'the active registrar can approve the saved review snapshot even if its submitter later becomes inactive');
   assert.equal(deactivatedSubmitter.state.persistedInserts, 4);
-  const submissionHeader = deactivatedSubmitter.state.queries.find(({ statement }) => statement.includes('FROM dbo.teacher_grade_submissions AS s WITH'));
-  assert.match(submissionHeader.statement, /s\.status = N'pending' AND a\.is_active = 1/);
-  assert.match(submissionHeader.statement, /a\.teacher_id = s\.submitted_by[\s\S]*?submitter\.role = N'teacher'/);
+  const submissionHeader = deactivatedSubmitter.state.queries.find(({ statement }) => statement.includes('FROM teacher_grade_submissions AS s'));
+  assert.match(submissionHeader.statement, /s\.status = 'pending' AND a\.is_active = 1/);
+  assert.match(submissionHeader.statement, /a\.teacher_id = s\.submitted_by[\s\S]*?submitter\.role = 'teacher'/);
   assert.doesNotMatch(submissionHeader.statement, /submitter\.is_active = 1/,
     'the registrar may finish review when the original teacher account is deactivated but the assignment remains active');
   const approvalAuditDetails = deactivatedSubmitter.state.queries
-    .filter(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs'))
+    .filter(({ statement }) => statement.includes('INSERT INTO audit_logs'))
     .map(({ values }) => values.detailsJson).join(' ');
   assert.doesNotMatch(approvalAuditDetails, /studentId|verified workbook name|123456789012|"89"/);
 
@@ -529,7 +544,7 @@ test('confirm rechecks registrar access and four complete cached grades before a
     getPool: async () => ({ request: () => requestFor(async () => ({ recordset: [] })) }), sql: fakeSql(), secret: SECRET,
     transactionFactory: () => ({
       async begin() {}, request() { return requestFor(async (statement) => {
-        if (statement.includes('FROM dbo.users WITH')) { userQuery += 1; return { recordset: [] }; }
+        if (statement.includes('SELECT id, role FROM users WHERE id = @actorId')) { userQuery += 1; return { recordset: [] }; }
         return { recordset: [] };
       }); },
       async rollback() {}, async commit() {}

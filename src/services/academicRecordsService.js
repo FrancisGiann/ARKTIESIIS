@@ -1,4 +1,4 @@
-const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
+const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
 
 const ID_PATTERN = /^\d{1,10}$/;
 const ACADEMIC_WRITER_ROLES = new Set(['database_admin', 'registrar']);
@@ -111,7 +111,7 @@ function validateGrade(input = {}) {
 }
 
 function isUniqueConflict(error) {
-  return error?.number === 2601 || error?.number === 2627;
+  return isDuplicateKeyError(error);
 }
 
 function createAcademicRecordsService({
@@ -149,8 +149,8 @@ function createAcademicRecordsService({
       .input('actorId', sql.Int, id)
       .input('databaseAdminRole', sql.NVarChar(30), 'database_admin')
       .input('registrarRole', sql.NVarChar(30), 'registrar')
-      .query(`SELECT id, role FROM dbo.users WITH (UPDLOCK, HOLDLOCK)
-        WHERE id = @actorId AND is_active = 1 AND role IN (@databaseAdminRole, @registrarRole)`);
+      .query(`SELECT id, role FROM users
+        WHERE id = @actorId AND is_active = 1 AND role IN (@databaseAdminRole, @registrarRole) FOR UPDATE`);
     const actor = result.recordset?.[0];
     if (!actor || !ACADEMIC_WRITER_ROLES.has(actor.role)) {
       throw new AcademicRecordsError('Academic record access is no longer active. Sign in again.', 403);
@@ -165,14 +165,14 @@ function createAcademicRecordsService({
       .input('entityType', sql.NVarChar(100), entityType)
       .input('entityId', sql.NVarChar(100), String(entityId))
       .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify(details || {}))
-      .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
+      .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
         VALUES (@actorId, @action, @entityType, @entityId, @detailsJson)`);
   }
 
   async function listSubjects() {
     const pool = await getPool();
     const result = await pool.request().query(`SELECT id, subject_code, subject_name, units
-      FROM dbo.subjects ORDER BY subject_code, id`);
+      FROM subjects ORDER BY subject_code, id`);
     return result.recordset || [];
   }
 
@@ -184,7 +184,7 @@ function createAcademicRecordsService({
       .input('studentId', sql.Int, studentId)
       .query(`SELECT id, student_no, first_name, middle_name, last_name, suffix,
         birth_date, sex, address, phone, status
-        FROM dbo.students WHERE id = @studentId`);
+        FROM students WHERE id = @studentId`);
     const student = studentResult.recordset?.[0];
     if (!student) return null;
 
@@ -192,9 +192,9 @@ function createAcademicRecordsService({
       pool.request().input('studentId', sql.Int, studentId).query(`
         SELECT e.id, e.academic_term_id, e.section_id, e.enrollment_status, e.enrolled_at,
           t.school_year, t.term, t.is_current, s.name AS section_name, s.grade_level
-        FROM dbo.enrollments AS e
-        INNER JOIN dbo.academic_terms AS t ON t.id = e.academic_term_id
-        LEFT JOIN dbo.sections AS s ON s.id = e.section_id AND s.academic_term_id = e.academic_term_id
+        FROM enrollments AS e
+        INNER JOIN academic_terms AS t ON t.id = e.academic_term_id
+        LEFT JOIN sections AS s ON s.id = e.section_id AND s.academic_term_id = e.academic_term_id
         WHERE e.student_id = @studentId
         ORDER BY t.is_current DESC, t.id DESC, e.id DESC`),
       listSubjects(),
@@ -202,10 +202,10 @@ function createAcademicRecordsService({
         SELECT ss.id AS student_subject_id, ss.enrollment_id,
           sub.id AS subject_id, sub.subject_code, sub.subject_name, sub.units,
           g.id AS grade_id, g.grading_period, g.grade_value, g.remarks
-        FROM dbo.student_subjects AS ss
-        INNER JOIN dbo.enrollments AS e ON e.id = ss.enrollment_id
-        INNER JOIN dbo.subjects AS sub ON sub.id = ss.subject_id
-        LEFT JOIN dbo.grades AS g ON g.student_subject_id = ss.id
+        FROM student_subjects AS ss
+        INNER JOIN enrollments AS e ON e.id = ss.enrollment_id
+        INNER JOIN subjects AS sub ON sub.id = ss.subject_id
+        LEFT JOIN grades AS g ON g.student_subject_id = ss.id
         WHERE e.student_id = @studentId
         ORDER BY ss.enrollment_id, sub.subject_code, g.grading_period`)
     ]);
@@ -248,12 +248,12 @@ function createAcademicRecordsService({
       .query(`SELECT g.id, g.grading_period, g.grade_value, g.remarks,
           sub.subject_code, sub.subject_name, sub.units,
           t.school_year, t.term, e.id AS enrollment_id
-        FROM dbo.students AS st
-        INNER JOIN dbo.enrollments AS e ON e.student_id = st.id
-        INNER JOIN dbo.academic_terms AS t ON t.id = e.academic_term_id
-        INNER JOIN dbo.student_subjects AS ss ON ss.enrollment_id = e.id
-        INNER JOIN dbo.subjects AS sub ON sub.id = ss.subject_id
-        INNER JOIN dbo.grades AS g ON g.student_subject_id = ss.id
+        FROM students AS st
+        INNER JOIN enrollments AS e ON e.student_id = st.id
+        INNER JOIN academic_terms AS t ON t.id = e.academic_term_id
+        INNER JOIN student_subjects AS ss ON ss.enrollment_id = e.id
+        INNER JOIN subjects AS sub ON sub.id = ss.subject_id
+        INNER JOIN grades AS g ON g.student_subject_id = ss.id
         WHERE st.user_id = @userId
         ORDER BY t.id DESC, sub.subject_code, g.grading_period`);
     return result.recordset || [];
@@ -269,14 +269,14 @@ function createAcademicRecordsService({
       const actor = await requireAcademicWriter(transaction, actorId);
       if (subjectId !== null) {
         const current = await transaction.request().input('subjectId', sql.Int, subjectId)
-          .query('SELECT id FROM dbo.subjects WITH (UPDLOCK, HOLDLOCK) WHERE id = @subjectId');
+          .query('SELECT id FROM subjects WHERE id = @subjectId FOR UPDATE');
         if (!current.recordset?.length) throw new AcademicRecordsError('Subject not found.', 404);
       }
       const duplicate = await transaction.request()
         .input('subjectCode', sql.NVarChar(50), subject.subjectCode)
         .input('subjectId', sql.Int, subjectId)
-        .query(`SELECT id FROM dbo.subjects WITH (UPDLOCK, HOLDLOCK)
-          WHERE subject_code = @subjectCode AND (@subjectId IS NULL OR id <> @subjectId)`);
+        .query(`SELECT id FROM subjects
+          WHERE subject_code = @subjectCode AND (@subjectId IS NULL OR id <> @subjectId) FOR UPDATE`);
       if (duplicate.recordset?.length) throw new AcademicRecordsError('That subject code is already in use.', 409);
 
       let savedId = subjectId;
@@ -285,9 +285,9 @@ function createAcademicRecordsService({
           .input('subjectCode', sql.NVarChar(50), subject.subjectCode)
           .input('subjectName', sql.NVarChar(200), subject.subjectName)
           .input('units', sql.Decimal(5, 2), subject.units)
-          .query(`INSERT INTO dbo.subjects (subject_code, subject_name, units)
-            OUTPUT INSERTED.id AS id VALUES (@subjectCode, @subjectName, @units)`);
-        savedId = result.recordset?.[0]?.id;
+          .query(`INSERT INTO subjects (subject_code, subject_name, units)
+            VALUES (@subjectCode, @subjectName, @units)`);
+        savedId = result.insertId;
         if (!savedId) throw new Error('Subject insert returned no identifier.');
       } else {
         await transaction.request()
@@ -295,7 +295,7 @@ function createAcademicRecordsService({
           .input('subjectCode', sql.NVarChar(50), subject.subjectCode)
           .input('subjectName', sql.NVarChar(200), subject.subjectName)
           .input('units', sql.Decimal(5, 2), subject.units)
-          .query(`UPDATE dbo.subjects SET subject_code = @subjectCode,
+          .query(`UPDATE subjects SET subject_code = @subjectCode,
             subject_name = @subjectName, units = @units WHERE id = @subjectId`);
       }
       await writeAudit(transaction, {
@@ -313,28 +313,28 @@ function createAcademicRecordsService({
       const enrollment = await transaction.request()
         .input('enrollmentId', sql.Int, assignment.enrollmentId)
         .input('studentId', sql.Int, assignment.studentId)
-        .query(`SELECT e.id, e.student_id, st.status FROM dbo.enrollments AS e WITH (UPDLOCK, HOLDLOCK)
-          INNER JOIN dbo.students AS st WITH (UPDLOCK, HOLDLOCK) ON st.id = e.student_id
-          WHERE e.id = @enrollmentId AND e.student_id = @studentId`);
+        .query(`SELECT e.id, e.student_id, st.status FROM enrollments AS e
+          INNER JOIN students AS st ON st.id = e.student_id
+          WHERE e.id = @enrollmentId AND e.student_id = @studentId FOR UPDATE`);
       if (!enrollment.recordset?.length) throw new AcademicRecordsError('Enrollment not found for this student.', 404);
       if (enrollment.recordset[0].status === 'archived') {
         throw new AcademicRecordsError('Archived students cannot receive new academic records.', 409);
       }
       const subject = await transaction.request().input('subjectId', sql.Int, assignment.subjectId)
-        .query('SELECT id FROM dbo.subjects WITH (UPDLOCK, HOLDLOCK) WHERE id = @subjectId');
+        .query('SELECT id FROM subjects WHERE id = @subjectId FOR UPDATE');
       if (!subject.recordset?.length) throw new AcademicRecordsError('Subject not found.', 404);
       const existing = await transaction.request()
         .input('enrollmentId', sql.Int, assignment.enrollmentId)
         .input('subjectId', sql.Int, assignment.subjectId)
-        .query(`SELECT id FROM dbo.student_subjects WITH (UPDLOCK, HOLDLOCK)
-          WHERE enrollment_id = @enrollmentId AND subject_id = @subjectId`);
+        .query(`SELECT id FROM student_subjects
+          WHERE enrollment_id = @enrollmentId AND subject_id = @subjectId FOR UPDATE`);
       if (existing.recordset?.length) throw new AcademicRecordsError('This subject is already assigned to the enrollment.', 409);
       const result = await transaction.request()
         .input('enrollmentId', sql.Int, assignment.enrollmentId)
         .input('subjectId', sql.Int, assignment.subjectId)
-        .query(`INSERT INTO dbo.student_subjects (enrollment_id, subject_id)
-          OUTPUT INSERTED.id AS id VALUES (@enrollmentId, @subjectId)`);
-      const assignmentId = result.recordset?.[0]?.id;
+        .query(`INSERT INTO student_subjects (enrollment_id, subject_id)
+          VALUES (@enrollmentId, @subjectId)`);
+      const assignmentId = result.insertId;
       if (!assignmentId) throw new Error('Enrollment subject insert returned no identifier.');
       await writeAudit(transaction, {
         actorId, actorRole: actor.role, action: 'subject_assigned', entityType: 'student_subject', entityId: assignmentId,
@@ -351,10 +351,10 @@ function createAcademicRecordsService({
       const enrollmentSubject = await transaction.request()
         .input('studentSubjectId', sql.Int, grade.studentSubjectId)
         .input('studentId', sql.Int, grade.studentId)
-        .query(`SELECT ss.id, e.student_id, st.status FROM dbo.student_subjects AS ss WITH (UPDLOCK, HOLDLOCK)
-          INNER JOIN dbo.enrollments AS e WITH (UPDLOCK, HOLDLOCK) ON e.id = ss.enrollment_id
-          INNER JOIN dbo.students AS st WITH (UPDLOCK, HOLDLOCK) ON st.id = e.student_id
-          WHERE ss.id = @studentSubjectId AND e.student_id = @studentId`);
+        .query(`SELECT ss.id, e.student_id, st.status FROM student_subjects AS ss
+          INNER JOIN enrollments AS e ON e.id = ss.enrollment_id
+          INNER JOIN students AS st ON st.id = e.student_id
+          WHERE ss.id = @studentSubjectId AND e.student_id = @studentId FOR UPDATE`);
       if (!enrollmentSubject.recordset?.length) {
         throw new AcademicRecordsError('Enrollment subject not found for this student.', 404);
       }
@@ -366,15 +366,15 @@ function createAcademicRecordsService({
         existing = await transaction.request()
           .input('gradeId', sql.Int, grade.gradeId)
           .input('studentSubjectId', sql.Int, grade.studentSubjectId)
-          .query(`SELECT id FROM dbo.grades WITH (UPDLOCK, HOLDLOCK)
-            WHERE id = @gradeId AND student_subject_id = @studentSubjectId`);
+          .query(`SELECT id FROM grades
+            WHERE id = @gradeId AND student_subject_id = @studentSubjectId FOR UPDATE`);
         if (!existing.recordset?.length) throw new AcademicRecordsError('Grade not found for this enrollment subject.', 404);
         const periodConflict = await transaction.request()
           .input('gradeId', sql.Int, grade.gradeId)
           .input('studentSubjectId', sql.Int, grade.studentSubjectId)
           .input('gradingPeriod', sql.NVarChar(50), grade.gradingPeriod)
-          .query(`SELECT id FROM dbo.grades WITH (UPDLOCK, HOLDLOCK)
-            WHERE student_subject_id = @studentSubjectId AND grading_period = @gradingPeriod AND id <> @gradeId`);
+          .query(`SELECT id FROM grades
+            WHERE student_subject_id = @studentSubjectId AND grading_period = @gradingPeriod AND id <> @gradeId FOR UPDATE`);
         if (periodConflict.recordset?.length) {
           throw new AcademicRecordsError('A grade for this enrollment subject and grading period already exists.', 409);
         }
@@ -382,8 +382,8 @@ function createAcademicRecordsService({
         existing = await transaction.request()
           .input('studentSubjectId', sql.Int, grade.studentSubjectId)
           .input('gradingPeriod', sql.NVarChar(50), grade.gradingPeriod)
-          .query(`SELECT id FROM dbo.grades WITH (UPDLOCK, HOLDLOCK)
-            WHERE student_subject_id = @studentSubjectId AND grading_period = @gradingPeriod`);
+          .query(`SELECT id FROM grades
+            WHERE student_subject_id = @studentSubjectId AND grading_period = @gradingPeriod FOR UPDATE`);
       }
       let gradeId;
       let action;
@@ -396,8 +396,8 @@ function createAcademicRecordsService({
           .input('gradeValue', sql.Decimal(6, 2), grade.gradeValue)
           .input('remarks', sql.NVarChar(100), grade.remarks)
           .input('actorId', sql.Int, actor.id)
-          .query(`UPDATE dbo.grades SET grading_period = @gradingPeriod, grade_value = @gradeValue, remarks = @remarks,
-            recorded_by = @actorId, recorded_at = SYSUTCDATETIME() WHERE id = @gradeId`);
+          .query(`UPDATE grades SET grading_period = @gradingPeriod, grade_value = @gradeValue, remarks = @remarks,
+            recorded_by = @actorId, recorded_at = UTC_TIMESTAMP(6) WHERE id = @gradeId`);
       } else {
         action = 'grade_created';
         const result = await transaction.request()
@@ -406,11 +406,10 @@ function createAcademicRecordsService({
           .input('gradeValue', sql.Decimal(6, 2), grade.gradeValue)
           .input('remarks', sql.NVarChar(100), grade.remarks)
           .input('actorId', sql.Int, actor.id)
-          .query(`INSERT INTO dbo.grades
+          .query(`INSERT INTO grades
             (student_subject_id, grading_period, grade_value, remarks, recorded_by)
-            OUTPUT INSERTED.id AS id
             VALUES (@studentSubjectId, @gradingPeriod, @gradeValue, @remarks, @actorId)`);
-        gradeId = result.recordset?.[0]?.id;
+        gradeId = result.insertId;
         if (!gradeId) throw new Error('Grade insert returned no identifier.');
       }
       await writeAudit(transaction, {

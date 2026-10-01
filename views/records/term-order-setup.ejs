@@ -1,0 +1,33 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell admin-page records-page" id="main-content">
+  <section class="dashboard-heading">
+    <div><h1>Configure school-year term order</h1><p>Map the school’s three term contexts explicitly. Existing semester labels are not reordered automatically.</p></div>
+    <div class="admin-heading-actions"><a class="button button--secondary" href="/registrar/intake">Back to annual intake</a></div>
+  </section>
+  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <% if (reviews.length) { %>
+    <section class="admin-section" aria-labelledby="term-review-title">
+      <div class="admin-section__heading"><div><h2 id="term-review-title">Academic terms needing a staff mapping</h2><p>These terms have conflicting recorded annual term numbers. Select and save the complete three-term order to resolve the corresponding review entries.</p></div></div>
+      <ul><% for (const item of reviews) { %><li><%= item.school_year %> · <%= terms.find((term) => String(term.id) === String(item.academic_term_id))?.term || `Academic term ${item.academic_term_id}` %> — <%= item.review_reason %></li><% } %></ul>
+    </section>
+  <% } %>
+  <section class="admin-section" aria-labelledby="term-map-title">
+    <div class="admin-section__heading"><div><h2 id="term-map-title">Save a three-term order</h2><p>Changing an order is blocked once annual placements or assessments use that school year.</p></div></div>
+    <form class="admin-form" method="post" action="/registrar/intake/setup/terms">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <div class="admin-form-grid">
+        <div class="field"><label for="term-order-year">School year</label><input id="term-order-year" name="schoolYear" maxlength="20" required placeholder="e.g. 2026-2027"></div>
+        <% for (const number of [1, 2, 3]) { %>
+          <div class="field"><label for="term-order-<%= number %>">Term <%= number %></label><select id="term-order-<%= number %>" name="term<%= number %>Id" required><option value="">Choose a school-year term</option><% for (const term of terms) { %><option value="<%= term.id %>" data-school-year="<%= term.school_year %>"><%= term.school_year %> · <%= term.term %><%= term.is_current ? ' · Current' : '' %></option><% } %></select></div>
+        <% } %>
+      </div>
+      <div class="admin-form-actions"><button class="button button--primary" type="submit">Save term order</button></div>
+    </form>
+  </section>
+  <section class="admin-section" aria-labelledby="term-mappings-title">
+    <div class="admin-section__heading"><div><h2 id="term-mappings-title">Configured orders</h2></div></div>
+    <% if (mappings.length) { %><div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>School year</th><th>Annual term number</th><th>Academic term</th></tr></thead><tbody><% for (const mapping of mappings) { %><tr><td><%= mapping.school_year %></td><td>Term <%= mapping.term_number %></td><td><%= terms.find((term) => String(term.id) === String(mapping.academic_term_id))?.term || `Academic term ${mapping.academic_term_id}` %></td></tr><% } %></tbody></table></div><% } else { %><p class="empty-state">No school-year term order has been configured.</p><% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

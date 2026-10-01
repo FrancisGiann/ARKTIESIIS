@@ -34,36 +34,39 @@
   </section>
 
   <section class="schedule-controls" aria-label="Selected class schedule">
-    <form class="schedule-create-form" method="post" action="/registrar/schedules" aria-labelledby="schedule-create-title" id="schedule-create-form">
-      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-      <input type="hidden" name="termId" value="<%= academicTermId || '' %>">
-      <input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>">
-      <input type="hidden" name="filterAssignmentId" value="<%= selectedAssignmentId || '' %>">
-      <div><h2 id="schedule-create-title">Add a class time</h2><p>Choose a day, start and end time, and room. Conflicts are checked when saved.</p></div>
-      <% if (!assignments.length) { %><p class="empty-state">No active teacher assignments match this context. Create an assignment before setting class times.</p><% } %>
-      <label for="schedule-assignment">Assigned class</label>
-      <select id="schedule-assignment" name="assignmentId" required <%= !assignments.length ? 'disabled' : '' %>>
-        <option value="">Choose an active class</option>
-        <% const scheduleFormAssignments = selectedAssignmentId ? assignments.filter((assignment) => Number(assignment.id) === Number(selectedAssignmentId)) : assignments; %>
-        <% for (const assignment of scheduleFormAssignments) { %>
-          <option value="<%= assignment.id %>" <%= String(values.assignmentId || selectedAssignmentId || '') === String(assignment.id) ? 'selected' : '' %>><%= formatStudentPlacement(assignment.grade_level, assignment.section_name) %> · <%= assignment.subject_code %> · <%= assignment.teacher_name %></option>
-        <% } %>
-      </select>
-      <div class="schedule-time-fields">
-        <div><label for="schedule-day">Day</label><select id="schedule-day" name="dayOfWeek" required>
-          <% for (const [value, label] of [[1,'Monday'],[2,'Tuesday'],[3,'Wednesday'],[4,'Thursday'],[5,'Friday'],[6,'Saturday']]) { %>
-            <option value="<%= value %>" <%= String(values.dayOfWeek || '1') === String(value) ? 'selected' : '' %>><%= label %></option>
+    <% if (!assignments.length) { %><p class="empty-state">No active teacher assignments match this context. Create an assignment before setting class times.</p><% } %>
+    <details class="schedule-create-disclosure" <%= showCreate || error ? 'open' : '' %>>
+      <summary class="schedule-create-summary" id="schedule-create-title">Add a class time</summary>
+      <form class="schedule-create-form" method="post" action="/registrar/schedules" aria-labelledby="schedule-create-title" id="schedule-create-form">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <input type="hidden" name="termId" value="<%= academicTermId || '' %>">
+        <input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>">
+        <input type="hidden" name="filterAssignmentId" value="<%= selectedAssignmentId || '' %>">
+        <p>Choose a day, start and end time, and room. Conflicts are checked when saved.</p>
+        <label for="schedule-assignment">Assigned class</label>
+        <select id="schedule-assignment" name="assignmentId" required <%= !assignments.length ? 'disabled' : '' %>>
+          <option value="">Choose an active class</option>
+          <% const scheduleFormAssignments = selectedAssignmentId ? assignments.filter((assignment) => Number(assignment.id) === Number(selectedAssignmentId)) : assignments; %>
+          <% for (const assignment of scheduleFormAssignments) { %>
+            <option value="<%= assignment.id %>" <%= String(values.assignmentId || selectedAssignmentId || '') === String(assignment.id) ? 'selected' : '' %>><%= formatStudentPlacement(assignment.grade_level, assignment.section_name) %> · <%= assignment.subject_code %> · <%= assignment.teacher_name %></option>
           <% } %>
-        </select></div>
-        <div><label for="schedule-start">Starts</label><input id="schedule-start" name="startTime" type="time" required value="<%= values.startTime || '' %>"></div>
-        <div><label for="schedule-end">Ends</label><input id="schedule-end" name="endTime" type="time" required value="<%= values.endTime || '' %>"></div>
-        <div><label for="schedule-room">Room <span class="field-optional">Optional</span></label><input id="schedule-room" name="room" maxlength="80" value="<%= values.room || '' %>" autocomplete="off"></div>
-      </div>
-      <div class="schedule-form-actions">
-        <button class="button button--primary" type="submit" <%= !assignments.length ? 'disabled' : '' %>>Add class time</button>
-        <% if (academicTermId) { %><a class="table-action" href="/registrar/schedules?termId=<%= academicTermId %><% if (selectedSectionId) { %>&amp;sectionId=<%= selectedSectionId %><% } %><% if (selectedAssignmentId) { %>&amp;assignmentId=<%= selectedAssignmentId %><% } %>#schedule-create-title">Clear day, time, and room</a><% } %>
-      </div>
-    </form>
+        </select>
+        <div class="schedule-time-fields">
+          <div><label for="schedule-day">Day</label><select id="schedule-day" name="dayOfWeek" required>
+            <% for (const [value, label] of [[1,'Monday'],[2,'Tuesday'],[3,'Wednesday'],[4,'Thursday'],[5,'Friday'],[6,'Saturday']]) { %>
+              <option value="<%= value %>" <%= String(values.dayOfWeek || '1') === String(value) ? 'selected' : '' %>><%= label %></option>
+            <% } %>
+          </select></div>
+          <div><label for="schedule-start">Starts</label><input id="schedule-start" name="startTime" type="time" required value="<%= values.startTime || '' %>"></div>
+          <div><label for="schedule-end">Ends</label><input id="schedule-end" name="endTime" type="time" required value="<%= values.endTime || '' %>"></div>
+          <div><label for="schedule-room">Room <span class="field-optional">Optional</span></label><input id="schedule-room" name="room" maxlength="80" value="<%= values.room || '' %>" autocomplete="off"></div>
+        </div>
+        <div class="schedule-form-actions">
+          <button class="button button--primary" type="submit" <%= !assignments.length ? 'disabled' : '' %>>Add class time</button>
+          <% if (academicTermId) { %><a class="table-action" href="/registrar/schedules?termId=<%= academicTermId %><% if (selectedSectionId) { %>&amp;sectionId=<%= selectedSectionId %><% } %><% if (selectedAssignmentId) { %>&amp;assignmentId=<%= selectedAssignmentId %><% } %>&amp;showCreate=1#schedule-create-title">Clear day, time, and room</a><% } %>
+        </div>
+      </form>
+    </details>
   </section>
 
   <section class="schedule-list" aria-labelledby="schedule-list-title" id="schedule-list">
@@ -90,50 +93,67 @@
                 <p><%= first.school_year %> · <%= first.term %></p></div>
               <span class="schedule-section-card__count"><%= sectionSchedules.length %> <%= sectionSchedules.length === 1 ? 'class time' : 'class times' %></span>
             </header>
-            <ol class="schedule-entry-list">
-              <% for (const schedule of sectionSchedules) { const dayLabel = dayNames[Number(schedule.day_of_week)] || 'Unknown day'; const isActiveAssignment = schedule.assignment_is_active === true || schedule.assignment_is_active === 1; const isEditing = Number(editScheduleId) === Number(schedule.id); %>
-                <li class="schedule-entry" id="schedule-<%= schedule.id %>">
-                  <div class="schedule-entry__overview<%= isActiveAssignment ? '' : ' schedule-entry__overview--revoked' %>">
-                    <div class="schedule-entry__day-time"><span><%= dayLabel %></span><strong><%= schedule.start_time %>–<%= schedule.end_time %></strong></div>
-                    <div class="schedule-entry__class">
-                      <h4><span><%= schedule.subject_code %></span> <%= schedule.subject_name %></h4>
-                      <p>Teacher: <%= schedule.teacher_name %></p>
-                      <p>Room: <%= schedule.room || 'To be announced' %></p>
-                    </div>
-                    <% if (!isActiveAssignment) { %><span class="schedule-entry__status schedule-entry__status--revoked">Assignment revoked</span><% } %>
-                  </div>
-                  <% if (isActiveAssignment) { %>
-                    <details class="schedule-edit" <%= isEditing ? 'open' : '' %>>
-                      <summary>Edit class time</summary>
-                      <form method="post" action="/registrar/schedules/<%= schedule.id %>">
-                        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-                        <input type="hidden" name="termId" value="<%= academicTermId || '' %>">
-                        <input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>">
-                        <input type="hidden" name="filterAssignmentId" value="<%= selectedAssignmentId || '' %>">
-                        <label for="assignment-<%= schedule.id %>">Assigned class</label>
-                        <select id="assignment-<%= schedule.id %>" name="assignmentId" required>
-                          <% for (const assignment of assignments) { %><option value="<%= assignment.id %>" <%= Number(isEditing ? values.assignmentId : schedule.assignment_id) === Number(assignment.id) ? 'selected' : '' %>><%= formatStudentPlacement(assignment.grade_level, assignment.section_name) %> · <%= assignment.subject_code %> · <%= assignment.teacher_name %></option><% } %>
-                        </select>
-                        <label for="day-<%= schedule.id %>">Day</label><select id="day-<%= schedule.id %>" name="dayOfWeek" required>
-                          <% for (const [value, label] of [[1,'Monday'],[2,'Tuesday'],[3,'Wednesday'],[4,'Thursday'],[5,'Friday'],[6,'Saturday']]) { %><option value="<%= value %>" <%= Number(isEditing ? values.dayOfWeek : schedule.day_of_week) === value ? 'selected' : '' %>><%= label %></option><% } %>
-                        </select>
-                        <label for="start-<%= schedule.id %>">Starts</label><input id="start-<%= schedule.id %>" type="time" name="startTime" required value="<%= isEditing ? values.startTime : schedule.start_time %>">
-                        <label for="end-<%= schedule.id %>">Ends</label><input id="end-<%= schedule.id %>" type="time" name="endTime" required value="<%= isEditing ? values.endTime : schedule.end_time %>">
-                        <label for="room-<%= schedule.id %>">Room <span class="field-optional">Optional</span></label><input id="room-<%= schedule.id %>" name="room" maxlength="80" value="<%= isEditing ? values.room : schedule.room || '' %>">
-                        <div class="schedule-form-actions"><button class="button button--secondary" type="submit">Save class time</button><a class="table-action" href="/registrar/schedules?termId=<%= academicTermId || '' %><% if (selectedSectionId) { %>&amp;sectionId=<%= selectedSectionId %><% } %><% if (selectedAssignmentId) { %>&amp;assignmentId=<%= selectedAssignmentId %><% } %>#schedule-<%= schedule.id %>">Cancel</a></div>
-                      </form>
-                      <form method="post" action="/registrar/schedules/<%= schedule.id %>/delete" class="schedule-delete-form">
-                        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-                        <input type="hidden" name="termId" value="<%= academicTermId || '' %>">
-                        <input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>">
-                        <input type="hidden" name="filterAssignmentId" value="<%= selectedAssignmentId || '' %>">
-                        <button class="button button--danger" type="submit">Remove class time</button>
-                      </form>
-                    </details>
-                  <% } %>
-                </li>
+            <% const schedulesByDay = new Map(); %>
+            <% for (const schedule of sectionSchedules) {
+              const dayNumber = Number(schedule.day_of_week);
+              if (!schedulesByDay.has(dayNumber)) schedulesByDay.set(dayNumber, []);
+              schedulesByDay.get(dayNumber).push(schedule);
+            } %>
+            <div class="schedule-day-list">
+              <% for (const [dayNumber, daySchedules] of [...schedulesByDay.entries()].sort((left, right) => left[0] - right[0])) {
+                const dayLabel = dayNames[dayNumber] || 'Unknown day';
+                const opensForTarget = daySchedules.some((schedule) => Number(schedule.id) === Number(focusScheduleId) || Number(schedule.id) === Number(editScheduleId));
+                const dayRange = `${daySchedules[0].start_time}–${daySchedules[daySchedules.length - 1].end_time}`;
+              %>
+                <details class="schedule-day" <%= opensForTarget ? 'open' : '' %>>
+                  <summary class="schedule-day__summary"><strong><%= dayLabel %></strong><span><%= daySchedules.length %> <%= daySchedules.length === 1 ? 'class time' : 'class times' %></span><time><%= dayRange %></time></summary>
+                  <ol class="schedule-entry-list" aria-label="<%= dayLabel %> class times in <%= formatStudentPlacement(first.grade_level, first.section_name) %>">
+                    <% for (const schedule of daySchedules) { const isActiveAssignment = schedule.assignment_is_active === true || schedule.assignment_is_active === 1; const isEditing = Number(editScheduleId) === Number(schedule.id); %>
+                      <li class="schedule-entry" id="schedule-<%= schedule.id %>">
+                        <div class="schedule-entry__overview<%= isActiveAssignment ? '' : ' schedule-entry__overview--revoked' %>">
+                          <div class="schedule-entry__day-time"><strong><%= schedule.start_time %>–<%= schedule.end_time %></strong></div>
+                          <div class="schedule-entry__class">
+                            <h4><span><%= schedule.subject_code %></span> <%= schedule.subject_name %></h4>
+                            <p>Teacher: <%= schedule.teacher_name %></p>
+                            <p>Room: <%= schedule.room || 'To be announced' %></p>
+                          </div>
+                          <% if (!isActiveAssignment) { %><span class="schedule-entry__status schedule-entry__status--revoked">Assignment revoked</span><% } %>
+                        </div>
+                        <% if (isActiveAssignment) { %>
+                          <details class="schedule-edit" <%= isEditing ? 'open' : '' %>>
+                            <summary>Edit class time</summary>
+                            <form method="post" action="/registrar/schedules/<%= schedule.id %>">
+                              <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                              <input type="hidden" name="termId" value="<%= academicTermId || '' %>">
+                              <input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>">
+                              <input type="hidden" name="filterAssignmentId" value="<%= selectedAssignmentId || '' %>">
+                              <label for="assignment-<%= schedule.id %>">Assigned class</label>
+                              <select id="assignment-<%= schedule.id %>" name="assignmentId" required>
+                                <% for (const assignment of assignments) { %><option value="<%= assignment.id %>" <%= Number(isEditing ? values.assignmentId : schedule.assignment_id) === Number(assignment.id) ? 'selected' : '' %>><%= formatStudentPlacement(assignment.grade_level, assignment.section_name) %> · <%= assignment.subject_code %> · <%= assignment.teacher_name %></option><% } %>
+                              </select>
+                              <label for="day-<%= schedule.id %>">Day</label><select id="day-<%= schedule.id %>" name="dayOfWeek" required>
+                                <% for (const [value, label] of [[1,'Monday'],[2,'Tuesday'],[3,'Wednesday'],[4,'Thursday'],[5,'Friday'],[6,'Saturday']]) { %><option value="<%= value %>" <%= Number(isEditing ? values.dayOfWeek : schedule.day_of_week) === value ? 'selected' : '' %>><%= label %></option><% } %>
+                              </select>
+                              <label for="start-<%= schedule.id %>">Starts</label><input id="start-<%= schedule.id %>" type="time" name="startTime" required value="<%= isEditing ? values.startTime : schedule.start_time %>">
+                              <label for="end-<%= schedule.id %>">Ends</label><input id="end-<%= schedule.id %>" type="time" name="endTime" required value="<%= isEditing ? values.endTime : schedule.end_time %>">
+                              <label for="room-<%= schedule.id %>">Room <span class="field-optional">Optional</span></label><input id="room-<%= schedule.id %>" name="room" maxlength="80" value="<%= isEditing ? values.room : schedule.room || '' %>">
+                              <div class="schedule-form-actions"><button class="button button--secondary" type="submit">Save class time</button><a class="table-action" href="/registrar/schedules?termId=<%= academicTermId || '' %><% if (selectedSectionId) { %>&amp;sectionId=<%= selectedSectionId %><% } %><% if (selectedAssignmentId) { %>&amp;assignmentId=<%= selectedAssignmentId %><% } %>&amp;focusScheduleId=<%= schedule.id %>#schedule-<%= schedule.id %>">Cancel</a></div>
+                            </form>
+                            <form method="post" action="/registrar/schedules/<%= schedule.id %>/delete" class="schedule-delete-form">
+                              <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                              <input type="hidden" name="termId" value="<%= academicTermId || '' %>">
+                              <input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>">
+                              <input type="hidden" name="filterAssignmentId" value="<%= selectedAssignmentId || '' %>">
+                              <button class="button button--danger" type="submit">Remove class time</button>
+                            </form>
+                          </details>
+                        <% } %>
+                      </li>
+                    <% } %>
+                  </ol>
+                </details>
               <% } %>
-            </ol>
+            </div>
           </article>
         <% } %>
       </div>

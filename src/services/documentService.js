@@ -293,7 +293,7 @@ function createDocumentService({
     if (!actorId) throw new DocumentServiceError('Document access is required.', 403);
     const result = await transaction.request()
       .input('actorId', sql.Int, actorId)
-      .query('SELECT id, role FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE id = @actorId AND is_active = 1');
+      .query('SELECT id, role FROM users WHERE id = @actorId AND is_active = 1 FOR UPDATE');
     const actor = result.recordset?.[0];
     if (!actor || !allowedRoles.has(actor.role)) throw new DocumentServiceError('Your document access is no longer active. Sign in again.', 403);
     return actor;
@@ -304,7 +304,7 @@ function createDocumentService({
     if (!actorId) throw new DocumentServiceError('Document access is required.', 403);
     const result = await pool.request()
       .input('actorId', sql.Int, actorId)
-      .query('SELECT id, role FROM dbo.users WHERE id = @actorId AND is_active = 1');
+      .query('SELECT id, role FROM users WHERE id = @actorId AND is_active = 1');
     const actor = result.recordset?.[0];
     if (!actor || !['student', ...STAFF_ROLES].includes(actor.role)) throw new DocumentServiceError('Your document access is no longer active. Sign in again.', 403);
     return actor;
@@ -317,7 +317,7 @@ function createDocumentService({
       .input('entityType', sql.NVarChar(100), 'document')
       .input('entityId', sql.NVarChar(100), String(documentId))
       .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify({ studentId, documentType }))
-      .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
+      .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
         VALUES (@actorId, @action, @entityType, @entityId, @detailsJson)`);
   }
 
@@ -410,14 +410,16 @@ function createDocumentService({
       .input('initialStatus', sql.NVarChar(30), initialStatus)
       .input('isLegacyArchive', sql.Bit, 0)
       .input('supersedesDocumentId', sql.Int, supersedesDocumentId)
-      .query(`INSERT INTO dbo.documents
+      .query(`INSERT INTO documents
           (student_id, document_type, original_filename, stored_filename, mime_type,
-            file_size_bytes, uploaded_by, upload_source, status, is_legacy_archive, supersedes_document_id)
-        OUTPUT INSERTED.id AS id
+          file_size_bytes, uploaded_by, upload_source, status, is_legacy_archive, supersedes_document_id)
         VALUES (@studentId, @documentType, @originalFilename, @storedFilename, @mimeType,
             @fileSizeBytes, @uploadedBy, @uploadSource, @initialStatus, @isLegacyArchive, @supersedesDocumentId)`);
-    const documentId = insertResult.recordset?.[0]?.id;
+    const documentId = insertResult.insertId;
     if (!Number.isSafeInteger(documentId) || documentId < 1) throw new Error('Document insert returned no identifier.');
+    if (supersedesDocumentId !== null && Number(supersedesDocumentId) === documentId) {
+      throw new DocumentServiceError('A document cannot supersede itself.', 400);
+    }
     await writeAudit(actor.transaction, {
       actor,
       action: supersedesDocumentId ? 'reuploaded' : 'uploaded',
@@ -432,10 +434,10 @@ function createDocumentService({
     const existingResult = await transaction.request()
       .input('studentId', sql.Int, studentId)
       .input('documentType', sql.NVarChar(50), documentType)
-      .query(`SELECT TOP (1) id, status FROM dbo.documents WITH (UPDLOCK, HOLDLOCK)
+      .query(`SELECT id, status FROM documents
         WHERE student_id = @studentId AND document_type = @documentType
           AND (@documentType <> 'report_card' OR is_legacy_archive = 0)
-        ORDER BY created_at DESC, id DESC`);
+        ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE`);
     const latestSubmission = existingResult.recordset?.[0];
     if (latestSubmission && latestSubmission.status !== 'rejected') {
       throw new DocumentServiceError('A submission of this type already exists. Use its correction request to upload a revised file.', 409);
@@ -466,7 +468,7 @@ function createDocumentService({
       if (actor.role === 'student') {
         const studentResult = await transaction.request()
           .input('actorId', sql.Int, actor.id)
-          .query('SELECT id FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE user_id = @actorId');
+          .query('SELECT id FROM students WHERE user_id = @actorId FOR UPDATE');
         studentId = studentResult.recordset?.[0]?.id;
         if (!studentId) throw new DocumentServiceError('No student record is linked to this account.', 403);
       } else {
@@ -474,7 +476,7 @@ function createDocumentService({
         if (!studentId) throw new DocumentServiceError('Choose a valid student record.');
         const studentResult = await transaction.request()
           .input('studentId', sql.Int, studentId)
-          .query('SELECT id FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE id = @studentId');
+          .query('SELECT id FROM students WHERE id = @studentId FOR UPDATE');
         if (!studentResult.recordset?.length) throw new DocumentServiceError('Student record not found.', 404);
       }
 
@@ -496,9 +498,9 @@ function createDocumentService({
         .input('actorId', sql.Int, actor.id)
         .query(`SELECT d.id, d.student_id, d.document_type, d.upload_source, d.status,
             d.is_legacy_archive, s.user_id AS student_user_id
-          FROM dbo.documents AS d WITH (UPDLOCK, HOLDLOCK)
-          INNER JOIN dbo.students AS s WITH (UPDLOCK, HOLDLOCK) ON s.id = d.student_id
-          WHERE d.id = @documentId`);
+          FROM documents AS d
+          INNER JOIN students AS s ON s.id = d.student_id
+          WHERE d.id = @documentId FOR UPDATE`);
       const previous = previousResult.recordset?.[0];
       if (!previous) throw new DocumentServiceError('Document not found.', 404);
       if (actor.role === 'student'
@@ -523,14 +525,14 @@ function createDocumentService({
 
       const decisionResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
-        .query(`SELECT TOP (1) decision_type AS action_type FROM dbo.document_decision_events
-          WHERE document_id = @documentId ORDER BY created_at DESC, id DESC`);
+        .query(`SELECT decision_type AS action_type FROM document_decision_events
+          WHERE document_id = @documentId ORDER BY created_at DESC, id DESC LIMIT 1`);
       let correctionRequested = decisionResult.recordset?.[0]?.action_type === 'correction_requested';
       if (!decisionResult.recordset?.length) {
         const legacyReviewResult = await transaction.request()
           .input('documentId', sql.Int, documentId)
-          .query(`SELECT TOP (1) action_type FROM dbo.document_review_events
-            WHERE document_id = @documentId ORDER BY created_at DESC, id DESC`);
+          .query(`SELECT action_type FROM document_review_events
+            WHERE document_id = @documentId ORDER BY created_at DESC, id DESC LIMIT 1`);
         correctionRequested = legacyReviewResult.recordset?.[0]?.action_type === 'correction_requested';
       }
       if (!correctionRequested) {
@@ -538,7 +540,7 @@ function createDocumentService({
       }
       const revisionResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
-        .query('SELECT TOP (1) id FROM dbo.documents WHERE supersedes_document_id = @documentId');
+        .query('SELECT id FROM documents WHERE supersedes_document_id = @documentId LIMIT 1');
       if (revisionResult.recordset?.length) throw new DocumentServiceError('A corrected upload has already been submitted for this document.', 409);
 
       return insertSubmission({
@@ -577,35 +579,27 @@ function createDocumentService({
       .input('searchPattern', sql.NVarChar(204), searchPattern)
       .input('documentType', sql.NVarChar(50), documentType === 'all' ? null : documentType)
       .input('statusFilter', sql.NVarChar(30), statusFilter === 'all' ? null : statusFilter)
-      .query(`SELECT TOP (200) d.id, d.student_id, d.document_type, d.is_legacy_archive, d.original_filename,
+      .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.original_filename,
           d.mime_type, d.file_size_bytes, d.status, d.supersedes_document_id, d.created_at,
           s.student_no, s.first_name, s.middle_name, s.last_name,
           latest.action_type AS latest_review_action,
-          CASE WHEN EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+          CASE WHEN EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
               OR (d.document_type NOT IN ('psa_birth_certificate', 'report_card') OR d.upload_source = 'student')
             THEN latest.instruction ELSE NULL END AS latest_review_instruction,
           latest.created_at AS latest_review_at, latest_decision.decision_type AS latest_decision_type
-        FROM dbo.documents AS d
-        INNER JOIN dbo.students AS s ON s.id = d.student_id
-        OUTER APPLY (
-          SELECT TOP (1) e.action_type, e.instruction, e.created_at
-          FROM dbo.document_review_events AS e
-          WHERE e.document_id = d.id ORDER BY e.created_at DESC, e.id DESC
-        ) AS latest
-        OUTER APPLY (
-          SELECT TOP (1) e.decision_type
-          FROM dbo.document_decision_events AS e
-          WHERE e.document_id = d.id ORDER BY e.created_at DESC, e.id DESC
-        ) AS latest_decision
+        FROM documents AS d
+        INNER JOIN students AS s ON s.id = d.student_id
+        LEFT JOIN v_document_latest_review_event AS latest ON latest.document_id = d.id
+        LEFT JOIN v_document_latest_decision_event AS latest_decision ON latest_decision.document_id = d.id
         WHERE ((
-          EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
-          AND (@searchPattern IS NULL OR s.student_no LIKE @searchPattern ESCAPE N'~'
-            OR s.first_name LIKE @searchPattern ESCAPE N'~' OR s.middle_name LIKE @searchPattern ESCAPE N'~'
-            OR s.last_name LIKE @searchPattern ESCAPE N'~'
-            OR s.lrn LIKE @searchPattern ESCAPE N'~'
-            OR CONCAT_WS(N' ', s.first_name, NULLIF(s.middle_name, N''), s.last_name) LIKE @searchPattern ESCAPE N'~')
+          EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+          AND (@searchPattern IS NULL OR s.student_no LIKE @searchPattern ESCAPE '~'
+            OR s.first_name LIKE @searchPattern ESCAPE '~' OR s.middle_name LIKE @searchPattern ESCAPE '~'
+            OR s.last_name LIKE @searchPattern ESCAPE '~'
+            OR s.lrn LIKE @searchPattern ESCAPE '~'
+            OR CONCAT_WS(' ', s.first_name, NULLIF(s.middle_name, ''), s.last_name) LIKE @searchPattern ESCAPE '~')
         ) OR (
-          EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role = 'student')
+          EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role = 'student')
           AND s.user_id = @actorId AND (
             (d.document_type IN ('good_moral', 'psa_birth_certificate')
               OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'))
@@ -614,12 +608,12 @@ function createDocumentService({
         AND (@documentType IS NULL OR d.document_type = @documentType)
         AND (@statusFilter IS NULL
           OR (@statusFilter = 'awaiting_review' AND d.status = 'needs_review'
-            AND (d.document_type <> 'report_card' OR ISNULL(latest_decision.decision_type, '') <> 'correction_requested'))
+            AND (d.document_type <> 'report_card' OR COALESCE(latest_decision.decision_type, '') <> 'correction_requested'))
           OR (@statusFilter = 'processing' AND d.status IN ('pending', 'processing'))
           OR (@statusFilter = 'verified' AND d.status = 'valid')
           OR (@statusFilter = 'rejected' AND d.status = 'rejected')
           OR (@statusFilter = 'review_required' AND d.status = 'failed'))
-        ORDER BY d.created_at DESC, d.id DESC`);
+        ORDER BY d.created_at DESC, d.id DESC LIMIT 200`);
     let blockedNewOriginalTypes = [];
     let statusSummary = [];
     if (STAFF_ROLES.has(actor.role)) {
@@ -628,22 +622,22 @@ function createDocumentService({
         .query(`WITH latest_submissions AS (
           SELECT d.student_id, d.document_type, d.status, d.is_legacy_archive,
             ROW_NUMBER() OVER (PARTITION BY d.student_id, d.document_type ORDER BY d.created_at DESC, d.id DESC) AS submission_rank
-          FROM dbo.documents AS d
+          FROM documents AS d
           WHERE d.document_type IN ('good_moral', 'psa_birth_certificate')
         )
-        SELECT required.document_type, COUNT_BIG(*) AS student_count,
+        SELECT required.document_type, COUNT(*) AS student_count,
           SUM(CASE WHEN latest.status IS NULL THEN 1 ELSE 0 END) AS missing_count,
           SUM(CASE WHEN latest.status = 'needs_review' THEN 1 ELSE 0 END) AS awaiting_review_count,
           SUM(CASE WHEN latest.status IN ('pending', 'processing') THEN 1 ELSE 0 END) AS processing_count,
           SUM(CASE WHEN latest.status = 'valid' THEN 1 ELSE 0 END) AS verified_count,
           SUM(CASE WHEN latest.status = 'rejected' THEN 1 ELSE 0 END) AS rejected_count,
           SUM(CASE WHEN latest.status = 'failed' THEN 1 ELSE 0 END) AS review_required_count
-        FROM dbo.students AS s
-        CROSS JOIN (VALUES (N'good_moral'), (N'psa_birth_certificate')) AS required(document_type)
+        FROM students AS s
+        CROSS JOIN (SELECT 'good_moral' AS document_type UNION ALL SELECT 'psa_birth_certificate') AS required
         LEFT JOIN latest_submissions AS latest ON latest.student_id = s.id
           AND latest.document_type = required.document_type AND latest.submission_rank = 1
         WHERE s.status = 'active'
-          AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+          AND EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
         GROUP BY required.document_type`);
       statusSummary = summaryResult.recordset || [];
       const reportCardSummaryResult = await pool.request()
@@ -651,16 +645,12 @@ function createDocumentService({
         .query(`WITH ranked_report_cards AS (
           SELECT d.student_id, d.status, latest_decision.decision_type AS latest_decision_type,
             ROW_NUMBER() OVER (PARTITION BY d.student_id ORDER BY d.created_at DESC, d.id DESC) AS submission_rank
-          FROM dbo.documents AS d
-          OUTER APPLY (
-            SELECT TOP (1) decision_type
-            FROM dbo.document_decision_events
-            WHERE document_id = d.id ORDER BY created_at DESC, id DESC
-          ) AS latest_decision
+          FROM documents AS d
+          LEFT JOIN v_document_latest_decision_event AS latest_decision ON latest_decision.document_id = d.id
           WHERE d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'
         )
-        SELECT N'report_card' AS document_type, COUNT_BIG(*) AS submitted_count,
-          COALESCE(SUM(CASE WHEN status = 'needs_review' AND ISNULL(latest_decision_type, '') <> 'correction_requested' THEN 1 ELSE 0 END), 0) AS awaiting_review_count,
+        SELECT 'report_card' AS document_type, COUNT(*) AS submitted_count,
+          COALESCE(SUM(CASE WHEN status = 'needs_review' AND COALESCE(latest_decision_type, '') <> 'correction_requested' THEN 1 ELSE 0 END), 0) AS awaiting_review_count,
           COALESCE(SUM(CASE WHEN status IN ('pending', 'processing') THEN 1 ELSE 0 END), 0) AS processing_count,
           COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS review_required_count,
           COALESCE(SUM(CASE WHEN latest_decision_type = 'correction_requested' THEN 1 ELSE 0 END), 0) AS correction_requested_count,
@@ -668,7 +658,7 @@ function createDocumentService({
           COALESCE(SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END), 0) AS rejected_count
         FROM ranked_report_cards
         WHERE submission_rank = 1
-          AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))`);
+          AND EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))`);
       statusSummary.push(reportCardSummaryResult.recordset?.[0] || {
         document_type: 'report_card', submitted_count: 0, awaiting_review_count: 0,
         processing_count: 0, review_required_count: 0, correction_requested_count: 0,
@@ -681,8 +671,8 @@ function createDocumentService({
         .query(`WITH latest_submissions AS (
           SELECT d.document_type, d.status,
             ROW_NUMBER() OVER (PARTITION BY d.document_type ORDER BY d.created_at DESC, d.id DESC) AS submission_rank
-          FROM dbo.documents AS d
-          INNER JOIN dbo.students AS s ON s.id = d.student_id
+          FROM documents AS d
+          INNER JOIN students AS s ON s.id = d.student_id
           WHERE s.user_id = @actorId AND (d.document_type IN ('good_moral', 'psa_birth_certificate')
             OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'))
         )
@@ -725,17 +715,17 @@ function createDocumentService({
     const matchingStudents = await pool.request()
       .input('actorId', sql.Int, actor.id)
       .input('searchPattern', sql.NVarChar(204), searchPattern)
-      .query(`SELECT COUNT_BIG(*) AS total_students
-        FROM dbo.students AS s
+      .query(`SELECT COUNT(*) AS total_students
+        FROM students AS s
         WHERE s.status = 'active'
-          AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+          AND EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
           AND (@searchPattern IS NULL
-            OR s.student_no LIKE @searchPattern ESCAPE N'~'
-            OR s.lrn LIKE @searchPattern ESCAPE N'~'
-            OR s.first_name LIKE @searchPattern ESCAPE N'~'
-            OR s.middle_name LIKE @searchPattern ESCAPE N'~'
-            OR s.last_name LIKE @searchPattern ESCAPE N'~'
-            OR CONCAT_WS(N' ', s.first_name, NULLIF(s.middle_name, N''), s.last_name) LIKE @searchPattern ESCAPE N'~')`);
+            OR s.student_no LIKE @searchPattern ESCAPE '~'
+            OR s.lrn LIKE @searchPattern ESCAPE '~'
+            OR s.first_name LIKE @searchPattern ESCAPE '~'
+            OR s.middle_name LIKE @searchPattern ESCAPE '~'
+            OR s.last_name LIKE @searchPattern ESCAPE '~'
+          OR CONCAT_WS(' ', s.first_name, NULLIF(s.middle_name, ''), s.last_name) LIKE @searchPattern ESCAPE '~')`);
     const totalStudents = Number(matchingStudents.recordset?.[0]?.total_students || 0);
     if (!Number.isSafeInteger(totalStudents) || totalStudents < 0) {
       throw new DocumentServiceError('Physical-requirements records could not be loaded.', 503);
@@ -751,28 +741,20 @@ function createDocumentService({
       .query(`SELECT s.id, s.student_no, s.lrn, s.first_name, s.middle_name, s.last_name, s.suffix,
           form137.status AS form137_status, form137.created_at AS form137_updated_at,
           report_card.status AS paper_report_card_status, report_card.created_at AS paper_report_card_updated_at
-        FROM dbo.students AS s
-        OUTER APPLY (
-          SELECT TOP (1) e.status, e.created_at
-          FROM dbo.form137_status_events AS e
-          WHERE e.student_id = s.id ORDER BY e.created_at DESC, e.id DESC
-        ) AS form137
-        OUTER APPLY (
-          SELECT TOP (1) e.status, e.created_at
-          FROM dbo.previous_school_report_card_status_events AS e
-          WHERE e.student_id = s.id ORDER BY e.created_at DESC, e.id DESC
-        ) AS report_card
+        FROM students AS s
+        LEFT JOIN v_form137_latest_status_event AS form137 ON form137.student_id = s.id
+        LEFT JOIN v_previous_school_report_card_latest_status_event AS report_card ON report_card.student_id = s.id
         WHERE s.status = 'active'
-          AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+          AND EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
           AND (@searchPattern IS NULL
-            OR s.student_no LIKE @searchPattern ESCAPE N'~'
-            OR s.lrn LIKE @searchPattern ESCAPE N'~'
-            OR s.first_name LIKE @searchPattern ESCAPE N'~'
-            OR s.middle_name LIKE @searchPattern ESCAPE N'~'
-            OR s.last_name LIKE @searchPattern ESCAPE N'~'
-            OR CONCAT_WS(N' ', s.first_name, NULLIF(s.middle_name, N''), s.last_name) LIKE @searchPattern ESCAPE N'~')
+            OR s.student_no LIKE @searchPattern ESCAPE '~'
+            OR s.lrn LIKE @searchPattern ESCAPE '~'
+            OR s.first_name LIKE @searchPattern ESCAPE '~'
+            OR s.middle_name LIKE @searchPattern ESCAPE '~'
+            OR s.last_name LIKE @searchPattern ESCAPE '~'
+            OR CONCAT_WS(' ', s.first_name, NULLIF(s.middle_name, ''), s.last_name) LIKE @searchPattern ESCAPE '~')
         ORDER BY s.last_name, s.first_name, s.student_no, s.id
-        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`);
+        LIMIT @pageSize OFFSET @offset`);
 
     return {
       students: students.recordset || [], searchTerm, totalStudents,
@@ -790,8 +772,8 @@ function createDocumentService({
       .input('studentId', sql.Int, studentId)
       .input('actorId', sql.Int, actor.id)
       .query(`SELECT s.id, s.student_no, s.first_name, s.middle_name, s.last_name, s.status
-        FROM dbo.students AS s WHERE s.id = @studentId
-          AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))`);
+        FROM students AS s WHERE s.id = @studentId
+          AND EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))`);
     const student = studentResult.recordset?.[0];
     if (!student) return null;
     const [documentResult, form137StatusResult, previousSchoolReportCardStatusResult] = await Promise.all([
@@ -802,39 +784,31 @@ function createDocumentService({
           d.mime_type, d.file_size_bytes, d.status, d.supersedes_document_id, d.created_at,
           latest.action_type AS latest_review_action, latest.instruction AS latest_review_instruction,
           latest.created_at AS latest_review_at, latest_decision.decision_type AS latest_decision_type
-        FROM dbo.documents AS d
-        OUTER APPLY (
-          SELECT TOP (1) e.action_type, e.instruction, e.created_at
-          FROM dbo.document_review_events AS e
-          WHERE e.document_id = d.id ORDER BY e.created_at DESC, e.id DESC
-        ) AS latest
-        OUTER APPLY (
-          SELECT TOP (1) e.decision_type
-          FROM dbo.document_decision_events AS e
-          WHERE e.document_id = d.id ORDER BY e.created_at DESC, e.id DESC
-        ) AS latest_decision
+        FROM documents AS d
+        LEFT JOIN v_document_latest_review_event AS latest ON latest.document_id = d.id
+        LEFT JOIN v_document_latest_decision_event AS latest_decision ON latest_decision.document_id = d.id
         WHERE d.student_id = @studentId
-          AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+          AND EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
         ORDER BY d.created_at DESC, d.id DESC`),
       pool.request()
         .input('studentId', sql.Int, studentId)
         .input('actorId', sql.Int, actor.id)
         .query(`SELECT e.id, e.status, e.instruction, e.created_at,
-            e.recorded_by, COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(p.first_name, N' ', p.last_name))), N''), CONCAT(N'Staff ', e.recorded_by)) AS recorded_by_name
-          FROM dbo.form137_status_events AS e
-          LEFT JOIN dbo.staff_profiles AS p ON p.user_id = e.recorded_by
+            e.recorded_by, COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(p.first_name, ' ', p.last_name))), ''), CONCAT('Staff ', e.recorded_by)) AS recorded_by_name
+          FROM form137_status_events AS e
+          LEFT JOIN staff_profiles AS p ON p.user_id = e.recorded_by
           WHERE e.student_id = @studentId
-            AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+            AND EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
           ORDER BY e.created_at DESC, e.id DESC`),
       pool.request()
         .input('studentId', sql.Int, studentId)
         .input('actorId', sql.Int, actor.id)
         .query(`SELECT e.id, e.status, e.instruction, e.created_at, e.recorded_by,
-            COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(p.first_name, N' ', p.last_name))), N''), CONCAT(N'Staff ', e.recorded_by)) AS recorded_by_name
-          FROM dbo.previous_school_report_card_status_events AS e
-          LEFT JOIN dbo.staff_profiles AS p ON p.user_id = e.recorded_by
+            COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(p.first_name, ' ', p.last_name))), ''), CONCAT('Staff ', e.recorded_by)) AS recorded_by_name
+          FROM previous_school_report_card_status_events AS e
+          LEFT JOIN staff_profiles AS p ON p.user_id = e.recorded_by
           WHERE e.student_id = @studentId
-            AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+            AND EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
           ORDER BY e.created_at DESC, e.id DESC`)
     ]);
     const form137StatusHistory = form137StatusResult.recordset || [];
@@ -857,12 +831,12 @@ function createDocumentService({
     if (actor.role !== 'student') throw new DocumentServiceError('Student document access is required.', 403);
     const result = await pool.request()
       .input('actorId', sql.Int, actor.id)
-      .query(`SELECT TOP (1) e.status, e.created_at
-        FROM dbo.previous_school_report_card_status_events AS e
-        INNER JOIN dbo.students AS s ON s.id = e.student_id
-        INNER JOIN dbo.users AS u ON u.id = @actorId AND u.is_active = 1 AND u.role = 'student'
+      .query(`SELECT e.status, e.created_at
+        FROM previous_school_report_card_status_events AS e
+        INNER JOIN students AS s ON s.id = e.student_id
+        INNER JOIN users AS u ON u.id = @actorId AND u.is_active = 1 AND u.role = 'student'
         WHERE s.user_id = @actorId
-        ORDER BY e.created_at DESC, e.id DESC`);
+        ORDER BY e.created_at DESC, e.id DESC LIMIT 1`);
     return result.recordset?.[0] || { status: 'not_recorded', created_at: null };
   }
 
@@ -878,12 +852,12 @@ function createDocumentService({
           d.mime_type, d.file_size_bytes, d.uploaded_by, d.upload_source, d.status,
           d.supersedes_document_id, d.created_at, s.user_id AS student_user_id,
           s.student_no, s.first_name, s.middle_name, s.last_name, u.role AS uploader_role
-        FROM dbo.documents AS d
-        INNER JOIN dbo.students AS s ON s.id = d.student_id
-        INNER JOIN dbo.users AS u ON u.id = d.uploaded_by
+        FROM documents AS d
+        INNER JOIN students AS s ON s.id = d.student_id
+        INNER JOIN users AS u ON u.id = d.uploaded_by
         WHERE d.id = @documentId
-          AND (EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
-            OR (EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role = 'student')
+          AND (EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+            OR (EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role = 'student')
               AND s.user_id = @actorId
               AND (d.document_type IN ('good_moral', 'psa_birth_certificate')
                 OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'))))`);
@@ -898,48 +872,48 @@ function createDocumentService({
         .input('documentId', sql.Int, documentId)
         .input('actorId', sql.Int, actor.id)
         .input('precheckProcessor', sql.NVarChar(100), GEMINI_PRECHECK_PROCESSOR)
-        .query(`SELECT TOP (1) validation.id, validation.processor, validation.extracted_text,
+        .query(`SELECT validation.id, validation.processor, validation.extracted_text,
             validation.validation_json, validation.result_status, validation.created_at,
-            (SELECT COUNT_BIG(*) FROM dbo.document_validations AS attempts
+            (SELECT COUNT(*) FROM document_validations AS attempts
               WHERE attempts.document_id = @documentId AND attempts.processor = @precheckProcessor) AS precheck_attempt_count
-          FROM dbo.document_validations AS validation
+          FROM document_validations AS validation
           WHERE validation.document_id = @documentId
-            AND EXISTS (SELECT 1 FROM dbo.users
+            AND EXISTS (SELECT 1 FROM users
               WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
-          ORDER BY validation.created_at DESC, validation.id DESC`)
+          ORDER BY validation.created_at DESC, validation.id DESC LIMIT 1`)
       : Promise.resolve({ recordset: [] });
     const visibleReviewer = STAFF_ROLES.has(actor.role)
-      ? "COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(p.first_name, N' ', p.last_name))), N''), CONCAT(N'Staff ', e.reviewer_id))"
-      : 'CAST(NULL AS NVARCHAR(201))';
+      ? "COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(p.first_name, ' ', p.last_name))), ''), CONCAT('Staff ', e.reviewer_id))"
+      : 'CAST(NULL AS CHAR(201))';
     const reviewHistorySql = archivedReportCard
-      ? 'SELECT CAST(NULL AS INT) AS id WHERE 1 = 0'
+      ? 'SELECT CAST(NULL AS SIGNED) AS id WHERE 1 = 0'
       : STAFF_ROLES.has(actor.role)
       ? `SELECT e.id, e.action_type, e.instruction, e.created_at,
-          e.reviewer_id, COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(p.first_name, N' ', p.last_name))), N''), CONCAT(N'Staff ', e.reviewer_id)) AS reviewer_name
-        FROM dbo.document_review_events AS e
-        LEFT JOIN dbo.staff_profiles AS p ON p.user_id = e.reviewer_id
+          e.reviewer_id, COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(p.first_name, ' ', p.last_name))), ''), CONCAT('Staff ', e.reviewer_id)) AS reviewer_name
+        FROM document_review_events AS e
+        LEFT JOIN staff_profiles AS p ON p.user_id = e.reviewer_id
         WHERE e.document_id = @documentId ORDER BY e.created_at DESC, e.id DESC`
       : `SELECT e.id, e.action_type, e.instruction, e.created_at,
-          CAST(NULL AS INT) AS reviewer_id, CAST(NULL AS NVARCHAR(201)) AS reviewer_name
-        FROM dbo.document_review_events AS e
+          CAST(NULL AS SIGNED) AS reviewer_id, CAST(NULL AS CHAR(201)) AS reviewer_name
+        FROM document_review_events AS e
         WHERE e.document_id = @documentId AND e.action_type = 'correction_requested'
           AND (@documentType NOT IN ('psa_birth_certificate', 'report_card') OR @uploadSource = 'student')
         ORDER BY e.created_at DESC, e.id DESC`;
     const decisionHistorySql = archivedReportCard
-      ? 'SELECT CAST(NULL AS INT) AS id WHERE 1 = 0'
+      ? 'SELECT CAST(NULL AS SIGNED) AS id WHERE 1 = 0'
       : STAFF_ROLES.has(actor.role)
       ? `SELECT e.id, e.decision_type, e.reason, e.verification_checklist_json, e.created_at, ${visibleReviewer} AS reviewer_name
-        FROM dbo.document_decision_events AS e
-        LEFT JOIN dbo.staff_profiles AS p ON p.user_id = e.reviewer_id
+        FROM document_decision_events AS e
+        LEFT JOIN staff_profiles AS p ON p.user_id = e.reviewer_id
         WHERE e.document_id = @documentId ORDER BY e.created_at DESC, e.id DESC`
       : `SELECT e.id, e.decision_type,
           CASE WHEN e.decision_type IN ('rejected', 'correction_requested')
               AND (@documentType NOT IN ('psa_birth_certificate', 'report_card') OR @uploadSource = 'student')
             THEN e.reason ELSE NULL END AS reason,
-          CAST(NULL AS NVARCHAR(500)) AS verification_checklist_json,
+          CAST(NULL AS CHAR(500)) AS verification_checklist_json,
           e.created_at,
-          CAST(NULL AS NVARCHAR(201)) AS reviewer_name
-        FROM dbo.document_decision_events AS e
+          CAST(NULL AS CHAR(201)) AS reviewer_name
+        FROM document_decision_events AS e
         WHERE e.document_id = @documentId
         ORDER BY e.created_at DESC, e.id DESC`;
     const [historyResult, eventsResult, validationResult, decisionsResult] = await Promise.all([
@@ -951,25 +925,15 @@ function createDocumentService({
             history_document.is_legacy_archive,
             history_document.status, history_document.supersedes_document_id, history_document.created_at,
             latest.action_type AS latest_review_action, latest_decision.decision_type AS latest_decision_type
-          FROM dbo.documents AS history_document
-          OUTER APPLY (
-            SELECT TOP (1) latest_review_event.action_type
-            FROM dbo.document_review_events AS latest_review_event
-            WHERE latest_review_event.document_id = history_document.id
-            ORDER BY latest_review_event.created_at DESC, latest_review_event.id DESC
-          ) AS latest
-          OUTER APPLY (
-            SELECT TOP (1) latest_decision_event.decision_type
-            FROM dbo.document_decision_events AS latest_decision_event
-            WHERE latest_decision_event.document_id = history_document.id
-            ORDER BY latest_decision_event.created_at DESC, latest_decision_event.id DESC
-          ) AS latest_decision
+          FROM documents AS history_document
+          LEFT JOIN v_document_latest_review_event AS latest ON latest.document_id = history_document.id
+          LEFT JOIN v_document_latest_decision_event AS latest_decision ON latest_decision.document_id = history_document.id
           WHERE history_document.student_id = @studentId AND history_document.document_type = @documentType
             AND (history_document.document_type <> 'report_card' OR (history_document.is_legacy_archive = 0 AND history_document.upload_source = 'student'))
-            AND (EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
-              OR EXISTS (SELECT 1 FROM dbo.students AS history_student
+            AND (EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+              OR EXISTS (SELECT 1 FROM students AS history_student
                 WHERE history_student.id = history_document.student_id AND history_student.user_id = @actorId
-                  AND EXISTS (SELECT 1 FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role = 'student')))
+                  AND EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role = 'student')))
           ORDER BY history_document.created_at DESC, history_document.id DESC`),
       pool.request()
         .input('documentId', sql.Int, documentId)
@@ -1062,28 +1026,20 @@ function createDocumentService({
         .input('documentId', sql.Int, documentId)
         .input('precheckProcessor', sql.NVarChar(100), GEMINI_PRECHECK_PROCESSOR)
         .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.status,
-            latest.validation_json, attempts.precheck_attempt_count
-          FROM dbo.documents AS d WITH (UPDLOCK, HOLDLOCK)
-          OUTER APPLY (
-            SELECT TOP (1) validation_json
-            FROM dbo.document_validations
-            WHERE document_id = d.id
-            ORDER BY created_at DESC, id DESC
-          ) AS latest
-          CROSS APPLY (
-            SELECT COUNT_BIG(*) AS precheck_attempt_count
-            FROM dbo.document_validations
-            WHERE document_id = d.id AND processor = @precheckProcessor
-          ) AS attempts
-          WHERE d.id = @documentId`);
+            latest.validation_json,
+            (SELECT COUNT(*) FROM document_validations AS attempts
+              WHERE attempts.document_id = d.id AND attempts.processor = @precheckProcessor) AS precheck_attempt_count
+          FROM documents AS d
+          LEFT JOIN v_document_latest_validation AS latest ON latest.document_id = d.id
+          WHERE d.id = @documentId FOR UPDATE`);
       const document = documentResult.recordset?.[0];
       if (!document) throw new DocumentServiceError('Document not found.', 404);
 
       const finalDecisionResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
-        .query(`SELECT TOP (1) decision_type
-          FROM dbo.document_decision_events WITH (UPDLOCK, HOLDLOCK)
-          WHERE document_id = @documentId AND decision_type IN ('verified', 'rejected')`);
+        .query(`SELECT id
+          FROM document_decision_events
+          WHERE document_id = @documentId AND decision_type IN ('verified', 'rejected') LIMIT 1 FOR UPDATE`);
       const hasFinalDecision = Boolean(finalDecisionResult.recordset?.length);
       let validationSummary = null;
       try {
@@ -1111,13 +1067,12 @@ function createDocumentService({
         .input('documentId', sql.Int, documentId)
         .input('studentId', sql.Int, document.student_id)
         .input('documentType', sql.NVarChar(50), document.document_type)
-        .query(`UPDATE dbo.documents
+        .query(`UPDATE documents
           SET status = 'pending', processing_started_at = NULL
-          OUTPUT INSERTED.id AS id
           WHERE id = @documentId AND status = 'needs_review'
             AND ((document_type IN ('good_moral', 'psa_birth_certificate'))
               OR (document_type = 'report_card' AND is_legacy_archive = 0))`);
-      if (!updateResult.recordset?.length) {
+      if (!updateResult.affectedRows) {
         throw new DocumentServiceError('The submission state changed before the retry could be queued.', 409);
       }
 
@@ -1146,8 +1101,8 @@ function createDocumentService({
       const actor = await requireActor(transaction, actorInput, new Set(STAFF_ROLES));
       const documentResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
-        .query(`SELECT id, student_id, document_type, is_legacy_archive FROM dbo.documents WITH (UPDLOCK, HOLDLOCK)
-          WHERE id = @documentId`);
+        .query(`SELECT id, student_id, document_type, is_legacy_archive FROM documents
+          WHERE id = @documentId FOR UPDATE`);
       const document = documentResult.recordset?.[0];
       if (!document) throw new DocumentServiceError('Document not found.', 404);
       if (document.document_type === 'form_137') {
@@ -1162,7 +1117,7 @@ function createDocumentService({
         .input('reviewerId', sql.Int, actor.id)
         .input('actionType', sql.NVarChar(40), action)
         .input('instruction', sql.NVarChar(1000), action === 'correction_requested' ? instruction : null)
-        .query(`INSERT INTO dbo.document_review_events (document_id, reviewer_id, action_type, instruction)
+        .query(`INSERT INTO document_review_events (document_id, reviewer_id, action_type, instruction)
           VALUES (@documentId, @reviewerId, @actionType, @instruction)`);
       await writeAudit(transaction, {
         actor,
@@ -1194,14 +1149,9 @@ function createDocumentService({
         .input('documentId', sql.Int, documentId)
         .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.status, d.original_filename, d.mime_type,
             validation.result_status, validation.validation_json
-          FROM dbo.documents AS d WITH (UPDLOCK, HOLDLOCK)
-          OUTER APPLY (
-            SELECT TOP (1) result_status, validation_json
-            FROM dbo.document_validations
-            WHERE document_id = d.id
-            ORDER BY created_at DESC, id DESC
-          ) AS validation
-          WHERE d.id = @documentId`);
+          FROM documents AS d
+          LEFT JOIN v_document_latest_validation AS validation ON validation.document_id = d.id
+          WHERE d.id = @documentId FOR UPDATE`);
       const document = documentResult.recordset?.[0];
       if (!document) throw new DocumentServiceError('Document not found.', 404);
       if (document.document_type === 'form_137') {
@@ -1226,8 +1176,8 @@ function createDocumentService({
 
       const latestDecisionResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
-        .query(`SELECT TOP (1) decision_type FROM dbo.document_decision_events
-          WHERE document_id = @documentId ORDER BY created_at DESC, id DESC`);
+        .query(`SELECT decision_type FROM document_decision_events
+          WHERE document_id = @documentId ORDER BY created_at DESC, id DESC LIMIT 1`);
       const previousDecision = latestDecisionResult.recordset?.[0]?.decision_type;
       if (previousDecision === 'verified' || previousDecision === 'rejected') {
         throw new DocumentServiceError('This submission already has a final staff decision.', 409);
@@ -1257,7 +1207,7 @@ function createDocumentService({
         .input('decisionType', sql.NVarChar(40), decision)
         .input('reason', sql.NVarChar(1000), reason || null)
         .input('verificationChecklistJson', sql.NVarChar(500), checklistJson)
-        .query(`INSERT INTO dbo.document_decision_events
+        .query(`INSERT INTO document_decision_events
             (document_id, reviewer_id, decision_type, reason, verification_checklist_json)
           VALUES (@documentId, @reviewerId, @decisionType, @reason, @verificationChecklistJson)`);
 
@@ -1266,10 +1216,9 @@ function createDocumentService({
         .input('documentId', sql.Int, documentId)
         .input('nextStatus', sql.NVarChar(30), nextStatus)
         .input('currentStatus', sql.NVarChar(30), document.status)
-        .query(`UPDATE dbo.documents SET status = @nextStatus, processing_started_at = NULL
-          OUTPUT INSERTED.id AS id
+        .query(`UPDATE documents SET status = @nextStatus, processing_started_at = NULL
           WHERE id = @documentId AND status = @currentStatus AND status IN ('needs_review', 'failed')`);
-      if (!updateResult.recordset?.length) {
+      if (!updateResult.affectedRows) {
         throw new DocumentServiceError('The submission state changed before the staff decision could be saved.', 409);
       }
       await writeAudit(transaction, {
@@ -1297,8 +1246,8 @@ function createDocumentService({
         const documentResult = await transaction.request()
           .input('documentId', sql.Int, documentId)
           .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.stored_filename
-            FROM dbo.documents AS d WITH (UPDLOCK, HOLDLOCK)
-            WHERE d.id = @documentId`);
+            FROM documents AS d
+            WHERE d.id = @documentId FOR UPDATE`);
         const document = documentResult.recordset?.[0];
         if (!document) throw new DocumentServiceError('Document not found.', 404);
         const activeReportCard = document.document_type === 'report_card'
@@ -1309,8 +1258,8 @@ function createDocumentService({
 
         const childResult = await transaction.request()
           .input('documentId', sql.Int, documentId)
-          .query(`SELECT TOP (1) id FROM dbo.documents WITH (UPDLOCK, HOLDLOCK)
-            WHERE supersedes_document_id = @documentId`);
+          .query(`SELECT id FROM documents
+            WHERE supersedes_document_id = @documentId LIMIT 1 FOR UPDATE`);
         if (childResult.recordset?.length) {
           throw new DocumentServiceError('Delete the latest corrected submission before deleting this earlier version.', 409);
         }
@@ -1330,7 +1279,7 @@ function createDocumentService({
         for (const table of ['document_validations', 'document_review_events', 'document_decision_events']) {
           await transaction.request()
             .input('documentId', sql.Int, documentId)
-            .query(`DELETE FROM dbo.${table} WHERE document_id = @documentId`);
+            .query(`DELETE FROM ${table} WHERE document_id = @documentId`);
         }
         await writeAudit(transaction, {
           actor,
@@ -1341,10 +1290,8 @@ function createDocumentService({
         });
         const deleteResult = await transaction.request()
           .input('documentId', sql.Int, documentId)
-          .query(`DELETE FROM dbo.documents
-            OUTPUT DELETED.id AS id
-            WHERE id = @documentId`);
-        if (!deleteResult.recordset?.length) {
+          .query('DELETE FROM documents WHERE id = @documentId');
+        if (!deleteResult.affectedRows) {
           throw new DocumentServiceError('The submission changed before it could be deleted.', 409);
         }
         return { id: documentId };
@@ -1391,21 +1338,21 @@ function createDocumentService({
       const actor = await requireActor(transaction, actorInput, new Set(STAFF_ROLES));
       const studentResult = await transaction.request()
         .input('studentId', sql.Int, studentId)
-        .query('SELECT id FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE id = @studentId');
+        .query('SELECT id FROM students WHERE id = @studentId FOR UPDATE');
       if (!studentResult.recordset?.length) throw new DocumentServiceError('Student record not found.', 404);
       await transaction.request()
         .input('studentId', sql.Int, studentId)
         .input('recorderId', sql.Int, actor.id)
         .input('status', sql.NVarChar(30), status)
         .input('instruction', sql.NVarChar(1000), instruction || null)
-        .query(`INSERT INTO dbo.form137_status_events (student_id, recorded_by, status, instruction)
+        .query(`INSERT INTO form137_status_events (student_id, recorded_by, status, instruction)
           VALUES (@studentId, @recorderId, @status, @instruction)`);
       await transaction.request()
         .input('actorId', sql.Int, actor.id)
         .input('action', sql.NVarChar(100), `${actor.role}.form137_status_recorded`)
         .input('entityId', sql.NVarChar(100), String(studentId))
         .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify({ status }))
-        .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
+        .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
           VALUES (@actorId, @action, 'form137_status', @entityId, @detailsJson)`);
       return { studentId, status };
     });
@@ -1428,21 +1375,21 @@ function createDocumentService({
       const actor = await requireActor(transaction, actorInput, STAFF_ROLES);
       const studentResult = await transaction.request()
         .input('studentId', sql.Int, studentId)
-        .query('SELECT id FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE id = @studentId');
+        .query('SELECT id FROM students WHERE id = @studentId FOR UPDATE');
       if (!studentResult.recordset?.length) throw new DocumentServiceError('Student record not found.', 404);
       await transaction.request()
         .input('studentId', sql.Int, studentId)
         .input('recorderId', sql.Int, actor.id)
         .input('status', sql.NVarChar(30), status)
         .input('instruction', sql.NVarChar(1000), instruction || null)
-        .query(`INSERT INTO dbo.previous_school_report_card_status_events (student_id, recorded_by, status, instruction)
+        .query(`INSERT INTO previous_school_report_card_status_events (student_id, recorded_by, status, instruction)
           VALUES (@studentId, @recorderId, @status, @instruction)`);
       await transaction.request()
         .input('actorId', sql.Int, actor.id)
         .input('action', sql.NVarChar(100), `${actor.role}.previous_school_report_card_physical_status_recorded`)
         .input('entityId', sql.NVarChar(100), String(studentId))
         .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify({ status }))
-        .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
+        .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
           VALUES (@actorId, @action, 'previous_school_report_card_physical_status', @entityId, @detailsJson)`);
       return { studentId, status };
     });

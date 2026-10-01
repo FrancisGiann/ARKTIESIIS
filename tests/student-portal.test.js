@@ -50,6 +50,27 @@ async function withServer(app, run) {
 
 test('student pages are separate, read-only destinations bound to the authenticated student', async () => {
   const calls = { records: [], summaries: [], schedules: [], grades: [], finance: [] };
+  const financeEvents = Array.from({ length: 125 }, (_, index) => ({
+    event_date: new Date(Date.UTC(2026, 6, 1 + index)),
+    event_type: index === 122 ? 'signed_clearance' : index % 2 ? 'charge' : 'payment',
+    details: index === 122 ? '<script>alert(1)</script>' : `Finance activity ${index}`,
+    reference_no: `REF-${String(index).padStart(3, '0')}`,
+    amount: index === 122 ? '4990.00' : index === 121 ? null : `${(index + 1) * 10}.00`
+  }));
+  let studentFinanceLedger = {
+    summary: { annualBalanceSchoolYear: '2026-2027', annualBalance: '4990.00', allYearsAnnualBalance: '4990.00',
+      unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00', totalBalance: '4990.00', currentTermOutstanding: '1000.00',
+      priorTermYearDebt: '3990.00', availableCredit: '500.00' },
+    terms: [
+      { school_year: '2026-2027', term: 'Term 1', is_current: false, enrollment_status: 'enrolled', term_scope_status: 'applicable',
+        registrar_confirmation_id: 12, signed_clearance_status: 'signed', outstanding: '0.00' },
+      { school_year: '2026-2027', term: 'Term 2', is_current: true, enrollment_status: 'enrolled', term_scope_status: 'applicable',
+        registrar_confirmation_id: 13, signed_clearance_status: null, outstanding: '1000.00' },
+      { school_year: '2026-2027', term: 'Term 3', is_current: false, enrollment_status: 'pending_payment', term_scope_status: 'applicable',
+        registrar_confirmation_id: null, signed_clearance_status: null, outstanding: '3990.00' }
+    ],
+    events: financeEvents
+  };
   const student = {
     id: 55, student_no: 'SHS-2026-0042', first_name: 'Rae', middle_name: null, last_name: 'Student', suffix: null,
     birth_date: '2009-05-10', sex: 'female', phone: '555-0100', address: 'Lucena', status: 'active'
@@ -78,7 +99,8 @@ test('student pages are separate, read-only destinations bound to the authentica
       calls.finance.push(userId); assert.equal(userId, 7);
       return { student: { ...student }, account: { balance: '4990.00' }, transactions: [{ transaction_type: 'charge',
         amount: '4990.00', description: 'Synthetic tuition sample', created_at: new Date('2026-09-01') }] };
-    } }
+    } },
+    annualFinanceService: { async getStudentLedger() { return studentFinanceLedger; } }
   };
 
   await withServer(createApp({ databasePool: authPool('student'), environment, ...services }), async (baseUrl) => {
@@ -104,11 +126,51 @@ test('student pages are separate, read-only destinations bound to the authentica
         assert.match(html, /href="\/student\/records">My profile/);
       }
     }
+    const financeResponse = await fetch(`${baseUrl}/student/finance`, { headers: { cookie } });
+    const financeHtml = await financeResponse.text();
+    assert.equal(financeResponse.status, 200);
+    assert.match(financeHtml, /Combined account balance[\s\S]*?₱4,990\.00/);
+    assert.match(financeHtml, /Available payment credit[\s\S]*?₱500\.00[\s\S]*?not deducted from the balance owed/);
+    assert.match(financeHtml, /Latest assessed year · 2026-2027/);
+    assert.match(financeHtml, /Configured current term due[\s\S]*?₱1,000\.00/);
+    assert.match(financeHtml, /Current term/);
+    assert.match(financeHtml, /Confirmed by registrar/);
+    assert.match(financeHtml, /Signed clearance[\s\S]*?Signed/);
+    assert.match(financeHtml, /does not change the outstanding amount shown here/);
+    const recentActivity = financeHtml.match(/<ol class="student-finance-activity-list">([\s\S]*?)<\/ol>/)?.[1];
+    assert.ok(recentActivity, 'recent activity preview is present');
+    assert.ok(recentActivity.indexOf('Finance activity 124') < recentActivity.indexOf('Finance activity 123'));
+    assert.ok(recentActivity.indexOf('Finance activity 123') < recentActivity.indexOf('Finance activity 121'));
+    assert.doesNotMatch(recentActivity, /Finance activity 119/);
+    assert.match(recentActivity, /Recorded amount/);
+    assert.match(recentActivity, /Reference: REF-124/);
+    assert.doesNotMatch(financeHtml, /<script>alert\(1\)<\/script>/);
+    assert.match(financeHtml, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+    const completeHistory = financeHtml.match(/<details class="student-finance-history">([\s\S]*?)<\/details>/)?.[1];
+    assert.ok(completeHistory, 'complete history is reachable in a native disclosure');
+    assert.match(completeHistory, /View complete finance history · 125 entries/);
+    assert.equal((completeHistory.match(/<tr>/g) || []).length, 126, 'all 125 history rows remain available');
+    assert.match(completeHistory, /REF-000/);
+    assert.match(completeHistory, /REF-124/);
+
+    studentFinanceLedger = {
+      summary: { annualBalanceSchoolYear: null, annualBalance: '0.00', allYearsAnnualBalance: '0.00',
+        unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00', totalBalance: '0.00', currentTermOutstanding: '0.00',
+        priorTermYearDebt: '0.00', availableCredit: '0.00' },
+      terms: [], events: []
+    };
+    const emptyFinanceResponse = await fetch(`${baseUrl}/student/finance`, { headers: { cookie } });
+    const emptyFinanceHtml = await emptyFinanceResponse.text();
+    assert.equal(emptyFinanceResponse.status, 200);
+    assert.match(emptyFinanceHtml, /Latest assessed year · none recorded/);
+    assert.match(emptyFinanceHtml, /No term finance activity has been posted yet/);
+    assert.match(emptyFinanceHtml, /No finance entries have been recorded/);
+    assert.match(emptyFinanceHtml, /View complete finance history · 0 entries/);
     assert.deepEqual(calls.records, [7, 7, 7, 7]);
     assert.deepEqual(calls.summaries, [], 'student home does not load a document summary used only by removed shortcuts');
     assert.deepEqual(calls.schedules, [7, 7]);
     assert.deepEqual(calls.grades, [7]);
-    assert.deepEqual(calls.finance, [7]);
+    assert.deepEqual(calls.finance, [7, 7, 7]);
   });
 });
 
@@ -146,7 +208,12 @@ test('unlinked student accounts receive clear empty states on every self-service
     for (const path of ['/student', '/student/schedule', '/student/grades', '/student/finance', '/student/records']) {
       const response = await fetch(`${baseUrl}${path}`, { headers: { cookie } });
       assert.equal(response.status, 200, path);
-      assert.match(await response.text(), /student profile is not linked yet/i, path);
+      const html = await response.text();
+      assert.match(html, /student profile is not linked yet/i, path);
+      if (path === '/student/finance') {
+        assert.match(html, /Statement of Account/);
+        assert.doesNotMatch(html, /student-finance-ledger|finance-history/);
+      }
     }
     assert.equal(calls.some(([name]) => name === 'grades'), false, 'grades are not requested without a linked student record');
     assert.ok(calls.every(([, userId]) => userId === 7), 'all attempted reads use the authenticated account id');

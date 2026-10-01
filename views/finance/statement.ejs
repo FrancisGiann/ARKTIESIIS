@@ -1,0 +1,23 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell finance-statement" id="main-content">
+  <header class="statement-heading"><div><h1>Statement of Account</h1><p><strong><%= [ledger.student.first_name, ledger.student.middle_name, ledger.student.last_name, ledger.student.suffix].filter(Boolean).join(' ') %></strong> · Student no. <%= ledger.student.student_no %></p><p>Prepared <%= new Date().toLocaleString() %></p></div><div class="statement-actions"><button class="button button--primary" type="button" data-print-statement>Print statement</button><a class="button button--secondary" href="<%= currentUser.role === 'student' ? '/student/finance' : `/finance/students/${ledger.student.id}/annual` %>">Back to finance account</a></div></header>
+  <p class="muted-copy">This is a statement of account. Payment entries record the receipt-issued status; this statement does not generate an official receipt.</p>
+  <section class="finance-panel" aria-labelledby="statement-summary-title"><h2 id="statement-summary-title">Balance summary</h2><dl class="finance-balance-summary">
+    <div><dt>Annual balance · <%= ledger.summary.annualBalanceSchoolYear || 'current year' %></dt><dd>₱<%= formatMoney(ledger.summary.annualBalance) %></dd></div>
+    <div><dt>All annual years</dt><dd>₱<%= formatMoney(ledger.summary.allYearsAnnualBalance) %></dd></div>
+    <div><dt>Unattributed legacy balance</dt><dd>₱<%= formatMoney(ledger.summary.unattributedLegacyBalance) %></dd></div>
+    <div><dt>Verified opening liability</dt><dd>₱<%= formatMoney(ledger.summary.openingLiabilityDue) %></dd></div>
+    <div><dt>Combined balance</dt><dd>₱<%= formatMoney(ledger.summary.totalBalance) %></dd></div>
+    <div><dt>Current term due</dt><dd>₱<%= formatMoney(ledger.summary.currentTermOutstanding) %></dd></div>
+    <div><dt>Prior term/year debt</dt><dd>₱<%= formatMoney(ledger.summary.priorTermYearDebt) %></dd></div>
+    <div><dt>Available credit</dt><dd>₱<%= formatMoney(ledger.summary.availableCredit) %></dd></div>
+  </dl></section>
+  <section class="finance-panel" aria-labelledby="statement-charges-title"><h2 id="statement-charges-title">Charges, adjustments, and allocations</h2>
+    <% if (ledger.charges.length) { %><div class="table-scroll"><table class="admin-table"><thead><tr><th>Year · term</th><th>Fee / installment</th><th>Charge</th><th>Adjustments</th><th>Allocated</th><th>Balance</th></tr></thead><tbody><% for (const charge of ledger.charges) { %><tr><td data-label="Year · term"><%= charge.school_year %> · <%= charge.term %></td><td data-label="Fee / installment"><%= charge.line_name %> · <%= charge.installment %></td><td data-label="Charge">₱<%= formatMoney(charge.amount) %></td><td data-label="Adjustments">₱<%= formatMoney(charge.adjustments) %></td><td data-label="Allocated">₱<%= formatMoney(charge.allocated) %></td><td data-label="Balance">₱<%= formatMoney(charge.remaining_amount) %></td></tr><% } %></tbody></table></div><% } else { %><p>No annual charges recorded.</p><% } %>
+  </section>
+  <section class="finance-panel" aria-labelledby="statement-history-title"><div class="admin-section__heading"><div><h2 id="statement-history-title">Complete history</h2><p><%= ledger.events.length %> entries in date order.</p></div></div>
+    <% if (ledger.events.length) { %><div class="table-scroll"><table class="admin-table"><thead><tr><th>Date</th><th>Entry</th><th>Details</th><th>Reference</th><th>Amount / snapshot</th></tr></thead><tbody><% for (const event of ledger.events) { %><tr><td data-label="Date"><%= event.event_type === 'payment' ? new Date(event.event_date).toISOString().slice(0, 10) : new Date(event.event_date).toLocaleString() %></td><td data-label="Entry"><%= event.event_type.replaceAll('_', ' ') %></td><td data-label="Details"><%= event.details || '—' %></td><td data-label="Reference"><%= event.reference_no || '—' %></td><td data-label="Amount / snapshot"><%= event.amount == null ? '—' : `₱${formatMoney(event.amount)}` %></td></tr><% } %></tbody></table></div><% } else { %><p>No financial history has been recorded.</p><% } %>
+  </section>
+</main>
+<script src="/js/statement-print.js" defer></script>
+<%- include('../partials/foot') %>

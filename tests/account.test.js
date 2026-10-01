@@ -52,6 +52,15 @@ function testEnvironment(overrides = {}) {
   };
 }
 
+function fakeTransactionFactory(pool) {
+  return {
+    async begin() {},
+    request() { return pool.request(); },
+    async commit() {},
+    async rollback() {}
+  };
+}
+
 function createAuthDatabase(users) {
   const getPool = async () => ({
     request() {
@@ -177,10 +186,11 @@ test('email confirmation works without an authenticated session and still requir
 });
 
 test('signing out other sessions writes a security audit event with the session rotation', async () => {
-  let query = '';
+  const queries = [];
   let inputs = {};
   const service = createAccountService({
-    sql: { Int: 'Int' },
+    sql: { Int: 'Int', ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' } },
+    transactionFactory: fakeTransactionFactory,
     async getPool() {
       return {
         request() {
@@ -188,8 +198,10 @@ test('signing out other sessions writes a security audit event with the session 
           return {
             input(name, _type, value) { inputs[name] = value; return this; },
             async query(statement) {
-              query = statement;
-              return { recordset: [{ auth_session_version: 'session-v2' }] };
+              queries.push(statement);
+              if (statement.includes('SELECT id FROM users')) return { recordset: [{ id: 7 }] };
+              if (statement.includes('SELECT auth_session_version')) return { recordset: [{ auth_session_version: 'session-v2' }] };
+              return { rowsAffected: [1] };
             }
           };
         }
@@ -199,9 +211,9 @@ test('signing out other sessions writes a security audit event with the session 
 
   assert.equal(await service.rotateOtherSessions(7), 'session-v2');
   assert.equal(inputs.userId, 7);
-  assert.match(query, /UPDATE dbo\.users[\s\S]*auth_session_version = NEWID\(\)/);
-  assert.match(query, /N'account\.sessions_revoked'/);
-  assert.match(query, /"currentSessionRetained":true/);
+  assert.match(queries.find((statement) => statement.includes('auth_session_version = UUID()')), /UPDATE users/);
+  assert.match(queries.find((statement) => statement.includes('account.sessions_revoked')), /INSERT INTO audit_logs/);
+  assert.match(queries.find((statement) => statement.includes('account.sessions_revoked')), /"currentSessionRetained":true/);
 });
 
 test('signing out other sessions rotates the account version and preserves the current session', async () => {
@@ -300,7 +312,7 @@ test('forced password mismatch remains on the required-password page and offers 
 
 test('password change verifies the current password and stores only the bcrypt hash', async () => {
   const calls = [];
-  const sql = { Int: 'Int', Char: (length) => `Char(${length})`, NVarChar: (length) => `NVarChar(${length})` };
+  const sql = { Int: 'Int', Char: (length) => `Char(${length})`, NVarChar: (length) => `NVarChar(${length})`, ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' } };
   const account = { id: 19, email: 'user@example.edu', password_hash: 'old-bcrypt-hash', is_active: true };
   const getPool = async () => ({
     request() {
@@ -310,14 +322,16 @@ test('password change verifies the current password and stores only the bcrypt h
         async query(statement) {
           calls.push({ statement, values: { ...values } });
           if (statement.includes('SELECT id, email, password_hash, is_active')) return { recordset: [{ ...account }] };
-          if (statement.includes('DECLARE @changed BIT')) return { recordset: [{ changed: 1 }] };
-          throw new Error('Unexpected account service query');
+          if (statement.includes('SELECT id FROM users WHERE id = @userId')) return { recordset: [{ id: account.id }] };
+          if (statement.startsWith('UPDATE ') || statement.startsWith('INSERT INTO audit_logs')) return { rowsAffected: [1] };
+          throw new Error('Unexpected account service query: ' + statement);
         }
       };
     }
   });
   const service = createAccountService({
     getPool, sql,
+    transactionFactory: fakeTransactionFactory,
     async hashPassword(password, rounds) { assert.equal(password, 'New-Secure-Password-99'); assert.equal(rounds, 12); return 'new-bcrypt-hash'; },
     async comparePassword(password, hash) { return password === 'Current-Secure-Password-88' && hash === account.password_hash; }
   });
@@ -325,42 +339,52 @@ test('password change verifies the current password and stores only the bcrypt h
   assert.equal(await service.changePassword(19, 'wrong-password-123', 'New-Secure-Password-99'), 'invalid_current_password');
   assert.equal(calls.length, 1, 'a failed reauthentication must not update account data');
   assert.equal(await service.changePassword(19, 'Current-Secure-Password-88', 'New-Secure-Password-99'), 'changed');
-  const mutation = calls[2];
+  const mutation = calls.find(({ statement }) => statement.startsWith('UPDATE users SET password_hash'));
+  const lockedAccount = calls.find(({ statement }) => statement.includes('SELECT id FROM users WHERE id = @userId'));
   assert.equal(mutation.values.passwordHash, 'new-bcrypt-hash');
-  assert.equal(mutation.values.currentHash, 'old-bcrypt-hash');
+  assert.equal(lockedAccount.values.currentHash, 'old-bcrypt-hash');
   assert.doesNotMatch(mutation.statement, /New-Secure-Password-99|Current-Secure-Password-88/);
-  assert.match(mutation.statement, /WHERE id = @userId AND is_active = 1 AND password_hash = @currentHash/);
-  assert.match(mutation.statement, /UPDATE dbo\.two_factor_codes/);
+  assert.match(lockedAccount.statement, /WHERE id = @userId AND is_active = 1\s+AND password_hash = @currentHash/);
   assert.match(mutation.statement, /must_change_password = 0/);
-  assert.match(mutation.statement, /INSERT INTO dbo\.audit_logs/);
+  assert.ok(calls.some(({ statement }) => statement.startsWith('UPDATE two_factor_codes')));
+  assert.ok(calls.some(({ statement }) => statement.startsWith('INSERT INTO audit_logs')));
 });
 
 test('password reset clears the forced-change flag without storing a plaintext password', async () => {
-  let statement = '';
-  let values = {};
+  const calls = [];
+  const token = 'x'.repeat(43);
   const service = createAccountService({
-    sql: { Int: 'Int', Char: (length) => `Char(${length})`, NVarChar: (length) => `NVarChar(${length})` },
+    sql: { Int: 'Int', Char: (length) => `Char(${length})`, NVarChar: (length) => `NVarChar(${length})`, ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' } },
+    transactionFactory: fakeTransactionFactory,
     async getPool() {
       return { request() {
-        values = {};
+        const values = {};
         return {
           input(name, _type, value) { values[name] = value; return this; },
-          async query(queryText) { statement = queryText; return { recordset: [{ status: 'reset' }] }; }
+          async query(queryText) {
+            calls.push({ statement: queryText, values: { ...values } });
+            if (queryText.includes('FROM password_reset_tokens WHERE id = @requestId')) {
+              return { recordset: [{ id: 31, user_id: 24, token_hash: hashActionToken(token), attempt_count: 0, is_expired: 0 }] };
+            }
+            if (queryText.includes('SELECT id FROM users WHERE id = @userId')) return { recordset: [{ id: 24 }] };
+            return { rowsAffected: [1] };
+          }
         };
       } };
     },
     async hashPassword(password, rounds) { assert.equal(password, 'Recovery-Password-77'); assert.equal(rounds, 12); return 'recovery-bcrypt-hash'; }
   });
-  assert.equal(await service.resetPasswordWithToken('31', 'x'.repeat(43), 'Recovery-Password-77'), 'reset');
-  assert.match(statement, /UPDATE dbo\.users SET password_hash = @passwordHash, must_change_password = 0/);
-  assert.equal(values.passwordHash, 'recovery-bcrypt-hash');
-  assert.doesNotMatch(statement + JSON.stringify(values), /Recovery-Password-77/);
+  assert.equal(await service.resetPasswordWithToken('31', token, 'Recovery-Password-77'), 'reset');
+  const mutation = calls.find(({ statement }) => statement.startsWith('UPDATE users SET password_hash'));
+  assert.match(mutation.statement, /UPDATE users SET password_hash = @passwordHash, must_change_password = 0/);
+  assert.equal(mutation.values.passwordHash, 'recovery-bcrypt-hash');
+  assert.doesNotMatch(JSON.stringify(calls), /Recovery-Password-77/);
 });
 
 test('email-change request sends both notices but updates the email only in the confirmation transaction', async () => {
   const calls = [];
   const sent = [];
-  const sql = { Int: 'Int', Char: (length) => `Char(${length})`, NVarChar: (length) => `NVarChar(${length})` };
+  const sql = { Int: 'Int', Char: (length) => `Char(${length})`, NVarChar: (length) => `NVarChar(${length})`, ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' } };
   const account = { id: 24, email: 'old@example.edu', password_hash: 'bcrypt-current', is_active: true };
   const getPool = async () => ({
     request() {
@@ -370,16 +394,22 @@ test('email-change request sends both notices but updates the email only in the 
         async query(statement) {
           calls.push({ statement, values: { ...values } });
           if (statement.includes('SELECT id, email, password_hash, is_active')) return { recordset: [{ ...account }] };
-          if (statement.includes('DECLARE @currentEmail')) return { recordset: [{ status: 'created', request_id: 31, current_email: account.email }] };
+          if (statement.includes('SELECT email, password_hash FROM users')) return { recordset: [{ email: account.email, password_hash: account.password_hash }] };
+          if (statement.includes('SELECT id FROM users WHERE email = @newEmail')) return { recordset: [] };
+          if (statement.includes('FROM pending_email_changes') && statement.includes('SELECT id FROM')) return { recordset: [] };
+          if (statement.includes('INSERT INTO pending_email_changes')) return { insertId: 31 };
           if (statement.includes('SELECT new_email')) return { recordset: [{ new_email: 'new@example.edu' }] };
-          if (statement.includes('DECLARE @oldEmail')) return { recordset: [{ status: 'changed' }] };
-          throw new Error('Unexpected account service query');
+          if (statement.includes('SELECT id, user_id, new_email, token_hash')) return { recordset: [{ id: 31, user_id: 24, new_email: 'new@example.edu', token_hash: hashActionToken('x'.repeat(43)), attempt_count: 0, is_expired: 0 }] };
+          if (statement.includes('SELECT id FROM users WHERE id = @userId')) return { recordset: [{ id: 24 }] };
+          if (statement.startsWith('UPDATE users SET email = @newEmail')) return { rowsAffected: [1] };
+          return { rowsAffected: [1] };
         }
       };
     }
   });
   const service = createAccountService({
     getPool, sql, smtp: { host: 'smtp.example', from: 'no-reply@example.edu' },
+    transactionFactory: fakeTransactionFactory,
     appBaseUrl: 'https://school.example.edu', createToken: () => 'x'.repeat(43),
     async comparePassword(password, hash) { return password === 'Current-Secure-Password-88' && hash === account.password_hash; },
     async deliverEmail(_smtp, message) { sent.push(message); }
@@ -391,12 +421,16 @@ test('email-change request sends both notices but updates the email only in the 
   assert.match(sent[0].text, /will not take effect until the new address is confirmed/);
   assert.equal(sent[1].to, 'new@example.edu');
   assert.match(sent[1].text, /https:\/\/school\.example\.edu\/account\/email\/confirm\?/);
-  assert.ok(calls[1].values.tokenHash);
-  assert.doesNotMatch(sent[1].text, new RegExp(calls[1].values.tokenHash));
-  assert.equal(calls.some(({ statement }) => /UPDATE dbo\.users SET email/.test(statement)), false);
+  const insert = calls.find(({ statement }) => statement.includes('INSERT INTO pending_email_changes'));
+  assert.ok(insert.values.tokenHash);
+  assert.doesNotMatch(sent[1].text, new RegExp(insert.values.tokenHash));
+  assert.equal(calls.some(({ statement }) => /UPDATE users SET email/.test(statement)), false);
 
   assert.equal((await service.inspectEmailChange('31', 'x'.repeat(43))).new_email, 'new@example.edu');
   assert.equal(await service.confirmEmailChange('31', 'x'.repeat(43)), 'changed');
-  assert.match(calls.at(-1).statement, /UPDATE dbo\.users SET email = @newEmail/);
-  assert.equal(calls.at(-1).values.tokenHash.length, 64);
+  const emailUpdate = calls.find(({ statement }) => statement.startsWith('UPDATE users SET email = @newEmail'));
+  assert.match(emailUpdate.statement, /UPDATE users SET email = @newEmail/);
+  assert.equal(emailUpdate.values.newEmail, 'new@example.edu');
+  assert.equal(calls.at(-1).values.userId, 24);
+  assert.equal(insert.values.tokenHash.length, 64);
 });

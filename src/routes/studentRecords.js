@@ -1,7 +1,10 @@
 const express = require('express');
+const crypto = require('node:crypto');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
 const { createAcademicRecordsService } = require('../services/academicRecordsService');
+const { StudentDocumentRequestError, createStudentDocumentRequestService } = require('../services/studentDocumentRequestService');
+const { RegistrarGradeOverviewError, createRegistrarGradeOverviewService } = require('../services/registrarGradeOverviewService');
 const {
   StudentRecordsError,
   createStudentRecordsService,
@@ -18,6 +21,9 @@ const notices = {
   termCurrent: 'Current academic term updated.',
   sectionCreated: 'Section created.',
   enrollmentSaved: 'Enrollment saved.',
+  documentRequestCreated: 'Document request recorded.',
+  documentRequestUpdated: 'Document request updated.',
+  documentRequestCorrected: 'Document request details corrected.',
 };
 
 function studentValues(input = {}) {
@@ -31,7 +37,17 @@ function studentValues(input = {}) {
     birthDate: typeof input.birthDate === 'string' ? input.birthDate.slice(0, 10) : '',
     sex: typeof input.sex === 'string' ? input.sex.slice(0, 20) : '',
     address: typeof input.address === 'string' ? input.address.slice(0, 500) : '',
-    phone: typeof input.phone === 'string' ? input.phone.slice(0, 50) : ''
+    phone: typeof input.phone === 'string' ? input.phone.slice(0, 50) : '',
+    birthplace: typeof input.birthplace === 'string' ? input.birthplace.slice(0, 160) : '',
+    facebookName: typeof input.facebookName === 'string' ? input.facebookName.slice(0, 120) : '',
+    emergencyContactPerson: typeof input.emergencyContactPerson === 'string' ? input.emergencyContactPerson.slice(0, 160) : '',
+    emergencyContactRelationship: typeof input.emergencyContactRelationship === 'string' ? input.emergencyContactRelationship.slice(0, 80) : '',
+    emergencyContactPhone: typeof input.emergencyContactPhone === 'string' ? input.emergencyContactPhone.slice(0, 50) : '',
+    emergencyContactAddress: typeof input.emergencyContactAddress === 'string' ? input.emergencyContactAddress.slice(0, 500) : '',
+    motherName: typeof input.motherName === 'string' ? input.motherName.slice(0, 160) : '',
+    motherPhone: typeof input.motherPhone === 'string' ? input.motherPhone.slice(0, 50) : '',
+    fatherName: typeof input.fatherName === 'string' ? input.fatherName.slice(0, 160) : '',
+    fatherPhone: typeof input.fatherPhone === 'string' ? input.fatherPhone.slice(0, 50) : ''
   };
 }
 
@@ -46,7 +62,17 @@ function valuesFromStudent(student) {
     birthDate: student.birth_date instanceof Date ? student.birth_date.toISOString().slice(0, 10) : student.birth_date,
     sex: student.sex,
     address: student.address,
-    phone: student.phone
+    phone: student.phone,
+    birthplace: student.birthplace,
+    facebookName: student.facebook_name,
+    emergencyContactPerson: student.emergency_contact_person,
+    emergencyContactRelationship: student.emergency_contact_relationship,
+    emergencyContactPhone: student.emergency_contact_phone,
+    emergencyContactAddress: student.emergency_contact_address,
+    motherName: student.mother_name,
+    motherPhone: student.mother_phone,
+    fatherName: student.father_name,
+    fatherPhone: student.father_phone
   });
 }
 
@@ -54,16 +80,20 @@ function isUniqueStudentConflict(error) {
   return normalizeUniqueConflict(error);
 }
 
-function createStudentRecordsRouter({ getPool, sql, studentRecordsService, academicRecordsService } = {}) {
+function createStudentRecordsRouter({ getPool, sql, studentRecordsService, academicRecordsService, documentRequestService, gradeOverviewService } = {}) {
   const router = express.Router();
   const service = studentRecordsService || createStudentRecordsService({ getPool, sql });
   const academics = academicRecordsService || createAcademicRecordsService({ getPool, sql });
+  const documentRequests = documentRequestService || (studentRecordsService
+    ? { async getStudentRequests() { return []; } }
+    : createStudentDocumentRequestService({ getPool, sql }));
+  const gradeOverview = gradeOverviewService || createRegistrarGradeOverviewService({ getPool, sql });
 
   async function loadWorkspace(search = '', termId = '', page = 1) {
     return service.listWorkspace(search, termId, page);
   }
 
-  async function renderDashboard(req, res, { status = 200, error = null, notice = null, search = '', termId = '', page = 1 } = {}) {
+  async function renderDashboard(req, res, { status = 200, error = null, notice = null, search = '', termId = '', page = 1, openForm = null, formValues = {} } = {}) {
     try {
       const workspace = await loadWorkspace(search, termId, page);
       return res.status(status).render('records/index', {
@@ -72,6 +102,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         currentUser: req.authUser,
         notice,
         error,
+        openForm,
+        formValues,
         ...workspace,
         students: workspace.students || [],
         terms: workspace.terms || [],
@@ -91,7 +123,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         title: 'Student Records', csrfToken: ensureCsrfToken(req), currentUser: req.authUser,
         students: [], terms: [], sections: [], searchTerm: '', academicTermId: null,
         totalStudents: 0, page: 1, pageSize: 25, totalPages: 1,
-        notice: null, error: loadError.message
+        notice: null, error: loadError.message, openForm: null, formValues: {}
       });
     }
   }
@@ -135,6 +167,28 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     notice: notices[req.query.notice] || null
   }));
 
+  router.get('/grades/missing', async (req, res) => {
+    try {
+      const contexts = await gradeOverview.listContexts(req.authUser.id);
+      const hasAllFilters = req.query.termId && req.query.sectionId && req.query.subjectId;
+      const overview = hasAllFilters ? await gradeOverview.getOverview(req.authUser.id, req.query) : null;
+      return res.render('records/missing-grade-overview', {
+        title: 'Grade completion overview', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        contexts, overview, filters: req.query, error: null
+      });
+    } catch (error) {
+      if (error instanceof RegistrarGradeOverviewError) {
+        let contexts = { terms: [], sections: [], subjects: [] };
+        try { contexts = await gradeOverview.listContexts(req.authUser.id); } catch { /* keep the original safe error */ }
+        return res.status(error.status).render('records/missing-grade-overview', {
+          title: 'Grade completion overview', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+          contexts, overview: null, filters: req.query, error: error.message
+        });
+      }
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The grade completion overview could not be loaded.' });
+    }
+  });
+
   router.get('/students/new', (req, res) => req.authUser.role === 'registrar'
     ? res.redirect(303, '/registrar/intake/new')
     : renderStudentForm(req, res));
@@ -143,17 +197,63 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     const studentId = normalizeRecordId(req.params.id);
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
     try {
-      const [record, academicRecord] = await Promise.all([
+      const [record, academicRecord, documentRequestRows, revisions] = await Promise.all([
         service.getStudent(studentId),
-        academics.getStudentAcademicRecord(studentId)
+        academics.getStudentAcademicRecord(studentId),
+        documentRequests.getStudentRequests ? documentRequests.getStudentRequests(req.authUser.id, studentId) : [],
+        service.listStudentProfileRevisions ? service.listStudentProfileRevisions(req.authUser.id, studentId) : []
       ]);
       if (!record || !academicRecord) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+      const requestIdempotencyKeys = Object.fromEntries(documentRequestRows.map((request) => [request.id, crypto.randomUUID()]));
+      const correctionIdempotencyKeys = Object.fromEntries(documentRequestRows.map((request) => [request.id, crypto.randomUUID()]));
       return res.render('records/student-overview', {
-        title: 'Student record overview', currentUser: req.authUser,
-        student: record.student, enrollments: academicRecord.enrollments
+        title: 'Student record overview', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        notice: notices[req.query.notice] || null,
+        student: record.student, enrollments: academicRecord.enrollments,
+        documentRequests: documentRequestRows, profileRevisions: revisions,
+        newDocumentRequestKey: crypto.randomUUID(), requestIdempotencyKeys, correctionIdempotencyKeys
       });
     } catch {
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The student record could not be loaded.' });
+    }
+  });
+
+  router.post('/students/:id/document-requests', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    const studentId = normalizeRecordId(req.params.id);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      await documentRequests.createRequest(req.authUser.id, studentId, req.body);
+      return res.redirect(303, `/registrar/records/students/${studentId}?notice=documentRequestCreated`);
+    } catch (error) {
+      if (error instanceof StudentDocumentRequestError) return res.status(error.status).render('error', { title: error.status === 404 ? 'Not Found' : 'Invalid Request', message: error.message });
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The document request could not be recorded.' });
+    }
+  });
+
+  router.post('/students/:id/document-requests/:requestId/status', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    const studentId = normalizeRecordId(req.params.id);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      await documentRequests.transitionRequest(req.authUser.id, studentId, req.params.requestId, req.body);
+      return res.redirect(303, `/registrar/records/students/${studentId}?notice=documentRequestUpdated`);
+    } catch (error) {
+      if (error instanceof StudentDocumentRequestError) return res.status(error.status).render('error', { title: error.status === 404 ? 'Not Found' : 'Invalid Request', message: error.message });
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The document request could not be updated.' });
+    }
+  });
+
+  router.post('/students/:id/document-requests/:requestId/correct', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    const studentId = normalizeRecordId(req.params.id);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      await documentRequests.correctRequest(req.authUser.id, studentId, req.params.requestId, req.body);
+      return res.redirect(303, `/registrar/records/students/${studentId}?notice=documentRequestCorrected`);
+    } catch (error) {
+      if (error instanceof StudentDocumentRequestError) return res.status(error.status).render('error', { title: error.status === 404 ? 'Not Found' : 'Invalid Request', message: error.message });
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The document request could not be corrected.' });
     }
   });
 
@@ -238,8 +338,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       await service.createTerm(req.authUser.id, req.body);
       return res.redirect(303, '/registrar/records?notice=termCreated');
     } catch (error) {
-      if (error instanceof StudentRecordsError) return renderDashboard(req, res, { error: error.message, status: error.status });
-      if (isUniqueStudentConflict(error)) return renderDashboard(req, res, { error: 'That academic term already exists.', status: 409 });
+      if (error instanceof StudentRecordsError) return renderDashboard(req, res, { error: error.message, status: error.status, openForm: 'term', formValues: req.body || {} });
+      if (isUniqueStudentConflict(error)) return renderDashboard(req, res, { error: 'That academic term already exists.', status: 409, openForm: 'term', formValues: req.body || {} });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The academic term could not be created.' });
     }
   });
@@ -265,8 +365,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       await service.createSection(req.authUser.id, req.body);
       return res.redirect(303, '/registrar/records?notice=sectionCreated');
     } catch (error) {
-      if (error instanceof StudentRecordsError) return renderDashboard(req, res, { error: error.message, status: error.status });
-      if (isUniqueStudentConflict(error)) return renderDashboard(req, res, { error: 'That section already exists for the selected term.', status: 409 });
+      if (error instanceof StudentRecordsError) return renderDashboard(req, res, { error: error.message, status: error.status, openForm: 'section', formValues: req.body || {} });
+      if (isUniqueStudentConflict(error)) return renderDashboard(req, res, { error: 'That section already exists for the selected term.', status: 409, openForm: 'section', formValues: req.body || {} });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The section could not be created.' });
     }
   });

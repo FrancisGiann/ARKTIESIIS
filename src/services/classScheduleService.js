@@ -78,8 +78,8 @@ function createClassScheduleService({
 
   async function requireRegistrar(transaction, actorId) {
     const result = await transaction.request().input('actorId', sql.Int, actorId)
-      .query(`SELECT id FROM dbo.users WITH (UPDLOCK, HOLDLOCK)
-        WHERE id = @actorId AND is_active = 1 AND role = N'registrar'`);
+      .query(`SELECT id FROM users
+        WHERE id = @actorId AND is_active = 1 AND role = 'registrar' FOR UPDATE`);
     if (!result.recordset?.length) throw new ClassScheduleError('Your registrar access is no longer active. Sign in again.', 403);
     return result.recordset[0].id;
   }
@@ -90,8 +90,8 @@ function createClassScheduleService({
       .input('action', sql.NVarChar(100), `registrar.${action}`)
       .input('entityId', sql.NVarChar(100), String(scheduleId))
       .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify(details))
-      .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
-        VALUES (@actorId, @action, N'class_schedule', @entityId, @detailsJson)`);
+      .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
+        VALUES (@actorId, @action, 'class_schedule', @entityId, @detailsJson)`);
   }
 
   async function listRegistrarWorkspace(actorInput, filterInput = {}) {
@@ -110,10 +110,10 @@ function createClassScheduleService({
     }
     const pool = await getPool();
     const actor = await pool.request().input('actorId', sql.Int, actorId)
-      .query(`SELECT id FROM dbo.users WHERE id = @actorId AND is_active = 1 AND role = N'registrar'`);
+      .query(`SELECT id FROM users WHERE id = @actorId AND is_active = 1 AND role = 'registrar'`);
     if (!actor.recordset?.length) throw new ClassScheduleError('Your registrar access is no longer active. Sign in again.', 403);
     const termsResult = await pool.request().query(`SELECT id, school_year, term, is_current
-      FROM dbo.academic_terms ORDER BY is_current DESC, id DESC`);
+      FROM academic_terms ORDER BY is_current DESC, id DESC`);
     const terms = termsResult.recordset || [];
     if (requestedTermId && !terms.some((term) => Number(term.id) === requestedTermId)) {
       throw new ClassScheduleError('Choose a valid academic term.');
@@ -126,8 +126,8 @@ function createClassScheduleService({
       ? await pool.request().input('academicTermId', sql.Int, selectedTermId)
         .query(`SELECT section.id, section.name, section.grade_level, section.academic_term_id,
             term.school_year, term.term
-          FROM dbo.sections AS section
-          INNER JOIN dbo.academic_terms AS term ON term.id = section.academic_term_id
+          FROM sections AS section
+          INNER JOIN academic_terms AS term ON term.id = section.academic_term_id
           WHERE section.academic_term_id = @academicTermId
           ORDER BY section.grade_level, section.name`)
       : { recordset: [] };
@@ -145,15 +145,15 @@ function createClassScheduleService({
       .input('sectionId', sql.Int, selectedSectionId)
       .query(`SELECT assignment.id, assignment.academic_term_id, assignment.section_id, section.name AS section_name,
           section.grade_level, assignment.subject_id, subject.subject_code, subject.subject_name,
-          assignment.teacher_id, COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(staff.first_name, N' ', staff.last_name))), N''), teacher.email) AS teacher_name,
+          assignment.teacher_id, COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(staff.first_name, ' ', staff.last_name))), ''), teacher.email) AS teacher_name,
           term.school_year, term.term
-        FROM dbo.teacher_assignments AS assignment
-        INNER JOIN dbo.users AS teacher ON teacher.id = assignment.teacher_id AND teacher.role = N'teacher' AND teacher.is_active = 1
-        LEFT JOIN dbo.staff_profiles AS staff ON staff.user_id = teacher.id
-        INNER JOIN dbo.sections AS section ON section.id = assignment.section_id
+        FROM teacher_assignments AS assignment
+        INNER JOIN users AS teacher ON teacher.id = assignment.teacher_id AND teacher.role = 'teacher' AND teacher.is_active = 1
+        LEFT JOIN staff_profiles AS staff ON staff.user_id = teacher.id
+        INNER JOIN sections AS section ON section.id = assignment.section_id
           AND section.academic_term_id = assignment.academic_term_id
-        INNER JOIN dbo.subjects AS subject ON subject.id = assignment.subject_id
-        INNER JOIN dbo.academic_terms AS term ON term.id = assignment.academic_term_id
+        INNER JOIN subjects AS subject ON subject.id = assignment.subject_id
+        INNER JOIN academic_terms AS term ON term.id = assignment.academic_term_id
         WHERE assignment.is_active = 1 AND (@academicTermId IS NULL OR assignment.academic_term_id = @academicTermId)
           AND (@sectionId IS NULL OR assignment.section_id = @sectionId)
         ORDER BY section.grade_level, section.name, subject.subject_code`)
@@ -174,21 +174,21 @@ function createClassScheduleService({
       .input('sectionId', sql.Int, selectedSectionId)
       .input('assignmentId', sql.Int, selectedAssignmentId);
     const scheduleResult = selectedTermId ? await schedulesRequest.query(`SELECT schedule.id, schedule.assignment_id, schedule.day_of_week,
-          CONVERT(char(5), schedule.start_time, 108) AS start_time,
-          CONVERT(char(5), schedule.end_time, 108) AS end_time, schedule.room,
+          TIME_FORMAT(schedule.start_time, '%H:%i') AS start_time,
+          TIME_FORMAT(schedule.end_time, '%H:%i') AS end_time, schedule.room,
           assignment.academic_term_id, assignment.section_id, assignment.is_active AS assignment_is_active,
           section.name AS section_name, section.grade_level, subject.subject_code, subject.subject_name,
           teacher.id AS teacher_id,
-          COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(staff.first_name, N' ', staff.last_name))), N''), teacher.email) AS teacher_name,
+          COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(staff.first_name, ' ', staff.last_name))), ''), teacher.email) AS teacher_name,
           term.school_year, term.term
-        FROM dbo.class_schedules AS schedule
-        INNER JOIN dbo.teacher_assignments AS assignment ON assignment.id = schedule.assignment_id
-        INNER JOIN dbo.sections AS section ON section.id = assignment.section_id
+        FROM class_schedules AS schedule
+        INNER JOIN teacher_assignments AS assignment ON assignment.id = schedule.assignment_id
+        INNER JOIN sections AS section ON section.id = assignment.section_id
           AND section.academic_term_id = assignment.academic_term_id
-        INNER JOIN dbo.subjects AS subject ON subject.id = assignment.subject_id
-        INNER JOIN dbo.users AS teacher ON teacher.id = assignment.teacher_id
-        LEFT JOIN dbo.staff_profiles AS staff ON staff.user_id = teacher.id
-        INNER JOIN dbo.academic_terms AS term ON term.id = assignment.academic_term_id
+        INNER JOIN subjects AS subject ON subject.id = assignment.subject_id
+        INNER JOIN users AS teacher ON teacher.id = assignment.teacher_id
+        LEFT JOIN staff_profiles AS staff ON staff.user_id = teacher.id
+        INNER JOIN academic_terms AS term ON term.id = assignment.academic_term_id
         WHERE (@academicTermId IS NULL OR assignment.academic_term_id = @academicTermId)
           AND (@sectionId IS NULL OR assignment.section_id = @sectionId)
           AND (@assignmentId IS NULL OR assignment.id = @assignmentId)
@@ -212,25 +212,25 @@ function createClassScheduleService({
     const pool = await getPool();
     const result = await pool.request().input('userId', sql.Int, userId)
       .query(`SELECT schedule.id, schedule.day_of_week,
-          CONVERT(char(5), schedule.start_time, 108) AS start_time,
-          CONVERT(char(5), schedule.end_time, 108) AS end_time, schedule.room,
+          TIME_FORMAT(schedule.start_time, '%H:%i') AS start_time,
+          TIME_FORMAT(schedule.end_time, '%H:%i') AS end_time, schedule.room,
           section.name AS section_name, section.grade_level, subject.subject_code, subject.subject_name,
-          COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(staff.first_name, N' ', staff.last_name))), N''), N'To be announced') AS teacher_name,
+          COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(staff.first_name, ' ', staff.last_name))), ''), 'To be announced') AS teacher_name,
           term.school_year, term.term
-        FROM dbo.users AS user_account
-        INNER JOIN dbo.students AS student ON student.user_id = user_account.id AND student.status = N'active'
-        INNER JOIN dbo.enrollments AS enrollment ON enrollment.student_id = student.id
-          AND enrollment.enrollment_status = N'enrolled'
-        INNER JOIN dbo.academic_terms AS term ON term.id = enrollment.academic_term_id AND term.is_current = 1
-        INNER JOIN dbo.teacher_assignments AS assignment ON assignment.academic_term_id = enrollment.academic_term_id
+        FROM users AS user_account
+        INNER JOIN students AS student ON student.user_id = user_account.id AND student.status = 'active'
+        INNER JOIN enrollments AS enrollment ON enrollment.student_id = student.id
+          AND enrollment.enrollment_status = 'enrolled'
+        INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id AND term.is_current = 1
+        INNER JOIN teacher_assignments AS assignment ON assignment.academic_term_id = enrollment.academic_term_id
           AND assignment.section_id = enrollment.section_id AND assignment.is_active = 1
-        INNER JOIN dbo.student_subjects AS enrolled_subject ON enrolled_subject.enrollment_id = enrollment.id
+        INNER JOIN student_subjects AS enrolled_subject ON enrolled_subject.enrollment_id = enrollment.id
           AND enrolled_subject.subject_id = assignment.subject_id
-        INNER JOIN dbo.class_schedules AS schedule ON schedule.assignment_id = assignment.id
-        INNER JOIN dbo.sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
-        INNER JOIN dbo.subjects AS subject ON subject.id = assignment.subject_id
-        LEFT JOIN dbo.staff_profiles AS staff ON staff.user_id = assignment.teacher_id
-        WHERE user_account.id = @userId AND user_account.role = N'student' AND user_account.is_active = 1
+        INNER JOIN class_schedules AS schedule ON schedule.assignment_id = assignment.id
+        INNER JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
+        INNER JOIN subjects AS subject ON subject.id = assignment.subject_id
+        LEFT JOIN staff_profiles AS staff ON staff.user_id = assignment.teacher_id
+        WHERE user_account.id = @userId AND user_account.role = 'student' AND user_account.is_active = 1
         ORDER BY schedule.day_of_week, schedule.start_time, subject.subject_code`);
     return result.recordset || [];
   }
@@ -245,18 +245,18 @@ function createClassScheduleService({
       let current = null;
       if (scheduleId) {
         const existing = await transaction.request().input('scheduleId', sql.Int, scheduleId)
-          .query(`SELECT id, assignment_id, day_of_week, start_time, end_time, room
-            FROM dbo.class_schedules WITH (UPDLOCK, HOLDLOCK) WHERE id = @scheduleId`);
+        .query(`SELECT id, assignment_id, day_of_week, start_time, end_time, room
+            FROM class_schedules WHERE id = @scheduleId FOR UPDATE`);
         current = existing.recordset?.[0];
         if (!current) throw new ClassScheduleError('Class schedule not found.', 404);
       }
 
       const assignmentResult = await transaction.request().input('assignmentId', sql.Int, values.assignmentId)
         .query(`SELECT assignment.id, assignment.section_id, assignment.teacher_id, assignment.academic_term_id
-          FROM dbo.teacher_assignments AS assignment WITH (UPDLOCK, HOLDLOCK)
-          INNER JOIN dbo.users AS teacher WITH (UPDLOCK, HOLDLOCK)
-            ON teacher.id = assignment.teacher_id AND teacher.role = N'teacher' AND teacher.is_active = 1
-          WHERE assignment.id = @assignmentId AND assignment.is_active = 1`);
+          FROM teacher_assignments AS assignment
+          INNER JOIN users AS teacher
+            ON teacher.id = assignment.teacher_id AND teacher.role = 'teacher' AND teacher.is_active = 1
+          WHERE assignment.id = @assignmentId AND assignment.is_active = 1 FOR UPDATE`);
       const assignment = assignmentResult.recordset?.[0];
       if (!assignment) throw new ClassScheduleError('Choose an active teacher assignment.');
       if (values.contextTermId && Number(assignment.academic_term_id) !== values.contextTermId) {
@@ -276,15 +276,15 @@ function createClassScheduleService({
         .input('sectionId', sql.Int, assignment.section_id)
         .input('teacherId', sql.Int, assignment.teacher_id)
         .input('academicTermId', sql.Int, assignment.academic_term_id)
-        .query(`SELECT TOP (1) schedule.id
-          FROM dbo.class_schedules AS schedule WITH (UPDLOCK, HOLDLOCK)
-          INNER JOIN dbo.teacher_assignments AS assigned_class WITH (UPDLOCK, HOLDLOCK)
+        .query(`SELECT schedule.id
+          FROM class_schedules AS schedule
+          INNER JOIN teacher_assignments AS assigned_class
             ON assigned_class.id = schedule.assignment_id
           WHERE assigned_class.academic_term_id = @academicTermId AND assigned_class.is_active = 1
-            AND schedule.day_of_week = @dayOfWeek AND schedule.id <> ISNULL(@scheduleId, -1)
+            AND schedule.day_of_week = @dayOfWeek AND schedule.id <> COALESCE(@scheduleId, -1)
             AND schedule.start_time < @endTime AND schedule.end_time > @startTime
             AND (assigned_class.section_id = @sectionId OR assigned_class.teacher_id = @teacherId
-              OR (@room IS NOT NULL AND schedule.room = @room))`);
+              OR (@room IS NOT NULL AND schedule.room = @room)) LIMIT 1 FOR UPDATE`);
       if (conflictResult.recordset?.length) {
         throw new ClassScheduleError('This time conflicts with another class for the section, teacher, or room.', 409);
       }
@@ -298,17 +298,16 @@ function createClassScheduleService({
         .input('registrarId', sql.Int, registrarId);
       let savedId = scheduleId;
       if (scheduleId) {
-        await request.input('scheduleId', sql.Int, scheduleId).query(`UPDATE dbo.class_schedules
+        await request.input('scheduleId', sql.Int, scheduleId).query(`UPDATE class_schedules
           SET assignment_id = @assignmentId, day_of_week = @dayOfWeek,
             start_time = @startTime, end_time = @endTime, room = @room,
-            updated_at = SYSUTCDATETIME()
+            updated_at = UTC_TIMESTAMP(6)
           WHERE id = @scheduleId`);
       } else {
-        const inserted = await request.query(`INSERT INTO dbo.class_schedules
+        const inserted = await request.query(`INSERT INTO class_schedules
           (assignment_id, day_of_week, start_time, end_time, room, created_by)
-          OUTPUT INSERTED.id AS id
           VALUES (@assignmentId, @dayOfWeek, @startTime, @endTime, @room, @registrarId)`);
-        savedId = inserted.recordset?.[0]?.id;
+        savedId = inserted.insertId;
         if (!savedId) throw new Error('Schedule insert returned no identifier.');
       }
       await writeAudit(transaction, registrarId, scheduleId ? 'class_schedule_updated' : 'class_schedule_created', savedId, {
@@ -327,14 +326,14 @@ function createClassScheduleService({
       const registrarId = await requireRegistrar(transaction, actorId);
       const existing = await transaction.request().input('scheduleId', sql.Int, scheduleId)
         .query(`SELECT schedule.id, schedule.assignment_id, schedule.day_of_week,
-            CONVERT(char(5), schedule.start_time, 108) AS start_time,
-            CONVERT(char(5), schedule.end_time, 108) AS end_time
-          FROM dbo.class_schedules AS schedule WITH (UPDLOCK, HOLDLOCK)
-          WHERE schedule.id = @scheduleId`);
+            TIME_FORMAT(schedule.start_time, '%H:%i') AS start_time,
+            TIME_FORMAT(schedule.end_time, '%H:%i') AS end_time
+          FROM class_schedules AS schedule
+          WHERE schedule.id = @scheduleId FOR UPDATE`);
       const row = existing.recordset?.[0];
       if (!row) throw new ClassScheduleError('Class schedule not found.', 404);
       await transaction.request().input('scheduleId', sql.Int, scheduleId)
-        .query('DELETE FROM dbo.class_schedules WHERE id = @scheduleId');
+        .query('DELETE FROM class_schedules WHERE id = @scheduleId');
       await writeAudit(transaction, registrarId, 'class_schedule_removed', scheduleId, {
         assignmentId: row.assignment_id, dayOfWeek: row.day_of_week,
         startTime: row.start_time, endTime: row.end_time

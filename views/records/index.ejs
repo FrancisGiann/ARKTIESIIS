@@ -1,6 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
   <% const currentTerm = terms.find((term) => term.is_current); %>
+  <% const createValues = (typeof formValues === 'undefined' ? {} : formValues) || {}; %>
   <section class="dashboard-heading records-heading">
     <div>
       <h1>Student records</h1>
@@ -9,6 +10,7 @@
     <div class="admin-heading-actions">
       <% if (currentUser.role === 'registrar') { %><a class="button button--secondary" href="/registrar/intake">Enrollment intake</a><% } %>
       <% if (currentUser.role === 'database_admin') { %><a class="button button--secondary" href="/admin/student-accounts">Set up student logins</a><% } %>
+      <a class="button button--secondary" href="/registrar/records/grades/missing">Grade completion overview</a>
     </div>
   </section>
 
@@ -87,15 +89,18 @@
   <div class="records-management-grid">
     <section class="admin-section" aria-labelledby="terms-title">
       <div class="admin-section__heading"><div><h2 id="terms-title">Academic terms</h2><p>Create a term and choose which existing term is current.</p></div></div>
-      <form class="form-stack records-compact-form" method="post" action="/registrar/records/terms">
-        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-        <div class="admin-form-grid">
-          <div class="field"><label for="school-year">School year</label><input id="school-year" name="schoolYear" type="text" maxlength="20" required></div>
-          <div class="field"><label for="term-name">Term</label><input id="term-name" name="term" type="text" maxlength="30" required></div>
-        </div>
-        <label class="checkbox-field"><input name="isCurrent" value="1" type="checkbox"><span>Set this as the current term</span></label>
-        <button class="button button--primary button--align-start" type="submit">Create term</button>
-      </form>
+      <details class="records-create-disclosure" <%= openForm === 'term' ? 'open' : '' %>>
+        <summary>Add academic term</summary>
+        <form class="form-stack records-compact-form" method="post" action="/registrar/records/terms">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <div class="admin-form-grid">
+            <div class="field"><label for="school-year">School year</label><input id="school-year" name="schoolYear" type="text" maxlength="20" required value="<%= createValues.schoolYear || '' %>"></div>
+            <div class="field"><label for="term-name">Term</label><input id="term-name" name="term" type="text" maxlength="30" required value="<%= createValues.term || '' %>"></div>
+          </div>
+          <label class="checkbox-field"><input name="isCurrent" value="1" type="checkbox" <%= createValues.isCurrent === '1' ? 'checked' : '' %>><span>Set this as the current term</span></label>
+          <button class="button button--primary button--align-start" type="submit">Create term</button>
+        </form>
+      </details>
       <% if (terms.length) { %>
         <div class="table-scroll records-small-table" tabindex="0" aria-label="Academic terms">
           <table class="admin-table"><thead><tr><th scope="col">Term</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
@@ -113,20 +118,47 @@
 
     <section class="admin-section" aria-labelledby="sections-title">
       <div class="admin-section__heading"><div><h2 id="sections-title">Sections</h2><p>Each section belongs to one academic term.</p></div></div>
-      <form class="form-stack records-compact-form" method="post" action="/registrar/records/sections">
-        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-        <div class="field"><label for="section-name">Section name</label><input id="section-name" name="name" type="text" maxlength="100" required></div>
-        <div class="admin-form-grid">
-          <div class="field"><label for="grade-level">Grade level (optional)</label><input id="grade-level" name="gradeLevel" type="text" maxlength="50"></div>
-          <div class="field"><label for="section-term">Academic term</label><select id="section-term" name="academicTermId" required><option value="">Choose a term</option><% for (const term of terms) { %><option value="<%= term.id %>"><%= term.school_year %> · <%= term.term %></option><% } %></select></div>
-        </div>
-        <button class="button button--primary button--align-start" type="submit" <%= terms.length ? '' : 'disabled' %>>Create section</button>
-      </form>
+      <details class="records-create-disclosure" <%= openForm === 'section' ? 'open' : '' %>>
+        <summary>Add section</summary>
+        <form class="form-stack records-compact-form" method="post" action="/registrar/records/sections">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <div class="field"><label for="section-name">Section name</label><input id="section-name" name="name" type="text" maxlength="100" required value="<%= createValues.name || '' %>"></div>
+          <div class="admin-form-grid">
+            <div class="field"><label for="grade-level">Grade level (optional)</label><input id="grade-level" name="gradeLevel" type="text" maxlength="50" value="<%= createValues.gradeLevel || '' %>"></div>
+            <div class="field"><label for="section-term">Academic term</label><select id="section-term" name="academicTermId" required><option value="">Choose a term</option><% for (const term of terms) { %><option value="<%= term.id %>" <%= String(createValues.academicTermId || '') === String(term.id) ? 'selected' : '' %>><%= term.school_year %> · <%= term.term %></option><% } %></select></div>
+            <div class="field"><label for="section-cluster">Cluster (optional)</label><input id="section-cluster" name="cluster" maxlength="80" value="<%= createValues.cluster || '' %>"></div>
+            <div class="field"><label for="section-strand">Strand (optional)</label><input id="section-strand" name="strand" maxlength="80" value="<%= createValues.strand || '' %>"></div>
+            <div class="field"><label for="section-adviser">Adviser (optional)</label><input id="section-adviser" name="adviser" maxlength="160" value="<%= createValues.adviser || '' %>"></div>
+            <div class="field"><label for="section-modality">Modality (optional)</label><select id="section-modality" name="modality"><option value="">Not recorded</option><% for (const [value, label] of [['face-to-face', 'Face to face'], ['distance', 'Distance'], ['modular', 'Modular'], ['hybrid', 'Hybrid']]) { %><option value="<%= value %>" <%= createValues.modality === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
+            <div class="field"><label for="section-modular-subtype">Modular subtype (if modular)</label><input id="section-modular-subtype" name="modularSubtype" maxlength="80" placeholder="e.g. printed modules" value="<%= createValues.modularSubtype || '' %>"></div>
+          </div>
+          <button class="button button--primary button--align-start" type="submit" <%= terms.length ? '' : 'disabled' %>>Create section</button>
+        </form>
+      </details>
       <% if (sections.length) { %>
-        <div class="table-scroll records-small-table" tabindex="0" aria-label="Sections and academic terms">
-          <table class="admin-table"><thead><tr><th scope="col">Section</th><th scope="col">Grade level</th><th scope="col">Term</th></tr></thead>
-            <tbody><% for (const section of sections) { %><tr><td data-label="Section"><%= section.name %></td><td data-label="Grade level"><%= section.grade_level || '—' %></td><td data-label="Term"><%= section.school_year %> · <%= section.term %></td></tr><% } %></tbody>
-          </table>
+        <% const termSectionGroups = terms.map((term) => ({ term, rows: sections.filter((section) => String(section.academic_term_id) === String(term.id)) })).filter((group) => group.rows.length); %>
+        <% const ungroupedSections = sections.filter((section) => !terms.some((term) => String(term.id) === String(section.academic_term_id))); %>
+        <div class="records-section-groups" aria-label="Sections grouped by academic term">
+          <% for (const group of termSectionGroups) { %>
+            <details class="records-section-group" <%= group.term.is_current ? 'open' : '' %>>
+              <summary><strong><%= group.term.school_year %> · <%= group.term.term %></strong><span><%= group.rows.length %> <%= group.rows.length === 1 ? 'section' : 'sections' %></span></summary>
+              <div class="table-scroll records-small-table" tabindex="0" aria-label="Sections for <%= group.term.school_year %> · <%= group.term.term %>">
+                <table class="admin-table"><thead><tr><th scope="col">Section</th><th scope="col">Grade level</th><th scope="col">Cluster and strand</th><th scope="col">Adviser and modality</th></tr></thead>
+                  <tbody><% for (const section of group.rows) { %><tr><td data-label="Section"><%= section.name %></td><td data-label="Grade level"><%= section.grade_level || '—' %></td><td data-label="Cluster and strand"><%= [section.cluster ? `Cluster ${section.cluster}` : '', section.strand].filter(Boolean).join(' · ') || '—' %></td><td data-label="Adviser and modality"><%= [section.adviser, section.modality, section.modular_subtype].filter(Boolean).join(' · ') || '—' %></td></tr><% } %></tbody>
+                </table>
+              </div>
+            </details>
+          <% } %>
+          <% if (ungroupedSections.length) { %>
+            <details class="records-section-group" open>
+              <summary><strong>Term unavailable</strong><span><%= ungroupedSections.length %> <%= ungroupedSections.length === 1 ? 'section' : 'sections' %></span></summary>
+              <div class="table-scroll records-small-table" tabindex="0" aria-label="Sections without an available academic term">
+                <table class="admin-table"><thead><tr><th scope="col">Section</th><th scope="col">Grade level</th><th scope="col">Term</th><th scope="col">Cluster and strand</th><th scope="col">Adviser and modality</th></tr></thead>
+                  <tbody><% for (const section of ungroupedSections) { %><tr><td data-label="Section"><%= section.name %></td><td data-label="Grade level"><%= section.grade_level || '—' %></td><td data-label="Term"><%= section.school_year || '—' %> · <%= section.term || '—' %></td><td data-label="Cluster and strand"><%= [section.cluster ? `Cluster ${section.cluster}` : '', section.strand].filter(Boolean).join(' · ') || '—' %></td><td data-label="Adviser and modality"><%= [section.adviser, section.modality, section.modular_subtype].filter(Boolean).join(' · ') || '—' %></td></tr><% } %></tbody>
+                </table>
+              </div>
+            </details>
+          <% } %>
         </div>
       <% } else { %><p class="empty-state">No sections have been created.</p><% } %>
     </section>

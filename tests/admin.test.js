@@ -145,12 +145,14 @@ test('teacher account creation and editing accept staff profile fields', () => {
 test('editing a user to teacher updates the account and staff profile in one transaction', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
-    if (statement.includes('SELECT id, email, role, is_active FROM dbo.users')) {
+    if (statement.includes('SELECT id, email, role, is_active FROM users')) {
       return { recordset: [{ id: 11, email: 'staff@example.edu', role: 'registrar', is_active: true }] };
     }
-    if (statement.includes('SELECT id FROM dbo.staff_profiles')) return { recordset: [{ id: 33 }] };
-    if (statement.startsWith('UPDATE dbo.users') || statement.startsWith('UPDATE dbo.students')
-      || statement.startsWith('UPDATE dbo.staff_profiles') || statement.includes('INSERT INTO dbo.audit_logs')) {
+    if (statement.includes('SELECT id FROM staff_profiles')) return { recordset: [{ id: 33 }] };
+    if (statement.startsWith('UPDATE users') || statement.startsWith('UPDATE two_factor_codes')
+      || statement.startsWith('UPDATE password_reset_tokens') || statement.startsWith('UPDATE pending_email_changes')
+      || statement.startsWith('UPDATE students')
+      || statement.startsWith('UPDATE staff_profiles') || statement.includes('INSERT INTO audit_logs')) {
       return { recordset: [] };
     }
     throw new Error(`Unexpected query: ${statement}`);
@@ -161,8 +163,8 @@ test('editing a user to teacher updates the account and staff profile in one tra
     firstName: 'Taylor', lastName: 'Teacher', department: 'English'
   });
   assert.equal(log.committed, true);
-  const userUpdate = log.queries.find(({ statement }) => statement.startsWith('UPDATE dbo.users'));
-  const profileUpdate = log.queries.find(({ statement }) => statement.startsWith('UPDATE dbo.staff_profiles'));
+  const userUpdate = log.queries.find(({ statement }) => statement.startsWith('UPDATE users'));
+  const profileUpdate = log.queries.find(({ statement }) => statement.startsWith('UPDATE staff_profiles'));
   assert.equal(userUpdate.values.role, 'teacher');
   assert.equal(profileUpdate.values.firstName, 'Taylor');
   assert.equal(profileUpdate.values.lastName, 'Teacher');
@@ -189,7 +191,7 @@ test('user search binds an escaped email/student-number pattern and validates it
   assert.equal(userQuery.values.searchPattern, '%acct~_~%~[x~]~~%');
   assert.match(userQuery.statement, /u\.email LIKE @searchPattern/);
   assert.match(userQuery.statement, /s\.student_no LIKE @searchPattern/);
-  assert.match(userQuery.statement, /SELECT TOP \(250\)/);
+  assert.match(userQuery.statement, /ORDER BY u\.created_at DESC, u\.id DESC LIMIT 250/);
   assert.doesNotMatch(userQuery.statement, /acct_%\[x\]/);
   await assert.rejects(service.listDashboard('x'.repeat(101)), /100 printable characters or fewer/);
 });
@@ -198,7 +200,7 @@ test('the final active database administrator cannot be demoted or deactivated',
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
     if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 8, email: 'admin@example.edu', role: 'database_admin', is_active: true }] };
-    if (statement.includes('COUNT_BIG(*)')) return { recordset: [{ activeCount: 1 }] };
+    if (statement.includes('role = @adminRole AND is_active = 1 FOR UPDATE')) return { recordset: [{ id: 8 }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
 
@@ -207,19 +209,20 @@ test('the final active database administrator cannot be demoted or deactivated',
   }), /At least one active database administrator/);
   assert.equal(log.committed, false);
   assert.equal(log.rolledBack, true);
-  assert.equal(log.queries.some(({ statement }) => statement.startsWith('UPDATE dbo.users')), false);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.startsWith('UPDATE users')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 });
 
 test('student-to-staff role changes unlink the student login and preserve the student record', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
     if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 8, email: 'learner@example.edu', role: 'student', is_active: true }] };
-    if (statement.includes('UPDATE dbo.users SET email')) return { recordset: [] };
-    if (statement.includes('UPDATE dbo.students SET user_id = NULL')) return { recordset: [] };
-    if (statement.includes('FROM dbo.staff_profiles')) return { recordset: [] };
-    if (statement.includes('INSERT INTO dbo.staff_profiles')) return { recordset: [] };
-    if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+    if (statement.includes('UPDATE users SET email')) return { recordset: [] };
+    if (statement.startsWith('UPDATE two_factor_codes') || statement.startsWith('UPDATE password_reset_tokens') || statement.startsWith('UPDATE pending_email_changes')) return { recordset: [] };
+    if (statement.includes('UPDATE students SET user_id = NULL')) return { recordset: [] };
+    if (statement.includes('FROM staff_profiles')) return { recordset: [] };
+    if (statement.includes('INSERT INTO staff_profiles')) return { recordset: [] };
+    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
 
@@ -227,20 +230,21 @@ test('student-to-staff role changes unlink the student login and preserve the st
     email: 'staff@example.edu', role: 'registrar', isActive: '1', firstName: 'Jamie', lastName: 'Lee', department: 'Records'
   });
   assert.equal(log.committed, true);
-  assert.ok(log.queries.some(({ statement }) => statement.includes('UPDATE dbo.students SET user_id = NULL, updated_at = SYSUTCDATETIME() WHERE user_id = @userId')));
-  assert.ok(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.staff_profiles')));
-  assert.ok(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')));
+  assert.ok(log.queries.some(({ statement }) => statement.includes('UPDATE students SET user_id = NULL, updated_at = UTC_TIMESTAMP(6) WHERE user_id = @userId')));
+  assert.ok(log.queries.some(({ statement }) => statement.includes('INSERT INTO staff_profiles')));
+  assert.ok(log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')));
 });
 
 test('staff-to-student role changes link an existing student and retain the staff profile', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
     if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 8, email: 'staff@example.edu', role: 'registrar', is_active: true }] };
-    if (statement.includes('UPDATE dbo.users SET email')) return { recordset: [] };
-    if (statement.includes('FROM dbo.students WITH (UPDLOCK, HOLDLOCK)')) return { recordset: [{ id: 51, user_id: null, status: 'active' }] };
-    if (statement.includes('UPDATE dbo.students SET user_id = NULL')) return { recordset: [] };
-    if (statement.includes('UPDATE dbo.students SET user_id = @userId')) return { recordset: [] };
-    if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+    if (statement.includes('UPDATE users SET email')) return { recordset: [] };
+    if (statement.startsWith('UPDATE two_factor_codes') || statement.startsWith('UPDATE password_reset_tokens') || statement.startsWith('UPDATE pending_email_changes')) return { recordset: [] };
+    if (statement.includes('FROM students WHERE student_no = @studentNo FOR UPDATE')) return { recordset: [{ id: 51, user_id: null, status: 'active' }] };
+    if (statement.includes('UPDATE students SET user_id = NULL')) return { recordset: [] };
+    if (statement.includes('UPDATE students SET user_id = @userId')) return { recordset: [] };
+    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
 
@@ -248,17 +252,18 @@ test('staff-to-student role changes link an existing student and retain the staf
     email: 'learner@example.edu', role: 'student', isActive: '1', studentNo: 'STU-0051'
   });
   assert.equal(log.committed, true);
-  assert.ok(log.queries.some(({ statement }) => statement.includes('UPDATE dbo.students SET user_id = @userId, updated_at = SYSUTCDATETIME() WHERE id = @studentId')));
-  assert.equal(log.queries.some(({ statement }) => statement.includes('DELETE FROM dbo.staff_profiles')), false);
-  assert.ok(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')));
+  assert.ok(log.queries.some(({ statement }) => statement.includes('UPDATE students SET user_id = @userId, updated_at = UTC_TIMESTAMP(6) WHERE id = @studentId')));
+  assert.equal(log.queries.some(({ statement }) => statement.includes('DELETE FROM staff_profiles')), false);
+  assert.ok(log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')));
 });
 
 test('administrator cannot link a login to an archived student record', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
     if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 8, email: 'staff@example.edu', role: 'registrar', is_active: true }] };
-    if (statement.includes('UPDATE dbo.users SET email')) return { recordset: [] };
-    if (statement.includes('FROM dbo.students WITH (UPDLOCK, HOLDLOCK)')) return { recordset: [{ id: 51, user_id: null, status: 'archived' }] };
+    if (statement.includes('UPDATE users SET email')) return { recordset: [] };
+    if (statement.startsWith('UPDATE two_factor_codes') || statement.startsWith('UPDATE password_reset_tokens') || statement.startsWith('UPDATE pending_email_changes')) return { recordset: [] };
+    if (statement.includes('FROM students WHERE student_no = @studentNo FOR UPDATE')) return { recordset: [{ id: 51, user_id: null, status: 'archived' }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
 
@@ -266,8 +271,8 @@ test('administrator cannot link a login to an archived student record', async ()
     email: 'learner@example.edu', role: 'student', isActive: '1', studentNo: 'STU-0051'
   }), /student number is unavailable/);
   assert.equal(log.rolledBack, true);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('UPDATE dbo.students SET user_id = @userId')), false);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('UPDATE students SET user_id = @userId')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 });
 
 test('an administrator cannot demote or deactivate their own account', async () => {
@@ -282,16 +287,16 @@ test('an administrator cannot demote or deactivate their own account', async () 
   }), /cannot change your own role or deactivate/);
   assert.equal(log.committed, false);
   assert.equal(log.rolledBack, true);
-  assert.equal(log.queries.some(({ statement }) => statement.startsWith('UPDATE dbo.users')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.startsWith('UPDATE users')), false);
 });
 
 test('account creation writes profile and audit event in one transaction without logging password data', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
-    if (statement.includes('INSERT INTO dbo.users')) return { recordset: [{ id: 11 }] };
-    if (statement.includes('FROM dbo.staff_profiles')) return { recordset: [] };
-    if (statement.includes('INSERT INTO dbo.staff_profiles')) return { recordset: [] };
-    if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+    if (statement.includes('INSERT INTO users')) return { insertId: 11 };
+    if (statement.includes('FROM staff_profiles')) return { recordset: [] };
+    if (statement.includes('INSERT INTO staff_profiles')) return { recordset: [] };
+    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   }, { hashPassword: async (password, rounds) => {
     assert.equal(password, 'new-password-is-secret');
@@ -303,10 +308,10 @@ test('account creation writes profile and audit event in one transaction without
     email: 'registrar@example.edu', role: 'registrar', password: 'new-password-is-secret',
     firstName: 'Riley', lastName: 'Registrar', department: 'Records'
   });
-  const auditCall = log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs'));
+  const auditCall = log.queries.find(({ statement }) => statement.includes('INSERT INTO audit_logs'));
   assert.equal(userId, 11);
   assert.equal(log.committed, true);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.staff_profiles')), true);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO staff_profiles')), true);
   assert.equal(auditCall.values.detailsJson, JSON.stringify({ role: 'registrar' }));
   assert.equal(JSON.stringify(auditCall.values).includes('new-password-is-secret'), false);
   assert.equal(JSON.stringify(auditCall.values).includes('bcrypt-hash-value'), false);
@@ -371,6 +376,9 @@ test('database administrator read matrix permits staff workspaces and denies stu
     adminService,
     studentRecordsService,
     financeService,
+    annualFinanceService: {
+      async listRoster() { calls.push(['annualFinanceRoster']); return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; }
+    },
     documentService,
     documentProcessingService: { schedulePendingProcessing() {} },
     form137ScanService: { async scan() { throw new Error('No scan operation is expected in this read-only matrix.'); } }
@@ -383,7 +391,7 @@ test('database administrator read matrix permits staff workspaces and denies stu
       ['/admin/audit', 200, /Audit activity/],
       ['/registrar/records', 200, /Student Records/],
       ['/documents', 200, /Documents/],
-      ['/finance', 200, /Finance Workspace/],
+      ['/finance', 200, /Annual finance roster/],
       ['/student', 403, null]
     ];
 
@@ -398,7 +406,7 @@ test('database administrator read matrix permits staff workspaces and denies stu
       ['listAuditLogs'],
       ['listWorkspace', '', ''],
       ['listDocuments', 7],
-      ['searchFinanceStudents', '']
+      ['annualFinanceRoster']
     ], 'only read services for database-admin workspaces run; student self-service stays denied');
   });
 });
@@ -467,6 +475,33 @@ test('invalid account form data is rejected before account creation', async () =
     assert.equal(response.status, 400);
     assert.match(html, /Enter a valid email address/);
     assert.equal(serviceDatabaseReads, 0);
+  });
+});
+
+test('admin account creation maps a MariaDB duplicate-key error to a conflict response', async () => {
+  const adminService = {
+    async createUser() {
+      throw Object.assign(new Error('duplicate key'), { code: 'ER_DUP_ENTRY', errno: 1062 });
+    }
+  };
+
+  await withServer(createApp({ databasePool: createAuthPool('database_admin'), environment: testEnvironment, adminService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'database_admin@example.edu');
+    const page = await fetch(`${baseUrl}/admin/users/new`, { headers: { cookie } });
+    const html = await page.text();
+    const response = await postForm(baseUrl, '/admin/users', cookie, {
+      _csrf: csrfFromHtml(html),
+      email: 'existing@example.edu',
+      role: 'registrar',
+      password: 'Valid-Password-For-Test-1',
+      confirmPassword: 'Valid-Password-For-Test-1',
+      firstName: 'Casey',
+      lastName: 'Staff'
+    });
+    const responseHtml = await response.text();
+    assert.equal(response.status, 409);
+    assert.match(responseHtml, /An account with that email already exists/);
+    assert.doesNotMatch(responseHtml, /duplicate key|ER_DUP_ENTRY/);
   });
 });
 

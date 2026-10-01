@@ -1,8 +1,17 @@
-const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
+const crypto = require('node:crypto');
+const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
 const { allocateStudentNumber, StudentNumberAllocationError } = require('./studentNumberAllocator');
 
 const RECORDS_ROLES = new Set(['database_admin', 'registrar']);
 const STUDENT_PAGE_SIZE = 25;
+const PROFILE_REVISION_FIELDS = [
+  ['student_no', 'studentNo'], ['lrn', 'lrn'], ['first_name', 'firstName'], ['middle_name', 'middleName'],
+  ['last_name', 'lastName'], ['suffix', 'suffix'], ['birth_date', 'birthDate'], ['sex', 'sex'],
+  ['address', 'address'], ['phone', 'phone'], ['birthplace', 'birthplace'], ['facebook_name', 'facebookName'],
+  ['emergency_contact_person', 'emergencyContactPerson'], ['emergency_contact_relationship', 'emergencyContactRelationship'],
+  ['emergency_contact_phone', 'emergencyContactPhone'], ['emergency_contact_address', 'emergencyContactAddress'],
+  ['mother_name', 'motherName'], ['mother_phone', 'motherPhone'], ['father_name', 'fatherName'], ['father_phone', 'fatherPhone']
+];
 
 class StudentRecordsError extends Error {
   constructor(message, status = 400) {
@@ -83,7 +92,19 @@ function validateStudent(input = {}, { requireLrn = true, requireStudentNo = tru
   const sex = printableText(input.sex, 20);
   const address = printableText(input.address, 500);
   const phone = printableText(input.phone, 50);
-  if ([middleName, suffix, sex, address, phone].includes(null)) {
+  const birthplace = printableText(input.birthplace, 160);
+  const facebookName = printableText(input.facebookName, 120);
+  const emergencyContactPerson = printableText(input.emergencyContactPerson, 160);
+  const emergencyContactRelationship = printableText(input.emergencyContactRelationship, 80);
+  const emergencyContactPhone = printableText(input.emergencyContactPhone, 50);
+  const emergencyContactAddress = printableText(input.emergencyContactAddress, 500);
+  const motherName = printableText(input.motherName, 160);
+  const motherPhone = printableText(input.motherPhone, 50);
+  const fatherName = printableText(input.fatherName, 160);
+  const fatherPhone = printableText(input.fatherPhone, 50);
+  if ([middleName, suffix, sex, address, phone, birthplace, facebookName, emergencyContactPerson,
+    emergencyContactRelationship, emergencyContactPhone, emergencyContactAddress, motherName, motherPhone,
+    fatherName, fatherPhone].includes(null)) {
     throw new StudentRecordsError('Check that each optional profile field is within its allowed length and contains no control characters.');
   }
   return {
@@ -96,7 +117,17 @@ function validateStudent(input = {}, { requireLrn = true, requireStudentNo = tru
     birthDate: normalizeDate(input.birthDate),
     sex: sex || null,
     address: address || null,
-    phone: phone || null
+    phone: phone || null,
+    birthplace: birthplace || null,
+    facebookName: facebookName || null,
+    emergencyContactPerson: emergencyContactPerson || null,
+    emergencyContactRelationship: emergencyContactRelationship || null,
+    emergencyContactPhone: emergencyContactPhone || null,
+    emergencyContactAddress: emergencyContactAddress || null,
+    motherName: motherName || null,
+    motherPhone: motherPhone || null,
+    fatherName: fatherName || null,
+    fatherPhone: fatherPhone || null
   };
 }
 
@@ -120,7 +151,23 @@ function validateSection(input = {}) {
   if (gradeLevel === null) throw new StudentRecordsError('Grade level must be 50 characters or fewer.');
   const academicTermId = normalizeOptionalId(input.academicTermId, 'academic term');
   if (!academicTermId) throw new StudentRecordsError('Choose an academic term.');
-  return { name, gradeLevel: gradeLevel || null, academicTermId };
+  const cluster = printableText(input.cluster, 80);
+  const strand = printableText(input.strand, 80);
+  const adviser = printableText(input.adviser, 160);
+  const modality = printableText(input.modality, 30);
+  const modularSubtype = printableText(input.modularSubtype, 80);
+  if ([cluster, strand, adviser, modality, modularSubtype].includes(null)) {
+    throw new StudentRecordsError('Check that each section detail is within its allowed length.');
+  }
+  if (modality && !['face-to-face', 'distance', 'modular', 'hybrid'].includes(modality)) {
+    throw new StudentRecordsError('Choose a supported section modality.');
+  }
+  if (modality !== 'modular' && modularSubtype) throw new StudentRecordsError('A modular subtype can only be entered for modular sections.');
+  return {
+    name, gradeLevel: gradeLevel || null, academicTermId,
+    cluster: cluster || null, strand: strand || null, adviser: adviser || null,
+    modality: modality || null, modularSubtype: modularSubtype || null
+  };
 }
 
 function validateEnrollment(input = {}) {
@@ -132,7 +179,7 @@ function validateEnrollment(input = {}) {
 }
 
 function normalizeUniqueConflict(error) {
-  return error?.number === 2601 || error?.number === 2627;
+  return isDuplicateKeyError(error);
 }
 
 function createStudentRecordsService({
@@ -168,8 +215,8 @@ function createStudentRecordsService({
       .input('actorId', sql.Int, actorId)
       .input('databaseAdminRole', sql.NVarChar(30), 'database_admin')
       .input('registrarRole', sql.NVarChar(30), 'registrar')
-      .query(`SELECT id, role FROM dbo.users WITH (UPDLOCK, HOLDLOCK)
-        WHERE id = @actorId AND is_active = 1 AND role IN (@databaseAdminRole, @registrarRole)`);
+      .query(`SELECT id, role FROM users
+        WHERE id = @actorId AND is_active = 1 AND role IN (@databaseAdminRole, @registrarRole) FOR UPDATE`);
     const actor = result.recordset?.[0];
     if (!actor || !RECORDS_ROLES.has(actor.role)) {
       throw new StudentRecordsError('Your academic records access is no longer active. Sign in again.', 403);
@@ -184,33 +231,40 @@ function createStudentRecordsService({
       .input('entityType', sql.NVarChar(100), entityType)
       .input('entityId', sql.NVarChar(100), String(entityId))
       .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify(details))
-      .query(`INSERT INTO dbo.audit_logs (user_id, action, entity_type, entity_id, details_json)
+      .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
         VALUES (@actorId, @action, @entityType, @entityId, @detailsJson)`);
+  }
+
+  function canonicalProfileValue(value) {
+    if (value === undefined || value === null || value === '') return null;
+    if (value instanceof Date) return value.toISOString().slice(0, 10);
+    return String(value);
   }
 
   async function invalidatePendingCodes(transaction, userId) {
     await transaction.request()
       .input('userId', sql.Int, userId)
-      .query(`UPDATE dbo.two_factor_codes
-        SET consumed_at = SYSUTCDATETIME()
+      .query(`UPDATE two_factor_codes
+        SET consumed_at = UTC_TIMESTAMP(6)
         WHERE user_id = @userId AND consumed_at IS NULL`);
   }
 
   async function listTerms(pool) {
     const result = await pool.request().query(`
-      SELECT TOP (100) id, school_year, term, is_current
-      FROM dbo.academic_terms
-      ORDER BY is_current DESC, id DESC`);
+      SELECT id, school_year, term, is_current
+      FROM academic_terms
+      ORDER BY is_current DESC, id DESC LIMIT 100`);
     return result.recordset || [];
   }
 
   async function listSections(pool) {
     const result = await pool.request().query(`
-      SELECT TOP (250) s.id, s.name, s.grade_level, s.academic_term_id,
+      SELECT s.id, s.name, s.grade_level, s.academic_term_id,
+        s.cluster, s.strand, s.adviser, s.modality, s.modular_subtype,
         t.school_year, t.term
-      FROM dbo.sections AS s
-      INNER JOIN dbo.academic_terms AS t ON t.id = s.academic_term_id
-      ORDER BY t.is_current DESC, s.academic_term_id DESC, s.name, s.id`);
+      FROM sections AS s
+      INNER JOIN academic_terms AS t ON t.id = s.academic_term_id
+      ORDER BY t.is_current DESC, s.academic_term_id DESC, s.name, s.id LIMIT 250`);
     return result.recordset || [];
   }
 
@@ -231,20 +285,20 @@ function createStudentRecordsService({
       .input('searchPattern', sql.NVarChar(204), searchPattern)
       .input('academicTermId', sql.Int, academicTermId)
       .query(`
-        SELECT COUNT_BIG(*) AS total_students
-        FROM dbo.students AS s
+        SELECT COUNT(*) AS total_students
+        FROM students AS s
         WHERE (@academicTermId IS NULL OR EXISTS (
-            SELECT 1 FROM dbo.enrollments AS filtered_enrollment
+            SELECT 1 FROM enrollments AS filtered_enrollment
             WHERE filtered_enrollment.student_id = s.id
               AND filtered_enrollment.academic_term_id = @academicTermId
           ))
           AND (@searchPattern IS NULL
-            OR s.student_no LIKE @searchPattern ESCAPE N'~'
-            OR s.lrn LIKE @searchPattern ESCAPE N'~'
-            OR s.first_name LIKE @searchPattern ESCAPE N'~'
-            OR s.middle_name LIKE @searchPattern ESCAPE N'~'
-            OR s.last_name LIKE @searchPattern ESCAPE N'~'
-            OR CONCAT_WS(N' ', s.first_name, NULLIF(s.middle_name, N''), s.last_name) LIKE @searchPattern ESCAPE N'~')`);
+            OR s.student_no LIKE @searchPattern ESCAPE '~'
+            OR s.lrn LIKE @searchPattern ESCAPE '~'
+            OR s.first_name LIKE @searchPattern ESCAPE '~'
+            OR s.middle_name LIKE @searchPattern ESCAPE '~'
+            OR s.last_name LIKE @searchPattern ESCAPE '~'
+            OR CONCAT_WS(' ', s.first_name, NULLIF(s.middle_name, ''), s.last_name) LIKE @searchPattern ESCAPE '~')`);
     const totalStudents = Number(matchingStudents.recordset?.[0]?.total_students || 0);
     const totalPages = Math.max(1, Math.ceil(totalStudents / STUDENT_PAGE_SIZE));
     const page = Math.min(safeRequestedPage, totalPages);
@@ -262,40 +316,65 @@ function createStudentRecordsService({
           t.id AS academic_term_id, t.school_year, t.term, sec.name AS section_name,
           good_moral.status AS good_moral_status, psa.status AS psa_status,
           form137.status AS form137_status
-        FROM dbo.students AS s
-        OUTER APPLY (
-          SELECT TOP (1) en.id, en.enrollment_status, en.academic_term_id,
-            en.section_id, at.school_year, at.term, at.id AS term_id
-          FROM dbo.enrollments AS en
-          INNER JOIN dbo.academic_terms AS at ON at.id = en.academic_term_id
-          WHERE en.student_id = s.id
-            AND (@academicTermId IS NULL OR en.academic_term_id = @academicTermId)
-          ORDER BY at.is_current DESC, at.id DESC, en.id DESC
-        ) AS latest
-        LEFT JOIN dbo.enrollments AS e ON e.id = latest.id
-        LEFT JOIN dbo.users AS u ON u.id = s.user_id
-        LEFT JOIN dbo.academic_terms AS t ON t.id = latest.term_id
-        LEFT JOIN dbo.sections AS sec ON sec.id = latest.section_id AND sec.academic_term_id = latest.academic_term_id
-        OUTER APPLY (SELECT TOP (1) d.status FROM dbo.documents AS d
-          WHERE d.student_id = s.id AND d.document_type = 'good_moral' ORDER BY d.created_at DESC, d.id DESC) AS good_moral
-        OUTER APPLY (SELECT TOP (1) d.status FROM dbo.documents AS d
-          WHERE d.student_id = s.id AND d.document_type = 'psa_birth_certificate' ORDER BY d.created_at DESC, d.id DESC) AS psa
-        OUTER APPLY (SELECT TOP (1) e.status FROM dbo.form137_status_events AS e
-          WHERE e.student_id = s.id ORDER BY e.created_at DESC, e.id DESC) AS form137
+        FROM students AS s
+        LEFT JOIN (
+          SELECT ranked.id, ranked.student_id, ranked.academic_term_id, ranked.section_id, ranked.term_id
+          FROM (
+            SELECT en.id, en.student_id, en.enrollment_status, en.academic_term_id, en.section_id,
+              at.school_year, at.term, at.id AS term_id,
+              ROW_NUMBER() OVER (PARTITION BY en.student_id
+                ORDER BY at.is_current DESC, at.id DESC, en.id DESC) AS event_rank
+            FROM enrollments AS en
+            INNER JOIN academic_terms AS at ON at.id = en.academic_term_id
+            WHERE @academicTermId IS NULL OR en.academic_term_id = @academicTermId
+          ) AS ranked
+          WHERE ranked.event_rank = 1
+        ) AS latest ON latest.student_id = s.id
+        LEFT JOIN enrollments AS e ON e.id = latest.id
+        LEFT JOIN users AS u ON u.id = s.user_id
+        LEFT JOIN academic_terms AS t ON t.id = latest.term_id
+        LEFT JOIN sections AS sec ON sec.id = latest.section_id AND sec.academic_term_id = latest.academic_term_id
+        LEFT JOIN (
+          SELECT ranked.student_id, ranked.status
+          FROM (
+            SELECT d.student_id, d.status,
+              ROW_NUMBER() OVER (PARTITION BY d.student_id ORDER BY d.created_at DESC, d.id DESC) AS event_rank
+            FROM documents AS d WHERE d.document_type = 'good_moral'
+          ) AS ranked
+          WHERE ranked.event_rank = 1
+        ) AS good_moral ON good_moral.student_id = s.id
+        LEFT JOIN (
+          SELECT ranked.student_id, ranked.status
+          FROM (
+            SELECT d.student_id, d.status,
+              ROW_NUMBER() OVER (PARTITION BY d.student_id ORDER BY d.created_at DESC, d.id DESC) AS event_rank
+            FROM documents AS d WHERE d.document_type = 'psa_birth_certificate'
+          ) AS ranked
+          WHERE ranked.event_rank = 1
+        ) AS psa ON psa.student_id = s.id
+        LEFT JOIN (
+          SELECT ranked.student_id, ranked.status
+          FROM (
+            SELECT e.student_id, e.status,
+              ROW_NUMBER() OVER (PARTITION BY e.student_id ORDER BY e.created_at DESC, e.id DESC) AS event_rank
+            FROM form137_status_events AS e
+          ) AS ranked
+          WHERE ranked.event_rank = 1
+        ) AS form137 ON form137.student_id = s.id
         WHERE (@academicTermId IS NULL OR EXISTS (
-            SELECT 1 FROM dbo.enrollments AS filtered_enrollment
+            SELECT 1 FROM enrollments AS filtered_enrollment
             WHERE filtered_enrollment.student_id = s.id
               AND filtered_enrollment.academic_term_id = @academicTermId
           ))
           AND (@searchPattern IS NULL
-            OR s.student_no LIKE @searchPattern ESCAPE N'~'
-            OR s.lrn LIKE @searchPattern ESCAPE N'~'
-            OR s.first_name LIKE @searchPattern ESCAPE N'~'
-            OR s.middle_name LIKE @searchPattern ESCAPE N'~'
-            OR s.last_name LIKE @searchPattern ESCAPE N'~'
-            OR CONCAT_WS(N' ', s.first_name, NULLIF(s.middle_name, N''), s.last_name) LIKE @searchPattern ESCAPE N'~')
+            OR s.student_no LIKE @searchPattern ESCAPE '~'
+            OR s.lrn LIKE @searchPattern ESCAPE '~'
+            OR s.first_name LIKE @searchPattern ESCAPE '~'
+            OR s.middle_name LIKE @searchPattern ESCAPE '~'
+            OR s.last_name LIKE @searchPattern ESCAPE '~'
+            OR CONCAT_WS(' ', s.first_name, NULLIF(s.middle_name, ''), s.last_name) LIKE @searchPattern ESCAPE '~')
         ORDER BY s.last_name, s.first_name, s.student_no, s.id
-        OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`);
+        LIMIT @pageSize OFFSET @offset`);
     return {
       students: students.recordset || [], terms, sections, searchTerm, academicTermId,
       totalStudents, page, pageSize: STUDENT_PAGE_SIZE, totalPages
@@ -309,7 +388,9 @@ function createStudentRecordsService({
     const result = await pool.request()
       .input('studentId', sql.Int, id)
       .query(`SELECT s.id, s.user_id, s.student_no, s.lrn, s.first_name, s.middle_name, s.last_name, s.suffix,
-        s.birth_date, s.sex, s.address, s.phone, s.status, s.created_at, s.updated_at,
+        s.birth_date, s.sex, s.address, s.phone, s.birthplace, s.facebook_name,
+        s.emergency_contact_person, s.emergency_contact_relationship, s.emergency_contact_phone, s.emergency_contact_address,
+        s.mother_name, s.mother_phone, s.father_name, s.father_phone, s.status, s.created_at, s.updated_at,
         u.is_active AS linked_account_is_active,
         good_moral.status AS good_moral_status, good_moral.created_at AS good_moral_submitted_at,
         psa.status AS psa_status, psa.created_at AS psa_submitted_at,
@@ -318,22 +399,62 @@ function createStudentRecordsService({
         previous_report_card.latest_decision_type AS previous_report_card_latest_decision_type,
         previous_report_card_paper.status AS previous_school_report_card_physical_status,
         form137.status AS form137_status, form137.created_at AS form137_updated_at
-        FROM dbo.students AS s LEFT JOIN dbo.users AS u ON u.id = s.user_id
-        OUTER APPLY (SELECT TOP (1) d.status, d.created_at FROM dbo.documents AS d
-          WHERE d.student_id = s.id AND d.document_type = 'good_moral' ORDER BY d.created_at DESC, d.id DESC) AS good_moral
-        OUTER APPLY (SELECT TOP (1) d.status, d.created_at FROM dbo.documents AS d
-          WHERE d.student_id = s.id AND d.document_type = 'psa_birth_certificate' ORDER BY d.created_at DESC, d.id DESC) AS psa
-        OUTER APPLY (SELECT TOP (1) d.status, d.created_at, latest.decision_type AS latest_decision_type
-          FROM dbo.documents AS d
-          OUTER APPLY (SELECT TOP (1) e.decision_type FROM dbo.document_decision_events AS e
-            WHERE e.document_id = d.id ORDER BY e.created_at DESC, e.id DESC) AS latest
-          WHERE d.student_id = s.id AND d.document_type = 'report_card'
-            AND d.is_legacy_archive = 0 AND d.upload_source = 'student'
-          ORDER BY d.created_at DESC, d.id DESC) AS previous_report_card
-        OUTER APPLY (SELECT TOP (1) e.status FROM dbo.previous_school_report_card_status_events AS e
-          WHERE e.student_id = s.id ORDER BY e.created_at DESC, e.id DESC) AS previous_report_card_paper
-        OUTER APPLY (SELECT TOP (1) e.status, e.created_at FROM dbo.form137_status_events AS e
-          WHERE e.student_id = s.id ORDER BY e.created_at DESC, e.id DESC) AS form137
+        FROM students AS s LEFT JOIN users AS u ON u.id = s.user_id
+        LEFT JOIN (
+          SELECT ranked.student_id, ranked.status, ranked.created_at
+          FROM (
+            SELECT d.student_id, d.status, d.created_at,
+              ROW_NUMBER() OVER (PARTITION BY d.student_id ORDER BY d.created_at DESC, d.id DESC) AS event_rank
+            FROM documents AS d WHERE d.document_type = 'good_moral'
+          ) AS ranked
+          WHERE ranked.event_rank = 1
+        ) AS good_moral ON good_moral.student_id = s.id
+        LEFT JOIN (
+          SELECT ranked.student_id, ranked.status, ranked.created_at
+          FROM (
+            SELECT d.student_id, d.status, d.created_at,
+              ROW_NUMBER() OVER (PARTITION BY d.student_id ORDER BY d.created_at DESC, d.id DESC) AS event_rank
+            FROM documents AS d WHERE d.document_type = 'psa_birth_certificate'
+          ) AS ranked
+          WHERE ranked.event_rank = 1
+        ) AS psa ON psa.student_id = s.id
+        LEFT JOIN (
+          SELECT reports.student_id, reports.status, reports.created_at, decisions.decision_type AS latest_decision_type
+          FROM (
+            SELECT d.id, d.student_id, d.status, d.created_at,
+              ROW_NUMBER() OVER (PARTITION BY d.student_id ORDER BY d.created_at DESC, d.id DESC) AS report_rank
+            FROM documents AS d
+            WHERE d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'
+          ) AS reports
+          LEFT JOIN (
+            SELECT ranked.document_id, ranked.decision_type
+            FROM (
+              SELECT e.document_id, e.decision_type,
+                ROW_NUMBER() OVER (PARTITION BY e.document_id ORDER BY e.created_at DESC, e.id DESC) AS event_rank
+              FROM document_decision_events AS e
+            ) AS ranked
+            WHERE ranked.event_rank = 1
+          ) AS decisions ON decisions.document_id = reports.id
+          WHERE reports.report_rank = 1
+        ) AS previous_report_card ON previous_report_card.student_id = s.id
+        LEFT JOIN (
+          SELECT ranked.student_id, ranked.status
+          FROM (
+            SELECT e.student_id, e.status,
+              ROW_NUMBER() OVER (PARTITION BY e.student_id ORDER BY e.created_at DESC, e.id DESC) AS event_rank
+            FROM previous_school_report_card_status_events AS e
+          ) AS ranked
+          WHERE ranked.event_rank = 1
+        ) AS previous_report_card_paper ON previous_report_card_paper.student_id = s.id
+        LEFT JOIN (
+          SELECT ranked.student_id, ranked.status, ranked.created_at
+          FROM (
+            SELECT e.student_id, e.status, e.created_at,
+              ROW_NUMBER() OVER (PARTITION BY e.student_id ORDER BY e.created_at DESC, e.id DESC) AS event_rank
+            FROM form137_status_events AS e
+          ) AS ranked
+          WHERE ranked.event_rank = 1
+        ) AS form137 ON form137.student_id = s.id
         WHERE s.id = @studentId`);
     const student = result.recordset?.[0];
     if (!student) return null;
@@ -343,9 +464,9 @@ function createStudentRecordsService({
       pool.request().input('studentId', sql.Int, id).query(`
         SELECT e.id, e.academic_term_id, e.section_id, e.enrollment_status, e.enrolled_at,
           t.school_year, t.term, s.name AS section_name, s.grade_level
-        FROM dbo.enrollments AS e
-        INNER JOIN dbo.academic_terms AS t ON t.id = e.academic_term_id
-        LEFT JOIN dbo.sections AS s ON s.id = e.section_id AND s.academic_term_id = e.academic_term_id
+        FROM enrollments AS e
+        INNER JOIN academic_terms AS t ON t.id = e.academic_term_id
+        LEFT JOIN sections AS s ON s.id = e.section_id AND s.academic_term_id = e.academic_term_id
         WHERE e.student_id = @studentId
         ORDER BY t.is_current DESC, t.id DESC, e.id DESC`)
     ]);
@@ -359,16 +480,16 @@ function createStudentRecordsService({
       .input('userId', sql.Int, userId)
       .query(`SELECT id, student_no, first_name, middle_name, last_name, suffix,
         birth_date, sex, address, phone, status
-        FROM dbo.students WHERE user_id = @userId`);
+        FROM students WHERE user_id = @userId`);
     const student = result.recordset?.[0];
     if (!student) return null;
     const enrollments = await pool.request()
       .input('studentId', sql.Int, student.id)
       .query(`SELECT e.id, e.enrollment_status, e.enrolled_at,
           t.school_year, t.term, t.is_current, s.name AS section_name, s.grade_level
-        FROM dbo.enrollments AS e
-        INNER JOIN dbo.academic_terms AS t ON t.id = e.academic_term_id
-        LEFT JOIN dbo.sections AS s ON s.id = e.section_id AND s.academic_term_id = e.academic_term_id
+        FROM enrollments AS e
+        INNER JOIN academic_terms AS t ON t.id = e.academic_term_id
+        LEFT JOIN sections AS s ON s.id = e.section_id AND s.academic_term_id = e.academic_term_id
         WHERE e.student_id = @studentId
         ORDER BY t.is_current DESC, t.id DESC, e.id DESC`);
     return { student, enrollments: enrollments.recordset || [] };
@@ -381,26 +502,26 @@ function createStudentRecordsService({
     const result = await pool.request()
       .input('actorId', sql.Int, actorId)
       .query(`SELECT
-          (SELECT COUNT_BIG(*) FROM dbo.enrollments AS e
-            INNER JOIN dbo.students AS s ON s.id = e.student_id
+          (SELECT COUNT(*) FROM enrollments AS e
+            INNER JOIN students AS s ON s.id = e.student_id
             WHERE s.user_id = @actorId) AS enrollment_count,
-          (SELECT COUNT_BIG(*) FROM dbo.grades AS g
-            INNER JOIN dbo.student_subjects AS ss ON ss.id = g.student_subject_id
-            INNER JOIN dbo.enrollments AS e ON e.id = ss.enrollment_id
-            INNER JOIN dbo.students AS s ON s.id = e.student_id
+          (SELECT COUNT(*) FROM grades AS g
+            INNER JOIN student_subjects AS ss ON ss.id = g.student_subject_id
+            INNER JOIN enrollments AS e ON e.id = ss.enrollment_id
+            INNER JOIN students AS s ON s.id = e.student_id
             WHERE s.user_id = @actorId) AS grade_entry_count,
-          (SELECT COUNT_BIG(*) FROM dbo.documents AS d
-            INNER JOIN dbo.students AS s ON s.id = d.student_id
+          (SELECT COUNT(*) FROM documents AS d
+            INNER JOIN students AS s ON s.id = d.student_id
             WHERE s.user_id = @actorId
               AND (d.document_type IN ('good_moral', 'psa_birth_certificate')
                 OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'))) AS document_count,
-          (SELECT COUNT_BIG(*) FROM dbo.documents AS d
-            INNER JOIN dbo.students AS s ON s.id = d.student_id
+          (SELECT COUNT(*) FROM documents AS d
+            INNER JOIN students AS s ON s.id = d.student_id
             WHERE s.user_id = @actorId
               AND (d.document_type IN ('good_moral', 'psa_birth_certificate')
                 OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'))
               AND d.status IN ('pending', 'processing', 'needs_review', 'failed')) AS documents_in_progress_count
-        WHERE EXISTS (SELECT 1 FROM dbo.users
+        WHERE EXISTS (SELECT 1 FROM users
           WHERE id = @actorId AND role = 'student' AND is_active = 1)`);
     const summary = result.recordset?.[0];
     if (!summary) throw new StudentRecordsError('Your student dashboard access is no longer active. Sign in again.', 403);
@@ -414,14 +535,14 @@ function createStudentRecordsService({
     const result = await pool.request()
       .input('actorId', sql.Int, actorId)
       .query(`SELECT
-          (SELECT COUNT_BIG(*) FROM dbo.students WHERE status = 'active') AS active_student_count,
-          (SELECT COUNT_BIG(*) FROM dbo.students WHERE status = 'archived') AS archived_student_count,
-          (SELECT COUNT_BIG(*) FROM dbo.enrollments AS e
-            INNER JOIN dbo.academic_terms AS t ON t.id = e.academic_term_id
+          (SELECT COUNT(*) FROM students WHERE status = 'active') AS active_student_count,
+          (SELECT COUNT(*) FROM students WHERE status = 'archived') AS archived_student_count,
+          (SELECT COUNT(*) FROM enrollments AS e
+            INNER JOIN academic_terms AS t ON t.id = e.academic_term_id
             WHERE t.is_current = 1 AND e.enrollment_status = 'enrolled') AS current_enrollment_count,
-          (SELECT COUNT_BIG(*) FROM dbo.documents WHERE status IN ('needs_review', 'failed')) AS documents_awaiting_review_count,
-          (SELECT COUNT_BIG(*) FROM dbo.documents WHERE status IN ('pending', 'processing')) AS documents_processing_count
-        WHERE EXISTS (SELECT 1 FROM dbo.users
+          (SELECT COUNT(*) FROM documents WHERE status IN ('needs_review', 'failed')) AS documents_awaiting_review_count,
+          (SELECT COUNT(*) FROM documents WHERE status IN ('pending', 'processing')) AS documents_processing_count
+        WHERE EXISTS (SELECT 1 FROM users
           WHERE id = @actorId AND role = 'registrar' AND is_active = 1)`);
     const summary = result.recordset?.[0];
     if (!summary) throw new StudentRecordsError('Your registrar dashboard access is no longer active. Sign in again.', 403);
@@ -439,8 +560,8 @@ function createStudentRecordsService({
       }
       if (id === null) {
         const termResult = await transaction.request()
-          .query(`SELECT TOP (1) school_year FROM dbo.academic_terms WITH (UPDLOCK, HOLDLOCK)
-            WHERE is_current = 1 ORDER BY id DESC`);
+          .query(`SELECT school_year FROM academic_terms
+            WHERE is_current = 1 ORDER BY id DESC LIMIT 1 FOR UPDATE`);
         const currentTerm = termResult.recordset?.[0];
         if (!currentTerm) throw new StudentRecordsError('Set a current academic term before creating a student profile.', 409);
         try {
@@ -460,20 +581,35 @@ function createStudentRecordsService({
         .input('birthDate', sql.Date, student.birthDate)
         .input('sex', sql.NVarChar(20), student.sex)
         .input('address', sql.NVarChar(500), student.address)
-        .input('phone', sql.NVarChar(50), student.phone);
+        .input('phone', sql.NVarChar(50), student.phone)
+        .input('birthplace', sql.NVarChar(160), student.birthplace)
+        .input('facebookName', sql.NVarChar(120), student.facebookName)
+        .input('emergencyContactPerson', sql.NVarChar(160), student.emergencyContactPerson)
+        .input('emergencyContactRelationship', sql.NVarChar(80), student.emergencyContactRelationship)
+        .input('emergencyContactPhone', sql.NVarChar(50), student.emergencyContactPhone)
+        .input('emergencyContactAddress', sql.NVarChar(500), student.emergencyContactAddress)
+        .input('motherName', sql.NVarChar(160), student.motherName)
+        .input('motherPhone', sql.NVarChar(50), student.motherPhone)
+        .input('fatherName', sql.NVarChar(160), student.fatherName)
+        .input('fatherPhone', sql.NVarChar(50), student.fatherPhone);
       let savedId;
       if (id === null) {
-        const result = await request.query(`DECLARE @insertedStudents TABLE (id INT);
-          INSERT INTO dbo.students
-          (student_no, lrn, first_name, middle_name, last_name, suffix, birth_date, sex, address, phone)
-          OUTPUT INSERTED.id INTO @insertedStudents(id)
-          VALUES (@studentNo, @lrn, @firstName, @middleName, @lastName, @suffix, @birthDate, @sex, @address, @phone);
-          SELECT id FROM @insertedStudents`);
-        savedId = result.recordset?.[0]?.id;
-        if (!savedId) throw new Error('Student record insert returned no identifier.');
+        const result = await request.query(`INSERT INTO students
+          (student_no, lrn, first_name, middle_name, last_name, suffix, birth_date, sex, address, phone,
+            birthplace, facebook_name, emergency_contact_person, emergency_contact_relationship,
+            emergency_contact_phone, emergency_contact_address, mother_name, mother_phone, father_name, father_phone)
+          VALUES (@studentNo, @lrn, @firstName, @middleName, @lastName, @suffix, @birthDate, @sex, @address, @phone,
+            @birthplace, @facebookName, @emergencyContactPerson, @emergencyContactRelationship,
+            @emergencyContactPhone, @emergencyContactAddress, @motherName, @motherPhone, @fatherName, @fatherPhone)`);
+        savedId = result.insertId;
+        if (!Number.isSafeInteger(savedId) || savedId < 1) throw new Error('Student record insert returned no identifier.');
       } else {
         const current = await transaction.request().input('studentId', sql.Int, id)
-          .query('SELECT id, status, student_no, lrn FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE id = @studentId');
+          .query(`SELECT id, status, student_no, lrn, first_name, middle_name, last_name, suffix,
+              birth_date, sex, address, phone, birthplace, facebook_name,
+              emergency_contact_person, emergency_contact_relationship, emergency_contact_phone, emergency_contact_address,
+              mother_name, mother_phone, father_name, father_phone
+            FROM students WHERE id = @studentId FOR UPDATE`);
         if (!current.recordset?.length) throw new StudentRecordsError('Student record not found.', 404);
         if (current.recordset[0].status === 'archived') throw new StudentRecordsError('Archived student profiles cannot be edited.', 409);
         if (actor.role === 'registrar' && student.studentNo !== current.recordset[0].student_no) {
@@ -486,12 +622,32 @@ function createStudentRecordsService({
         if (currentLrn && !student.lrn) {
           throw new StudentRecordsError('A recorded LRN cannot be cleared. Enter its replacement LRN.', 400);
         }
-        await request.input('studentId', sql.Int, id).query(`UPDATE dbo.students
+        await request.input('studentId', sql.Int, id).query(`UPDATE students
           SET student_no = @studentNo, lrn = @lrn, first_name = @firstName, middle_name = @middleName,
             last_name = @lastName, suffix = @suffix, birth_date = @birthDate,
-            sex = @sex, address = @address, phone = @phone, updated_at = SYSUTCDATETIME()
+            sex = @sex, address = @address, phone = @phone, birthplace = @birthplace, facebook_name = @facebookName,
+            emergency_contact_person = @emergencyContactPerson, emergency_contact_relationship = @emergencyContactRelationship,
+            emergency_contact_phone = @emergencyContactPhone, emergency_contact_address = @emergencyContactAddress,
+            mother_name = @motherName, mother_phone = @motherPhone, father_name = @fatherName, father_phone = @fatherPhone,
+            updated_at = UTC_TIMESTAMP(6)
           WHERE id = @studentId`);
         savedId = id;
+        const revisionGroup = crypto.randomUUID();
+        for (const [fieldName, inputName] of PROFILE_REVISION_FIELDS) {
+          const beforeValue = canonicalProfileValue(current.recordset[0][fieldName]);
+          const afterValue = canonicalProfileValue(student[inputName]);
+          if (beforeValue === afterValue) continue;
+          await transaction.request()
+            .input('revisionGroup', sql.UniqueIdentifier, revisionGroup)
+            .input('studentId', sql.Int, savedId)
+            .input('actorId', sql.Int, actor.id)
+            .input('fieldName', sql.NVarChar(50), fieldName)
+            .input('beforeValue', sql.NVarChar(sql.MAX), beforeValue)
+            .input('afterValue', sql.NVarChar(sql.MAX), afterValue)
+            .query(`INSERT INTO student_profile_revisions
+              (revision_group, student_id, actor_id, field_name, before_value, after_value)
+              VALUES (@revisionGroup, @studentId, @actorId, @fieldName, @beforeValue, @afterValue)`);
+        }
       }
       await writeAudit(transaction, {
         actorId, actorRole: actor.role, action: id === null ? 'student_created' : 'student_updated',
@@ -499,6 +655,29 @@ function createStudentRecordsService({
       });
       return savedId;
     });
+  }
+
+  async function listStudentProfileRevisions(actorInput, studentInput) {
+    const actorId = normalizeRecordId(actorInput, 'user');
+    const studentId = normalizeRecordId(studentInput, 'student');
+    if (!actorId || !studentId) throw new StudentRecordsError('Student record not found.', 404);
+    const pool = await getPool();
+    const actor = await pool.request()
+      .input('actorId', sql.Int, actorId)
+      .query(`SELECT id, role FROM users
+        WHERE id = @actorId AND is_active = 1 AND role IN ('database_admin', 'registrar')`);
+    if (!actor.recordset?.length || !RECORDS_ROLES.has(actor.recordset[0].role)) {
+      throw new StudentRecordsError('Staff-only student revision history is unavailable.', 403);
+    }
+    const result = await pool.request().input('studentId', sql.Int, studentId)
+      .query(`SELECT revision.revision_group, revision.field_name, revision.before_value,
+          revision.after_value, revision.created_at, revision.actor_id,
+          staff.first_name AS actor_first_name, staff.last_name AS actor_last_name
+        FROM student_profile_revisions AS revision
+        LEFT JOIN staff_profiles AS staff ON staff.user_id = revision.actor_id
+        WHERE revision.student_id = @studentId
+        ORDER BY revision.created_at DESC, revision.id DESC`);
+    return result.recordset || [];
   }
 
   async function deactivateStudentLogin(actorIdInput, studentInput, confirmationInput) {
@@ -511,18 +690,25 @@ function createStudentRecordsService({
       const actor = await requireAcademicActor(transaction, actorIdInput);
       if (actor.role !== 'registrar') throw new StudentRecordsError('Only registrars can deactivate a student login.', 403);
       const studentResult = await transaction.request().input('studentId', sql.Int, studentId)
-        .query('SELECT id, user_id, status FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE id = @studentId');
+        .query('SELECT id, user_id, status FROM students WHERE id = @studentId FOR UPDATE');
       const student = studentResult.recordset?.[0];
       if (!student) throw new StudentRecordsError('Student record not found.', 404);
       if (student.status === 'archived') throw new StudentRecordsError('Archived student logins are already disabled.', 409);
       if (!student.user_id) throw new StudentRecordsError('This student has no linked login account.', 409);
       const userResult = await transaction.request().input('userId', sql.Int, student.user_id)
-        .query('SELECT id, is_active FROM dbo.users WITH (UPDLOCK, HOLDLOCK) WHERE id = @userId AND role = N\'student\'');
+        .query('SELECT id, is_active FROM users WHERE id = @userId AND role = N\'student\' FOR UPDATE');
       const user = userResult.recordset?.[0];
       if (!user) throw new StudentRecordsError('The linked student login could not be found.', 409);
       if (!(user.is_active === true || user.is_active === 1)) throw new StudentRecordsError('The linked student login is already inactive.', 409);
       await transaction.request().input('userId', sql.Int, user.id)
-        .query('UPDATE dbo.users SET is_active = 0, updated_at = SYSUTCDATETIME() WHERE id = @userId');
+        .query('UPDATE users SET is_active = 0, updated_at = UTC_TIMESTAMP(6) WHERE id = @userId');
+      await transaction.request().input('studentId', sql.Int, studentId)
+        .query(`UPDATE annual_enrollments SET account_activation_pending = 0, updated_at = UTC_TIMESTAMP(6)
+          WHERE student_id = @studentId AND account_activation_pending = 1`);
+      await transaction.request().input('userId', sql.Int, user.id)
+        .query(`UPDATE enrollment_clearances SET account_activation_pending = 0
+          WHERE created_for_intake = 1 AND account_activation_pending = 1
+            AND enrollment_id IN (SELECT id FROM enrollments WHERE student_id = (SELECT id FROM students WHERE user_id = @userId))`);
       await invalidatePendingCodes(transaction, user.id);
       await writeAudit(transaction, {
         actorId: actor.id, actorRole: actor.role, action: 'student_login_deactivated',
@@ -542,20 +728,20 @@ function createStudentRecordsService({
       const actor = await requireAcademicActor(transaction, actorIdInput);
       if (actor.role !== 'database_admin') throw new StudentRecordsError('Only database administrators can archive student records.', 403);
       const studentResult = await transaction.request().input('studentId', sql.Int, studentId)
-        .query('SELECT id, user_id, student_no, status FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE id = @studentId');
+        .query('SELECT id, user_id, student_no, status FROM students WHERE id = @studentId FOR UPDATE');
       const student = studentResult.recordset?.[0];
       if (!student) throw new StudentRecordsError('Student record not found.', 404);
       if (confirmationInput !== student.student_no) throw new StudentRecordsError('Type this student’s number to confirm archiving.');
       if (student.status === 'archived') throw new StudentRecordsError('This student record is already archived.', 409);
 
       await transaction.request().input('studentId', sql.Int, studentId)
-        .query(`UPDATE dbo.students SET status = N'archived', updated_at = SYSUTCDATETIME()
+        .query(`UPDATE students SET status = 'archived', updated_at = UTC_TIMESTAMP(6)
           WHERE id = @studentId`);
       let loginDeactivated = false;
       if (student.user_id) {
         await transaction.request().input('userId', sql.Int, student.user_id)
-          .query(`UPDATE dbo.users SET is_active = 0, updated_at = SYSUTCDATETIME()
-            WHERE id = @userId AND role = N'student'`);
+          .query(`UPDATE users SET is_active = 0, updated_at = UTC_TIMESTAMP(6)
+            WHERE id = @userId AND role = 'student'`);
         await invalidatePendingCodes(transaction, student.user_id);
         loginDeactivated = true;
       }
@@ -572,17 +758,16 @@ function createStudentRecordsService({
     return runTransaction(async (transaction) => {
       const actor = await requireAcademicActor(transaction, actorId);
       if (term.isCurrent) {
-        await transaction.request().query('UPDATE dbo.academic_terms SET is_current = 0 WHERE is_current = 1');
+        await transaction.request().query('UPDATE academic_terms SET is_current = 0 WHERE is_current = 1');
       }
       const result = await transaction.request()
         .input('schoolYear', sql.NVarChar(20), term.schoolYear)
         .input('term', sql.NVarChar(30), term.term)
         .input('isCurrent', sql.Bit, term.isCurrent)
-        .query(`INSERT INTO dbo.academic_terms (school_year, term, is_current)
-          OUTPUT INSERTED.id AS id
+        .query(`INSERT INTO academic_terms (school_year, term, is_current)
           VALUES (@schoolYear, @term, @isCurrent)`);
-      const termId = result.recordset?.[0]?.id;
-      if (!termId) throw new Error('Academic term insert returned no identifier.');
+      const termId = result.insertId;
+      if (!Number.isSafeInteger(termId) || termId < 1) throw new Error('Academic term insert returned no identifier.');
       await writeAudit(transaction, {
         actorId, actorRole: actor.role, action: 'academic_term_created',
         entityType: 'academic_term', entityId: termId, details: { isCurrent: term.isCurrent }
@@ -597,11 +782,11 @@ function createStudentRecordsService({
     return runTransaction(async (transaction) => {
       const actor = await requireAcademicActor(transaction, actorId);
       const term = await transaction.request().input('termId', sql.Int, termId)
-        .query('SELECT id FROM dbo.academic_terms WITH (UPDLOCK, HOLDLOCK) WHERE id = @termId');
+        .query('SELECT id FROM academic_terms WHERE id = @termId FOR UPDATE');
       if (!term.recordset?.length) throw new StudentRecordsError('Academic term not found.', 404);
-      await transaction.request().query('UPDATE dbo.academic_terms SET is_current = 0 WHERE is_current = 1');
+      await transaction.request().query('UPDATE academic_terms SET is_current = 0 WHERE is_current = 1');
       await transaction.request().input('termId', sql.Int, termId)
-        .query('UPDATE dbo.academic_terms SET is_current = 1 WHERE id = @termId');
+        .query('UPDATE academic_terms SET is_current = 1 WHERE id = @termId');
       await writeAudit(transaction, {
         actorId, actorRole: actor.role, action: 'academic_term_set_current',
         entityType: 'academic_term', entityId: termId
@@ -614,23 +799,27 @@ function createStudentRecordsService({
     return runTransaction(async (transaction) => {
       const actor = await requireAcademicActor(transaction, actorId);
       const term = await transaction.request().input('termId', sql.Int, section.academicTermId)
-        .query('SELECT id FROM dbo.academic_terms WITH (UPDLOCK, HOLDLOCK) WHERE id = @termId');
+        .query('SELECT id FROM academic_terms WHERE id = @termId FOR UPDATE');
       if (!term.recordset?.length) throw new StudentRecordsError('Academic term not found.', 404);
       const existing = await transaction.request()
         .input('termId', sql.Int, section.academicTermId)
         .input('name', sql.NVarChar(100), section.name)
-        .query(`SELECT id FROM dbo.sections WITH (UPDLOCK, HOLDLOCK)
-          WHERE academic_term_id = @termId AND name = @name`);
+        .query(`SELECT id FROM sections
+          WHERE academic_term_id = @termId AND name = @name FOR UPDATE`);
       if (existing.recordset?.length) throw new StudentRecordsError('That section already exists for this academic term.', 409);
       const result = await transaction.request()
         .input('termId', sql.Int, section.academicTermId)
         .input('name', sql.NVarChar(100), section.name)
         .input('gradeLevel', sql.NVarChar(50), section.gradeLevel)
-        .query(`INSERT INTO dbo.sections (name, grade_level, academic_term_id)
-          OUTPUT INSERTED.id AS id
-          VALUES (@name, @gradeLevel, @termId)`);
-      const sectionId = result.recordset?.[0]?.id;
-      if (!sectionId) throw new Error('Section insert returned no identifier.');
+        .input('cluster', sql.NVarChar(80), section.cluster)
+        .input('strand', sql.NVarChar(80), section.strand)
+        .input('adviser', sql.NVarChar(160), section.adviser)
+        .input('modality', sql.NVarChar(30), section.modality)
+        .input('modularSubtype', sql.NVarChar(80), section.modularSubtype)
+        .query(`INSERT INTO sections (name, grade_level, academic_term_id, cluster, strand, adviser, modality, modular_subtype)
+          VALUES (@name, @gradeLevel, @termId, @cluster, @strand, @adviser, @modality, @modularSubtype)`);
+      const sectionId = result.insertId;
+      if (!Number.isSafeInteger(sectionId) || sectionId < 1) throw new Error('Section insert returned no identifier.');
       await writeAudit(transaction, {
         actorId, actorRole: actor.role, action: 'section_created',
         entityType: 'section', entityId: sectionId, details: { academicTermId: section.academicTermId }
@@ -644,27 +833,35 @@ function createStudentRecordsService({
     return runTransaction(async (transaction) => {
       const actor = await requireAcademicActor(transaction, actorId);
       const student = await transaction.request().input('studentId', sql.Int, enrollment.studentId)
-        .query('SELECT id, status FROM dbo.students WITH (UPDLOCK, HOLDLOCK) WHERE id = @studentId');
+        .query('SELECT id, status FROM students WHERE id = @studentId FOR UPDATE');
       if (!student.recordset?.length) throw new StudentRecordsError('Student record not found.', 404);
       if (student.recordset[0].status === 'archived') throw new StudentRecordsError('Archived students cannot receive new enrollments.', 409);
       const pendingIntake = await transaction.request().input('studentId', sql.Int, enrollment.studentId)
-        .query(`SELECT TOP (1) enrollment.id
-          FROM dbo.enrollments AS enrollment WITH (UPDLOCK, HOLDLOCK)
-          INNER JOIN dbo.enrollment_clearances AS clearance WITH (UPDLOCK, HOLDLOCK)
+        .query(`SELECT enrollment.id
+          FROM enrollments AS enrollment
+          INNER JOIN enrollment_clearances AS clearance
             ON clearance.enrollment_id = enrollment.id
-          WHERE enrollment.student_id = @studentId AND enrollment.enrollment_status = N'pending_payment'
-            AND enrollment.finalized_at IS NULL AND clearance.created_for_intake = 1`);
+          WHERE enrollment.student_id = @studentId AND enrollment.enrollment_status = 'pending_payment'
+            AND enrollment.finalized_at IS NULL AND clearance.created_for_intake = 1 LIMIT 1 FOR UPDATE`);
       if (pendingIntake.recordset?.length) {
         throw new StudentRecordsError('This student has a pending new-student intake. Finance must clear that enrollment before it can be finalized.', 409);
       }
       const term = await transaction.request().input('termId', sql.Int, enrollment.academicTermId)
-        .query('SELECT id FROM dbo.academic_terms WITH (UPDLOCK, HOLDLOCK) WHERE id = @termId');
+        .query('SELECT id, school_year FROM academic_terms WHERE id = @termId FOR UPDATE');
       if (!term.recordset?.length) throw new StudentRecordsError('Academic term not found.', 404);
+      const annualWorkflow = await transaction.request()
+        .input('studentId', sql.Int, enrollment.studentId)
+        .input('schoolYear', sql.NVarChar(20), term.recordset[0].school_year)
+        .query(`SELECT id FROM annual_enrollments
+          WHERE student_id = @studentId AND school_year = @schoolYear FOR UPDATE`);
+      if (annualWorkflow.recordset?.length) {
+        throw new StudentRecordsError('This school year has an annual enrollment record. Its term history is managed in the annual intake workspace and cannot be changed here.', 409);
+      }
       if (enrollment.sectionId !== null) {
         const section = await transaction.request()
           .input('sectionId', sql.Int, enrollment.sectionId)
           .input('termId', sql.Int, enrollment.academicTermId)
-          .query('SELECT id FROM dbo.sections WITH (UPDLOCK, HOLDLOCK) WHERE id = @sectionId AND academic_term_id = @termId');
+          .query('SELECT id FROM sections WHERE id = @sectionId AND academic_term_id = @termId FOR UPDATE');
         if (!section.recordset?.length) {
           throw new StudentRecordsError('Choose a section that belongs to the selected academic term.');
         }
@@ -672,8 +869,8 @@ function createStudentRecordsService({
       const existing = await transaction.request()
         .input('studentId', sql.Int, enrollment.studentId)
         .input('termId', sql.Int, enrollment.academicTermId)
-        .query(`SELECT id FROM dbo.enrollments WITH (UPDLOCK, HOLDLOCK)
-          WHERE student_id = @studentId AND academic_term_id = @termId`);
+        .query(`SELECT id FROM enrollments
+          WHERE student_id = @studentId AND academic_term_id = @termId FOR UPDATE`);
       let enrollmentId;
       let action;
       if (existing.recordset?.length) {
@@ -682,18 +879,17 @@ function createStudentRecordsService({
         await transaction.request()
           .input('enrollmentId', sql.Int, enrollmentId)
           .input('sectionId', sql.Int, enrollment.sectionId)
-          .query('UPDATE dbo.enrollments SET section_id = @sectionId WHERE id = @enrollmentId');
+          .query('UPDATE enrollments SET section_id = @sectionId WHERE id = @enrollmentId');
       } else {
         action = 'enrollment_created';
         const result = await transaction.request()
           .input('studentId', sql.Int, enrollment.studentId)
           .input('termId', sql.Int, enrollment.academicTermId)
           .input('sectionId', sql.Int, enrollment.sectionId)
-          .query(`INSERT INTO dbo.enrollments (student_id, academic_term_id, section_id)
-            OUTPUT INSERTED.id AS id
+          .query(`INSERT INTO enrollments (student_id, academic_term_id, section_id)
             VALUES (@studentId, @termId, @sectionId)`);
-        enrollmentId = result.recordset?.[0]?.id;
-        if (!enrollmentId) throw new Error('Enrollment insert returned no identifier.');
+        enrollmentId = result.insertId;
+        if (!Number.isSafeInteger(enrollmentId) || enrollmentId < 1) throw new Error('Enrollment insert returned no identifier.');
       }
       await writeAudit(transaction, {
         actorId, actorRole: actor.role, action, entityType: 'enrollment', entityId: enrollmentId,
@@ -705,7 +901,7 @@ function createStudentRecordsService({
 
   return {
     listWorkspace, getStudent, getOwnStudentRecord, getStudentDashboardSummary, getRegistrarDashboardSummary,
-    saveStudent, deactivateStudentLogin, archiveStudent,
+    saveStudent, listStudentProfileRevisions, deactivateStudentLogin, archiveStudent,
     createTerm, setCurrentTerm, createSection, saveEnrollment
   };
 }

@@ -31,6 +31,21 @@
         <div class="field"><label for="sex">Sex (optional)</label><input id="sex" name="sex" type="text" maxlength="20" value="<%= values.sex %>"></div>
         <div class="field"><label for="phone">Phone (optional)</label><input id="phone" name="phone" type="tel" maxlength="50" value="<%= values.phone %>"></div>
         <div class="field field--full"><label for="address">Address (optional)</label><textarea id="address" name="address" maxlength="500" rows="3"><%= values.address %></textarea></div>
+        <details class="student-profile-extra field--full">
+          <summary>Background and family contacts <span class="muted-copy">Optional · staff only</span></summary>
+          <div class="admin-form-grid">
+            <div class="field"><label for="birthplace">Birthplace</label><input id="birthplace" name="birthplace" maxlength="160" value="<%= values.birthplace %>"></div>
+            <div class="field"><label for="facebook-name">Facebook name</label><input id="facebook-name" name="facebookName" maxlength="120" value="<%= values.facebookName %>"></div>
+            <div class="field"><label for="mother-name">Mother’s name</label><input id="mother-name" name="motherName" maxlength="160" value="<%= values.motherName %>"></div>
+            <div class="field"><label for="mother-phone">Mother’s phone</label><input id="mother-phone" name="motherPhone" type="tel" maxlength="50" value="<%= values.motherPhone %>"></div>
+            <div class="field"><label for="father-name">Father’s name</label><input id="father-name" name="fatherName" maxlength="160" value="<%= values.fatherName %>"></div>
+            <div class="field"><label for="father-phone">Father’s phone</label><input id="father-phone" name="fatherPhone" type="tel" maxlength="50" value="<%= values.fatherPhone %>"></div>
+            <div class="field"><label for="emergency-contact-person">Emergency contact person</label><input id="emergency-contact-person" name="emergencyContactPerson" maxlength="160" value="<%= values.emergencyContactPerson %>"></div>
+            <div class="field"><label for="emergency-contact-relationship">Relationship to student</label><input id="emergency-contact-relationship" name="emergencyContactRelationship" maxlength="80" value="<%= values.emergencyContactRelationship %>"></div>
+            <div class="field"><label for="emergency-contact-phone">Emergency contact phone</label><input id="emergency-contact-phone" name="emergencyContactPhone" type="tel" maxlength="50" value="<%= values.emergencyContactPhone %>"></div>
+            <div class="field field--full"><label for="emergency-contact-address">Emergency contact address</label><textarea id="emergency-contact-address" name="emergencyContactAddress" maxlength="500" rows="2"><%= values.emergencyContactAddress %></textarea></div>
+          </div>
+        </details>
       </div>
       <div class="admin-form-actions"><button class="button button--primary" type="submit"><%= student ? 'Save profile' : 'Create profile' %></button><a class="button button--secondary" href="/registrar/records">Cancel</a></div>
       </fieldset>

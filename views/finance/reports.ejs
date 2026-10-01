@@ -1,0 +1,73 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page finance-reports-page" id="main-content">
+  <a class="context-back" href="/finance">Back to annual finance roster</a>
+  <header class="dashboard-heading"><div><h1>Finance reports</h1><p>Collections, reversals, and allocations use the selected dates. Term progress is a current snapshot across recorded placements.</p></div></header>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <section class="finance-panel" aria-labelledby="report-range-title">
+    <div class="admin-section__heading"><div><h2 id="report-range-title">Report date range</h2><p>Up to 367 calendar days.</p></div></div>
+    <form class="admin-form-grid" method="get" action="/finance/reports">
+      <label class="field"><span>From actual payment date</span><input type="date" name="fromDate" value="<%= filters.fromDate %>" required></label>
+      <label class="field"><span>Through actual payment date</span><input type="date" name="toDate" value="<%= filters.toDate %>" required></label>
+      <div class="field field--actions"><button class="button button--primary" type="submit">Run reports</button></div>
+    </form>
+  </section>
+  <% if (report) { %>
+    <section class="finance-panel" aria-labelledby="daily-collections-title">
+      <div class="admin-section__heading"><div><h2 id="daily-collections-title">Valid collections by payment date · <%= report.fromDate %> to <%= report.toDate %></h2><p>Reversed entries are excluded from valid collections.</p></div></div>
+      <dl class="finance-report-summary"><div><dt>Distinct payers in range</dt><dd><%= report.collectionSummary.distinct_payers %></dd></div><div><dt>Valid collection amount</dt><dd>₱<%= formatMoney(report.collectionSummary.valid_collection_amount) %></dd></div><div><dt>Payment records</dt><dd><%= report.collectionSummary.payment_count %></dd></div></dl>
+      <% if (!report.dailyCollections.length) { %><p class="empty-state">No non-reversed payments in this date range.</p><% } else { %>
+        <div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Payment date</th><th>Distinct payers</th><th>Payment records</th><th>Collected</th></tr></thead><tbody>
+          <% for (const row of report.dailyCollections) { %><tr><td data-label="Payment date"><%= row.collection_date %></td><td data-label="Distinct payers"><%= row.distinct_payers %></td><td data-label="Payment records"><%= row.payment_count %></td><td data-label="Collected">₱<%= formatMoney(row.collected_amount) %></td></tr><% } %>
+        </tbody></table></div>
+      <% } %>
+      <section class="finance-report-reversals" aria-labelledby="reversal-records-title">
+        <div class="finance-report-reversals__heading"><div><h3 id="reversal-records-title">Reversed payment records by correction date</h3><p>Reversals are correction records, not a cash-refund report.</p></div></div>
+        <% if (!report.reversals.length) { %><p class="empty-state">No payment reversals in this date range.</p><% } else { %>
+        <p class="finance-report-reversals__summary"><%= report.reversalSummary.distinct_payers %> distinct payers · <%= report.reversalSummary.reversal_count %> records · ₱<%= formatMoney(report.reversalSummary.corrected_record_amount) %> original payment amounts referenced by corrections. This informational amount is not deducted a second time.</p>
+        <div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Reversal date</th><th>Distinct payers</th><th>Reversal records</th><th>Reversed</th></tr></thead><tbody>
+          <% for (const row of report.reversals) { %><tr><td data-label="Reversal date"><%= row.reversal_date %></td><td data-label="Distinct payers"><%= row.distinct_payers %></td><td data-label="Reversal records"><%= row.reversal_count %></td><td data-label="Reversed">₱<%= formatMoney(row.reversed_amount) %></td></tr><% } %>
+        </tbody></table></div>
+        <% } %>
+      </section>
+    </section>
+    <section class="finance-panel" aria-labelledby="allocation-reports-title">
+      <div class="admin-section__heading"><div><h2 id="allocation-reports-title">Allocations by academic and fee context</h2><p>Distinct payers are counted once per displayed group. One payment split across charges appears in each target context.</p></div></div>
+      <p>Range-wide allocations: <%= report.allocationSummary.distinct_payers %> distinct payers · ₱<%= formatMoney(report.allocationSummary.target_allocated_amount) %>. This is allocation activity, not additional collections.</p>
+      <% if (!report.allocationContexts.length) { %><p class="empty-state">No payment allocations in this range.</p><% } else { %>
+        <div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Year · term</th><th>Section · strand</th><th>Voucher</th><th>Fee category</th><th>Distinct payers</th><th>Allocated</th></tr></thead><tbody>
+          <% for (const row of report.allocationContexts) { %><tr><td data-label="Year · term"><%= row.school_year %><%= row.annual_term_number ? ` · Term ${row.annual_term_number}` : '' %></td><td data-label="Section · strand"><%= row.section_name || '—' %><%= row.strand ? ` · ${row.strand}` : '' %></td><td data-label="Voucher"><%= row.voucher_code || '—' %></td><td data-label="Fee category"><%= row.fee_category %></td><td data-label="Distinct payers"><%= row.distinct_payers %></td><td data-label="Allocated">₱<%= formatMoney(row.allocated_amount) %></td></tr><% } %>
+        </tbody></table></div>
+      <% } %>
+    </section>
+    <section class="finance-panel" aria-labelledby="term-progress-title">
+      <div class="admin-section__heading"><div><h2 id="term-progress-title">Term enrollment and payment progress</h2><p>Current snapshot across all recorded annual placements; this section is not limited by the payment date range. Fully waived terms remain visible.</p></div></div>
+      <% if (!report.termProgress.length) { %><p class="empty-state">No applicable annual placements are recorded.</p><% } else { %>
+        <%
+          const progressGroups = new Map();
+          for (const row of report.termProgress) {
+            const key = String(row.school_year) + '|' + String(row.annual_term_number);
+            if (!progressGroups.has(key)) progressGroups.set(key, {
+              school_year: row.school_year,
+              annual_term_number: row.annual_term_number,
+              rows: []
+            });
+            progressGroups.get(key).rows.push(row);
+          }
+        %>
+        <div class="finance-term-progress-groups">
+          <% for (const group of progressGroups.values()) { %>
+            <details class="finance-term-progress-group">
+              <summary><strong><%= group.school_year %> · Term <%= group.annual_term_number %></strong><span><%= group.rows.length %> grade, section, and voucher breakdowns</span></summary>
+              <div class="table-scroll" tabindex="0" aria-label="<%= group.school_year %> Term <%= group.annual_term_number %> breakdowns">
+                <table class="admin-table"><thead><tr><th>Grade</th><th>Section · strand</th><th>Voucher</th><th>Applicable placements</th><th>Enrolled</th><th>Paid or waived</th><th>Waived students</th><th>Outstanding</th><th>Waived amount</th></tr></thead><tbody>
+                  <% for (const row of group.rows) { %><tr><td data-label="Grade"><%= row.grade_level %></td><td data-label="Section · strand"><%= row.section_name || 'No section' %><%= row.strand ? ' · ' + row.strand : '' %></td><td data-label="Voucher"><%= row.voucher_code %></td><td data-label="Applicable placements"><%= row.applicable_enrollments %></td><td data-label="Enrolled"><%= row.enrolled_students %></td><td data-label="Paid or waived"><%= row.paid_or_waived_students %></td><td data-label="Waived students"><%= row.waived_students %></td><td data-label="Outstanding">₱<%= formatMoney(row.outstanding_amount) %></td><td data-label="Waived amount">₱<%= formatMoney(row.waived_amount) %></td></tr><% } %>
+                </tbody></table>
+              </div>
+            </details>
+          <% } %>
+        </div>
+      <% } %>
+    </section>
+  <% } %>
+</main>
+<%- include('../partials/foot') %>

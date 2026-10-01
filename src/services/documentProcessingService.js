@@ -116,15 +116,16 @@ function createDocumentProcessingService({
 
   async function startProcessing(documentId) {
     return runTransaction(async (transaction) => {
-      const result = await transaction.request()
+      const claimed = await transaction.request()
         .input('documentId', sql.Int, documentId)
-        .query(`UPDATE dbo.documents
-          SET status = 'processing', processing_started_at = SYSUTCDATETIME()
-          OUTPUT INSERTED.id AS id, INSERTED.stored_filename AS stored_filename,
-            INSERTED.mime_type AS mime_type, INSERTED.document_type AS document_type,
-            INSERTED.is_legacy_archive AS is_legacy_archive
+        .query(`UPDATE documents
+          SET status = 'processing', processing_started_at = UTC_TIMESTAMP()
           WHERE id = @documentId AND status = 'pending' AND document_type <> 'form_137'
             AND (document_type <> 'report_card' OR is_legacy_archive = 0)`);
+      if (claimed.rowsAffected?.[0] !== 1) return null;
+      const result = await transaction.request().input('documentId', sql.Int, documentId)
+        .query(`SELECT id, stored_filename, mime_type, document_type, is_legacy_archive
+          FROM documents WHERE id = @documentId AND status = 'processing'`);
       const document = result.recordset?.[0];
       if (!document) return null;
       return loadStudentName(transaction, document);
@@ -135,7 +136,7 @@ function createDocumentProcessingService({
     const result = await transaction.request()
       .input('documentId', sql.Int, document.id)
       .query(`SELECT d.original_filename, s.first_name, s.middle_name, s.last_name
-        FROM dbo.documents AS d INNER JOIN dbo.students AS s ON s.id = d.student_id
+        FROM documents AS d INNER JOIN students AS s ON s.id = d.student_id
         WHERE d.id = @documentId`);
     const linkedStudent = result.recordset?.[0] || {};
     return { ...document, original_filename: linkedStudent.original_filename, student: linkedStudent };
@@ -143,21 +144,25 @@ function createDocumentProcessingService({
 
   async function claimNextPendingDocument() {
     return runTransaction(async (transaction) => {
-      const result = await transaction.request()
-        .query(`;WITH next_pending AS (
-            SELECT TOP (1) id
-            FROM dbo.documents WITH (UPDLOCK, READPAST, READCOMMITTEDLOCK)
-            WHERE status = 'pending' AND document_type <> 'form_137'
-              AND (document_type <> 'report_card' OR is_legacy_archive = 0)
-            ORDER BY created_at, id
-          )
-          UPDATE d
-          SET status = 'processing', processing_started_at = SYSUTCDATETIME()
-          OUTPUT INSERTED.id AS id, INSERTED.stored_filename AS stored_filename,
-            INSERTED.mime_type AS mime_type, INSERTED.document_type AS document_type,
-            INSERTED.is_legacy_archive AS is_legacy_archive
-          FROM dbo.documents AS d
-          INNER JOIN next_pending AS pending ON pending.id = d.id`);
+      const candidateResult = await transaction.request().query(`SELECT id
+        FROM documents
+        WHERE status = 'pending' AND document_type <> 'form_137'
+          AND (document_type <> 'report_card' OR is_legacy_archive = 0)
+        ORDER BY created_at, id
+        LIMIT 1 FOR UPDATE`);
+      const candidateId = candidateResult.recordset?.[0]?.id;
+      if (!candidateId) return null;
+
+      const claimed = await transaction.request().input('documentId', sql.Int, candidateId)
+        .query(`UPDATE documents
+          SET status = 'processing', processing_started_at = UTC_TIMESTAMP()
+          WHERE id = @documentId AND status = 'pending'
+            AND document_type <> 'form_137' AND (document_type <> 'report_card' OR is_legacy_archive = 0)`);
+      if (claimed.rowsAffected?.[0] !== 1) return null;
+
+      const result = await transaction.request().input('documentId', sql.Int, candidateId)
+        .query(`SELECT id, stored_filename, mime_type, document_type, is_legacy_archive
+          FROM documents WHERE id = @documentId AND status = 'processing'`);
       const document = result.recordset?.[0];
       if (!document) return null;
       return loadStudentName(transaction, document);
@@ -279,11 +284,10 @@ function createDocumentProcessingService({
       const updateResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
         .input('documentStatus', sql.NVarChar(30), outcome.documentStatus)
-        .query(`UPDATE dbo.documents
+        .query(`UPDATE documents
           SET status = @documentStatus, processing_started_at = NULL
-          OUTPUT INSERTED.id AS id
           WHERE id = @documentId AND status = 'processing'`);
-      if (!updateResult.recordset?.length) return false;
+      if (updateResult.rowsAffected?.[0] !== 1) return false;
 
       const validationJson = JSON.stringify({
         stage: 'gemini_precheck',
@@ -300,7 +304,7 @@ function createDocumentProcessingService({
         .input('extractedText', sql.NVarChar(sql.MAX), outcome.extractedText)
         .input('validationJson', sql.NVarChar(sql.MAX), validationJson)
         .input('resultStatus', sql.NVarChar(30), outcome.resultStatus)
-        .query(`INSERT INTO dbo.document_validations
+        .query(`INSERT INTO document_validations
           (document_id, processor, extracted_text, validation_json,
             completeness_passed, format_passed, result_status)
           VALUES (@documentId, @processor, @extractedText, @validationJson, NULL, NULL, @resultStatus)`);
@@ -310,44 +314,41 @@ function createDocumentProcessingService({
 
   async function recoverStaleProcessing() {
     return runTransaction(async (transaction) => {
-      const result = await transaction.request()
+      const stale = await transaction.request()
         .input('staleAfterMs', sql.Int, staleAfterMs)
         .input('batchSize', sql.Int, recoveryLimit)
-        .input('processor', sql.NVarChar(100), PROCESSING_LABEL)
-        .input('validationJson', sql.NVarChar(sql.MAX), JSON.stringify({
-          stage: 'gemini_precheck',
-          precheckVersion: 2,
-          outcome: 'processing_recovered',
-          message: PROCESSING_RECOVERY_MESSAGE,
-          fileFormatPassed: false,
-          gemini: { status: 'unavailable', code: 'processing_recovered', fields: null }
-        }))
-        .query(`DECLARE @recovered TABLE (id INT NOT NULL PRIMARY KEY);
-          ;WITH stale_documents AS (
-            SELECT TOP (@batchSize) id
-            FROM dbo.documents WITH (UPDLOCK, HOLDLOCK, ROWLOCK)
-            WHERE status = 'processing' AND document_type <> 'form_137'
-              AND (document_type <> 'report_card' OR is_legacy_archive = 0)
-              AND (processing_started_at IS NULL
-                OR processing_started_at < DATEADD(MILLISECOND, -@staleAfterMs, SYSUTCDATETIME()))
-            ORDER BY CASE WHEN processing_started_at IS NULL THEN 0 ELSE 1 END,
-              processing_started_at, id
-          )
-          UPDATE d
-          SET status = 'failed', processing_started_at = NULL
-          OUTPUT INSERTED.id INTO @recovered (id)
-          FROM dbo.documents AS d
-          INNER JOIN stale_documents AS stale ON stale.id = d.id;
-
-          INSERT INTO dbo.document_validations
-            (document_id, processor, extracted_text, validation_json,
-              completeness_passed, format_passed, result_status)
-          SELECT id, @processor, NULL, @validationJson, NULL, NULL, 'failed'
-          FROM @recovered;
-
-          SELECT COUNT(*) AS recovered_count FROM @recovered;`);
-      const count = Number(result.recordset?.[0]?.recovered_count);
-      return Number.isSafeInteger(count) && count > 0 ? count : 0;
+        .query(`SELECT id FROM documents
+          WHERE status = 'processing' AND document_type <> 'form_137'
+            AND (document_type <> 'report_card' OR is_legacy_archive = 0)
+            AND (processing_started_at IS NULL OR processing_started_at < TIMESTAMPADD(MICROSECOND, -(@staleAfterMs * 1000), UTC_TIMESTAMP()))
+          ORDER BY CASE WHEN processing_started_at IS NULL THEN 0 ELSE 1 END, processing_started_at, id
+          LIMIT @batchSize FOR UPDATE`);
+      const ids = (stale.recordset || []).map(({ id }) => id);
+      if (!ids.length) return 0;
+      const validationJson = JSON.stringify({
+        stage: 'gemini_precheck',
+        precheckVersion: 2,
+        outcome: 'processing_recovered',
+        message: PROCESSING_RECOVERY_MESSAGE,
+        fileFormatPassed: false,
+        gemini: { status: 'unavailable', code: 'processing_recovered', fields: null }
+      });
+      let recoveredCount = 0;
+      for (const id of ids) {
+        const updated = await transaction.request().input('documentId', sql.Int, id)
+          .query(`UPDATE documents SET status = 'failed', processing_started_at = NULL
+            WHERE id = @documentId AND status = 'processing'`);
+        if (updated.rowsAffected?.[0] !== 1) continue;
+        recoveredCount += 1;
+        await transaction.request()
+          .input('documentId', sql.Int, id)
+          .input('processor', sql.NVarChar(100), PROCESSING_LABEL)
+          .input('validationJson', sql.NVarChar(sql.MAX), validationJson)
+          .query(`INSERT INTO document_validations
+            (document_id, processor, extracted_text, validation_json, completeness_passed, format_passed, result_status)
+            VALUES (@documentId, @processor, NULL, @validationJson, NULL, NULL, 'failed')`);
+      }
+      return recoveredCount;
     });
   }
 

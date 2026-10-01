@@ -30,17 +30,21 @@ Student intake and profile data use validated registrar forms. New student numbe
 - Create and revoke term-specific teacher assignments and review, approve, request corrections for, or reject submitted grade workbooks.
 - Student master list.
 - Deactivate linked student login accounts without archiving the student master record.
-- Create a new student intake with an unused LRN and contact email; the system assigns a unique student number from the selected term. Assign an existing term and section and review its finance-clearance status.
-- Finalize a specific enrollment only after finance clears it; finalization activates the linked student login and issues a one-time printable enrollment form with a temporary password.
+- Guide new, returning, and transfer intake through student, enrollment, documents received, and fees/confirmation steps. Review the approved schedule and discounts, then confirm the payable assessment and entry-term enrollment; returning students reuse their linked profile and login.
+- Update the annual voucher (PUB, ESC, NV) and optional category A–E metadata, plus each term's section placement. Voucher metadata does not calculate or change tuition.
+- Finalize the entry term when the registrar confirms the reviewed fee assessment; later terms are activated individually after the annual confirmation and a valid section. Finance payment or clearance is not an enrollment prerequisite. Only a verified first-time intake activates a pending new login; returning accounts and previously finalized terms do not have credentials rotated. Legacy pending accounts require explicit reviewed activation.
+- Record dated, reasoned cancel/drop/transfer changes without deleting academic history or canceling finance debt.
 - Authorized document management and review.
-- May upload Good Moral Certificates and PSA birth certificates for student records. Students upload previous-school report-card scans for their own linked record; registrars and database administrators review the source manually, request correction, verify, or reject. Historical archive rows remain read-only. Staff separately record paper-copy receipt/review status; both channels are enrollment requirements and never current-grade sources.
+- May upload Good Moral Certificates and PSA birth certificates for student records. Students upload previous-school report-card scans for their own linked record; registrars and database administrators review the source manually, request correction, verify, or reject. Historical archive rows remain read-only. Staff separately record paper-copy receipt/review status; missing paper records are informational and do not block enrollment. Neither channel is a current-grade source.
 - Records Form 137 physical receipt/review status and instructions. The student master record links directly to this staff-only workflow. Authorized staff may send an in-memory scan to Google Gemini for temporary student-name and possible school-name suggestions; the application does not retain the scan or Gemini result as a file or database record. Historical Form 137 files stay staff-only.
 
 ## Finance
 - Search for a student by name or student number and access only finance identifiers, account details, balances, and transaction history.
-- Create a financial account explicitly, then record positive PHP charges and payments or nonzero signed PHP adjustments with a reason.
-- When recording a payment, explicitly attest that it qualifies for a selected pending enrollment; the recorded transaction is tied to that enrollment. Finance may also assign an unused recorded payment from the same student's account to one specific pending enrollment with an explicit attestation. General account balance does not clear enrollment.
-- Charge increases balance; payment decreases balance; a negative balance represents a credit.
+- Maintain versioned schedules by school year, grade, and voucher using student-payable amounts. The registrar reviews the configured fees and confirms the immutable annual assessment during intake; optional fees are added only when selected. Voucher changes after assessment remain visible for explicit review and never silently rewrite assessed charges.
+- Record actual payment date, receipt/reference, and receipt-issued status separately from official receipt issuance. Allocate across this or prior assessments/terms. Payments, allocations, adjustments, reversals, legacy credits, and audit records remain separate and append-only.
+- Record payments and allocations, and sign term-end/departure clearances separately from registrar enrollment confirmation. An outstanding balance requires a payment arrangement and remains owed after clearance. Finance has no enrollment-approval action in the current annual workflow.
+- Read one shared finance projection for annual balance, current-term amount due, prior debt, and available credit. Old unattributed balances remain visible until explicitly reconciled; reconciliation does not create duplicate cash.
+- Open authenticated, complete Statements of Account for finance work or a student's own account. A statement is not an official receipt. Private notes and payment arrangements remain finance/database-admin only.
 - Finance users have no academic or system-administrator privileges.
 - Database administrators also have finance workspace access and may create/update financial accounts and ledger entries.
 
@@ -58,6 +62,7 @@ Student intake and profile data use validated registrar forms. New student numbe
 - View document status and applicable correction instructions and rejection reasons for their own Good Moral, PSA, and active report-card submissions. Re-upload their own Good Moral Certificates, student-uploaded PSA files, and report cards after staff requests a correction. If staff rejects the latest submission, students can start a new original submission while the rejected record stays in history.
 - View/download student-uploaded and staff-uploaded PSA birth certificates belonging to their own record. Students cannot re-upload staff-uploaded PSA files, and staff correction instructions/reasons for those files remain staff-only.
 - View the latest status/date for their own previous-school report-card paper copy without staff notes or history.
+- View their own read-only Statement of Account and complete financial history without staff-only notes.
 - Form 137 is staff-only: students cannot view its physical status, staff instructions, scans, or Gemini suggestions.
 - No access to another student's records.
 - Archived student records retain academic and finance history; the linked student login is inactive.

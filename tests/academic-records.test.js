@@ -143,10 +143,10 @@ test('subject, enrollment assignment, grading period, remarks, and provisional g
 
 test('subject creation is parameterized, registrar-checked, serializable, and audited in its transaction', async () => {
   const { service, log } = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.subjects')) return { recordset: [] };
-    if (statement.includes('INSERT INTO dbo.subjects')) return { recordset: [{ id: 31 }] };
-    if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM subjects')) return { recordset: [] };
+    if (statement.includes('INSERT INTO subjects')) return { insertId: 31 };
+    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
 
@@ -154,61 +154,61 @@ test('subject creation is parameterized, registrar-checked, serializable, and au
   assert.equal(subjectId, 31);
   assert.equal(log.isolation, 'SERIALIZABLE');
   assert.equal(log.committed, true);
-  const insert = log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.subjects'));
+  const insert = log.queries.find(({ statement }) => statement.includes('INSERT INTO subjects'));
   assert.equal(insert.values.subjectCode, 'ENG-101');
   assert.equal(insert.values.subjectName, 'English');
   assert.equal(insert.values.units, 3);
   assert.doesNotMatch(insert.statement, /ENG-101/);
-  const audit = log.queries.find(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs'));
+  const audit = log.queries.find(({ statement }) => statement.includes('INSERT INTO audit_logs'));
   assert.equal(audit.values.action, 'registrar.subject_created');
   assert.equal(audit.values.entityId, '31');
 });
 
 test('academic writes allow database administrators and reject other roles or duplicate catalog keys', async () => {
   const denied = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'finance' }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'finance' }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   await assert.rejects(denied.service.saveSubject(7, null, { subjectCode: 'CS1', subjectName: 'Computer Science' }), /Academic record access is no longer active/);
   assert.equal(denied.log.rolledBack, true);
-  assert.equal(denied.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.subjects')), false);
-  assert.equal(denied.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(denied.log.queries.some(({ statement }) => statement.includes('INSERT INTO subjects')), false);
+  assert.equal(denied.log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 
   const admin = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
-    if (statement.includes('FROM dbo.subjects')) return { recordset: [] };
-    if (statement.includes('INSERT INTO dbo.subjects')) return { recordset: [{ id: 12 }] };
-    if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'database_admin' }] };
+    if (statement.includes('FROM subjects')) return { recordset: [] };
+    if (statement.includes('INSERT INTO subjects')) return { insertId: 12 };
+    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   assert.equal(await admin.service.saveSubject(7, null, { subjectCode: 'CS1', subjectName: 'Computer Science' }), 12);
   assert.equal(admin.log.queries.at(-1).values.action, 'database_admin.subject_created');
 
   const duplicate = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.subjects')) return { recordset: [{ id: 9 }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM subjects')) return { recordset: [{ id: 9 }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   await assert.rejects(duplicate.service.saveSubject(7, null, { subjectCode: 'CS1', subjectName: 'Computer Science' }), /already in use/);
   assert.equal(duplicate.log.rolledBack, true);
-  assert.equal(duplicate.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.subjects')), false);
-  assert.equal(duplicate.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(duplicate.log.queries.some(({ statement }) => statement.includes('INSERT INTO subjects')), false);
+  assert.equal(duplicate.log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 });
 
 test('subject assignment verifies the student owns the enrollment and records audit atomically', async () => {
   const { service, log } = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.enrollments')) return { recordset: [{ id: 22, student_id: 10 }] };
-    if (statement.includes('FROM dbo.subjects')) return { recordset: [{ id: 4 }] };
-    if (statement.includes('FROM dbo.student_subjects')) return { recordset: [] };
-    if (statement.includes('INSERT INTO dbo.student_subjects')) return { recordset: [{ id: 80 }] };
-    if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM enrollments')) return { recordset: [{ id: 22, student_id: 10 }] };
+    if (statement.includes('FROM subjects')) return { recordset: [{ id: 4 }] };
+    if (statement.includes('FROM student_subjects')) return { recordset: [] };
+    if (statement.includes('INSERT INTO student_subjects')) return { insertId: 80 };
+    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
 
   const studentId = await service.assignSubject(7, { studentId: '10', enrollmentId: '22', subjectId: '4' });
   assert.equal(studentId, 10);
-  const enrollmentCheck = log.queries.find(({ statement }) => statement.includes('FROM dbo.enrollments'));
+  const enrollmentCheck = log.queries.find(({ statement }) => statement.includes('FROM enrollments'));
   assert.match(enrollmentCheck.statement, /e\.id = @enrollmentId AND e\.student_id = @studentId/);
   assert.deepEqual(enrollmentCheck.values, { enrollmentId: 22, studentId: 10 });
   assert.equal(log.queries.at(-1).values.action, 'registrar.subject_assigned');
@@ -217,8 +217,8 @@ test('subject assignment verifies the student owns the enrollment and records au
 
 test('archived students cannot receive subject assignments or new grade writes', async () => {
   const archivedAssignment = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.enrollments')) return { recordset: [{ id: 22, student_id: 10, status: 'archived' }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM enrollments')) return { recordset: [{ id: 22, student_id: 10, status: 'archived' }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   await assert.rejects(
@@ -226,36 +226,36 @@ test('archived students cannot receive subject assignments or new grade writes',
     /Archived students cannot receive new academic records/
   );
   assert.equal(archivedAssignment.log.rolledBack, true);
-  const enrollmentRead = archivedAssignment.log.queries.find(({ statement }) => statement.includes('FROM dbo.enrollments'));
+  const enrollmentRead = archivedAssignment.log.queries.find(({ statement }) => statement.includes('FROM enrollments'));
   assert.match(enrollmentRead.statement, /st\.status/);
-  assert.match(enrollmentRead.statement, /dbo\.students AS st WITH \(UPDLOCK, HOLDLOCK\)/);
-  assert.equal(archivedAssignment.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.student_subjects')), false);
-  assert.equal(archivedAssignment.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.match(enrollmentRead.statement, /INNER JOIN students AS st ON st\.id = e\.student_id[\s\S]*FOR UPDATE/);
+  assert.equal(archivedAssignment.log.queries.some(({ statement }) => statement.includes('INSERT INTO student_subjects')), false);
+  assert.equal(archivedAssignment.log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 
   const archivedGrade = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.student_subjects')) return { recordset: [{ id: 80, student_id: 10, status: 'archived' }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM student_subjects')) return { recordset: [{ id: 80, student_id: 10, status: 'archived' }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   await assert.rejects(archivedGrade.service.saveGrade(7, {
     studentId: '10', studentSubjectId: '80', gradingPeriod: 'Quarter A', gradeValue: '92.50'
   }), /Archived students cannot receive new academic records/);
   assert.equal(archivedGrade.log.rolledBack, true);
-  const enrollmentSubjectRead = archivedGrade.log.queries.find(({ statement }) => statement.includes('FROM dbo.student_subjects'));
+  const enrollmentSubjectRead = archivedGrade.log.queries.find(({ statement }) => statement.includes('FROM student_subjects'));
   assert.match(enrollmentSubjectRead.statement, /st\.status/);
-  assert.match(enrollmentSubjectRead.statement, /dbo\.students AS st WITH \(UPDLOCK, HOLDLOCK\)/);
-  assert.equal(archivedGrade.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.grades') || statement.includes('UPDATE dbo.grades')), false);
-  assert.equal(archivedGrade.log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.match(enrollmentSubjectRead.statement, /INNER JOIN students AS st ON st\.id = e\.student_id[\s\S]*FOR UPDATE/);
+  assert.equal(archivedGrade.log.queries.some(({ statement }) => statement.includes('INSERT INTO grades') || statement.includes('UPDATE grades')), false);
+  assert.equal(archivedGrade.log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 });
 
 test('grade upsert binds the staff period and requires an enrollment subject belonging to that student', async () => {
   const { service, log } = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.student_subjects')) return { recordset: [{ id: 80, student_id: 10 }] };
-    if (statement.includes('FROM dbo.grades') && statement.includes('id <> @gradeId')) return { recordset: [] };
-    if (statement.includes('FROM dbo.grades')) return { recordset: [{ id: 91 }] };
-    if (statement.includes('UPDATE dbo.grades')) return { recordset: [] };
-    if (statement.includes('INSERT INTO dbo.audit_logs')) return { recordset: [] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM student_subjects')) return { recordset: [{ id: 80, student_id: 10 }] };
+    if (statement.includes('FROM grades') && statement.includes('id <> @gradeId')) return { recordset: [] };
+    if (statement.includes('FROM grades')) return { recordset: [{ id: 91 }] };
+    if (statement.includes('UPDATE grades')) return { recordset: [] };
+    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
 
@@ -263,22 +263,22 @@ test('grade upsert binds the staff period and requires an enrollment subject bel
     studentId: '10', studentSubjectId: '80', gradeId: '91', gradingPeriod: 'Quarter A', gradeValue: '92.50', remarks: 'Good progress'
   });
   assert.equal(studentId, 10);
-  const associationCheck = log.queries.find(({ statement }) => statement.includes('FROM dbo.student_subjects'));
+  const associationCheck = log.queries.find(({ statement }) => statement.includes('FROM student_subjects'));
   assert.match(associationCheck.statement, /ss\.id = @studentSubjectId AND e\.student_id = @studentId/);
   assert.deepEqual(associationCheck.values, { studentSubjectId: 80, studentId: 10 });
-  const periodQuery = log.queries.find(({ statement }) => statement.includes('FROM dbo.grades') && statement.includes('@gradingPeriod'));
+  const periodQuery = log.queries.find(({ statement }) => statement.includes('FROM grades') && statement.includes('@gradingPeriod'));
   assert.equal(periodQuery.values.gradingPeriod, 'Quarter A');
-  assert.ok(log.queries.some(({ statement }) => statement.includes('UPDATE dbo.grades')));
+  assert.ok(log.queries.some(({ statement }) => statement.includes('UPDATE grades')));
   assert.equal(log.queries.at(-1).values.action, 'registrar.grade_updated');
   assert.equal(log.committed, true);
 });
 
 test('grade update rejects a duplicate period key before update or audit', async () => {
   const { service, log } = transactionalService(({ statement }) => {
-    if (statement.includes('FROM dbo.users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-    if (statement.includes('FROM dbo.student_subjects')) return { recordset: [{ id: 80, student_id: 10 }] };
-    if (statement.includes('FROM dbo.grades') && statement.includes('id <> @gradeId')) return { recordset: [{ id: 92 }] };
-    if (statement.includes('FROM dbo.grades')) return { recordset: [{ id: 91 }] };
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM student_subjects')) return { recordset: [{ id: 80, student_id: 10 }] };
+    if (statement.includes('FROM grades') && statement.includes('id <> @gradeId')) return { recordset: [{ id: 92 }] };
+    if (statement.includes('FROM grades')) return { recordset: [{ id: 91 }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
 
@@ -286,8 +286,8 @@ test('grade update rejects a duplicate period key before update or audit', async
     studentId: '10', studentSubjectId: '80', gradeId: '91', gradingPeriod: 'Quarter A', gradeValue: '92'
   }), /already exists/);
   assert.equal(log.rolledBack, true);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('UPDATE dbo.grades')), false);
-  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO dbo.audit_logs')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('UPDATE grades')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);
 });
 
 test('own grades query is scoped through the authenticated account-to-student link', async () => {
@@ -309,7 +309,7 @@ test('own grades query is scoped through the authenticated account-to-student li
   assert.equal(grades[0].subject_code, 'CS1');
   assert.equal(calls[0].values.userId, 7);
   assert.match(calls[0].statement, /WHERE st\.user_id = @userId/);
-  assert.match(calls[0].statement, /JOIN dbo\.grades AS g ON g\.student_subject_id = ss\.id/);
+  assert.match(calls[0].statement, /JOIN grades AS g ON g\.student_subject_id = ss\.id/);
   assert.doesNotMatch(calls[0].statement, /studentId/);
 });
 
@@ -319,9 +319,16 @@ test('catalog reads follow role rules, mutations require CSRF, and rendered cata
   const academicRecordsService = {
     async listSubjects() {
       listReads += 1;
-      return [{ id: 4, subject_code: 'CS1', subject_name: '<script>alert(1)</script>', units: 3 }];
+      return [
+        { id: 4, subject_code: 'CS1', subject_name: '<script>alert(1)</script>', units: 3 },
+        { id: 5, subject_code: 'BIO1', subject_name: 'Biology', units: 4 }
+      ];
     },
-    async saveSubject(...args) { writes.push(args); return 4; }
+    async saveSubject(...args) {
+      if (args[2]?.subjectCode === 'BAD') throw new AcademicRecordsError('Enter a valid subject code.', 400);
+      writes.push(args);
+      return 4;
+    }
   };
   await withServer(createApp({
     databasePool: makeAuthPool('registrar'), environment, academicRecordsService,
@@ -333,11 +340,32 @@ test('catalog reads follow role rules, mutations require CSRF, and rendered cata
     const html = await page.text();
     assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
     assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
+    assert.match(html, /<details class="subject-create-details"\s*>/);
+    assert.doesNotMatch(html, /<details class="subject-create-details" open>/);
     assert.match(html, /<details class="subject-catalog__disclosure">/);
     assert.match(html, /action="\/registrar\/records\/subjects\/4"/);
     assert.match(html, /name="subjectCode"/);
     assert.match(html, /name="subjectName"/);
     assert.match(html, /name="units"/);
+    assert.match(html, /Showing 2 of 2 subjects/);
+    const filteredPage = await fetch(`${baseUrl}/registrar/records/subjects?search=CS1`, { headers: { cookie } });
+    const filteredHtml = await filteredPage.text();
+    assert.equal(filteredPage.status, 200);
+    assert.match(filteredHtml, /Showing 1 of 2 subjects/);
+    assert.match(filteredHtml, /value="CS1"/);
+    assert.doesNotMatch(filteredHtml, />BIO1</);
+    const noMatchPage = await fetch(`${baseUrl}/registrar/records/subjects?search=missing`, { headers: { cookie } });
+    const noMatchHtml = await noMatchPage.text();
+    assert.match(noMatchHtml, /No subjects match “missing”/);
+    assert.match(noMatchHtml, /Clear search/);
+    const invalid = await postForm(baseUrl, '/registrar/records/subjects', cookie, {
+      _csrf: csrfFromHtml(html), subjectCode: 'BAD', subjectName: 'Retained subject', units: '3'
+    });
+    assert.equal(invalid.status, 400);
+    const invalidHtml = await invalid.text();
+    assert.match(invalidHtml, /<details class="subject-create-details" open>/);
+    assert.match(invalidHtml, /name="subjectCode"[^>]*value="BAD"/);
+    assert.equal(writes.length, 0);
     const denied = await postForm(baseUrl, '/registrar/records/subjects', cookie, { subjectCode: 'X1', subjectName: 'Test' });
     assert.equal(denied.status, 403);
     assert.equal(writes.length, 0);
@@ -423,7 +451,8 @@ test('teacher assignment list keeps concise context and working status and revok
     const html = await page.text();
     assert.equal(page.status, 200);
     assert.match(html, /Grade 11 · Section A/);
-    assert.match(html, /class="teacher-assignment-class"><strong>Grade 11 · Section A<\/strong>/);
+    assert.match(html, /<details class="teacher-assignment-section" open>[\s\S]*?<strong>Grade 11 · Section A<\/strong>/);
+    assert.match(html, /class="teacher-assignment-class"><strong>CS1 · Computer Science<\/strong>/);
     assert.doesNotMatch(html, /Grade Grade 11/);
     assert.match(html, /class="teacher-assignment-roster">18 students<\/span>/);
     assert.match(html, /pending review/);
@@ -439,7 +468,7 @@ test('teacher assignment list keeps concise context and working status and revok
     assert.equal((html.match(/name="termId"/g) || []).length, 1, 'assignment creation does not ask for term twice');
     assert.match(html, /Past and revoked assignments/);
     assert.match(html, /<details/);
-    assert.match(html, /\/registrar\/schedules\?termId=2&amp;sectionId=3&amp;assignmentId=20#schedule-create-title/);
+    assert.match(html, /\/registrar\/schedules\?termId=2&amp;sectionId=3&amp;assignmentId=20&amp;showCreate=1#schedule-create-title/);
     const createResponse = await postForm(baseUrl, '/registrar/records/teacher-assignments', cookie, {
       _csrf: csrfFromHtml(html), academicTermId: '2', sectionId: '3', filterTermId: '2', filterSectionId: '3',
       teacherId: '6', subjectId: '4'

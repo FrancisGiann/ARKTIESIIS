@@ -23,11 +23,11 @@
         <div><dt>Contact and sign-in email</dt><dd><%= enrollment.email %></dd></div>
       </dl>
     </section>
-    <section class="enrollment-print__credential" aria-labelledby="temporary-password-title">
+    <% if (enrollment.temporaryPassword) { %><section class="enrollment-print__credential" aria-labelledby="temporary-password-title">
       <h2 id="temporary-password-title">One-time temporary password</h2>
       <p class="enrollment-print__password"><%= enrollment.temporaryPassword %></p>
       <p>Keep this credential private. The student must sign in, complete email verification, and change this password before accessing student pages. If this form is lost, use the existing password reset flow; the temporary password cannot be recovered.</p>
-    </section>
+    </section><% } %>
     <footer class="enrollment-print__actions">
       <button class="button button--primary" type="button" data-print-page>Print enrollment form</button>
       <a class="button button--secondary" href="/registrar/intake">Return to pending intake</a>
