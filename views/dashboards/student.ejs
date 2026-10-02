@@ -23,7 +23,7 @@
     <section class="student-section student-schedule" aria-labelledby="today-schedule-title">
       <div class="student-section-heading">
         <div><h2 id="today-schedule-title">Today's classes</h2><p><%= new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' }) %></p></div>
-        <a class="text-link" href="/student/schedule">View full schedule</a>
+        <a class="button button--primary student-schedule__action" href="/student/schedule">View full schedule</a>
       </div>
       <% if (todaySchedules.length) { %>
         <ol class="schedule-agenda">
