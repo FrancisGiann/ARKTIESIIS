@@ -1,20 +1,13 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page records-page student-record-overview" id="main-content">
   <a class="context-back" href="/registrar/records">Back to student search</a>
-  <header class="dashboard-heading records-heading">
-    <div>
-      <h1><%= [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(' ') %></h1>
-      <p>Student no. <%= student.student_no %> · LRN <%= student.lrn || 'Not recorded' %></p>
-    </div>
-    <div class="admin-heading-actions">
-      <a class="button button--secondary" href="/registrar/records/students/<%= student.id %>/edit">Edit profile</a>
-      <a class="button button--primary" href="/documents/students/<%= student.id %>">Open document review</a>
-      <a class="button button--secondary" href="/registrar/records/grades/missing">Grade completion overview</a>
-    </div>
-  </header>
+  <%- include('../partials/student-record-navigation', { student, activeStudentView: studentView }) %>
+  <h2 class="student-record-view-title"><%= ({ overview: 'Overview', history: 'Profile revision history', requests: 'Document requests' })[studentView] %></h2>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (requestError) { %><p class="form-alert" role="alert"><%= requestError %></p><% } %>
 
+  <% if (studentView === 'overview') { %>
   <section class="student-record-status-grid" aria-label="Student record status">
     <article class="admin-section">
       <h2>Enrollment</h2>
@@ -42,56 +35,88 @@
       <p class="muted-copy">The digital scan and paper-copy status are separate enrollment records. Neither writes grades. Form 137 stays in its own staff-only physical-record workflow.</p>
     </article>
   </section>
+  <section class="student-record-status-grid" aria-label="Document request finance summary">
+    <article class="admin-section"><h2>Document request finance status</h2>
+      <p><strong><%= financeSummary.status %></strong></p>
+      <p>All-years outstanding: <strong><%= financeSummary.outstanding === null ? 'Pending finance review' : `₱${financeSummary.outstanding}` %></strong></p>
+      <p class="muted-copy">This safe summary combines all annual years and legacy records. Finance notes and payment arrangement details remain private.</p>
+      <a class="text-link" href="/registrar/records/students/<%= student.id %>?view=requests">Review document requests</a>
+    </article>
+  </section>
+  <% } %>
 
+  <% if (studentView === 'requests') { %>
   <section class="admin-section" aria-labelledby="document-request-ledger-title">
     <div class="admin-section__heading">
       <div><h2 id="document-request-ledger-title">Document requests and release history</h2><p>Staff tracking only. This ledger does not create a certificate, send a file, or change document access.</p></div>
     </div>
+    <section class="registrar-overview__selected" aria-label="Safe finance balance summary">
+      <div><dt>Finance status</dt><dd><%= financeSummary.status %></dd></div>
+      <div><dt>All-years outstanding</dt><dd><%= financeSummary.outstanding === null ? 'Pending finance review' : `₱${financeSummary.outstanding}` %></dd></div>
+    </section>
+    <p class="muted-copy">Finance checks annual balances across all years and legacy records. Payment arrangements, finance reasons, and private finance notes stay with Finance.</p>
     <form class="form-stack records-compact-form" method="post" action="/registrar/records/students/<%= student.id %>/document-requests">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <input type="hidden" name="idempotencyKey" value="<%= newDocumentRequestKey %>">
       <div class="admin-form-grid">
-        <div class="field"><label for="request-document-type">Document type</label><input id="request-document-type" name="documentType" maxlength="50" required placeholder="e.g. Transcript of Records"></div>
-        <div class="field"><label for="request-document-name">Document name or description</label><input id="request-document-name" name="documentName" maxlength="150" required></div>
-        <div class="field"><label for="request-requested-on">Request date</label><input id="request-requested-on" name="requestedOn" type="date" required></div>
-        <div class="field"><label for="request-reference">Reference (optional)</label><input id="request-reference" name="reference" maxlength="200"></div>
+        <div class="field"><label for="request-document-type">Document type</label><input id="request-document-type" name="documentType" maxlength="50" value="<%= requestFormValues.documentType || '' %>" required placeholder="e.g. Transcript of Records"></div>
+        <div class="field"><label for="request-document-name">Document name or description</label><input id="request-document-name" name="documentName" maxlength="150" value="<%= requestFormValues.documentName || '' %>" required></div>
+        <div class="field"><label for="request-requested-on">Request date</label><input id="request-requested-on" name="requestedOn" type="date" value="<%= requestFormValues.requestedOn || '' %>" required></div>
+        <div class="field"><label for="request-reference">Reference (optional)</label><input id="request-reference" name="reference" maxlength="200" value="<%= requestFormValues.reference || '' %>"></div>
       </div>
       <button class="button button--primary button--align-start" type="submit">Record document request</button>
     </form>
     <% if (documentRequests.length) { %>
       <div class="records-request-list">
-        <% for (const request of documentRequests) { const requestDate = request.requested_on instanceof Date ? request.requested_on.toISOString().slice(0, 10) : String(request.requested_on || '').slice(0, 10); const releaseDate = request.released_on instanceof Date ? request.released_on.toISOString().slice(0, 10) : String(request.released_on || '').slice(0, 10); const requestKey = requestIdempotencyKeys[request.id]; %>
+        <% for (const request of documentRequests) { const requestDate = request.requested_on instanceof Date ? request.requested_on.toISOString().slice(0, 10) : String(request.requested_on || '').slice(0, 10); const releaseDate = request.released_on instanceof Date ? request.released_on.toISOString().slice(0, 10) : String(request.released_on || '').slice(0, 10); const expectedClaimDate = request.expected_claim_date instanceof Date ? request.expected_claim_date.toISOString().slice(0, 10) : String(request.expected_claim_date || '').slice(0, 10); const requestKey = requestIdempotencyKeys[request.id]; const clearance = requestClearanceData[request.id] || { status: 'pending', history: [], claimSlipHistory: [], claimSlipCurrent: false }; %>
           <article class="academic-enrollment" aria-labelledby="document-request-<%= request.id %>">
             <h3 id="document-request-<%= request.id %>"><%= request.document_name %> <span class="record-status"><%= request.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></span></h3>
             <p><strong><%= request.document_type %></strong> · Requested <%= requestDate %> · Reference: <%= request.reference_text || 'None' %></p>
-            <% if (request.status === 'released') { %><p>Release recorded <%= releaseDate %> to <%= request.recipient %>.</p><% } %>
+            <p>Finance clearance: <strong><%= clearance.status.replaceAll('_', ' ') %></strong><% if (clearance.status === 'approved') { %><%= clearance.hasArrangement ? ' with payment arrangement' : '' %> · <%= clearance.actorName %> · <%= clearance.decidedAt instanceof Date ? clearance.decidedAt.toLocaleString('en-PH', { timeZone: 'Asia/Manila' }) : clearance.decidedAt %><% } %></p>
+            <% if (clearance.status === 'reapproval_required') { %><p class="form-alert">Finance must review the increased balance before processing continues. Issue a new claim slip after approval.</p><% } %>
+            <% if (request.status === 'released') { %><p>Release recorded <%= releaseDate %> to <%= request.recipient %><%= request.handover_reference ? ` · Reference ${request.handover_reference}` : '' %>.</p><% } %>
+            <% if (clearance.history.length) { %><details><summary>Finance decision history (<%= clearance.history.length %>)</summary><ol class="records-request-history"><% for (const event of clearance.history) { %><li><strong><%= event.eventType.replaceAll('_', ' ') %></strong> · <%= event.status.replaceAll('_', ' ') %> · <%= event.actorName %> · <%= event.createdAt instanceof Date ? event.createdAt.toLocaleString('en-PH', { timeZone: 'Asia/Manila' }) : event.createdAt %><% if (event.eventType === 'approved' && event.hasArrangement) { %> · Payment arrangement recorded<% } %></li><% } %></ol></details><% } %>
+            <% if (clearance.claimSlipHistory.length) { %><details><summary>Claim slip history (<%= clearance.claimSlipHistory.length %>)</summary><ol class="records-request-history"><% for (const slip of clearance.claimSlipHistory) { const slipDate = slip.expected_claim_date instanceof Date ? slip.expected_claim_date.toISOString().slice(0, 10) : String(slip.expected_claim_date || '').slice(0, 10); %><li><strong><%= slip.event_type %></strong> · Expected claim date <%= slipDate %> · <%= [slip.issuer_first_name, slip.issuer_last_name].filter(Boolean).join(' ') || 'Registrar staff' %><% if (slip.reason) { %><p>Reason: <%= slip.reason %></p><% } %></li><% } %></ol></details><% } %>
+            <% if (clearance.claimSlipCurrent) { %><p><a class="button button--secondary" href="/registrar/records/students/<%= student.id %>/document-requests/<%= request.id %>/claim-slip">Print current claim slip</a></p><% } %>
+            <% if (['processing', 'ready'].includes(request.status) && clearance.status === 'approved') { %>
+              <details <%= requestForm === 'claim-slip' && requestFormId === request.id ? 'open' : '' %>><summary><%= request.current_claim_slip_id ? 'Reissue or reschedule claim slip' : 'Issue claim slip' %></summary>
+                <form class="form-stack records-compact-form" method="post" action="/registrar/records/students/<%= student.id %>/document-requests/<%= request.id %>/claim-slip">
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= claimSlipIdempotencyKeys[request.id] %>">
+                  <div class="admin-form-grid"><div class="field"><label for="claim-date-<%= request.id %>">Expected claim date</label><input id="claim-date-<%= request.id %>" name="expectedClaimDate" type="date" value="<%= requestForm === 'claim-slip' && requestFormId === request.id ? requestFormValues.expectedClaimDate || '' : expectedClaimDate %>" required></div>
+                    <% if (request.current_claim_slip_id) { %><div class="field"><label for="claim-reason-<%= request.id %>">Reason for reissue or reschedule</label><input id="claim-reason-<%= request.id %>" name="reason" maxlength="500" minlength="5" value="<%= requestForm === 'claim-slip' && requestFormId === request.id ? requestFormValues.reason || '' : '' %>" required></div><% } %></div>
+                  <button class="button button--secondary" type="submit">Save claim slip</button>
+                </form>
+              </details>
+            <% } %>
             <% if (['requested', 'processing', 'ready'].includes(request.status)) { %>
-              <details><summary>Update request status</summary>
+              <details <%= requestForm === 'status' && requestFormId === request.id ? 'open' : '' %>><summary>Update request status</summary>
                 <form class="form-stack records-compact-form document-request-status-form" method="post" action="/registrar/records/students/<%= student.id %>/document-requests/<%= request.id %>/status">
                   <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= requestKey %>">
                   <div class="admin-form-grid">
-                    <div class="field"><label for="request-status-<%= request.id %>">Status</label><select id="request-status-<%= request.id %>" name="status" required><% const nextStatuses = { requested: ['processing', 'ready', 'cancelled'], processing: ['ready', 'cancelled'], ready: ['released', 'cancelled'] }; for (const nextStatus of nextStatuses[request.status] || []) { %><option value="<%= nextStatus %>"><%= nextStatus.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></option><% } %></select></div>
-                    <div class="field request-status-conditional" data-status-only="released" hidden><label for="request-release-date-<%= request.id %>">Release date</label><input id="request-release-date-<%= request.id %>" name="releasedOn" type="date" data-required-status="released" disabled></div>
-                    <div class="field request-status-conditional" data-status-only="released" hidden><label for="request-recipient-<%= request.id %>">Recipient</label><input id="request-recipient-<%= request.id %>" name="recipient" maxlength="150" data-required-status="released" disabled></div>
-                    <div class="field request-status-conditional" data-status-only="cancelled" hidden><label for="request-cancel-reason-<%= request.id %>">Cancellation reason</label><input id="request-cancel-reason-<%= request.id %>" name="reason" maxlength="500" data-required-status="cancelled" disabled></div>
+                    <div class="field"><label for="request-status-<%= request.id %>">Status</label><select id="request-status-<%= request.id %>" name="status" required><% const nextStatuses = { requested: ['processing', 'cancelled'], processing: ['ready', 'cancelled'], ready: ['released', 'cancelled'] }; for (const nextStatus of nextStatuses[request.status] || []) { %><option value="<%= nextStatus %>" <%= requestForm === 'status' && requestFormId === request.id && requestFormValues.status === nextStatus ? 'selected' : '' %>><%= nextStatus.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></option><% } %></select></div>
+                    <div class="field request-status-conditional" data-status-only="released" hidden><label for="request-release-date-<%= request.id %>">Release date</label><input id="request-release-date-<%= request.id %>" name="releasedOn" type="date" value="<%= requestForm === 'status' && requestFormId === request.id ? requestFormValues.releasedOn || '' : '' %>" data-required-status="released" disabled></div>
+                    <div class="field request-status-conditional" data-status-only="released" hidden><label for="request-recipient-<%= request.id %>">Recipient</label><input id="request-recipient-<%= request.id %>" name="recipient" maxlength="150" value="<%= requestForm === 'status' && requestFormId === request.id ? requestFormValues.recipient || '' : '' %>" data-required-status="released" disabled></div>
+                    <div class="field request-status-conditional" data-status-only="released" hidden><label for="request-handover-reference-<%= request.id %>">Handover reference (optional)</label><input id="request-handover-reference-<%= request.id %>" name="handoverReference" maxlength="200" value="<%= requestForm === 'status' && requestFormId === request.id ? requestFormValues.handoverReference || '' : '' %>" disabled></div>
+                    <div class="field request-status-conditional" data-status-only="cancelled" hidden><label for="request-cancel-reason-<%= request.id %>">Cancellation reason</label><input id="request-cancel-reason-<%= request.id %>" name="reason" maxlength="500" value="<%= requestForm === 'status' && requestFormId === request.id ? requestFormValues.reason || '' : '' %>" data-required-status="cancelled" disabled></div>
                   </div>
                   <button class="button button--secondary button--align-start" type="submit">Save status</button>
                 </form>
               </details>
             <% } %>
-            <details><summary>Correct request details</summary>
+            <details <%= requestForm === 'correct' && requestFormId === request.id ? 'open' : '' %>><summary>Correct request details</summary>
               <form class="form-stack records-compact-form" method="post" action="/registrar/records/students/<%= student.id %>/document-requests/<%= request.id %>/correct">
                 <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= correctionIdempotencyKeys[request.id] %>">
                 <div class="admin-form-grid">
-                  <div class="field"><label for="correct-type-<%= request.id %>">Document type</label><input id="correct-type-<%= request.id %>" name="documentType" maxlength="50" value="<%= request.document_type %>" required></div>
-                  <div class="field"><label for="correct-name-<%= request.id %>">Document name</label><input id="correct-name-<%= request.id %>" name="documentName" maxlength="150" value="<%= request.document_name %>" required></div>
-                  <div class="field"><label for="correct-date-<%= request.id %>">Request date</label><input id="correct-date-<%= request.id %>" name="requestedOn" type="date" value="<%= requestDate %>" required></div>
-                  <div class="field"><label for="correct-reference-<%= request.id %>">Reference</label><input id="correct-reference-<%= request.id %>" name="reference" maxlength="200" value="<%= request.reference_text || '' %>"></div>
+                  <div class="field"><label for="correct-type-<%= request.id %>">Document type</label><input id="correct-type-<%= request.id %>" name="documentType" maxlength="50" value="<%= requestForm === 'correct' && requestFormId === request.id ? requestFormValues.documentType || '' : request.document_type %>" required></div>
+                  <div class="field"><label for="correct-name-<%= request.id %>">Document name</label><input id="correct-name-<%= request.id %>" name="documentName" maxlength="150" value="<%= requestForm === 'correct' && requestFormId === request.id ? requestFormValues.documentName || '' : request.document_name %>" required></div>
+                  <div class="field"><label for="correct-date-<%= request.id %>">Request date</label><input id="correct-date-<%= request.id %>" name="requestedOn" type="date" value="<%= requestForm === 'correct' && requestFormId === request.id ? requestFormValues.requestedOn || '' : requestDate %>" required></div>
+                  <div class="field"><label for="correct-reference-<%= request.id %>">Reference</label><input id="correct-reference-<%= request.id %>" name="reference" maxlength="200" value="<%= requestForm === 'correct' && requestFormId === request.id ? requestFormValues.reference || '' : request.reference_text || '' %>"></div>
                   <% if (request.status === 'released') { %>
-                    <div class="field"><label for="correct-release-date-<%= request.id %>">Release date</label><input id="correct-release-date-<%= request.id %>" name="releasedOn" type="date" value="<%= releaseDate %>" required></div>
-                    <div class="field"><label for="correct-recipient-<%= request.id %>">Recipient</label><input id="correct-recipient-<%= request.id %>" name="recipient" maxlength="150" value="<%= request.recipient %>" required></div>
+                    <div class="field"><label for="correct-release-date-<%= request.id %>">Release date</label><input id="correct-release-date-<%= request.id %>" name="releasedOn" type="date" value="<%= requestForm === 'correct' && requestFormId === request.id ? requestFormValues.releasedOn || '' : releaseDate %>" required></div>
+                    <div class="field"><label for="correct-recipient-<%= request.id %>">Recipient</label><input id="correct-recipient-<%= request.id %>" name="recipient" maxlength="150" value="<%= requestForm === 'correct' && requestFormId === request.id ? requestFormValues.recipient || '' : request.recipient %>" required></div>
+                    <div class="field"><label for="correct-handover-reference-<%= request.id %>">Handover reference (optional)</label><input id="correct-handover-reference-<%= request.id %>" name="handoverReference" maxlength="200" value="<%= requestForm === 'correct' && requestFormId === request.id ? requestFormValues.handoverReference || '' : request.handover_reference || '' %>"></div>
                   <% } %>
-                  <div class="field"><label for="correct-reason-<%= request.id %>">Correction reason</label><input id="correct-reason-<%= request.id %>" name="reason" maxlength="500" required></div>
+                  <div class="field"><label for="correct-reason-<%= request.id %>">Correction reason</label><input id="correct-reason-<%= request.id %>" name="reason" maxlength="500" value="<%= requestForm === 'correct' && requestFormId === request.id ? requestFormValues.reason || '' : '' %>" required></div>
                 </div>
                 <button class="button button--secondary button--align-start" type="submit">Record correction</button>
               </form>
@@ -102,6 +127,7 @@
                 <% if (event.status_from && event.status_from !== event.status_to) { %> · <%= event.status_from %> → <%= event.status_to %><% } else { %> · <%= event.status_to %><% } %>
                 · <%= [event.actor_first_name, event.actor_last_name].filter(Boolean).join(' ') || 'Staff' %>
                 <% if (event.released_on) { const eventReleaseDate = event.released_on instanceof Date ? event.released_on.toISOString().slice(0, 10) : String(event.released_on).slice(0, 10); %> · Release date <%= eventReleaseDate %> to <%= event.recipient %><% } %>
+                <% if (event.handover_reference && event.event_type === 'released') { %> · Handover reference <%= event.handover_reference %><% } %>
                 <% if (event.reason) { %><p>Reason: <%= event.reason %></p><% } %>
                 <% if (event.event_type === 'corrected') { const oldRequestedDate = event.requested_on_before instanceof Date ? event.requested_on_before.toISOString().slice(0, 10) : String(event.requested_on_before || '').slice(0, 10); const newRequestedDate = event.requested_on_after instanceof Date ? event.requested_on_after.toISOString().slice(0, 10) : String(event.requested_on_after || '').slice(0, 10); %>
                   <% if (event.document_name_before !== event.document_name_after) { %><p>Document name: <%= event.document_name_before %> → <%= event.document_name_after %></p><% } %>
@@ -111,6 +137,7 @@
                   <% const oldReleaseDate = event.released_on_before instanceof Date ? event.released_on_before.toISOString().slice(0, 10) : String(event.released_on_before || '').slice(0, 10); const newReleaseDate = event.released_on_after instanceof Date ? event.released_on_after.toISOString().slice(0, 10) : String(event.released_on_after || '').slice(0, 10); %>
                   <% if (oldReleaseDate !== newReleaseDate) { %><p>Release date: <%= oldReleaseDate || 'None' %> → <%= newReleaseDate || 'None' %></p><% } %>
                   <% if ((event.recipient_before || '') !== (event.recipient_after || '')) { %><p>Recipient: <%= event.recipient_before || 'None' %> → <%= event.recipient_after || 'None' %></p><% } %>
+                  <% if ((event.handover_reference_before || '') !== (event.handover_reference_after || '')) { %><p>Handover reference: <%= event.handover_reference_before || 'None' %> → <%= event.handover_reference_after || 'None' %></p><% } %>
                 <% } %>
               </li><% } %></ol>
             </details>
@@ -119,7 +146,9 @@
       </div>
     <% } else { %><p class="empty-state">No document requests have been recorded.</p><% } %>
   </section>
+  <% } %>
 
+  <% if (studentView === 'history') { %>
   <section class="admin-section" aria-labelledby="profile-revision-history-title">
     <div class="admin-section__heading"><div><h2 id="profile-revision-history-title">Student profile revision history</h2><p>Staff-only history records changed profile fields from the first saved edit onward.</p></div></div>
     <% if (profileRevisions.length) { %>
@@ -134,33 +163,7 @@
       </table></div>
     <% } else { %><p class="empty-state">No profile field revisions are recorded.</p><% } %>
   </section>
-
-  <section class="admin-section student-record-academics" aria-labelledby="academic-history-title">
-    <div class="admin-section__heading">
-      <div><h2 id="academic-history-title">Enrollment, subjects, and grades</h2><p>Grades appear here after registrar approval of a teacher’s corrected SSHS E-Class Record workbook.</p></div>
-      <a class="text-link" href="/registrar/records/students/<%= student.id %>/academic">Open academic workspace</a>
-    </div>
-    <% if (enrollments.length) { %>
-      <% for (const enrollment of enrollments) { const placement = formatStudentPlacement(enrollment.grade_level, enrollment.section_name); %>
-        <article class="academic-enrollment" aria-labelledby="record-enrollment-<%= enrollment.id %>">
-          <h3 id="record-enrollment-<%= enrollment.id %>"><%= enrollment.school_year %> · <%= enrollment.term %></h3>
-          <p class="muted-copy"><%= placement || 'Section not assigned' %> · <%= enrollment.enrollment_status.replaceAll('_', ' ') %></p>
-          <% if (enrollment.subjects.length) { %>
-            <div class="student-record-subject-grid">
-              <% for (const subject of enrollment.subjects) { %>
-                <section class="student-record-subject">
-                  <h4><%= subject.subjectCode %> · <%= subject.subjectName %></h4>
-                  <% if (subject.grades.length) { %>
-                    <ul><% for (const grade of subject.grades) { %><li><span><%= grade.gradingPeriod %></span><strong><%= grade.gradeValue ?? 'Pending' %></strong></li><% } %></ul>
-                  <% } else { %><p class="muted-copy">No registrar-approved grade is available.</p><% } %>
-                </section>
-              <% } %>
-            </div>
-          <% } else { %><p class="empty-state">No subjects are assigned for this enrollment.</p><% } %>
-        </article>
-      <% } %>
-    <% } else { %><p class="empty-state">No enrollment history is available for this student.</p><% } %>
-  </section>
+  <% } %>
 </main>
 <script src="/js/registrar-records-followup.js" defer></script>
 <%- include('../partials/foot') %>

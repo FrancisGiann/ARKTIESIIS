@@ -1,0 +1,26 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell finance-statement document-claim-slip" id="main-content">
+  <header class="statement-heading">
+    <div><h1>Document Claim Slip</h1><p>Request <strong><%= claimSlip.requestReference %></strong></p></div>
+    <div class="statement-actions">
+      <button class="button button--primary" type="button" data-print-statement>Print claim slip</button>
+      <a class="button button--secondary" href="/registrar/records/students/<%= claimSlip.studentId %>?view=requests">Back to student record</a>
+    </div>
+  </header>
+  <section class="finance-panel" aria-labelledby="claim-slip-school-title">
+    <h2 id="claim-slip-school-title"><%= claimSlip.schoolName %></h2>
+    <p><strong>Document claim slip</strong> · Slip #<%= claimSlip.slipNumber %></p>
+    <dl class="finance-balance-summary">
+      <div><dt>Student name</dt><dd><%= claimSlip.studentName %></dd></div>
+      <div><dt>Student number</dt><dd><%= claimSlip.studentNumber %></dd></div>
+      <div><dt>Document</dt><dd><%= claimSlip.document %> (<%= claimSlip.documentType %>)</dd></div>
+      <div><dt>Request reference</dt><dd><%= claimSlip.requestReference %></dd></div>
+      <div><dt>Request date</dt><dd><%= claimSlip.requestedOn %></dd></div>
+      <div><dt>Expected claim date</dt><dd><%= claimSlip.expectedClaimDate %></dd></div>
+      <div><dt>Issued by</dt><dd><%= claimSlip.issuerName %></dd></div>
+    </dl>
+    <p class="muted-copy">Present this slip when claiming the requested document. The expected date is an estimate recorded by the registrar.</p>
+  </section>
+</main>
+<script src="/js/statement-print.js" defer></script>
+<%- include('../partials/foot') %>

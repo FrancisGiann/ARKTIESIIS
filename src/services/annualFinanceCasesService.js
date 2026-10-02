@@ -1,6 +1,8 @@
 const crypto = require('node:crypto');
 const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
 const { parseMoneyCents, formatMoneyCents } = require('./financeService');
+const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
+const { runSerializableTransaction } = require('./transactionRetry');
 
 const ID = /^\d{1,10}$/;
 const BIG_ID = /^\d{1,18}$/;
@@ -86,23 +88,13 @@ function normalizeAdjustmentRows(value) {
 function createAnnualFinanceCasesService({
   getPool = defaultGetPool,
   sql = defaultSql,
-  transactionFactory = (pool) => new sql.Transaction(pool)
-} = {}) {
+  transactionFactory = (pool) => new sql.Transaction(pool),
+  debtRevisions = createFinanceDebtRevisionService({ getPool, sql, transactionFactory })
+  } = {}) {
   async function transaction(callback) {
-    const pool = await getPool();
-    const tx = transactionFactory(pool);
-    let started = false;
     try {
-      await tx.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-      started = true;
-      const result = await callback(tx);
-      await tx.commit();
-      started = false;
-      return result;
+      return await runSerializableTransaction({ getPool, sql, transactionFactory }, callback);
     } catch (error) {
-      if (started) {
-        try { await tx.rollback(); } catch { /* Keep the original failure. */ }
-      }
       if (isDuplicateKeyError(error)) throw new FinanceCasesError('This finance workflow was already recorded or conflicts with an existing record.', 409);
       throw error;
     }
@@ -311,9 +303,19 @@ function createAnnualFinanceCasesService({
     const expectedStudentId = input.expectedStudentId == null ? null : validId(input.expectedStudentId, 'student');
     const reason = text(input.reason, 'Finance exemption approval reason', 1000, true);
     const idempotencyKey = token(input.idempotencyKey, 'exemption approval');
+    const pool = await getPool();
+    const ownerResult = await pool.request().input('annualId', sql.Int, annualEnrollmentId)
+      .query('SELECT student_id FROM annual_enrollments WHERE id = @annualId');
+    const owner = ownerResult.recordset?.[0];
+    if (!owner) throw new FinanceCasesError('Annual enrollment not found.', 404);
+    const ownerStudentId = Number(owner.student_id);
     return transaction(async (tx) => {
       const actor = await requireActor(tx.request(), actorInput);
+      const student = await debtRevisions.lockStudent(tx, ownerStudentId);
+      if (!student) throw new FinanceCasesError('Student record not found.', 404);
+      const debtBefore = (await debtRevisions.readSnapshot(tx, ownerStudentId)).canonicalBalanceCents;
       const annual = await requireAnnual(tx, annualEnrollmentId);
+      if (Number(annual.student_id) !== ownerStudentId) throw new FinanceCasesError('Annual enrollment ownership changed. Reload before continuing.', 409);
       if (expectedStudentId && Number(annual.student_id) !== expectedStudentId) {
         throw new FinanceCasesError('This annual enrollment does not belong to the selected student.', 404);
       }
@@ -346,6 +348,7 @@ function createAnnualFinanceCasesService({
         .query(`SELECT charge.id AS charge_id FROM assessed_charges AS charge
           WHERE charge.annual_enrollment_id = @annualId ORDER BY charge.enrollment_id, charge.id FOR UPDATE`);
       for (const charge of charges.recordset || []) await applyApprovedExemptionsForCharge(tx, actor, annualEnrollmentId, charge.charge_id);
+      await debtRevisions.recordIncreaseIfAny(tx, ownerStudentId, debtBefore);
       await writeAudit(tx, actor, 'exemption_approved', caseId, { annualEnrollmentId, schoolYear: annual.school_year, reason, ruleCount: rules.length });
       return { exemptionCaseId: caseId, studentId: Number(annual.student_id) };
     });
@@ -361,6 +364,10 @@ function createAnnualFinanceCasesService({
     const fingerprint = requestFingerprint({ studentId, specialSubjectId, amount: formatMoneyCents(amountCents), installment, reason });
     return transaction(async (tx) => {
       const actor = await requireActor(tx.request(), actorInput);
+      const student = await debtRevisions.lockStudent(tx, studentId);
+      if (!student) throw new FinanceCasesError('Student record not found.', 404);
+      if (student.status === 'archived') throw new FinanceCasesError('Archived students cannot receive new finance records.', 409);
+      const debtBefore = (await debtRevisions.readSnapshot(tx, studentId)).canonicalBalanceCents;
       const existing = await tx.request().input('key', sql.UniqueIdentifier, idempotencyKey)
         .query(`SELECT charge.id, charge.special_subject_id, charge.request_fingerprint, annual.student_id
           FROM assessed_charges AS charge
@@ -403,6 +410,7 @@ function createAnnualFinanceCasesService({
       await applyApprovedExemptionsForCharge(tx, actor, Number(special.annual_enrollment_id), chargeId);
       await requireFreshApproval(tx, actor, Number(special.enrollment_id), 'Special-subject charge added to this term.');
       await writeAudit(tx, actor, 'special_subject_billed', chargeId, { studentId, specialSubjectId, enrollmentId: special.enrollment_id, subjectName: special.subject_name, amount: formatMoneyCents(amountCents), reason });
+      await debtRevisions.recordIncreaseIfAny(tx, studentId, debtBefore);
       return { chargeId };
     });
   }
@@ -413,8 +421,19 @@ function createAnnualFinanceCasesService({
     const idempotencyKey = token(input.idempotencyKey, 'departure review');
     const adjustments = normalizeAdjustmentRows(input.adjustments);
     const fingerprint = requestFingerprint({ departureCaseId, reason, adjustments: adjustments.map((row) => ({ ...row, amount: formatMoneyCents(row.amountCents), amountCents: undefined })).sort((a, b) => a.chargeId - b.chargeId) });
+    const pool = await getPool();
+    const ownerResult = await pool.request().input('caseId', sql.BigInt, departureCaseId)
+      .query(`SELECT annual.student_id FROM finance_departure_cases AS departure
+        INNER JOIN annual_enrollments AS annual ON annual.id = departure.annual_enrollment_id
+        WHERE departure.id = @caseId`);
+    const owner = ownerResult.recordset?.[0];
+    if (!owner) throw new FinanceCasesError('Departure case not found.', 404);
+    const ownerStudentId = Number(owner.student_id);
     return transaction(async (tx) => {
       const actor = await requireActor(tx.request(), actorInput);
+      const student = await debtRevisions.lockStudent(tx, ownerStudentId);
+      if (!student) throw new FinanceCasesError('Student record not found.', 404);
+      const debtBefore = (await debtRevisions.readSnapshot(tx, ownerStudentId)).canonicalBalanceCents;
       const caseResult = await tx.request().input('caseId', sql.BigInt, departureCaseId)
         .query(`SELECT departure.id, departure.annual_enrollment_id, departure.finance_status,
             departure.review_idempotency_key, departure.review_request_fingerprint,
@@ -425,6 +444,7 @@ function createAnnualFinanceCasesService({
           WHERE departure.id = @caseId FOR UPDATE`);
       const departure = caseResult.recordset?.[0];
       if (!departure) throw new FinanceCasesError('Departure case not found.', 404);
+      if (Number(departure.student_id) !== ownerStudentId) throw new FinanceCasesError('Departure case ownership changed. Reload before continuing.', 409);
       if (departure.student_status === 'archived') throw new FinanceCasesError('Archived student history is read-only.', 409);
       if (departure.finance_status === 'reviewed') {
         const storedKey = String(departure.review_idempotency_key || '').trim().toLowerCase();
@@ -481,6 +501,7 @@ function createAnnualFinanceCasesService({
           WHERE id = @caseId AND finance_status = 'pending';`);
       if (updated.rowsAffected?.at(-1) !== 1) throw new FinanceCasesError('The departure case changed during review. Reload it and try again.', 409);
       await writeAudit(tx, actor, 'departure_case_reviewed', departureCaseId, { annualEnrollmentId: Number(departure.annual_enrollment_id), reason, adjustmentCount: normalizedAdjustments.length });
+      await debtRevisions.recordIncreaseIfAny(tx, Number(departure.student_id), debtBefore);
       return { departureCaseId, reviewed: true, studentId: Number(departure.student_id) };
     });
   }

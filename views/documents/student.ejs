@@ -1,43 +1,47 @@
 <%- include('../partials/head', { title }) %>
-<main class="page-shell dashboard-page records-page" id="main-content">
+<main class="page-shell dashboard-page records-page student-documents-page" id="main-content" data-active-section="<%= activeDocumentSection %>">
   <% const blockedNewOriginalTypeSet = new Set(blockedNewOriginalTypes || []); %>
   <% const availableDocumentTypes = documentTypes.filter(({ value }) => !blockedNewOriginalTypeSet.has(value)); %>
-  <section class="dashboard-heading">
-    <div>
-      <h1>Documents · <%= student.student_no %></h1>
-      <p><%= [student.first_name, student.middle_name, student.last_name].filter(Boolean).join(' ') %></p>
-    </div>
-    <a class="button button--secondary" href="/documents">All documents</a>
-  </section>
+  <a class="context-back" href="/documents">Back to document review</a>
+  <%- include('../partials/student-record-navigation', { student, activeStudentView: 'documents' }) %>
+  <h2 class="student-record-view-title">Documents</h2>
+  <nav class="student-document-sections" aria-label="Student document workflows">
+    <a href="#digital-submissions-title" data-student-document-section="digital"<% if (activeDocumentSection === 'digital') { %> aria-current="page"<% } %>>Digital submissions</a>
+    <a href="#physical-checklist-title" data-student-document-section="paper"<% if (activeDocumentSection === 'paper') { %> aria-current="page"<% } %>>Paper requirements</a>
+    <a href="#form137-status-title" data-student-document-section="form137"<% if (activeDocumentSection === 'form137') { %> aria-current="page"<% } %>>Form 137</a>
+    <a href="/registrar/records/students/<%= student.id %>?view=requests">Requests</a>
+  </nav>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice === 'form137StatusRecorded' ? 'Form 137 status recorded.' : notice === 'previousSchoolReportCardStatusRecorded' ? 'Previous-school report-card paper status recorded.' : notice === 'physicalChecklistRecorded' ? 'Paper requirement status recorded in the staff history.' : notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
-  <section class="admin-section" aria-labelledby="physical-checklist-title">
-    <div class="admin-section__heading"><div><h2 id="physical-checklist-title">Physical admission paper checklist</h2><p>Staff-only, append-only checklist. Record originals, photocopies, and pieces separately. This checklist is informational and does not block enrollment.</p></div></div>
+  <div class="student-documents-panel" data-section-panel="paper">
+    <section class="admin-section" aria-labelledby="physical-checklist-title">
+    <div class="admin-section__heading"><div><h2 id="physical-checklist-title" tabindex="-1">Physical admission paper checklist</h2><p>Staff-only, append-only checklist. Record originals, photocopies, and pieces separately. This checklist is informational and does not block enrollment.</p></div></div>
     <p><strong>Verified or marked not applicable:</strong> <%= physicalChecklist.summary.completeCount %> of <%= physicalChecklist.summary.requiredCount %> current required items</p>
     <div class="physical-requirements-list">
       <% const paperStatusLabels = { pending: 'Pending', received: 'Received', verified: 'Verified', correction: 'Correction needed', rejected: 'Rejected' }; %>
       <% for (const requirement of physicalChecklist.requirements) { %>
+        <% const checklistValues = documentFormValues.workflow === 'physicalChecklist' && documentFormValues.requirementCode === requirement.requirement_code ? documentFormValues : {}; %>
         <article class="physical-requirements-item" aria-labelledby="paper-<%= requirement.requirement_code %>-title">
           <header class="physical-requirements-item__heading"><div><h3 id="paper-<%= requirement.requirement_code %>-title"><%= requirement.requirement_name %></h3><p><%= requirement.guidance %><% if (requirement.is_optional) { %> Optional.<% } %><% if (requirement.applicability === 'als') { %> Confirm ALS applicability with the learner; do not infer from voucher.<% } %><% if (requirement.applicability === 'esc') { %> Confirm ESC applicability with the learner.<% } %><% if (requirement.applicability === 'grade11') { %> Grade 11 learners only.<% } %><% if (requirement.applicability === 'grade12') { %> Grade 12 learners only.<% } %></p></div></header>
           <p class="physical-requirements-item__status"><strong><%= requirement.is_applicable === false || requirement.is_applicable === 0 ? 'Not applicable' : paperStatusLabels[requirement.status] || 'Not recorded' %></strong><span>Originals <%= requirement.originals_received || 0 %> · Copies <%= requirement.copies_received || 0 %> · Pieces <%= requirement.pieces_received || 0 %></span><% if (requirement.created_at) { %><span><%= new Date(requirement.created_at).toLocaleDateString() %> · <%= requirement.recorded_by_name %></span><% } %></p>
           <% if (requirement.note) { %><p class="form-alert" role="status"><%= requirement.note %></p><% } %>
-          <details class="physical-checklist-update">
+          <details class="physical-checklist-update"<% if (error && Object.keys(checklistValues).length) { %> open<% } %>>
             <summary>Update this item<% if (requirement.created_at) { %> · <%= paperStatusLabels[requirement.status] || 'Status recorded' %><% } %></summary>
           <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/physical-checklist">
             <input type="hidden" name="_csrf" value="<%= csrfToken %>">
             <input type="hidden" name="requirementCode" value="<%= requirement.requirement_code %>">
             <input type="hidden" name="idempotencyKey" value="<%= physicalChecklist.idempotencyKeys[requirement.requirement_code] %>">
             <div class="admin-form-grid">
-              <div class="field"><label for="paper-status-<%= requirement.requirement_code %>">Status</label><select id="paper-status-<%= requirement.requirement_code %>" name="status" required><% for (const [value, label] of Object.entries(paperStatusLabels)) { %><option value="<%= value %>" <%= requirement.status === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
+              <div class="field"><label for="paper-status-<%= requirement.requirement_code %>">Status</label><select id="paper-status-<%= requirement.requirement_code %>" name="status" required><% for (const [value, label] of Object.entries(paperStatusLabels)) { %><option value="<%= value %>" <%= (checklistValues.status || requirement.status) === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
               <% if (['als', 'esc', 'optional'].includes(requirement.applicability)) { %>
-                <div class="field"><label for="paper-applies-<%= requirement.requirement_code %>">Does this item apply?</label><select id="paper-applies-<%= requirement.requirement_code %>" name="isApplicable" required><option value="1" <%= requirement.is_applicable === false || requirement.is_applicable === 0 ? '' : 'selected' %>>Applies / record as available</option><option value="0" <%= requirement.is_applicable === false || requirement.is_applicable === 0 ? 'selected' : '' %>>Not applicable or not available</option></select></div>
+                <div class="field"><label for="paper-applies-<%= requirement.requirement_code %>">Does this item apply?</label><select id="paper-applies-<%= requirement.requirement_code %>" name="isApplicable" required><option value="1" <%= (checklistValues.isApplicable || (requirement.is_applicable === false || requirement.is_applicable === 0 ? '0' : '1')) === '1' ? 'selected' : '' %>>Applies / record as available</option><option value="0" <%= (checklistValues.isApplicable || (requirement.is_applicable === false || requirement.is_applicable === 0 ? '0' : '1')) === '0' ? 'selected' : '' %>>Not applicable or not available</option></select></div>
               <% } else { %><input type="hidden" name="isApplicable" value="1"><% } %>
-              <div class="field"><label for="paper-originals-<%= requirement.requirement_code %>">Originals received</label><input id="paper-originals-<%= requirement.requirement_code %>" name="originalsReceived" type="number" min="0" max="20" value="<%= requirement.originals_received || 0 %>"></div>
-              <div class="field"><label for="paper-copies-<%= requirement.requirement_code %>">Photocopies received</label><input id="paper-copies-<%= requirement.requirement_code %>" name="copiesReceived" type="number" min="0" max="50" value="<%= requirement.copies_received || 0 %>"></div>
-              <div class="field"><label for="paper-pieces-<%= requirement.requirement_code %>">Pieces received</label><input id="paper-pieces-<%= requirement.requirement_code %>" name="piecesReceived" type="number" min="0" max="50" value="<%= requirement.pieces_received || 0 %>"></div>
-              <div class="field field--full"><label for="paper-note-<%= requirement.requirement_code %>">Staff-only note</label><textarea id="paper-note-<%= requirement.requirement_code %>" name="note" rows="2" maxlength="1000"><%= requirement.note || '' %></textarea></div>
+              <div class="field"><label for="paper-originals-<%= requirement.requirement_code %>">Originals received</label><input id="paper-originals-<%= requirement.requirement_code %>" name="originalsReceived" type="number" min="0" max="20" value="<%= checklistValues.originalsReceived ?? requirement.originals_received ?? 0 %>"></div>
+              <div class="field"><label for="paper-copies-<%= requirement.requirement_code %>">Photocopies received</label><input id="paper-copies-<%= requirement.requirement_code %>" name="copiesReceived" type="number" min="0" max="50" value="<%= checklistValues.copiesReceived ?? requirement.copies_received ?? 0 %>"></div>
+              <div class="field"><label for="paper-pieces-<%= requirement.requirement_code %>">Pieces received</label><input id="paper-pieces-<%= requirement.requirement_code %>" name="piecesReceived" type="number" min="0" max="50" value="<%= checklistValues.piecesReceived ?? requirement.pieces_received ?? 0 %>"></div>
+              <div class="field field--full"><label for="paper-note-<%= requirement.requirement_code %>">Staff-only note</label><textarea id="paper-note-<%= requirement.requirement_code %>" name="note" rows="2" maxlength="1000"><%= checklistValues.note ?? requirement.note ?? '' %></textarea></div>
             </div>
             <button class="button button--secondary button--align-start" type="submit">Append paper checklist update</button>
           </form>
@@ -50,11 +54,12 @@
     <section class="admin-section" aria-labelledby="additional-paper-title">
       <div class="admin-section__heading"><div><h3 id="additional-paper-title">Additional named paper items</h3><p>Add a school-specific paper requirement for this learner. Each update is appended to the staff history.</p></div></div>
       <% for (const item of physicalChecklist.additionalItems) { %>
+        <% const additionalValues = documentFormValues.workflow === 'physicalChecklist' && documentFormValues.requirementCode === 'additional' && documentFormValues.requirementName === item.requirement_name ? documentFormValues : {}; %>
         <article class="physical-requirements-item">
           <h4><%= item.requirement_name %></h4>
           <p class="physical-requirements-item__status"><strong><%= paperStatusLabels[item.status] || 'Not recorded' %></strong><span>Originals <%= item.originals_received %> · Copies <%= item.copies_received %> · Pieces <%= item.pieces_received %></span></p>
           <% if (item.note) { %><p class="form-alert" role="status"><%= item.note %></p><% } %>
-          <details class="physical-checklist-update">
+          <details class="physical-checklist-update"<% if (error && Object.keys(additionalValues).length) { %> open<% } %>>
             <summary>Update this item · <%= paperStatusLabels[item.status] || 'Not recorded' %></summary>
           <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/physical-checklist">
             <input type="hidden" name="_csrf" value="<%= csrfToken %>">
@@ -63,11 +68,11 @@
             <input type="hidden" name="idempotencyKey" value="<%= physicalChecklist.additionalIdempotencyKeys[item.requirement_code] %>">
             <input type="hidden" name="isApplicable" value="1">
             <div class="admin-form-grid">
-              <div class="field"><label for="extra-status-<%= item.id %>">Status</label><select id="extra-status-<%= item.id %>" name="status" required><% for (const [value, label] of Object.entries(paperStatusLabels)) { %><option value="<%= value %>" <%= item.status === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
-              <div class="field"><label for="extra-originals-<%= item.id %>">Originals received</label><input id="extra-originals-<%= item.id %>" name="originalsReceived" type="number" min="0" max="20" value="<%= item.originals_received || 0 %>"></div>
-              <div class="field"><label for="extra-copies-<%= item.id %>">Photocopies received</label><input id="extra-copies-<%= item.id %>" name="copiesReceived" type="number" min="0" max="50" value="<%= item.copies_received || 0 %>"></div>
-              <div class="field"><label for="extra-pieces-<%= item.id %>">Pieces received</label><input id="extra-pieces-<%= item.id %>" name="piecesReceived" type="number" min="0" max="50" value="<%= item.pieces_received || 0 %>"></div>
-              <div class="field field--full"><label for="extra-note-<%= item.id %>">Staff-only note</label><textarea id="extra-note-<%= item.id %>" name="note" rows="2" maxlength="1000"></textarea></div>
+            <div class="field"><label for="extra-status-<%= item.id %>">Status</label><select id="extra-status-<%= item.id %>" name="status" required><% for (const [value, label] of Object.entries(paperStatusLabels)) { %><option value="<%= value %>" <%= (additionalValues.status || item.status) === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
+              <div class="field"><label for="extra-originals-<%= item.id %>">Originals received</label><input id="extra-originals-<%= item.id %>" name="originalsReceived" type="number" min="0" max="20" value="<%= additionalValues.originalsReceived ?? item.originals_received ?? 0 %>"></div>
+              <div class="field"><label for="extra-copies-<%= item.id %>">Photocopies received</label><input id="extra-copies-<%= item.id %>" name="copiesReceived" type="number" min="0" max="50" value="<%= additionalValues.copiesReceived ?? item.copies_received ?? 0 %>"></div>
+              <div class="field"><label for="extra-pieces-<%= item.id %>">Pieces received</label><input id="extra-pieces-<%= item.id %>" name="piecesReceived" type="number" min="0" max="50" value="<%= additionalValues.piecesReceived ?? item.pieces_received ?? 0 %>"></div>
+              <div class="field field--full"><label for="extra-note-<%= item.id %>">Staff-only note</label><textarea id="extra-note-<%= item.id %>" name="note" rows="2" maxlength="1000"><%= additionalValues.note ?? item.note ?? '' %></textarea></div>
             </div>
             <button class="button button--secondary button--align-start" type="submit">Append update</button>
           </form>
@@ -76,7 +81,7 @@
           </details>
         </article>
       <% } %>
-      <details class="physical-checklist-update physical-checklist-new-item">
+      <details class="physical-checklist-update physical-checklist-new-item"<% if (error && documentFormValues.workflow === 'physicalChecklist' && documentFormValues.requirementCode === 'additional' && !physicalChecklist.additionalItems.some((item) => item.requirement_name === documentFormValues.requirementName)) { %> open<% } %>>
         <summary>Add a paper requirement</summary>
       <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/physical-checklist">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
@@ -84,12 +89,12 @@
         <input type="hidden" name="idempotencyKey" value="<%= physicalChecklist.additionalIdempotencyKey %>">
         <input type="hidden" name="isApplicable" value="1">
         <div class="admin-form-grid">
-          <div class="field"><label for="additional-requirement-name">Named paper item</label><input id="additional-requirement-name" name="requirementName" maxlength="120" required></div>
-          <div class="field"><label for="additional-requirement-status">Status</label><select id="additional-requirement-status" name="status" required><% for (const [value, label] of Object.entries(paperStatusLabels)) { %><option value="<%= value %>" <%= value === 'pending' ? 'selected' : '' %>><%= label %></option><% } %></select></div>
-          <div class="field"><label for="additional-originals">Originals received</label><input id="additional-originals" name="originalsReceived" type="number" min="0" max="20" value="0"></div>
-          <div class="field"><label for="additional-copies">Photocopies received</label><input id="additional-copies" name="copiesReceived" type="number" min="0" max="50" value="0"></div>
-          <div class="field"><label for="additional-pieces">Pieces received</label><input id="additional-pieces" name="piecesReceived" type="number" min="0" max="50" value="0"></div>
-          <div class="field field--full"><label for="additional-note">Staff-only note</label><textarea id="additional-note" name="note" rows="2" maxlength="1000"></textarea></div>
+          <div class="field"><label for="additional-requirement-name">Named paper item</label><input id="additional-requirement-name" name="requirementName" maxlength="120" value="<%= documentFormValues.workflow === 'physicalChecklist' && documentFormValues.requirementCode === 'additional' && !physicalChecklist.additionalItems.some((item) => item.requirement_name === documentFormValues.requirementName) ? documentFormValues.requirementName || '' : '' %>" required></div>
+          <div class="field"><label for="additional-requirement-status">Status</label><select id="additional-requirement-status" name="status" required><% for (const [value, label] of Object.entries(paperStatusLabels)) { %><option value="<%= value %>" <%= (documentFormValues.workflow === 'physicalChecklist' && documentFormValues.requirementCode === 'additional' && !physicalChecklist.additionalItems.some((item) => item.requirement_name === documentFormValues.requirementName) ? documentFormValues.status : 'pending') === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
+          <div class="field"><label for="additional-originals">Originals received</label><input id="additional-originals" name="originalsReceived" type="number" min="0" max="20" value="<%= documentFormValues.workflow === 'physicalChecklist' && documentFormValues.requirementCode === 'additional' && !physicalChecklist.additionalItems.some((item) => item.requirement_name === documentFormValues.requirementName) ? documentFormValues.originalsReceived ?? 0 : 0 %>"></div>
+          <div class="field"><label for="additional-copies">Photocopies received</label><input id="additional-copies" name="copiesReceived" type="number" min="0" max="50" value="<%= documentFormValues.workflow === 'physicalChecklist' && documentFormValues.requirementCode === 'additional' && !physicalChecklist.additionalItems.some((item) => item.requirement_name === documentFormValues.requirementName) ? documentFormValues.copiesReceived ?? 0 : 0 %>"></div>
+          <div class="field"><label for="additional-pieces">Pieces received</label><input id="additional-pieces" name="piecesReceived" type="number" min="0" max="50" value="<%= documentFormValues.workflow === 'physicalChecklist' && documentFormValues.requirementCode === 'additional' && !physicalChecklist.additionalItems.some((item) => item.requirement_name === documentFormValues.requirementName) ? documentFormValues.piecesReceived ?? 0 : 0 %>"></div>
+          <div class="field field--full"><label for="additional-note">Staff-only note</label><textarea id="additional-note" name="note" rows="2" maxlength="1000"><%= documentFormValues.workflow === 'physicalChecklist' && documentFormValues.requirementCode === 'additional' && !physicalChecklist.additionalItems.some((item) => item.requirement_name === documentFormValues.requirementName) ? documentFormValues.note || '' : '' %></textarea></div>
         </div>
         <button class="button button--secondary button--align-start" type="submit">Add named requirement</button>
       </form>
@@ -98,8 +103,8 @@
     <% if (physicalChecklist.history.length) { %><details class="admin-section"><summary>Paper checklist event history</summary><ul class="document-review-history"><% for (const item of physicalChecklist.history) { %><li><strong><%= item.requirement_name %> · <%= paperStatusLabels[item.status] %><%= item.is_applicable ? '' : ' · Not applicable' %></strong><span><%= new Date(item.created_at).toLocaleString() %> · <%= item.recorded_by_name %> · originals <%= item.originals_received %>, photocopies <%= item.copies_received %>, pieces <%= item.pieces_received %></span><% if (item.note) { %><p><%= item.note %></p><% } %></li><% } %></ul></details><% } %>
   </section>
 
-  <section class="admin-section" aria-labelledby="previous-school-report-card-status-title">
-    <div class="admin-section__heading"><div><h2 id="previous-school-report-card-status-title">Previous-school report-card paper copy</h2><p>Track the separate paper copy brought to school. This does not review the uploaded scan or change current grades.</p></div></div>
+    <section class="admin-section" aria-labelledby="previous-school-report-card-status-title">
+        <div class="admin-section__heading"><div><h2 id="previous-school-report-card-status-title" tabindex="-1">Previous-school report-card paper copy</h2><p>Track the separate paper copy brought to school. This does not review the uploaded scan or change current grades.</p></div></div>
     <% const paperReportCardStatusLabels = { not_recorded: 'Not recorded', pending: 'Pending', received: 'Received', verified: 'Checked by staff', correction: 'Clearer or replacement copy requested', rejected: 'Not accepted for this requirement' }; %>
     <p><strong>Paper-copy status:</strong> <%= paperReportCardStatusLabels[previousSchoolReportCardPhysicalStatus?.status || 'not_recorded'] || 'Not recorded' %></p>
     <% if (previousSchoolReportCardPhysicalStatus?.instruction) { %><p class="form-alert" role="status"><%= previousSchoolReportCardPhysicalStatus.instruction %></p><% } %>
@@ -115,17 +120,19 @@
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="admin-form-grid">
         <div class="field"><label for="previous-school-report-card-status">Record paper-copy status</label><select id="previous-school-report-card-status" name="status" required>
-          <option value="pending">Pending</option><option value="received">Received</option><option value="verified">Checked by staff</option><option value="correction">Clearer or replacement copy needed</option><option value="rejected">Not accepted for this requirement</option>
+          <% const previousPhysicalValues = documentFormValues.workflow === 'reportCardPhysical' ? documentFormValues : {}; for (const [value, label] of Object.entries({ pending: 'Pending', received: 'Received', verified: 'Checked by staff', correction: 'Clearer or replacement copy needed', rejected: 'Not accepted for this requirement' })) { %><option value="<%= value %>" <%= previousPhysicalValues.status === value ? 'selected' : '' %>><%= label %></option><% } %>
         </select></div>
-        <div class="field"><label for="previous-school-report-card-instruction">Staff note or instruction</label><textarea id="previous-school-report-card-instruction" name="instruction" rows="3" maxlength="1000"></textarea></div>
+        <div class="field"><label for="previous-school-report-card-instruction">Staff note or instruction</label><textarea id="previous-school-report-card-instruction" name="instruction" rows="3" maxlength="1000"><%= previousPhysicalValues.instruction || '' %></textarea></div>
       </div>
       <p class="muted-copy">A note is required for “Clearer or replacement copy needed.” This paper record is separate from the digital upload.</p>
       <button class="button button--secondary button--align-start" type="submit">Save paper-copy status</button>
     </form>
   </section>
 
-  <section class="admin-section" aria-labelledby="form137-status-title">
-    <div class="admin-section__heading"><div><h2 id="form137-status-title">Form 137 physical record</h2><p>Form 137 remains a separate staff-only physical-status workflow. Authorized staff can send a temporary scan to Google Gemini for student-name and possible school-name suggestions. The scan is processed in memory and is not stored by this application as a file or database record. Only the human-recorded status and instruction are saved. Inspect the physical paper before deciding.</p></div></div>
+  </div>
+
+    <section class="admin-section student-documents-panel" aria-labelledby="form137-status-title" data-section-panel="form137">
+    <div class="admin-section__heading"><div><h2 id="form137-status-title" tabindex="-1">Form 137 physical record</h2><p>Form 137 remains a separate staff-only physical-status workflow. Authorized staff can send a temporary scan to Google Gemini for student-name and possible school-name suggestions. The scan is processed in memory and is not stored by this application as a file or database record. Only the human-recorded status and instruction are saved. Inspect the physical paper before deciding.</p></div></div>
     <p><strong>Current status:</strong> <%= form137Status.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></p>
     <% if (form137Status.instruction) { %><p class="form-alert" role="status"><%= form137Status.instruction %></p><% } %>
     <% if (form137Status.created_at) { %><p class="muted-copy">Updated <%= new Date(form137Status.created_at).toLocaleString() %></p><% } %>
@@ -142,9 +149,9 @@
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="admin-form-grid">
         <div class="field"><label for="form137-status">Record a physical status</label><select id="form137-status" name="status" required>
-          <option value="pending">Pending</option><option value="received">Received</option><option value="verified">Verified</option><option value="correction">Correction needed</option><option value="rejected">Rejected</option>
+          <% const form137Values = documentFormValues.workflow === 'form137' ? documentFormValues : {}; for (const [value, label] of Object.entries({ pending: 'Pending', received: 'Received', verified: 'Verified', correction: 'Correction needed', rejected: 'Rejected' })) { %><option value="<%= value %>" <%= form137Values.status === value ? 'selected' : '' %>><%= label %></option><% } %>
         </select></div>
-        <div class="field"><label for="form137-instruction">Instruction or note</label><textarea id="form137-instruction" name="instruction" rows="3" maxlength="1000"></textarea></div>
+        <div class="field"><label for="form137-instruction">Instruction or note</label><textarea id="form137-instruction" name="instruction" rows="3" maxlength="1000"><%= form137Values.instruction || '' %></textarea></div>
       </div>
       <p class="muted-copy">An instruction is required when choosing “Correction needed.”</p>
       <button class="button button--secondary button--align-start" type="submit">Save Form 137 status</button>
@@ -169,15 +176,18 @@
     </form>
   </section>
 
-  <section class="admin-section" aria-labelledby="upload-title">
-        <div class="admin-section__heading"><div><h2 id="upload-title">Upload a digital document</h2><p id="upload-format-help">Accepted file formats: PDF, JPEG, and PNG. Maximum size: <%= uploadMaxMb %> MB. Good Moral and PSA files receive configured field prechecks. A previous-school report-card scan receives a limited visible-name and file-format precheck, then staff review for the enrollment requirement; grades are not extracted or changed. The paper-copy status above is recorded separately. Upload a correction when staff requests one. If staff rejects the latest submission, you can start a new original submission; earlier submissions stay in the student’s history.</p></div></div>
+  <div class="student-documents-panel" data-section-panel="digital">
+  <section class="admin-section" aria-labelledby="digital-submissions-title">
+        <div class="admin-section__heading"><div><h2 id="digital-submissions-title" tabindex="-1">Digital submissions</h2><p id="upload-format-help">Upload a Good Moral Certificate, PSA birth certificate, or previous-school report-card scan. Accepted formats are PDF, JPEG, and PNG; maximum size is <%= uploadMaxMb %> MB. Report-card checks compare only the visible student name and file format; grades are not extracted or changed.</p></div></div>
+        <p class="muted-copy">If staff rejects the latest submission, you can start a new original submission; earlier submissions stay in the student’s history.</p>
+        <h3 id="upload-title">Upload a digital document</h3>
     <% if (availableDocumentTypes.length) { %>
     <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>" enctype="multipart/form-data" data-submitting-message="Uploading the document. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="admin-form-grid">
         <div class="field">
           <label for="document-type">Document type</label>
-          <select id="document-type" name="documentType" aria-describedby="upload-format-help" required><option value="">Choose a document type</option><% for (const type of availableDocumentTypes) { %><option value="<%= type.value %>"><%= type.label %></option><% } %></select>
+          <select id="document-type" name="documentType" aria-describedby="upload-format-help" required><option value="">Choose a document type</option><% for (const type of availableDocumentTypes) { %><option value="<%= type.value %>" <%= documentFormValues.documentType === type.value ? 'selected' : '' %>><%= type.label %></option><% } %></select>
         </div>
         <div class="field">
           <label for="document-file">File</label>
@@ -208,5 +218,7 @@
       </div>
     <% } else { %><p class="empty-state">No documents have been uploaded for this student.</p><% } %>
   </section>
+  </div>
 </main>
+<script src="/js/student-documents.js" defer></script>
 <%- include('../partials/foot') %>

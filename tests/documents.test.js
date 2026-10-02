@@ -10,6 +10,7 @@ const vm = require('node:vm');
 const bcrypt = require('bcrypt');
 const { createApp } = require('../src/app');
 const { configuredMaxBytes, documentStatusLabel } = require('../src/routes/documents');
+const { PhysicalChecklistError } = require('../src/services/physicalChecklistService');
 const {
   DocumentServiceError,
   createDocumentService,
@@ -1605,9 +1606,17 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
       async getStudentChecklist(_actorId, studentId) {
         return {
           student: { id: studentId, student_no: 'SHS-2026-0321', first_name: 'Maria', last_name: 'Santos', requestedBy: 'registrar' },
-          requirements: [], history: [], additionalItems: [],
+          requirements: [{
+            id: 1, requirement_code: 'birth_certificate', requirement_name: 'PSA birth certificate', guidance: 'Submit a copy.',
+            is_optional: 0, is_applicable: 1, applicability: 'required', status: 'pending', originals_received: 0,
+            copies_received: 0, pieces_received: 0, note: null
+          }], history: [], additionalItems: [],
           summary: { requiredCount: 9, completeCount: 2 }
         };
+      },
+      async recordRequirement(_actorId, _studentId, values) {
+        if (values.requirementCode === 'additional') throw new PhysicalChecklistError('The named paper requirement could not be saved.');
+        if (values.status === 'correction' && !values.note) throw new PhysicalChecklistError('Enter a note when requesting a correction.');
       },
       async getStudentSummaries(_actorId, studentIds) {
         return new Map(studentIds.map((studentId) => [Number(studentId), { required_count: 9, completed_count: 2 }]));
@@ -1875,6 +1884,35 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     const staffPage = await fetch(`${baseUrl}/documents/students/44`, { headers: { cookie: registrarCookie } });
     assert.equal(staffPage.status, 200);
     const staffPageHtml = await staffPage.text();
+    assert.match(staffPageHtml, /aria-label="Student document workflows"[\s\S]*Digital submissions[\s\S]*Paper requirements[\s\S]*Form 137[\s\S]*Requests/);
+    for (const anchor of ['digital-submissions-title', 'physical-checklist-title', 'previous-school-report-card-status-title', 'form137-status-title']) {
+      assert.match(staffPageHtml, new RegExp(`id="${anchor}" tabindex="-1"`));
+    }
+    assert.match(staffPageHtml, /<script src="\/js\/student-documents\.js" defer><\/script>/);
+    assert.doesNotMatch(staffPageHtml, /data-section-panel="(?:digital|paper|form137)" hidden/);
+    const paperError = await fetch(`${baseUrl}/documents/students/44/physical-checklist`, {
+      method: 'POST', headers: { cookie: registrarCookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfFromHtml(staffPageHtml), idempotencyKey: 'paper-checklist-token', requirementCode: 'birth_certificate', status: 'correction', isApplicable: '1', originalsReceived: '2', copiesReceived: '0', piecesReceived: '0', note: '' }),
+      redirect: 'manual'
+    });
+    assert.equal(paperError.status, 400);
+    const paperErrorHtml = await paperError.text();
+    assert.match(paperErrorHtml, /Enter a note when requesting a correction/);
+    assert.match(paperErrorHtml, /<details class="physical-checklist-update" open>/);
+    assert.match(paperErrorHtml, /id="paper-status-birth_certificate" name="status" required><option value="pending" >Pending<\/option><option value="received" >Received<\/option><option value="verified" >Verified<\/option><option value="correction" selected>Correction needed/);
+    assert.match(paperErrorHtml, /id="paper-originals-birth_certificate" name="originalsReceived" type="number" min="0" max="20" value="2"/);
+    assert.match(paperErrorHtml, /name="idempotencyKey" value="paper-checklist-token"/);
+
+    const additionalPaperError = await fetch(`${baseUrl}/documents/students/44/physical-checklist`, {
+      method: 'POST', headers: { cookie: registrarCookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfFromHtml(staffPageHtml), idempotencyKey: 'additional-paper-token', requirementCode: 'additional', requirementName: 'Custom form', status: 'pending', isApplicable: '1' }),
+      redirect: 'manual'
+    });
+    assert.equal(additionalPaperError.status, 400);
+    const additionalPaperErrorHtml = await additionalPaperError.text();
+    assert.match(additionalPaperErrorHtml, /<details class="physical-checklist-update physical-checklist-new-item" open>/);
+    assert.match(additionalPaperErrorHtml, /id="additional-requirement-name" name="requirementName" maxlength="120" value="Custom form"/);
+    assert.match(additionalPaperErrorHtml, /name="idempotencyKey" value="additional-paper-token"/);
     assert.match(staffPageHtml, /PSA birth certificate/);
     assert.match(staffPageHtml, /Previous-school report-card paper copy/);
     assert.match(staffPageHtml, /Staff-only paper note: bring a clearer copy/);
@@ -1984,7 +2022,7 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
       body: new URLSearchParams({ _csrf: csrfFromHtml(staffPageHtml), status: 'received', instruction: '' }), redirect: 'manual'
     });
     assert.equal(paperStatus.status, 303);
-    assert.match(paperStatus.headers.get('location'), /notice=previousSchoolReportCardStatusRecorded#previous-school-report-card-status-title/);
+    assert.match(paperStatus.headers.get('location'), /notice=previousSchoolReportCardStatusRecorded&section=paper#previous-school-report-card-status-title/);
     assert.equal(calls.some(([action, actorId, studentId, status]) => action === 'previous-school-paper-status' && actorId === 2 && studentId === 44 && status === 'received'), true);
 
     const staffReportCardUpload = new FormData();
@@ -2033,7 +2071,7 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
       method: 'POST', headers: { cookie: registrarCookie }, body: staffUpload, redirect: 'manual'
     });
     assert.equal(acceptedStaffWrite.status, 303);
-    assert.equal(acceptedStaffWrite.headers.get('location'), '/documents/students/44?notice=uploaded');
+    assert.equal(acceptedStaffWrite.headers.get('location'), '/documents/students/44?notice=uploaded&section=digital#digital-submissions-title');
     assert.equal(processingCalls.at(-1), 'scheduled', 'staff upload schedules background OCR');
 
     const restrictedStaffDetail = await fetch(`${baseUrl}/documents/16`, { headers: { cookie: registrarCookie } });
@@ -2058,7 +2096,7 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     const staffDetail = await fetch(`${baseUrl}/documents/15`, { headers: { cookie: registrarCookie } });
     const staffDetailHtml = await staffDetail.text();
     assert.equal(staffDetail.status, 200);
-    assert.match(staffDetailHtml, /href="\/documents\/15\/preview"[^>]*>View document<\/a>/);
+    assert.match(staffDetailHtml, /href="\/documents\/15\/preview" target="_blank" rel="noopener">Open source in a new tab<\/a>/);
     assert.match(staffDetailHtml, /Automated precheck/);
     assert.match(staffDetailHtml, /Needs attention/);
     assert.match(staffDetailHtml, /Supported PDF, JPEG, or PNG/);
@@ -2208,24 +2246,98 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
   });
 });
 
-test('document detail pairs image preview with submission and puts staff precheck below', async () => {
+test('document detail pairs source with findings, keeps notices and secondary actions distinct, and stacks on narrow screens', async () => {
   const styles = await fs.readFile(path.join(__dirname, '../public/css/app.css'), 'utf8');
   const template = await fs.readFile(path.join(__dirname, '../views/documents/detail.ejs'), 'utf8');
-  const overviewStart = template.indexOf('<div class="document-detail-overview ');
+  const overviewStart = template.indexOf('<div class="document-review-layout">');
   const overviewEnd = template.indexOf('\n  </div>\n\n  <% if (document.isArchivedReportCard)', overviewStart);
   assert.notEqual(overviewStart, -1);
   assert.notEqual(overviewEnd, -1);
-
   const overview = template.slice(overviewStart, overviewEnd);
-  assert.match(overview, /document-detail-overview--with-preview/);
-  assert.ok(overview.indexOf('document-image-thumbnail-card') < overview.indexOf('aria-labelledby="submission-title"'));
-  assert.doesNotMatch(overview, /precheck-result-title/);
-  assert.ok(template.indexOf('aria-labelledby="precheck-result-title"') > overviewEnd);
-  assert.match(styles, /\.document-detail-overview\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s, 'documents without a thumbnail use full-width metadata');
-  assert.match(styles, /\.document-detail-overview--with-preview\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*23rem\)\s+minmax\(0,\s*1fr\);/s);
-  assert.match(styles, /@media \(max-width: 880px\)\s*\{[^}]*\.document-detail-overview\.document-detail-overview--with-preview\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+  assert.match(overview, /document-source-pane/);
+  assert.match(overview, /aria-labelledby="submission-title"/);
+  assert.doesNotMatch(overview, /document-findings-pane/);
+  assert.ok(template.indexOf('document-findings-pane') > overviewEnd);
+  assert.match(template, /<div class="document-detail-notices">[\s\S]*document-rejection-callout/);
+  assert.match(template, /<div class="document-secondary-actions">[\s\S]*delete-submission-title/);
+  assert.match(template, /if \(isStaff\) \{ %><p>Inspect the submitted pages before recording a staff decision/);
+  assert.match(styles, /\.document-detail-page\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.05fr\)\s+minmax\(0,\s*0\.95fr\)/s);
+  assert.match(styles, /@media \(max-width: 880px\)\s*\{[^}]*\.document-detail-page\s*\{\s*display:\s*block;/s);
   assert.match(styles, /\.document-precheck-scope\s*\{[^}]*max-width:\s*74ch;/s);
   assert.match(template, /does not establish authenticity or acceptance/);
+});
+
+test('student document sections preserve legacy anchors and focus targets after progressive enhancement reveals them', async () => {
+  const script = await fs.readFile(path.join(__dirname, '../public/js/student-documents.js'), 'utf8');
+  const template = await fs.readFile(path.join(__dirname, '../views/documents/student.ejs'), 'utf8');
+  for (const section of ['digital', 'paper', 'form137']) assert.match(template, new RegExp(`data-section-panel="${section}"`));
+  for (const anchor of ['physical-checklist-title', 'previous-school-report-card-status-title', 'form137-status-title']) {
+    assert.match(template, new RegExp(`id="${anchor}" tabindex="-1"`));
+  }
+
+  const sectionNames = ['digital', 'paper', 'form137'];
+  const focusCalls = [];
+  const scrollCalls = [];
+  const listeners = {};
+  const sectionTitle = { digital: 'digital-submissions-title', paper: 'physical-checklist-title', form137: 'form137-status-title' };
+  const panels = sectionNames.map((section) => ({
+    dataset: { sectionPanel: section },
+    hidden: false,
+    querySelector() { return targets[sectionTitle[section]]; }
+  }));
+  const targets = Object.fromEntries([
+    ['digital-submissions-title', 'digital'],
+    ['physical-checklist-title', 'paper'],
+    ['previous-school-report-card-status-title', 'paper'],
+    ['form137-status-title', 'form137']
+  ].map(([id, section]) => [id, {
+    id,
+    focus(options) { focusCalls.push([id, options]); },
+    scrollIntoView(options) { scrollCalls.push([id, options]); },
+    closest() { return panels.find((panel) => panel.dataset.sectionPanel === section); }
+  }]));
+  const links = sectionNames.map((section) => {
+    const attributes = {};
+    return {
+      dataset: { studentDocumentSection: section },
+      attributes,
+      addEventListener(name, callback) { this[name] = callback; },
+      setAttribute(name, value) { attributes[name] = value; },
+      removeAttribute(name) { delete attributes[name]; }
+    };
+  });
+  const page = { dataset: { activeSection: 'digital' }, querySelectorAll(selector) { return selector === '[data-section-panel]' ? panels : links; } };
+  const windowStub = {
+    location: { pathname: '/documents/students/12', search: '', hash: '#physical-checklist-title' },
+    history: { pushState(_state, _title, url) { this.lastUrl = url; windowStub.location.hash = url.slice(url.indexOf('#')); } },
+    requestAnimationFrame(callback) { callback(); },
+    addEventListener(name, callback) { listeners[name] = callback; }
+  };
+  const documentStub = { querySelector() { return page; }, getElementById(id) { return targets[id] || null; } };
+  vm.runInNewContext(script, { document: documentStub, window: windowStub, URLSearchParams });
+  const activeSection = () => panels.find((panel) => !panel.hidden)?.dataset.sectionPanel;
+  assert.equal(activeSection(), 'paper');
+  assert.equal(links.find((link) => link.dataset.studentDocumentSection === 'paper').attributes['aria-current'], 'page');
+  assert.equal(focusCalls[0][0], 'physical-checklist-title');
+  assert.equal(focusCalls[0][1].preventScroll, true);
+  assert.equal(scrollCalls[0][0], 'physical-checklist-title');
+  assert.equal(scrollCalls[0][1].block, 'start');
+
+  windowStub.location.hash = '#previous-school-report-card-status-title';
+  listeners.hashchange();
+  assert.equal(activeSection(), 'paper');
+  assert.equal(focusCalls.at(-1)[0], 'previous-school-report-card-status-title');
+  windowStub.location.hash = '#form137-status-title';
+  listeners.hashchange();
+  assert.equal(activeSection(), 'form137');
+  assert.equal(focusCalls.at(-1)[0], 'form137-status-title');
+
+  let defaultPrevented = false;
+  links.find((link) => link.dataset.studentDocumentSection === 'digital').click({ preventDefault() { defaultPrevented = true; } });
+  assert.equal(defaultPrevented, true);
+  assert.equal(activeSection(), 'digital');
+  assert.match(windowStub.history.lastUrl, /#digital-submissions-title$/);
+  assert.equal(focusCalls.at(-1)[0], 'digital-submissions-title');
 });
 
 test('document preview links open the same-origin file in a modal and clear it on close', async () => {

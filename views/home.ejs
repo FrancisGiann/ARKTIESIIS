@@ -1,17 +1,120 @@
 <%- include('partials/head', { title }) %>
 <main class="page-shell home-page" id="main-content">
-  <section class="home-intro" aria-labelledby="home-title">
-    <h1 id="home-title">ARKTIESIIS school records, easier to find.</h1>
-    <p>ARKTIESIIS gives staff one searchable place for student profiles, enrollment, academic history, and required-document status.</p>
-    <section class="home-access" aria-labelledby="access-title">
-      <h2 id="access-title">For school staff and students</h2>
-      <p>Staff can manage school records and review documents. Students can sign in to view their own enrollment, classes, approved grades, documents, and finance activity.</p>
-      <a class="button button--primary" href="/login">Sign in to ARKTIESIIS</a>
-    </section>
+  <section class="home-hero" id="home-overview" aria-labelledby="home-title">
+    <div class="home-hero__copy">
+      <h1 id="home-title">School information, connected for everyday work.</h1>
+      <p>ARKTIESIIS brings student records, enrollment, schedules, academic work, and document review into one school system.</p>
+      <div class="home-hero__actions">
+        <a class="button button--primary home-sign-in" href="/login">Sign in to ARKTIESIIS</a>
+        <a class="home-hero__secondary" href="#home-features">Explore system features</a>
+      </div>
+      <p class="home-hero__account-note">Sign-in is for school-issued accounts.</p>
+    </div>
+    <figure class="home-visual">
+      <img src="/images/arktiesiis-campus-building-hero.png" alt="Street view of the Ark Technological Institute Education System Incorporated building at Lucena Branch, with its blue glass facade and ARK sign visible." width="1672" height="941" fetchpriority="high">
+      <figcaption>Ark Technological Institute Education System Incorporated · Lucena Branch</figcaption>
+    </figure>
   </section>
-  <figure class="home-visual" aria-label="Lucena Branch campus">
-    <img src="/images/arktiesiis-campus-building-hero.png" alt="Street view of the Ark Technological Institute Education System Incorporated building at Lucena Branch, with its blue glass facade and ARK sign visible." width="1672" height="941" fetchpriority="high">
-    <figcaption>Ark Technological Institute Education System Incorporated · Lucena Branch</figcaption>
-  </figure>
+
+  <nav class="home-section-nav" aria-label="Page sections">
+    <a href="#home-overview">Overview</a>
+    <a href="#home-features">Features</a>
+    <a href="#home-audiences">Who it’s for</a>
+    <a href="#home-help">Help</a>
+  </nav>
+
+  <section class="home-section home-features" id="home-features" aria-labelledby="home-features-title">
+    <div class="home-section-heading">
+      <h2 id="home-features-title">A clearer view of school records and work.</h2>
+      <p>Information follows the student and the task, so school staff and learners can find the parts relevant to their role.</p>
+    </div>
+    <div class="home-capabilities">
+      <article class="home-capability-feature">
+        <h3>Student records and enrollment</h3>
+        <p>Keep student profiles and term enrollment details together for the school’s day-to-day record work.</p>
+      </article>
+      <dl class="home-capability-list">
+        <div>
+          <dt>Schedules and grades</dt>
+          <dd>Students can view their schedule and approved grades. Teachers submit grade work for assigned classes for registrar review.</dd>
+        </div>
+        <div>
+          <dt>Document review</dt>
+          <dd>Students can follow permitted submission statuses. Authorized staff inspect documents and make acceptance decisions; prechecks provide limited support only.</dd>
+        </div>
+        <div>
+          <dt>Finance workflows</dt>
+          <dd>Finance staff manage fee, payment, and student-account tasks in their workspace.</dd>
+        </div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="home-section home-audiences" id="home-audiences" aria-labelledby="home-audiences-title">
+    <div class="home-section-heading">
+      <h2 id="home-audiences-title">The right view for each school user.</h2>
+      <p>Your account opens the workspace for your school role.</p>
+    </div>
+    <div class="home-audience-layout">
+      <section class="home-audience-student" aria-labelledby="home-students-title">
+        <h3 id="home-students-title">Students</h3>
+        <p>See your own school information, including schedules, approved grades, account details, and the status of permitted documents.</p>
+      </section>
+      <section class="home-audience-staff" aria-labelledby="home-staff-title">
+        <h3 id="home-staff-title">School staff</h3>
+        <dl class="home-staff-roles">
+          <div><dt>Registrar</dt><dd>Maintains student records and enrollment, and reviews academic and document work.</dd></div>
+          <div><dt>Teacher</dt><dd>Works with assigned classes and submits grade records for registrar review.</dd></div>
+          <div><dt>Finance</dt><dd>Handles fee, payment, and student-account workflows.</dd></div>
+          <div><dt>Database administrator</dt><dd>Manages user accounts and system-level record oversight.</dd></div>
+        </dl>
+      </section>
+    </div>
+  </section>
+
+  <section class="home-section home-help" id="home-help" aria-labelledby="home-help-title">
+    <div class="home-section-heading">
+      <h2 id="home-help-title">Getting started and common questions.</h2>
+      <p>Use the account provided by the school to continue to the workspace for your role.</p>
+    </div>
+    <div class="home-help-layout">
+      <section class="home-getting-started" aria-labelledby="home-start-title">
+        <h3 id="home-start-title">Getting started</h3>
+        <ol class="home-start-steps">
+          <li>Use the email address and password linked to your school account.</li>
+          <li><a href="/login">Sign in</a> and complete email verification if prompted.</li>
+          <li>Continue in the workspace available to your account.</li>
+        </ol>
+        <p>Ask school staff if you have not received an account.</p>
+      </section>
+      <section class="home-faq" aria-labelledby="home-faq-title">
+        <h3 id="home-faq-title">Frequently asked questions</h3>
+        <details class="home-faq-item">
+          <summary>How do I get a school account?</summary>
+          <p>Ask school staff if you have not received an account. Public registration is not available.</p>
+        </details>
+        <details class="home-faq-item">
+          <summary>How do I recover a forgotten password?</summary>
+          <p>Choose “Forgot your password?” on the <a href="/login">sign-in page</a>. The reset process uses the email associated with your school account.</p>
+        </details>
+        <details class="home-faq-item">
+          <summary>Can an automated precheck approve my document?</summary>
+          <p>No. Prechecks offer limited support and do not establish document authenticity or make acceptance decisions. Authorized staff inspect submissions and decide.</p>
+        </details>
+        <details class="home-faq-item">
+          <summary>Where can students check document status?</summary>
+          <p>After signing in, open Documents in the student workspace to see the status of permitted submissions.</p>
+        </details>
+      </section>
+    </div>
+  </section>
+
+  <section class="home-cta" aria-labelledby="home-cta-title">
+    <div>
+      <h2 id="home-cta-title">Continue to your school workspace.</h2>
+      <p>Sign in with your school-issued account to see the records and tasks for your role.</p>
+    </div>
+    <a class="button button--secondary" href="/login">Sign in</a>
+  </section>
 </main>
 <%- include('partials/foot') %>

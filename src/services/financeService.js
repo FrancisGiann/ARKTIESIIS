@@ -1,4 +1,6 @@
 const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
+const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
+const { runSerializableTransaction } = require('./transactionRetry');
 
 const ID_PATTERN = /^\d{1,10}$/;
 const MAX_MONEY_CENTS = 999999999999n;
@@ -114,29 +116,13 @@ function isUniqueConflict(error) {
 function createFinanceService({
   getPool = defaultGetPool,
   sql = defaultSql,
-  transactionFactory = (pool) => new sql.Transaction(pool)
+  transactionFactory = (pool) => new sql.Transaction(pool),
+  debtRevisionService = null
 } = {}) {
+  const debtRevisions = debtRevisionService || createFinanceDebtRevisionService({ getPool, sql, transactionFactory });
+
   async function runTransaction(callback) {
-    const pool = await getPool();
-    const transaction = transactionFactory(pool);
-    let started = false;
-    try {
-      await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-      started = true;
-      const result = await callback(transaction);
-      await transaction.commit();
-      started = false;
-      return result;
-    } catch (error) {
-      if (started) {
-        try {
-          await transaction.rollback();
-        } catch {
-          // Preserve the original failure without exposing database details to the caller.
-        }
-      }
-      throw error;
-    }
+    return runSerializableTransaction({ getPool, sql, transactionFactory }, callback);
   }
 
   async function requireFinanceActor(transaction, actorInput) {
@@ -449,6 +435,10 @@ function createFinanceService({
     const entry = validateTransaction(input);
     return runTransaction(async (transaction) => {
       const actor = await requireFinanceActor(transaction, actorInput);
+      const student = await debtRevisions.lockStudent(transaction, studentId);
+      if (!student) throw new FinanceServiceError('Student record not found.', 404);
+      if (student.status === 'archived') throw new FinanceServiceError('Archived students cannot receive new finance records.', 409);
+      const beforeDebt = (await debtRevisions.readSnapshot(transaction, studentId)).canonicalBalanceCents;
       const accountResult = await transaction.request()
         .input('studentId', sql.Int, studentId)
         .query(`SELECT a.id AS financial_account_id, CAST(a.balance AS CHAR(40)) AS balance, s.status
@@ -530,6 +520,7 @@ function createFinanceService({
           VALUES (@accountId, @transactionType, @amount, @description, @referenceNo, @actorId)`);
       const transactionId = Number(inserted.insertId || inserted.recordset?.[0]?.id);
       if (!Number.isSafeInteger(transactionId) || transactionId < 1) throw new Error('Financial transaction insert returned no identifier.');
+      await debtRevisions.recordIncreaseIfAny(transaction, studentId, beforeDebt);
       if (entry.clearEnrollmentId) {
         const cleared = await transaction.request()
           .input('enrollmentId', sql.Int, entry.clearEnrollmentId)

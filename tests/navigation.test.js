@@ -173,6 +173,7 @@ test('student section navigation uses real server pages with path-specific curre
   }
   const links = buildNavigation('student').items.filter((item) => item.id !== 'account');
   assert.ok(links.every((item) => !item.href.includes('#')), 'student navigation destinations are not in-page anchors');
+  assert.equal(buildNavigation('registrar', '//').currentPage, null, 'malformed network-path input does not make navigation throw');
 });
 
 test('finance navigation marks one destination for workspace, account, and annual statement routes', () => {
@@ -202,7 +203,7 @@ test('finance navigation marks one destination for workspace, account, and annua
 test('authenticated navigation only exposes destinations available to each role', async () => {
   const cases = [
     { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Audit activity', 'Documents', 'Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Legacy account history'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/legacy'], forbidden: [] },
-    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollment intake', 'Document review', 'Grade review', 'Class schedules', 'Subject catalog', 'Teacher assignments'], forbidden: ['/finance', '/admin'] },
+    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollment intake', 'Document review', 'Grade review', 'Class schedules', 'Subject catalog', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
     { role: 'teacher', path: '/teacher', labels: ['My classes', 'Submit grades'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/admin'] },
     { role: 'finance', path: '/finance', labels: ['Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Legacy account history'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/legacy'], forbidden: ['/registrar/records', '/documents', '/admin'] },
     { role: 'student', path: '/student', labels: ['Home', 'Schedule', 'Grades', 'Finance', 'My records', 'Documents'], forbidden: ['/registrar/records', '/finance', '/admin'] }
@@ -275,11 +276,11 @@ test('authenticated navigation only exposes destinations available to each role'
         const main = html.match(/<main class="page-shell student-home"[\s\S]*?<\/main>/)?.[0];
         assert.ok(main, 'student home content should render');
         assert.match(main, /Your current school day at a glance/);
-        assert.doesNotMatch(main, /student-shortcuts|Your school pages/, 'student home does not duplicate navigation links from the sidebar');
+        assert.match(main, /student-quick-links/);
         assert.match(main, /href="\/student\/schedule">View full schedule/);
         assert.match(main, /href="\/student\/records">My profile/);
         for (const href of ['/student/grades', '/student/finance', '/documents']) {
-          assert.doesNotMatch(main, new RegExp(`href="${href.replaceAll('/', '\\/')}`), `${href} remains in the sidebar rather than the home content`);
+          assert.match(main, new RegExp(`href="${href.replaceAll('/', '\\/')}`), `${href} is available from the student home quick links`);
         }
       }
       for (const href of scenario.forbidden) assert.doesNotMatch(html, new RegExp(`href="${href.replace('/', '\\/')}`));
@@ -324,7 +325,7 @@ test('student overview stays concise while all destinations remain in sidebar an
     assert.match(main, /href="\/student\/records">My profile/);
     assert.match(main, /Your current school day at a glance/);
     assert.doesNotMatch(main, /student-shortcuts|Your school pages/);
-    assert.doesNotMatch(main, /href="\/(student\/grades|student\/finance|documents)"/);
+    assert.match(main, /class="student-quick-links"[\s\S]*href="\/student\/grades"[\s\S]*href="\/documents"[\s\S]*href="\/student\/finance"/);
     assert.doesNotMatch(main, /₱|Approved grades|Enrollment history/);
 
     const destinations = ['Home', 'Schedule', 'Grades', 'Finance', 'My records', 'Documents'];
@@ -351,13 +352,19 @@ test('student records use the workspace rail and show a clear no-current-term st
     assert.match(html, /<main class="page-shell dashboard-page admin-page records-page"/);
     assert.match(html, /<h1>Student records<\/h1>/);
     assert.match(html, /No academic term is marked current\./);
-    assert.match(html, /Student master list/);
-    assert.match(html, /Academic terms/);
-    assert.match(html, /Sections/);
+    assert.match(html, /Find a student record/);
+    assert.doesNotMatch(html, /<h2 id="terms-title">Academic terms/);
+    assert.doesNotMatch(html, /<h2 id="sections-title">Sections/);
     assert.match(html, /name="search"/);
     assert.match(html, /name="termId"/);
     assert.ok(html.indexOf('records-context-strip') < html.indexOf('records-list-panel'));
-    assert.ok(html.indexOf('records-list-panel') < html.indexOf('records-management-grid'));
+    assert.ok(html.indexOf('No student records match these filters.') > html.indexOf('name="search"'));
+    assert.doesNotMatch(html, /records-management-grid/);
+    const setup = await fetch(`${baseUrl}/registrar/records?view=setup`, { headers: { cookie } });
+    const setupHtml = await setup.text();
+    assert.equal(setup.status, 200);
+    assert.match(setupHtml, /<h1>Academic setup<\/h1>/);
+    assert.match(setupHtml, /href="\/registrar\/records\?view=setup" aria-current="page">Academic setup<\/a>/);
   });
 });
 

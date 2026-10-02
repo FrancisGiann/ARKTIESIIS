@@ -1,12 +1,8 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
   <a class="context-back" href="/registrar/records/students/<%= student.id %>/edit">Back to student profile</a>
-  <section class="dashboard-heading">
-    <div>
-      <h1>Academic record</h1>
-      <p><%= student.student_no %> · <%= [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(' ') %></p>
-    </div>
-  </section>
+  <%- include('../partials/student-record-navigation', { student, activeStudentView: 'academics' }) %>
+  <h2 class="student-record-view-title">Academic record</h2>
   <% if (student.status === 'archived') { %>
     <p class="form-alert" role="status">This student record is archived. Existing enrollments, subjects, and grades are available for review; grade and subject changes are disabled.</p>
   <% } %>

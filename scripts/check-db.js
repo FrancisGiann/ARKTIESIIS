@@ -24,21 +24,24 @@ const REQUIRED_OBJECTS = Object.freeze([
   'v_finance_assessed_charge_due', 'v_finance_opening_liability_due', 'v_finance_legacy_account_balance',
   'student_document_requests', 'student_document_request_events', 'student_profile_revisions',
   'annual_registrar_confirmations', 'annual_enrollment_admin_revisions', 'finance_fee_comment_events',
-  'finance_handbook_number_events', 'v_document_latest_review_event', 'v_document_latest_decision_event',
+  'finance_handbook_number_events', 'student_document_clearance_events', 'student_document_claim_slips',
+  'v_document_latest_review_event', 'v_document_latest_decision_event',
   'v_document_latest_validation', 'v_form137_latest_status_event', 'v_previous_school_report_card_latest_status_event'
 ]);
 
 const REQUIRED_COLUMNS = Object.freeze({
   users: ['auth_session_version', 'must_change_password'],
-  students: ['birthplace', 'emergency_contact_person'],
+  students: ['birthplace', 'emergency_contact_person', 'debt_increase_revision'],
   documents: ['is_legacy_archive'],
   enrollments: ['finalized_at', 'annual_enrollment_id', 'term_scope_status'],
   annual_enrollments: ['esc_id', 'eform_status', 'finance_handbook_number'],
   previous_school_report_card_status_events: ['status'],
   finance_payment_allocations: ['legacy_opening_charge_id'],
-  assessed_charges: ['gross_amount', 'waived_amount']
+  assessed_charges: ['gross_amount', 'waived_amount'],
+  student_document_requests: ['expected_claim_date', 'handover_reference', 'current_claim_slip_id'],
+  student_document_request_events: ['handover_reference_before', 'handover_reference_after', 'handover_reference']
 });
-const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 10 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 11 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 function bindInList(request, values, prefix) {
   return values.map((value, index) => {
@@ -112,7 +115,7 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
       process.exitCode = 1;
       return;
     }
-    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.010.`);
+    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.011.`);
   } catch {
     logger.error('MariaDB database check failed. Confirm DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD, then run npm run db:setup.');
     process.exitCode = 1;

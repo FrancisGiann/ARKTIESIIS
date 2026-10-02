@@ -50,27 +50,6 @@
     </form>
   </section>
 
-  <section class="admin-section annual-counts-section" aria-labelledby="annual-counts-title">
-    <div class="admin-section__heading"><div><h2 id="annual-counts-title">Enrollment counts</h2><p>A secondary breakdown of distinct students by placement details. Not-applicable pre-entry terms and legacy semester rows are excluded.</p></div></div>
-    <details class="annual-counts-details">
-      <summary>Show count breakdown <span class="section-count"><%= counts.length %> groups</span></summary>
-      <% if (counts.length) { %>
-        <div class="table-scroll annual-counts-table" tabindex="0" aria-label="Annual enrollment counts by term and placement">
-          <table class="admin-table"><thead><tr><th scope="col">School year</th><th scope="col">Grade</th><th scope="col">Term</th><th scope="col">Section</th><th scope="col">Cluster</th><th scope="col">Strand</th><th scope="col">Gender</th><th scope="col">Placement status</th><th scope="col">Students</th></tr></thead>
-            <tbody><% for (const count of counts) { %><tr>
-              <td data-label="School year"><%= count.school_year %></td><td data-label="Grade"><%= count.grade_level %></td>
-              <td data-label="Term"><%= termLabel(count) %></td>
-              <td data-label="Section"><%= count.section_name %></td><td data-label="Cluster"><%= count.cluster %></td>
-              <td data-label="Strand"><%= count.strand %></td><td data-label="Gender"><%= count.gender %></td>
-              <td data-label="Placement status"><%= ({ pending_payment: 'Pending activation', enrolled: 'Enrolled', cancelled: 'Cancelled', dropped: 'Dropped', transferred: 'Transferred' })[count.enrollment_status] || 'Status review' %></td>
-              <td data-label="Students"><strong><%= count.student_count %></strong></td>
-            </tr><% } %></tbody>
-          </table>
-        </div>
-      <% } else { %><p class="empty-state">No annual enrollment counts match these filters.</p><% } %>
-    </details>
-  </section>
-
   <section class="admin-section annual-enrollments-section" aria-labelledby="annual-placements-title">
     <div class="admin-section__heading"><div><h2 id="annual-placements-title">Student annual records</h2><p>Each record keeps its matching term placements together. The entry term is confirmed by the registrar; finance records payments and clearances separately.</p></div></div>
     <% if (pagination.totalRecords) { %>
@@ -165,6 +144,27 @@
         <% } %>
       </div>
     <% } else { %><p class="empty-state">No annual enrollment records match these filters. Change or clear the filters, or start a new annual intake.</p><% } %>
+  </section>
+
+  <section class="admin-section annual-counts-section" aria-labelledby="annual-counts-title">
+    <div class="admin-section__heading"><div><h2 id="annual-counts-title">Enrollment counts</h2><p>Distinct students grouped by placement details. Not-applicable pre-entry terms and legacy semester rows are excluded.</p></div></div>
+    <details class="annual-counts-details">
+      <summary>Show count breakdown <span class="section-count"><%= counts.length %> groups</span></summary>
+      <% if (counts.length) { %>
+        <div class="table-scroll annual-counts-table" tabindex="0" aria-label="Annual enrollment counts by term and placement">
+          <table class="admin-table"><thead><tr><th scope="col">School year</th><th scope="col">Grade</th><th scope="col">Term</th><th scope="col">Section</th><th scope="col">Cluster</th><th scope="col">Strand</th><th scope="col">Gender</th><th scope="col">Placement status</th><th scope="col">Students</th></tr></thead>
+            <tbody><% for (const count of counts) { %><tr>
+              <td data-label="School year"><%= count.school_year %></td><td data-label="Grade"><%= count.grade_level %></td>
+              <td data-label="Term"><%= termLabel(count) %></td>
+              <td data-label="Section"><%= count.section_name %></td><td data-label="Cluster"><%= count.cluster %></td>
+              <td data-label="Strand"><%= count.strand %></td><td data-label="Gender"><%= count.gender %></td>
+              <td data-label="Placement status"><%= ({ pending_payment: 'Pending activation', enrolled: 'Enrolled', cancelled: 'Cancelled', dropped: 'Dropped', transferred: 'Transferred' })[count.enrollment_status] || 'Status review' %></td>
+              <td data-label="Students"><strong><%= count.student_count %></strong></td>
+            </tr><% } %></tbody>
+          </table>
+        </div>
+      <% } else { %><p class="empty-state">No annual enrollment counts match these filters.</p><% } %>
+    </details>
   </section>
   <p class="muted-copy"><a href="/registrar/intake/legacy">Open historic pending intake records</a></p>
 </main>

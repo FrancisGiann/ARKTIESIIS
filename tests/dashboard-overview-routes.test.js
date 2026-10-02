@@ -141,10 +141,12 @@ test('registrar overview renders term counts and filtered intake links without f
     const html = await response.text();
     assert.equal(response.status, 200);
     assert.match(html, /Active enrolled students · Second Term/);
-    assert.match(html, /<details class="registrar-overview__comparison">\s*<summary>Compare configured terms<\/summary>/);
-    assert.doesNotMatch(html, /<details class="registrar-overview__comparison" open>/);
-    assert.match(html, /<ol class="dashboard-comparison" aria-label="Active enrollment by configured term">/);
-    assert.doesNotMatch(html, /<table class="admin-table dashboard-chart__table/);
+    assert.match(html, /<section class="registrar-overview__term-comparison"[\s\S]*Grade 11 and Grade 12 by term/);
+    assert.match(html, /<details class="registrar-overview__details">\s*<summary>More enrollment counts and how they are counted<\/summary>/);
+    assert.doesNotMatch(html, /<details class="registrar-overview__details" open>/);
+    assert.match(html, /Active counts include active students with enrolled placements\. Legacy archive rows are excluded\./);
+    assert.match(html, /<ol class="dashboard-comparison registrar-term-chart__rows" aria-label="Active enrollment by configured term">/);
+    assert.match(html, /<span class="dashboard-chart__track" aria-hidden="true">/);
     const activeTermLink = accessibleCountLink(html, 'View 12 active enrolled students for Second Term');
     assert.equal(activeTermLink.text, '12');
     assert.deepEqual(Object.fromEntries(new URL(activeTermLink.href, baseUrl).searchParams), {
@@ -166,7 +168,7 @@ test('registrar overview renders term counts and filtered intake links without f
       schoolYear: '2026-2027', termId: '62', status: 'pending_payment', studentStatus: 'active'
     });
     assert.match(html, /Students finalized this year/);
-    assert.match(html, /Grade 11/);
+    assert.match(html, /Grade 11 and Grade 12 by term/);
     assert.match(html, /status=pending_payment/);
     assert.match(html, /status=dropped/);
     assert.match(html, /status=transferred/);

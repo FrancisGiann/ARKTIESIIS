@@ -4,6 +4,8 @@ const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = requir
 const { validateStudent, StudentRecordsError, normalizeRecordId } = require('./studentRecordsService');
 const { allocateStudentNumber, StudentNumberAllocationError } = require('./studentNumberAllocator');
 const { normalizeIntakeChecklistUpdates } = require('./physicalChecklistService');
+const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
+const { runSerializableTransaction } = require('./transactionRetry');
 
 const BCRYPT_ROUNDS = 12;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -174,21 +176,12 @@ function createAnnualEnrollmentService({
   physicalChecklistService = null,
   annualFinanceService = null
 } = {}) {
+  const debtRevisions = createFinanceDebtRevisionService({ getPool, sql, transactionFactory });
+
   async function runTransaction(callback) {
-    const pool = await getPool();
-    const transaction = transactionFactory(pool);
-    let started = false;
     try {
-      await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-      started = true;
-      const result = await callback(transaction);
-      await transaction.commit();
-      started = false;
-      return result;
+      return await runSerializableTransaction({ getPool, sql, transactionFactory }, callback);
     } catch (error) {
-      if (started) {
-        try { await transaction.rollback(); } catch { /* Keep the original error. */ }
-      }
       if (isDuplicateKeyError(error)) {
         throw new AnnualEnrollmentError('This student already has an annual enrollment for the selected school year.', 409);
       }
@@ -1323,8 +1316,17 @@ function createAnnualEnrollmentService({
     const expectedAssessmentId = input.assessmentId ? normalizeId(input.assessmentId, 'assessment') : null;
     const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ annualEnrollmentId, scheduleId, scheduleVersion,
       voucherCode, expectedAssessmentId, optionalLineIds, assessmentSnapshotFingerprint: input.snapshotFingerprint || null })).digest('hex');
+    const pool = await getPool();
+    const ownerResult = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+      .query('SELECT student_id FROM annual_enrollments WHERE id = @annualEnrollmentId');
+    const owner = ownerResult.recordset?.[0];
+    if (!owner) throw new AnnualEnrollmentError('Annual enrollment not found.', 404);
+    const ownerStudentId = Number(owner.student_id);
     return runTransaction(async (transaction) => {
       const actor = await requireRegistrar(transaction.request(), actorInput);
+      const student = await debtRevisions.lockStudent(transaction, ownerStudentId);
+      if (!student) throw new AnnualEnrollmentError('Student record not found.', 404);
+      if (student.status === 'archived') throw new AnnualEnrollmentError('Archived students cannot receive new enrollments.', 409);
       const priorResult = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
         .query(`SELECT id, annual_enrollment_id, request_fingerprint, assessment_id, payable_total
           FROM annual_registrar_confirmations WHERE idempotency_key = @idempotencyKey FOR UPDATE`);
@@ -1334,6 +1336,7 @@ function createAnnualEnrollmentService({
           throw new AnnualEnrollmentError('This confirmation token was already used for different fee or enrollment choices.', 409);
         }
         const saved = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+          .input('studentId', sql.Int, ownerStudentId)
           .query(`SELECT annual.student_id, annual.school_year, annual.grade_level, annual.entry_term_number,
               student.student_no, student.first_name, student.middle_name, student.last_name, student.suffix,
               term.term, section.name AS section_name
@@ -1343,7 +1346,7 @@ function createAnnualEnrollmentService({
               AND entry.annual_term_number = annual.entry_term_number
             INNER JOIN academic_terms AS term ON term.id = entry.academic_term_id
             LEFT JOIN sections AS section ON section.id = entry.section_id AND section.academic_term_id = entry.academic_term_id
-            WHERE annual.id = @annualEnrollmentId`);
+            WHERE annual.id = @annualEnrollmentId AND annual.student_id = @studentId`);
         const row = saved.recordset?.[0];
         if (!row) throw new AnnualEnrollmentError('The saved enrollment confirmation could not be loaded.', 409);
         return { annualEnrollmentId, studentId: Number(row.student_id), studentNo: row.student_no,
@@ -1353,6 +1356,7 @@ function createAnnualEnrollmentService({
           temporaryPassword: null, alreadyConfirmed: true };
       }
       const parentResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .input('studentId', sql.Int, ownerStudentId)
         .query(`SELECT annual.id, annual.student_id, annual.school_year, annual.grade_level, annual.voucher_code,
             annual.entry_term_number, annual.intake_status, annual.enrollment_start_date, student.status AS student_status,
             assessment.id AS existing_assessment_id, assessment.schedule_id AS existing_schedule_id,
@@ -1378,7 +1382,8 @@ function createAnnualEnrollmentService({
             ) AS latest
             WHERE latest.event_rank = 1
           ) AS latest_voucher_event ON latest_voucher_event.annual_enrollment_id = annual.id
-          WHERE annual.id = @annualEnrollmentId AND annual.intake_status <> 'legacy' FOR UPDATE`);
+          WHERE annual.id = @annualEnrollmentId AND annual.student_id = @studentId
+            AND annual.intake_status <> 'legacy' FOR UPDATE`);
       const parent = parentResult.recordset?.[0];
       if (!parent) throw new AnnualEnrollmentError('Annual enrollment not found.', 404);
       if (parent.student_status === 'archived') throw new AnnualEnrollmentError('Archived student records cannot be confirmed.', 409);
@@ -1392,7 +1397,7 @@ function createAnnualEnrollmentService({
       const existingAssessmentId = parent.existing_assessment_id == null ? null : Number(parent.existing_assessment_id);
       if (existingAssessmentId !== expectedAssessmentId) throw new AnnualEnrollmentError('The fee assessment changed after review. Reload the fee summary before confirming.', 409);
       const assessed = await annualFinanceService.confirmAnnualAssessmentInTransaction(transaction, actor.id, annualEnrollmentId,
-        optionalLineIds, { idempotencyKey, scheduleId, scheduleVersion, voucherCode, snapshotFingerprint: input.snapshotFingerprint });
+        optionalLineIds, { idempotencyKey, scheduleId, scheduleVersion, voucherCode, snapshotFingerprint: input.snapshotFingerprint, studentId: ownerStudentId });
       const assessmentId = normalizeId(String(assessed.assessmentId), 'assessment');
       const payableTotal = typeof assessed.total === 'string' && /^(?:0|[1-9]\d{0,9})\.\d{2}$/.test(assessed.total)
         ? assessed.total : null;

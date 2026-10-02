@@ -136,6 +136,13 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
     parseSingleUpload(req, res, (error) => {
       if (!error) return next();
       clearUploadBuffer(req.file);
+      const studentId = normalizeId(req.params.studentId);
+      if (studentId) return renderStudentDocuments(req, res, studentId, {
+        status: error.code === 'LIMIT_FILE_SIZE' ? 413 : 400,
+        error: uploadErrorMessage(error),
+        activeSection: 'digital',
+        formValues: req.body || {}
+      });
       return res.status(error.code === 'LIMIT_FILE_SIZE' ? 413 : 400).render('error', {
         title: 'Upload Error',
         message: uploadErrorMessage(error)
@@ -183,7 +190,7 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
     }
   }
 
-  async function renderStudentDocuments(req, res, studentId, { status = 200, error = null, form137Scan = null } = {}) {
+  async function renderStudentDocuments(req, res, studentId, { status = 200, error = null, form137Scan = null, activeSection = null, formValues = {} } = {}) {
     try {
       const [workspace, physicalChecklist] = await Promise.all([
         service.getStudentDocuments(req.authUser.id, studentId),
@@ -193,6 +200,14 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       physicalChecklist.idempotencyKeys = Object.fromEntries(physicalChecklist.requirements.map((item) => [item.requirement_code, crypto.randomUUID()]));
       physicalChecklist.additionalIdempotencyKey = crypto.randomUUID();
       physicalChecklist.additionalIdempotencyKeys = Object.fromEntries(physicalChecklist.additionalItems.map((item) => [item.requirement_code, crypto.randomUUID()]));
+      if (formValues.idempotencyKey) {
+        if (formValues.requirementCode === 'additional') {
+          const matchingItem = physicalChecklist.additionalItems.find((item) => item.requirement_name === formValues.requirementName);
+          if (matchingItem) physicalChecklist.additionalIdempotencyKeys[matchingItem.requirement_code] = formValues.idempotencyKey;
+          else physicalChecklist.additionalIdempotencyKey = formValues.idempotencyKey;
+        }
+        else if (formValues.requirementCode) physicalChecklist.idempotencyKeys[formValues.requirementCode] = formValues.idempotencyKey;
+      }
       return res.status(status).render('documents/student', {
         title: 'Student Documents',
         currentUser: req.authUser,
@@ -207,6 +222,10 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
         previousSchoolReportCardPhysicalStatusHistory: workspace.previousSchoolReportCardPhysicalStatusHistory || [],
         physicalChecklist,
         form137Scan,
+        activeDocumentSection: ['digital', 'paper', 'form137'].includes(activeSection)
+          ? activeSection
+          : ['digital', 'paper', 'form137'].includes(req.query.section) ? req.query.section : 'digital',
+        documentFormValues: formValues,
         uploadMaxMb,
         error,
         notice: req.query.notice === 'uploaded'
@@ -250,9 +269,9 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
     try {
       await checklistService.recordRequirement(req.authUser.id, studentId, req.body || {});
-      return res.redirect(303, `/documents/students/${studentId}?notice=physicalChecklistRecorded#physical-checklist-title`);
+      return res.redirect(303, `/documents/students/${studentId}?notice=physicalChecklistRecorded&section=paper#physical-checklist-title`);
     } catch (error) {
-      if (error instanceof PhysicalChecklistError && error.status < 500) return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message });
+      if (error instanceof PhysicalChecklistError && error.status < 500) return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'paper', formValues: { ...req.body, workflow: 'physicalChecklist' } });
       return renderError(res, error, 'The paper requirement status could not be saved.');
     }
   });
@@ -291,10 +310,10 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
       const result = await service.upload(req.authUser.id, { ...req.body, studentId }, req.file);
       processingService.schedulePendingProcessing();
-      return res.redirect(303, `/documents/students/${studentId}?notice=uploaded`);
+      return res.redirect(303, `/documents/students/${studentId}?notice=uploaded&section=digital#digital-submissions-title`);
     } catch (error) {
       if (error instanceof DocumentServiceError && error.status < 500) {
-        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message });
+        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'digital', formValues: req.body || {} });
       }
       return renderError(res, error, 'The document could not be uploaded.');
     } finally {
@@ -310,10 +329,10 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
     try {
       await service.recordForm137Status(req.authUser.id, studentId, req.body?.status, req.body?.instruction);
-      return res.redirect(303, `/documents/students/${studentId}?notice=form137StatusRecorded`);
+      return res.redirect(303, `/documents/students/${studentId}?notice=form137StatusRecorded&section=form137#form137-status-title`);
     } catch (error) {
       if (error instanceof DocumentServiceError && error.status < 500) {
-        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message });
+        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'form137', formValues: { ...req.body, workflow: 'form137' } });
       }
       return renderError(res, error, 'The Form 137 status could not be saved.');
     }
@@ -327,10 +346,10 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
     try {
       await service.recordPreviousSchoolReportCardPhysicalStatus(req.authUser.id, studentId, req.body?.status, req.body?.instruction);
-      return res.redirect(303, `/documents/students/${studentId}?notice=previousSchoolReportCardStatusRecorded#previous-school-report-card-status-title`);
+      return res.redirect(303, `/documents/students/${studentId}?notice=previousSchoolReportCardStatusRecorded&section=paper#previous-school-report-card-status-title`);
     } catch (error) {
       if (error instanceof DocumentServiceError && error.status < 500) {
-        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message });
+        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'paper', formValues: { ...req.body, workflow: 'reportCardPhysical' } });
       }
       return renderError(res, error, 'The previous-school report-card paper status could not be saved.');
     }
@@ -343,6 +362,8 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       if (!error) return next();
       clearUploadBuffer(req.file);
       const status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+      const studentId = normalizeId(req.params.studentId);
+      if (studentId) return renderStudentDocuments(req, res, studentId, { status, error: status === 413 ? 'The selected scan exceeds the configured upload limit.' : 'Choose one PDF, JPEG, or PNG scan file.', activeSection: 'form137' });
       return res.status(status).render('error', {
         title: 'Form 137 Scan',
         message: error.code === 'LIMIT_FILE_SIZE'
@@ -361,11 +382,12 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       studentId = normalizeId(req.params.studentId);
       if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
       const result = await scanService.scan(req.authUser.id, studentId, req.file);
-      return renderStudentDocuments(req, res, studentId, { form137Scan: result });
+      return renderStudentDocuments(req, res, studentId, { form137Scan: result, activeSection: 'form137' });
     } catch (error) {
       if (error instanceof DocumentServiceError || error instanceof Form137ScanError) {
-        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message });
+        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'form137' });
       }
+      if (studentId) return renderStudentDocuments(req, res, studentId, { status: 503, error: 'The temporary Form 137 scan could not be processed. Inspect the physical paper and record its status manually.', activeSection: 'form137' });
       return renderError(res, error, 'The temporary Form 137 scan could not be processed. Inspect the physical paper and record its status manually.');
     } finally {
       clearUploadBuffer(req.file);

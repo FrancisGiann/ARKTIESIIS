@@ -1,0 +1,20 @@
+<% const studentFullName = [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(' '); %>
+<header class="student-record-identity">
+  <div>
+    <h1><%= studentFullName %></h1>
+    <% if (student.student_no || student.lrn) { %><p><% if (student.student_no) { %>Student no. <%= student.student_no %><% } %><% if (student.student_no && student.lrn) { %> · <% } %><% if (student.lrn) { %>LRN <%= student.lrn %><% } %></p><% } %>
+  </div>
+  <% if (student.status) { %><span class="record-status <%= student.status === 'active' ? 'record-status--active' : student.status === 'archived' ? 'record-status--archived' : '' %>"><%= student.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></span><% } %>
+</header>
+<nav class="student-record-navigation" aria-label="Student record sections">
+  <% const studentRecordLinks = [
+    ['overview', 'Overview', `/registrar/records/students/${student.id}`],
+    ['profile', 'Profile', `/registrar/records/students/${student.id}/edit`],
+    ['academics', 'Academics', `/registrar/records/students/${student.id}/academic`],
+    ['documents', 'Documents', `/documents/students/${student.id}`],
+    ['history', 'History', `/registrar/records/students/${student.id}?view=history`]
+  ]; %>
+  <% for (const [view, label, href] of studentRecordLinks) { %>
+    <a href="<%= href %>" <% if (activeStudentView === view || (activeStudentView === 'requests' && view === 'documents')) { %>aria-current="page"<% } %>><%= label %></a>
+  <% } %>
+</nav>

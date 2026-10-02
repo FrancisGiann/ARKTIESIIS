@@ -24,7 +24,8 @@ const navigationByRole = {
     { id: 'grade-submissions', label: 'Grade review', href: '/registrar/grade-submissions', group: 'Academic work' },
     { id: 'schedules', label: 'Class schedules', href: '/registrar/schedules', group: 'Academic work' },
     { id: 'subjects', label: 'Subject catalog', href: '/registrar/records/subjects', group: 'Setup' },
-    { id: 'assignments', label: 'Teacher assignments', href: '/registrar/records/teacher-assignments', group: 'Setup' }
+    { id: 'assignments', label: 'Teacher assignments', href: '/registrar/records/teacher-assignments', group: 'Setup' },
+    { id: 'academic-setup', label: 'Academic setup', href: '/registrar/records?view=setup', group: 'Setup' }
   ],
   teacher: [
     { id: 'teacher-workspace', label: 'My classes', href: '/teacher', group: 'Teaching' },
@@ -42,7 +43,13 @@ const navigationByRole = {
 };
 
 function buildNavigation(role, currentPath = '') {
-  const path = typeof currentPath === 'string' ? currentPath.split(/[?#]/, 1)[0] : '';
+  const source = typeof currentPath === 'string' ? currentPath : '';
+  const queryStart = source.indexOf('?');
+  const hashStart = source.indexOf('#');
+  const queryEnd = hashStart === -1 ? source.length : hashStart;
+  const pathEnd = queryStart === -1 ? queryEnd : Math.min(queryStart, queryEnd);
+  const path = source.slice(0, pathEnd) || '/';
+  const query = new URLSearchParams(queryStart === -1 || queryStart >= queryEnd ? '' : source.slice(queryStart + 1, queryEnd));
   const annualFinanceStudentPath = /^\/finance\/students\/[^/]+\/(?:annual|statement)(?:\/|$)/.test(path);
   const legacyFinanceStudentPath = /^\/finance\/students\/[^/]+(?:\/.*)?$/.test(path) && !annualFinanceStudentPath;
   const roleItems = (navigationByRole[role] || []).map((item) => {
@@ -50,10 +57,11 @@ function buildNavigation(role, currentPath = '') {
     if (item.id === 'overview') current = path === '/admin' || path === '/registrar';
     else if (item.id === 'accounts') current = path.startsWith('/admin/users') || path.startsWith('/admin/student-accounts');
     else if (item.id === 'audit') current = path === '/admin/audit';
-    else if (item.id === 'students') current = path === '/registrar/records' || path.startsWith('/registrar/records/students');
+    else if (item.id === 'students') current = (path === '/registrar/records' && (role !== 'registrar' || query.get('view') !== 'setup')) || path.startsWith('/registrar/records/students');
     else if (item.id === 'intake') current = path.startsWith('/registrar/intake');
     else if (item.id === 'subjects') current = path.startsWith('/registrar/records/subjects');
     else if (item.id === 'assignments') current = path.startsWith('/registrar/records/teacher-assignments');
+    else if (item.id === 'academic-setup') current = role === 'registrar' && path === '/registrar/records' && query.get('view') === 'setup';
     else if (item.id === 'schedules') current = path.startsWith('/registrar/schedules');
     else if (item.id === 'grade-submissions') current = path.startsWith('/registrar/grade-submissions');
     else if (item.id === 'teacher-workspace') current = path === '/teacher';

@@ -5,7 +5,7 @@
       <h1>Finance overview</h1>
       <p>Review term payment and balance states for confirmed annual assessments.</p>
     </div>
-    <a class="button button--primary" href="/finance">Open roster</a>
+    <div class="dashboard-heading__actions"><a class="button button--secondary" href="/finance/document-clearance">Document clearance queue</a><a class="button button--primary" href="/finance">Open roster</a></div>
   </header>
 
   <section class="finance-overview" aria-labelledby="finance-overview-heading">
@@ -72,7 +72,10 @@
           <% }); %>
         </ol>
       </figure>
-      <p class="finance-overview__method">Payment date does not affect term attribution. Reversed payments, legacy transactions, unreconciled balances, and unattributed history are excluded. Settled balances may include a credit.</p>
+      <details class="finance-overview-method">
+        <summary>Counting methodology</summary>
+        <p>Payment date does not affect term attribution. Reversed payments, legacy transactions, unreconciled balances, and unattributed history are excluded. Settled balances may include a credit.</p>
+      </details>
     <% } %>
   </section>
 </main>

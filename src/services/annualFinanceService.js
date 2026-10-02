@@ -3,6 +3,8 @@ const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = requir
 const { parseMoneyCents, formatMoneyCents } = require('./financeService');
 const { normalizeId, normalizeSearchTerm } = require('./financeService');
 const { createAnnualFinanceCasesService } = require('./annualFinanceCasesService');
+const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
+const { runSerializableTransaction } = require('./transactionRetry');
 
 const FEE_CATEGORIES = new Set(['tuition', 'miscellaneous', 'uniform', 'id', 'activity', 'retake', 'other']);
 const ID_PATTERN = /^\d{1,10}$/;
@@ -230,7 +232,8 @@ function createAnnualFinanceService({
   sql = defaultSql,
   transactionFactory = (pool) => new sql.Transaction(pool)
 } = {}) {
-  const financeCases = createAnnualFinanceCasesService({ getPool, sql, transactionFactory });
+  const debtRevisions = createFinanceDebtRevisionService({ getPool, sql, transactionFactory });
+  const financeCases = createAnnualFinanceCasesService({ getPool, sql, transactionFactory, debtRevisions });
 
   async function loadAssessmentSnapshot(transaction, assessmentId) {
     const result = await transaction.request().input('assessmentId', sql.Int, assessmentId)
@@ -250,20 +253,9 @@ function createAnnualFinanceService({
   }
 
   async function runTransaction(callback) {
-    const pool = await getPool();
-    const transaction = transactionFactory(pool);
-    let started = false;
     try {
-      await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-      started = true;
-      const result = await callback(transaction);
-      await transaction.commit();
-      started = false;
-      return result;
+      return await runSerializableTransaction({ getPool, sql, transactionFactory }, callback);
     } catch (error) {
-      if (started) {
-        try { await transaction.rollback(); } catch { /* Keep the original error. */ }
-      }
       if (isDuplicateKeyError(error)) throw new AnnualFinanceError('This finance submission was already recorded or conflicts with an existing record.', 409);
       throw error;
     }
@@ -333,9 +325,7 @@ function createAnnualFinanceService({
   }
 
   async function verifyStudent(transaction, studentId) {
-    const result = await transaction.request().input('studentId', sql.Int, studentId)
-      .query(`SELECT id, status FROM students WHERE id = @studentId FOR UPDATE`);
-    const student = result.recordset?.[0];
+    const student = await debtRevisions.lockStudent(transaction, studentId);
     if (!student) throw new AnnualFinanceError('Student record not found.', 404);
     if (student.status === 'archived') throw new AnnualFinanceError('Archived students cannot receive new finance records.', 409);
     return student;
@@ -574,10 +564,23 @@ function createAnnualFinanceService({
     const fingerprint = requestFingerprint({ annualEnrollmentId, scheduleId: expectedScheduleId, scheduleVersion: expectedScheduleVersion,
       voucherCode: expectedVoucherCode, optionalLineIds: [...selectedOptionalLines].sort((a, b) => a - b),
       ...(actorRole === 'registrar' ? { snapshotFingerprint: expectedSnapshotFingerprint } : {}) });
+    let ownerStudentId;
+    if (sharedTransaction) {
+      ownerStudentId = id(confirmation.studentId, 'student');
+    } else {
+      const pool = await getPool();
+      const ownerResult = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .query('SELECT student_id FROM annual_enrollments WHERE id = @annualEnrollmentId');
+      const owner = ownerResult.recordset?.[0];
+      if (!owner) throw new AnnualFinanceError('Annual enrollment not found.', 404);
+      ownerStudentId = Number(owner.student_id);
+    }
     const execute = async (transaction) => {
       const actor = actorRole === 'registrar'
         ? await requireRegistrarActor(transaction.request(), actorInput)
         : await requireFinanceActor(transaction.request(), actorInput);
+      if (!sharedTransaction) await verifyStudent(transaction, ownerStudentId);
+      const beforeDebt = (await debtRevisions.readSnapshot(transaction, ownerStudentId)).canonicalBalanceCents;
       const priorAssessment = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
         .query(`SELECT id, annual_enrollment_id, request_fingerprint
           FROM annual_assessments  WHERE idempotency_key = @idempotencyKey FOR UPDATE`);
@@ -688,6 +691,7 @@ function createAnnualFinanceService({
             VALUES (@assessmentId, @annualEnrollmentId, @enrollmentId, @scheduleLineId, @category, @lineName, @installment, @amount, @amount)`);
         await financeCases.applyApprovedExemptionsForCharge(transaction, actor, annualEnrollmentId, generatedId(insertedCharge, 'Assessed charge'));
       }
+      await debtRevisions.recordIncreaseIfAny(transaction, ownerStudentId, beforeDebt);
       await writeAudit(transaction, actor, 'annual_assessment_posted', assessmentId, {
         annualEnrollmentId, scheduleId: schedule.id, scheduleVersion: schedule.version_no,
         voucherCodeSnapshot: parent.voucher_code, lineCount: includedLines.length
@@ -1022,6 +1026,7 @@ function createAnnualFinanceService({
     return runTransaction(async (transaction) => {
       const actor = await requireFinanceActor(transaction.request(), actorInput);
       await verifyStudent(transaction, studentId);
+      const debtBefore = (await debtRevisions.readSnapshot(transaction, studentId)).canonicalBalanceCents;
       const prior = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
         .query(`SELECT allocation_release.id, allocation_release.allocation_id, allocation_release.request_fingerprint, payment.student_id
           FROM finance_payment_allocation_releases AS allocation_release
@@ -1067,6 +1072,7 @@ function createAnnualFinanceService({
       await writeAudit(transaction, actor, 'payment_allocation_released', releaseId, {
         studentId, allocationId, amount: formatMoneyCents(amountCents), reason
       });
+      await debtRevisions.recordIncreaseIfAny(transaction, studentId, debtBefore);
       return { releaseId };
     });
   }
@@ -1081,6 +1087,7 @@ function createAnnualFinanceService({
     return runTransaction(async (transaction) => {
       const actor = await requireFinanceActor(transaction.request(), actorInput);
       await verifyStudent(transaction, studentId);
+      const debtBefore = (await debtRevisions.readSnapshot(transaction, studentId)).canonicalBalanceCents;
       const prior = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
         .query(`SELECT reconciliation_release.id, reconciliation_release.reconciliation_id, reconciliation_release.request_fingerprint, account.student_id
           FROM finance_legacy_reconciliation_releases AS reconciliation_release
@@ -1130,6 +1137,7 @@ function createAnnualFinanceService({
       await writeAudit(transaction, actor, 'legacy_reconciliation_released', releaseId, {
         studentId, reconciliationId, amount: formatMoneyCents(amountCents), reason
       });
+      await debtRevisions.recordIncreaseIfAny(transaction, studentId, debtBefore);
       return { releaseId };
     });
   }
@@ -1214,6 +1222,7 @@ function createAnnualFinanceService({
     return runTransaction(async (transaction) => {
       const actor = await requireFinanceActor(transaction.request(), actorInput);
       await verifyStudent(transaction, studentId);
+      const debtBefore = (await debtRevisions.readSnapshot(transaction, studentId)).canonicalBalanceCents;
       const duplicate = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
         .query(`SELECT adjustment.id, adjustment.charge_id, adjustment.request_fingerprint, annual.student_id
           FROM finance_charge_adjustments AS adjustment
@@ -1248,6 +1257,7 @@ function createAnnualFinanceService({
         if (termResult.recordset?.[0]) await requireFreshApproval(transaction, actor, Number(termResult.recordset[0].enrollment_id), 'positive_charge_adjustment');
       }
       await writeAudit(transaction, actor, 'charge_adjustment_recorded', adjustmentId, { studentId, chargeId, amount: formatMoneyCents(amountCents), reason });
+      await debtRevisions.recordIncreaseIfAny(transaction, studentId, debtBefore);
       return { adjustmentId };
     });
   }
@@ -1266,6 +1276,7 @@ function createAnnualFinanceService({
     return runTransaction(async (transaction) => {
       const actor = await requireFinanceActor(transaction.request(), actorInput);
       await verifyStudent(transaction, studentId);
+      const debtBefore = (await debtRevisions.readSnapshot(transaction, studentId)).canonicalBalanceCents;
       const existing = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
         .query(`SELECT charge.id, charge.enrollment_id, charge.request_fingerprint, annual.student_id
           FROM assessed_charges AS charge
@@ -1309,6 +1320,7 @@ function createAnnualFinanceService({
       await writeAudit(transaction, actor, 'supplementary_charge_added', chargeId, {
         studentId, enrollmentId, feeCategory: category, lineName, installment, amount: formatMoneyCents(amountCents), reason
       });
+      await debtRevisions.recordIncreaseIfAny(transaction, studentId, debtBefore);
       return { chargeId };
     });
   }
@@ -1321,6 +1333,8 @@ function createAnnualFinanceService({
     const fingerprint = requestFingerprint({ studentId, adjustmentId, reason });
     return runTransaction(async (transaction) => {
       const actor = await requireFinanceActor(transaction.request(), actorInput);
+      await verifyStudent(transaction, studentId);
+      const debtBefore = (await debtRevisions.readSnapshot(transaction, studentId)).canonicalBalanceCents;
       const prior = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
         .query(`SELECT adjustment.id, adjustment.reverses_adjustment_id, adjustment.request_fingerprint, annual.student_id
           FROM finance_charge_adjustments AS adjustment
@@ -1361,6 +1375,7 @@ function createAnnualFinanceService({
       }
       const reversalId = generatedId(result, 'Charge adjustment reversal');
       await writeAudit(transaction, actor, 'charge_adjustment_reversed', reversalId, { studentId, adjustmentId, reason });
+      await debtRevisions.recordIncreaseIfAny(transaction, studentId, debtBefore);
       return { reversalId };
     });
   }
@@ -1373,6 +1388,8 @@ function createAnnualFinanceService({
     const fingerprint = requestFingerprint({ studentId, paymentId, reason });
     return runTransaction(async (transaction) => {
       const actor = await requireFinanceActor(transaction.request(), actorInput);
+      await verifyStudent(transaction, studentId);
+      const debtBefore = (await debtRevisions.readSnapshot(transaction, studentId)).canonicalBalanceCents;
       const prior = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
         .query(`SELECT reversal.id, reversal.payment_id, reversal.request_fingerprint, payment.student_id
           FROM finance_payment_reversals AS reversal
@@ -1406,6 +1423,8 @@ function createAnnualFinanceService({
         await requireFreshApproval(transaction, actor, Number(row.enrollment_id), 'qualifying_payment_reversed');
       }
       await writeAudit(transaction, actor, 'payment_reversed', paymentId, { studentId, reason });
+      await debtRevisions.recordIncreaseIfAny(transaction, studentId, debtBefore);
+      return { paymentId, reversed: true };
       return { paymentId, reversed: true };
     });
   }
@@ -1421,6 +1440,8 @@ function createAnnualFinanceService({
     const fingerprint = requestFingerprint({ studentId, transactionId, reason, allocations: canonicalAllocations(allocations) });
     return runTransaction(async (transaction) => {
       const actor = await requireFinanceActor(transaction.request(), actorInput);
+      await verifyStudent(transaction, studentId);
+      const debtBefore = (await debtRevisions.readSnapshot(transaction, studentId)).canonicalBalanceCents;
       const legacyResult = await transaction.request().input('transactionId', sql.Int, transactionId)
         .input('studentId', sql.Int, studentId)
         .query(`SELECT transaction_record.id, transaction_record.transaction_type,
@@ -1485,6 +1506,7 @@ function createAnnualFinanceService({
             VALUES (@transactionId, @chargeId, @amount, @reason, @batchId, @actorId)`);
       }
       await writeAudit(transaction, actor, 'legacy_payment_reconciled', transactionId, { studentId, batchId, amount: formatMoneyCents(requestedCents), reason, allocationCount: allocations.length });
+      await debtRevisions.recordIncreaseIfAny(transaction, studentId, debtBefore);
       return { transactionId, batchId, amount: formatMoneyCents(requestedCents) };
     });
   }

@@ -11,11 +11,11 @@ const { splitSqlStatements, readSqlFile, readForwardMigrations, validateAppliedV
   assert.match(statements[1], /\`semi;colon\`/);
 });
 
-test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.010 migrations', () => {
+test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.011 migrations', () => {
   const baseline = readSqlFile(path.resolve('database/mariadb/schema.sql'));
   assert.ok(baseline.some((statement) => /v2\.001/.test(statement)));
   const migrations = readForwardMigrations();
-  assert.deepEqual(migrations.map(({ version }) => version), Array.from({ length: 9 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
+  assert.deepEqual(migrations.map(({ version }) => version), Array.from({ length: 10 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
   assert.ok(migrations.every(({ statements }) => statements.length > 0));
 });
 
@@ -30,7 +30,10 @@ test('setup rejects Hostinger-incompatible schema DDL', () => {
 });
 
 test('setup refuses unknown or discontinuous migration history', () => {
-  assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.011'])), /Unknown migration/);
+  assert.doesNotThrow(() => validateAppliedVersions(new Set(
+    Array.from({ length: 11 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
+  )));
+  assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.012'])), /Unknown migration/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.003'])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.002'])), /no recorded MariaDB v2.001/);
 });

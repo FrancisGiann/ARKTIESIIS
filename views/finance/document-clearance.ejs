@@ -1,0 +1,96 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page" id="main-content">
+  <header class="dashboard-heading">
+    <div><h1>Document request finance clearance</h1><p>Review a student’s all-years annual and legacy outstanding balance before a registrar starts document processing.</p></div>
+    <a class="button button--secondary" href="/finance/overview">Finance overview</a>
+  </header>
+  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+
+  <section class="finance-panel" aria-labelledby="document-clearance-filter-title">
+    <div class="admin-section__heading"><div><h2 id="document-clearance-filter-title">Find requests</h2><p>Search by student name or number, document, or request reference. By default, the queue shows requests that can still progress.</p></div></div>
+    <form class="finance-roster-filters" method="get" action="/finance/document-clearance">
+      <div class="finance-roster-primary-filters">
+        <div class="field"><label for="document-clearance-search">Student or document</label><input id="document-clearance-search" type="search" name="search" maxlength="100" value="<%= queue.filters.search %>"></div>
+        <div class="field"><label for="document-clearance-status">Request or finance status</label>
+          <select id="document-clearance-status" name="status">
+            <option value="">Active requests</option>
+            <% for (const [value, label] of [['pending','Finance pending'],['on_hold','On hold'],['approved','Approved'],['reapproval_required','Reapproval required'],['withdrawn','Withdrawn'],['requested','Requested'],['processing','Processing'],['ready','Ready'],['released','Released'],['cancelled','Cancelled']]) { %>
+              <option value="<%= value %>" <%= queue.filters.status === value ? 'selected' : '' %>><%= label %></option>
+            <% } %>
+          </select>
+        </div>
+        <input type="hidden" name="page" value="1">
+        <button class="button button--secondary" type="submit">Apply filters</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="finance-panel" aria-labelledby="document-clearance-results-title">
+    <div class="admin-section__heading"><div><h2 id="document-clearance-results-title">Finance review queue</h2><p>All displayed totals combine outstanding annual assessments for every school year, verified opening liabilities, and legacy balances. Unallocated annual payment credit is not subtracted.</p></div></div>
+    <% if (!queue.rows.length) { %><p class="empty-state">No requests match these filters.</p><% } else { %>
+      <div class="finance-roster-record-list">
+        <% for (const row of queue.rows) { %>
+          <% const fullName = [row.first_name, row.middle_name, row.last_name, row.suffix].filter(Boolean).join(' '); %>
+          <% const requestedDate = row.requested_on instanceof Date ? row.requested_on.toISOString().slice(0, 10) : String(row.requested_on || '').slice(0, 10); %>
+          <% const hasOutstanding = /[1-9]/.test(String(row.outstanding || '0.00')); %>
+          <article class="finance-roster-record">
+            <div class="finance-roster-record__header">
+              <div><h3><%= fullName %> <span class="record-status"><%= row.clearanceStatus.replaceAll('_', ' ') %></span></h3>
+                <p><strong><%= row.student_no || 'Student number not recorded' %></strong> · <%= row.document_name %> (<%= row.document_type %>)</p>
+                <p>Requested <%= requestedDate %> · Request reference: <%= row.reference_text || row.id %> · Request status: <%= row.request_status %></p>
+                <p><a href="/finance/students/<%= row.student_id %>">Review student finance account</a></p>
+              </div>
+              <div class="finance-roster-record__balance"><span>All-years outstanding</span><strong><%= row.ledgerComplete ? `₱${row.outstanding}` : 'Needs finance review' %></strong></div>
+            </div>
+            <% if (!row.ledgerComplete) { %><p class="form-alert">The ledger is missing a required finance source or a confirmed annual assessment. Verify the account records before approving.</p><% } %>
+            <% if (row.reason && row.clearanceStatus !== 'approved') { %><p><strong>Finance reason:</strong> <%= row.reason %></p><% } %>
+            <% if (row.payment_arrangement) { %><p><strong>Payment arrangement:</strong> <%= row.payment_arrangement %></p><% } %>
+            <% if (row.finance_note) { %><p><strong>Private finance note:</strong> <%= row.finance_note %></p><% } %>
+            <% if (row.request_status !== 'released' && row.request_status !== 'cancelled') { %>
+              <details class="finance-clearance-actions"><summary>Record finance decision</summary>
+                <div class="admin-form-grid">
+                  <% if (row.ledgerComplete) { %>
+                    <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision">
+                      <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= row.decisionKeys.approve %>">
+                      <input type="hidden" name="decision" value="approve"><input type="hidden" name="expectedRevision" value="<%= row.currentRevision %>"><input type="hidden" name="expectedOutstanding" value="<%= row.outstanding %>">
+                      <input type="hidden" name="search" value="<%= queue.filters.search %>"><input type="hidden" name="status" value="<%= queue.filters.status %>"><input type="hidden" name="page" value="<%= queue.filters.page %>">
+                      <% if (hasOutstanding) { %>
+                        <div class="field"><label for="clearance-reason-<%= row.id %>">Approval reason</label><textarea id="clearance-reason-<%= row.id %>" name="reason" maxlength="1000" required></textarea></div>
+                        <div class="field"><label for="clearance-arrangement-<%= row.id %>">Payment arrangement</label><textarea id="clearance-arrangement-<%= row.id %>" name="paymentArrangement" maxlength="1000" required></textarea></div>
+                      <% } %>
+                      <div class="field"><label for="clearance-note-<%= row.id %>">Private finance note (finance staff only, optional)</label><textarea id="clearance-note-<%= row.id %>" name="financeNote" maxlength="1000"></textarea></div>
+                      <label class="check-row"><input type="checkbox" name="ledgerReviewConfirmed" value="1" required> I reviewed the complete all-years annual and legacy balance shown above.</label>
+                      <button class="button button--primary" type="submit">Approve clearance</button>
+                    </form>
+                  <% } %>
+                  <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision">
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= row.decisionKeys.hold %>"><input type="hidden" name="decision" value="hold">
+                    <input type="hidden" name="search" value="<%= queue.filters.search %>"><input type="hidden" name="status" value="<%= queue.filters.status %>"><input type="hidden" name="page" value="<%= queue.filters.page %>">
+                    <div class="field"><label for="hold-reason-<%= row.id %>">Reason to place on hold</label><textarea id="hold-reason-<%= row.id %>" name="reason" maxlength="1000" minlength="5" required></textarea></div>
+                    <div class="field"><label for="hold-note-<%= row.id %>">Private finance note (optional)</label><textarea id="hold-note-<%= row.id %>" name="financeNote" maxlength="1000"></textarea></div>
+                    <button class="button button--secondary" type="submit">Place on hold</button>
+                  </form>
+                  <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision">
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= row.decisionKeys.withdraw %>"><input type="hidden" name="decision" value="withdraw">
+                    <input type="hidden" name="search" value="<%= queue.filters.search %>"><input type="hidden" name="status" value="<%= queue.filters.status %>"><input type="hidden" name="page" value="<%= queue.filters.page %>">
+                    <div class="field"><label for="withdraw-reason-<%= row.id %>">Reason to withdraw clearance</label><textarea id="withdraw-reason-<%= row.id %>" name="reason" maxlength="1000" minlength="5" required></textarea></div>
+                    <div class="field"><label for="withdraw-note-<%= row.id %>">Private finance note (optional)</label><textarea id="withdraw-note-<%= row.id %>" name="financeNote" maxlength="1000"></textarea></div>
+                    <button class="button button--secondary" type="submit">Withdraw clearance</button>
+                  </form>
+                </div>
+              </details>
+            <% } %>
+          </article>
+        <% } %>
+      </div>
+      <nav class="finance-roster-pagination" aria-label="Finance clearance queue pages">
+        <% const queuePageHref = (pageNumber) => { const query = new URLSearchParams(); if (queue.filters.search) query.set('search', queue.filters.search); if (queue.filters.status) query.set('status', queue.filters.status); query.set('page', String(pageNumber)); return `/finance/document-clearance?${query.toString()}`; }; %>
+        <% if (queue.filters.page > 1) { %><a class="button button--secondary" href="<%= queuePageHref(queue.filters.page - 1) %>">Previous</a><% } %>
+        <span>Page <%= queue.filters.page %></span>
+        <% if (queue.hasNext) { %><a class="button button--secondary" href="<%= queuePageHref(queue.filters.page + 1) %>">Next</a><% } %>
+      </nav>
+    <% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

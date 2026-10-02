@@ -21,7 +21,7 @@ function fakeSql() {
   };
 }
 
-function transactionalService(onQuery) {
+function transactionalService(onQuery, debtRevisionService = null) {
   const log = { queries: [], isolation: null, committed: false, rolledBack: false };
   const transactionFactory = () => ({
     async begin(isolation) { log.isolation = isolation; },
@@ -40,13 +40,23 @@ function transactionalService(onQuery) {
     async rollback() { log.rolledBack = true; }
   });
   return {
-    service: createFinanceService({ getPool: async () => ({}), sql: fakeSql(), transactionFactory }),
+    service: createFinanceService({ getPool: async () => ({}), sql: fakeSql(), transactionFactory, debtRevisionService }),
     log
   };
 }
 
 function transactionFixture({ actorRole = 'finance', balance = '10.00', duplicate = false, failAt = null, studentExists = true, studentStatus = 'active', accountExists = false, transactionAccountExists = true, enrollmentStatus = 'pending_payment', enrollmentClearanceStatus = 'pending', enrollmentPaymentTransactionId = null, paymentAvailable = true, clearanceUpdateRows = 1, openingLiabilityExists = false } = {}) {
   let stateBalance = balance;
+  let debtRevision = 0;
+  const debtRevisionService = {
+    async lockStudent(_transaction, studentId) { return studentExists ? { id: studentId, status: studentStatus, debtIncreaseRevision: String(debtRevision) } : null; },
+    async readSnapshot() { return { canonicalBalanceCents: parseMoneyCents(stateBalance, { allowNegative: true, allowZero: true }) }; },
+    async recordIncreaseIfAny(_transaction, _studentId, before) {
+      const after = parseMoneyCents(stateBalance, { allowNegative: true, allowZero: true });
+      if (after > before) debtRevision += 1;
+      return { increased: after > before, debtIncreaseRevision: String(debtRevision) };
+    }
+  };
   const { service, log } = transactionalService(({ statement, values }) => {
     if (statement.includes('FROM users')) return { recordset: actorRole ? [{ id: 7, role: actorRole }] : [] };
     if (statement.includes('FROM annual_enrollments')) return { recordset: [] };
@@ -78,7 +88,7 @@ function transactionFixture({ actorRole = 'finance', balance = '10.00', duplicat
       return { recordset: [] };
     }
     throw new Error(`Unexpected query: ${statement}`);
-  });
+  }, debtRevisionService);
   return { service, log, getBalance: () => stateBalance };
 }
 
@@ -297,9 +307,7 @@ test('archived students cannot receive new finance accounts or ledger entries', 
   await assert.rejects(archivedLedger.service.recordTransaction(7, '22', { transactionType: 'charge', amount: '1.00' }), /Archived students cannot receive new finance records/);
   assert.equal(archivedLedger.log.rolledBack, true);
   const accountRead = archivedLedger.log.queries.find(({ statement }) => statement.includes('FROM financial_accounts AS a'));
-  assert.match(accountRead.statement, /s\.status/);
-  assert.match(accountRead.statement, /students AS s/);
-  assert.match(accountRead.statement, /FOR UPDATE/);
+  assert.equal(accountRead, undefined, 'the student lock rejects archived records before any finance account reads');
   assert.equal(archivedLedger.log.queries.some(({ statement }) => statement.includes('UPDATE financial_accounts')), false);
   assert.equal(archivedLedger.log.queries.some(({ statement }) => statement.includes('INSERT INTO financial_transactions')), false);
   assert.equal(archivedLedger.log.queries.some(({ statement }) => statement.includes('INSERT INTO audit_logs')), false);

@@ -4,7 +4,7 @@
 
 Create the database and its single database user in Hostinger hPanel before connecting the application. Hostinger prefixes both values; use the exact database name, user, and password shown by hPanel. Configure the app with `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`; a local socket path is optional for development. The usual Hostinger application connection uses `localhost` and port `3306`.
 
-The setup runner connects to the selected existing database. It does not run `CREATE DATABASE`, `DROP DATABASE`, triggers, procedures, or `DEFINER` statements. Run `npm run db:setup` once against the empty database and then `npm run db:check`. Setup records `v2.001` and applies forward migrations through `v2.010`; app startup and deployment do not rerun schema setup automatically.
+The setup runner connects to the selected existing database. It does not run `CREATE DATABASE`, `DROP DATABASE`, triggers, procedures, or `DEFINER` statements. Run `npm run db:setup` once against the empty database and then `npm run db:check`. Setup records `v2.001` and applies forward migrations through `v2.011`; app startup and deployment do not rerun schema setup automatically.
 
 Hostinger's Business/Cloud Node deployment runs npm commands as part of deployment and does not provide SSH commands for one-time database setup. A maintainer can apply migrations from a trusted development machine by temporarily allowing its IP through Remote MySQL, running setup and the schema check, then removing that remote access. Use the repository's MariaDB setup runner so it records the baseline and migration versions consistently; the hPanel SQL import path has not been verified for this bookkeeping. Do not upload the old SQL Server baseline or its migrations. Review Hostinger's [Node.js deployment workflow](https://www.hostinger.com/support/how-to-deploy-a-nodejs-website-in-hostinger/), [redeployment guide](https://www.hostinger.com/support/how-to-redeploy-a-node-js-application/), [environment variable guidance](https://www.hostinger.com/support/how-to-edit-or-add-environment-variables-after-deployment/), [remote MySQL access](https://www.hostinger.com/support/1583546-how-to-set-up-remote-mysql-access-in-hostinger/), and [database creation guide](https://www.hostinger.com/support/1583542-how-to-create-a-new-mysql-database-in-hostinger/) before deployment because account controls can change.
 
@@ -39,6 +39,34 @@ npm run demo:seed-hostinger -- --apply --target-database 'PREFIX_database' --con
 
 Apply is allowed only when the database contains no business records apart from the exact baseline physical-requirement reference rows. It inserts five fictional role accounts, one fictional student with a single term/section/subject, and an audit marker. It never prints the account passwords, has no reset mode, and refuses a second application. Keep the passwords in an approved private store, test each role through its email-code sign-in, and remove or rotate demo accounts before real student data is used. Do not point the seed at an existing school database.
 
+#### One-time demo data expansion
+
+After the Hostinger seed succeeds, `demo:expand-hostinger` can add a larger fictional dataset to that same demo database. Run it only while the original seed profile is untouched: the expansion checks the exact `hostinger-demo-seed-v1` marker, the complete MariaDB v2.011 schema, the exact DB name twice, and the baseline counts for the five seeded accounts and one initial academic record. It also requires `NODE_ENV=production`, `DEV_PASSWORD_ONLY_LOGIN=false`, the remote hPanel database host, and the existing database credentials. It uses an advisory lock and one transaction; the expansion marker is written with the fixture rows, and a failed run rolls back. A successful run cannot be repeated.
+
+From the trusted maintenance machine, temporarily allow its IP through Hostinger Remote MySQL. Use the same private production environment that can connect to the existing demo database. Replace both example names with the exact prefixed `DB_NAME` shown in hPanel, then run dry-run before apply:
+
+```sh
+npm run demo:expand-hostinger -- --dry-run --target-database 'PREFIX_database' --confirm-database 'PREFIX_database' --confirm-seed-marker hostinger-demo-seed-v1
+npm run demo:expand-hostinger -- --apply --target-database 'PREFIX_database' --confirm-database 'PREFIX_database' --confirm-seed-marker hostinger-demo-seed-v1
+```
+
+The expansion adds 99 fictional, unlinked students, bringing the total to 100. Twenty use the existing Term 1 section, subject, and teacher assignment as legacy-style enrolled academic fixtures; each has four synthetic grade rows. Those direct fixture grades are not teacher workbook submissions or registrar approvals. The other 79 have pending annual intake records with three pending-payment term placements each, plus 79 assessments and 474 assessed fee lines. Twenty-seven receive sample payments and allocations so finance dashboards show varied balances. The run adds 12 sections, four subjects, 24 teacher assignments, six fee schedules, and the two remaining terms for the seeded school year. It also adds 25 timetable rows linked to the seeded teacher's active assignments: one for the original assignment and one for each new assignment. The expansion requires that the original seed has no timetable rows and rejects any existing class schedule; it does not modify existing schedules. Generated days, times, and demo rooms do not overlap for this teacher within a term. It does not add login accounts, documents, registrar confirmations, or grades for pending students. All fee amounts are fictional examples, not approved tuition rates.
+
+The expansion’s focused test uses a mocked MariaDB connection to verify counts, one-time behavior, collision guards, rollback, and safe errors; it does not connect to Hostinger. After the approved apply, check the expected counts in the app and remove the temporary Remote MySQL allowlist entry.
+
+#### One-time demo enrollment activation
+
+After the expansion is applied, `demo:activate-hostinger-enrollments` can confirm a fixed set of 20 fictional annual intakes through the registrar confirmation service: student ordinals 22–31 in Grade 11 and 51–60 in Grade 12. It requires the production-shaped remote database, the exact seeded demo account marker, the exact expansion marker, the v2.011 schema, and the reserved 99-student/79-intake fixture state. Dry-run previews every selected intake's existing assessment before apply. It does not create logins or documents and does not change the saved assessment or charge snapshot.
+
+Use the private, ignored `.env.hostinger-activate` file with production database settings. For Hostinger Remote MySQL, select IPv4 first: the maintenance connection may otherwise choose IPv6, which can be denied even while the trusted IPv4 address is allowlisted. Replace both example database names with the exact prefixed `DB_NAME` from hPanel:
+
+```sh
+node --dns-result-order=ipv4first --env-file=.env.hostinger-activate scripts/activate-hostinger-demo-enrollments.js --dry-run --target-database 'PREFIX_database' --confirm-database 'PREFIX_database' --confirm-seed-marker hostinger-demo-seed-v1 --confirm-expansion-marker hostinger-demo-expansion-v1
+node --dns-result-order=ipv4first --env-file=.env.hostinger-activate scripts/activate-hostinger-demo-enrollments.js --apply --target-database 'PREFIX_database' --confirm-database 'PREFIX_database' --confirm-seed-marker hostinger-demo-seed-v1 --confirm-expansion-marker hostinger-demo-expansion-v1
+```
+
+Each registrar confirmation and entry-term activation is a transaction with a deterministic idempotency key. The 20-student batch commits one learner at a time so an interrupted run can be resumed with the same apply command; the one-time completion marker is added only after all 20 are verified. After success, the current Term 1 registrar overview should show 20 enrolled and 59 pending activation. The later term placements remain pending payment until their own workflow is completed. Review that overview, then remove the temporary Remote MySQL allowlist entry. This one-time operation is for the fictional demo database only.
+
 ### Temporary password-only sign-in for the dummy-data demo
 
 Email two-factor authentication remains the production default. If groupmates need direct access to the seeded dummy-data deployment, configure these environment variables in Hostinger hPanel for that app:
@@ -66,6 +94,6 @@ Back up the MariaDB database and private upload directory as a coordinated pair 
 
 ## Migration and self-link invariants
 
-The MariaDB schema is a fresh baseline in `database/mariadb/schema.sql`, with numbered forward-only migrations in `database/mariadb/migrations/`. Migration `010_latest_event_views.sql` adds latest-event views for document histories and physical-status records without depending on triggers or stored programs.
+The MariaDB schema is a fresh baseline in `database/mariadb/schema.sql`, with numbered forward-only migrations in `database/mariadb/migrations/`. Migration `010_latest_event_views.sql` adds latest-event views for document histories and physical-status records without depending on triggers or stored programs. Migration `011_document_request_finance_clearance.sql` adds the student debt-increase revision and append-only finance-clearance and claim-slip histories; apply it through the setup runner before deploying code that uses document clearance.
 
 The MariaDB schema cannot enforce that `documents.supersedes_document_id` differs from the same row's auto-increment id with a `CHECK` constraint. `documentService.reupload` rejects a self-link before the transaction commits; `tests/documents.test.js` covers that invariant through the service path. The view migration does not change that rule.

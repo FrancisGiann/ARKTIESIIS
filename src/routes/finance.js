@@ -6,6 +6,10 @@ const { AnnualFinanceError, createAnnualFinanceService } = require('../services/
 const { FinanceCasesError, createAnnualFinanceCasesService } = require('../services/annualFinanceCasesService');
 const { FinanceReportsError, createAnnualFinanceReportsService } = require('../services/annualFinanceReportsService');
 const { FinanceDashboardError, createFinanceDashboardService } = require('../services/financeDashboardService');
+const {
+  StudentDocumentFinanceClearanceError,
+  createStudentDocumentFinanceClearanceService
+} = require('../services/studentDocumentFinanceClearanceService');
 const { isDuplicateKeyError } = require('../config/database');
 
 const notices = {
@@ -43,13 +47,14 @@ function detailUrl(req, studentId, notice) {
   return `/finance/students/${studentId}${suffix ? `?${suffix}` : ''}`;
 }
 
-function createFinanceRouter({ getPool, sql, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService } = {}) {
+function createFinanceRouter({ getPool, sql, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, documentClearanceService } = {}) {
   const router = express.Router();
   const service = financeService || createFinanceService({ getPool, sql });
   const annual = annualFinanceService || createAnnualFinanceService({ getPool, sql });
   const cases = financeCasesService || createAnnualFinanceCasesService({ getPool, sql });
   const reports = financeReportsService || createAnnualFinanceReportsService({ getPool, sql });
   const dashboard = financeDashboardService || createFinanceDashboardService({ getPool, sql });
+  const documentClearance = documentClearanceService || createStudentDocumentFinanceClearanceService({ getPool, sql });
 
   function repeated(value) {
     if (value == null) return [];
@@ -305,6 +310,54 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The financial account could not be loaded.' });
     }
   }
+
+  async function renderDocumentClearanceQueue(req, res, { status = 200, error = null, filters = req.query } = {}) {
+    try {
+      const queue = await documentClearance.getFinanceQueue(req.authUser.id, filters);
+      queue.rows = queue.rows.map((row) => ({ ...row, decisionKeys: {
+        approve: crypto.randomUUID(), hold: crypto.randomUUID(), withdraw: crypto.randomUUID()
+      } }));
+      return res.status(status).set('Cache-Control', 'private, no-store').render('finance/document-clearance', {
+        title: 'Document finance clearance', currentUser: req.authUser,
+        csrfToken: ensureCsrfToken(req), queue, error, notice: req.query.notice === 'decisionRecorded' ? 'Finance decision recorded.' : null
+      });
+    } catch (loadError) {
+      if (loadError instanceof StudentDocumentFinanceClearanceError) {
+        return res.status(loadError.status).set('Cache-Control', 'private, no-store').render('finance/document-clearance', {
+          title: 'Document finance clearance', currentUser: req.authUser,
+          csrfToken: ensureCsrfToken(req), queue: { rows: [], filters: { search: '', status: '', page: 1 } },
+          error: loadError.message, notice: null
+        });
+      }
+      return res.status(503).set('Cache-Control', 'private, no-store').render('error', {
+        title: 'Service Unavailable', message: 'The document clearance queue could not be loaded.'
+      });
+    }
+  }
+
+  router.get('/document-clearance', (req, res) => renderDocumentClearanceQueue(req, res));
+
+  router.post('/document-clearance/:requestId/decision', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).set('Cache-Control', 'private, no-store').render('error', {
+      title: 'Forbidden', message: 'The form session expired. Reload the page and try again.'
+    });
+    try {
+      await documentClearance.decideClearance(req.authUser.id, req.params.requestId, req.body);
+      const query = new URLSearchParams();
+      for (const key of ['search', 'status', 'page']) {
+        if (typeof req.body[key] === 'string' && req.body[key]) query.set(key, req.body[key]);
+      }
+      query.set('notice', 'decisionRecorded');
+      return res.redirect(303, `/finance/document-clearance?${query.toString()}`);
+    } catch (error) {
+      if (error instanceof StudentDocumentFinanceClearanceError) {
+        return renderDocumentClearanceQueue(req, res, { status: error.status, error: error.message, filters: req.body });
+      }
+      return res.status(503).set('Cache-Control', 'private, no-store').render('error', {
+        title: 'Service Unavailable', message: 'The finance clearance decision could not be saved.'
+      });
+    }
+  });
 
   router.get('/overview', async (req, res) => {
     try {

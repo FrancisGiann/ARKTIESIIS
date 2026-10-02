@@ -1,15 +1,13 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/registrar/records">Back to student records</a>
-  <section class="dashboard-heading">
-    <div>
-      <h1><%= student ? 'Student record' : 'Create student profile' %></h1>
-      <p><% if (student) { %>Student number <%= student.student_no %><% } else { %>Enter the student’s master record details. The number is assigned automatically from the current academic year.<% } %></p>
-    </div>
-    <div class="admin-heading-actions">
-      <% if (student) { %><a class="button button--primary" href="/registrar/records/students/<%= student.id %>/academic">Academic record</a><% } %>
-    </div>
-  </section>
+  <% if (student) { %>
+    <a class="context-back" href="/registrar/records">Back to student search</a>
+    <%- include('../partials/student-record-navigation', { student, activeStudentView: 'profile' }) %>
+    <h2 class="student-record-view-title">Profile</h2>
+  <% } else { %>
+    <a class="context-back" href="/registrar/records">Back to student records</a>
+    <section class="dashboard-heading"><div><h1>Create student profile</h1><p>Enter the student’s master record details. The number is assigned automatically from the current academic year.</p></div></section>
+  <% } %>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
@@ -53,8 +51,8 @@
   </section>
 
   <% if (student) { %>
-    <section class="admin-section" aria-labelledby="student-access-title">
-      <div class="admin-section__heading"><div><h2 id="student-access-title">Student login</h2><p>Login access is separate from the retained student profile and history.</p></div></div>
+    <details class="student-profile-control">
+      <summary><strong>Student login</strong><span>Linked account state and access controls</span></summary>
       <p>Linked account: <%= student.user_id ? (student.linked_account_is_active ? 'Active' : 'Inactive') : 'No login account linked' %></p>
       <% if (currentUser.role === 'registrar' && student.status !== 'archived' && student.user_id && student.linked_account_is_active) { %>
         <form class="form-stack records-compact-form" method="post" action="/registrar/records/students/<%= student.id %>/login/deactivate" data-submitting-message="Deactivating the linked student login. Please wait.">
@@ -71,10 +69,11 @@
           <button class="button button--secondary button--align-start" type="submit">Archive student record</button>
         </form>
       <% } %>
-    </section>
+    </details>
 
-    <section class="admin-section" aria-labelledby="enrollments-title">
-      <div class="admin-section__heading"><div><h2 id="enrollments-title">Enrollment history</h2><p>Saving an existing student and term updates its section. The term and selected section must match.</p></div></div>
+    <details class="student-profile-control">
+      <summary><strong>Enrollment history and controls</strong><span>Review existing terms or add an enrollment</span></summary>
+      <div class="student-profile-control__body">
       <% if (enrollments.length) { %>
         <div class="table-scroll" tabindex="0" aria-label="Student enrollment history">
           <table class="admin-table"><thead><tr><th scope="col">Academic term</th><th scope="col">Section</th><th scope="col">Status</th><th scope="col">Enrolled</th></tr></thead><tbody>
@@ -97,7 +96,8 @@
         </div>
         <button class="button button--primary button--align-start" type="submit" <%= terms.length ? '' : 'disabled' %>>Save enrollment</button>
       </form><% } %>
-    </section>
+      </div>
+    </details>
   <% } %>
 </main>
 <%- include('../partials/foot') %>

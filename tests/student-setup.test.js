@@ -452,6 +452,7 @@ test('finance records and clears only the selected pending enrollment with the p
         async query(statement) {
           log.queries.push({ statement, values: { ...values } });
           if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'finance' }] };
+          if (statement.includes('SELECT id, status FROM students') && statement.includes('FOR UPDATE')) return { recordset: [{ id: values.studentId, status: 'active' }] };
           if (statement.includes('FROM annual_enrollments')) return { recordset: [] };
           if (statement.includes('FROM finance_legacy_opening_charges')) return { recordset: [] };
           if (statement.includes('FROM financial_accounts AS a')) return { recordset: [{ financial_account_id: 30, balance, status: 'active' }] };
@@ -469,7 +470,13 @@ test('finance records and clears only the selected pending enrollment with the p
     async commit() { log.committed = true; },
     async rollback() { log.rolledBack = true; }
   });
-  const service = createFinanceService({ getPool: async () => ({}), sql: fakeSql(), transactionFactory });
+  const service = createFinanceService({ getPool: async () => ({}), sql: fakeSql(), transactionFactory,
+    debtRevisionService: {
+      async lockStudent(_transaction, studentId) { return { id: studentId, status: 'active', debtIncreaseRevision: '0' }; },
+      async readSnapshot() { return { canonicalBalanceCents: 1000n }; },
+      async recordIncreaseIfAny() { return { increased: false }; }
+    }
+  });
   const input = { transactionType: 'payment', amount: '2.00', clearEnrollmentId: '51', confirmEnrollmentClearance: '1' };
   const result = await service.recordTransaction(7, 22, input);
   assert.equal(result.transactionId, 91);

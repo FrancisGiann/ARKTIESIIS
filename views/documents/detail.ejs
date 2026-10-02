@@ -1,41 +1,48 @@
 <%- include('../partials/head', { title }) %>
-<main class="page-shell dashboard-page records-page" id="main-content">
+<main class="page-shell dashboard-page records-page document-detail-page" id="main-content">
   <% const latestDecision = document.decisions[0] || null; %>
   <% const correctionRequested = latestDecision ? latestDecision.decision_type === 'correction_requested' : document.reviewEvents[0]?.action_type === 'correction_requested'; %>
   <% const hasCorrectedSubmission = document.history.some((item) => String(item.supersedes_document_id) === String(document.id)); %>
-  <section class="dashboard-heading">
+  <% if (isStaff) { %><%- include('../partials/student-record-navigation', { student: { id: document.student_id, student_no: document.student_no, first_name: document.first_name, middle_name: document.middle_name, last_name: document.last_name }, activeStudentView: 'documents' }) %><% } %>
+  <section class="dashboard-heading document-detail-heading">
     <div>
-      <h1><%= documentTypeLabel(document.document_type) %><%= document.document_type === 'report_card' ? ' · Enrollment submission' : '' %></h1>
+      <% if (isStaff) { %><h2><%= documentTypeLabel(document.document_type) %><%= document.document_type === 'report_card' ? ' · Enrollment submission' : '' %></h2><% } else { %><h1><%= documentTypeLabel(document.document_type) %><%= document.document_type === 'report_card' ? ' · Enrollment submission' : '' %></h1><% } %>
       <p>Submission #<%= document.id %><% if (isStaff) { %> · <%= document.student_no %> · <%= [document.first_name, document.middle_name, document.last_name].filter(Boolean).join(' ') %><% } %></p>
     </div>
     <div class="admin-heading-actions">
-      <a class="button button--secondary" href="<%= isStaff ? `/documents/students/${document.student_id}` : '/documents' %>"><%= isStaff ? 'Student documents' : 'My documents' %></a>
-      <% if (!['image/jpeg', 'image/png'].includes(document.mime_type)) { %><a class="button button--primary" href="/documents/<%= document.id %>/preview" data-document-preview-trigger data-preview-title="<%= document.original_filename %>" data-preview-mime="<%= document.mime_type || '' %>" aria-haspopup="dialog" aria-controls="document-preview-dialog">View document</a><% } %>
+      <% if (!isStaff) { %><a class="button button--secondary" href="/documents">My documents</a><% } %>
       <a class="button button--secondary" href="/documents/<%= document.id %>/download">Download file</a>
     </div>
   </section>
 
-  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
-  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
-  <% if (!isStaff && ['good_moral', 'psa_birth_certificate', 'report_card'].includes(document.document_type) && latestDecision?.decision_type === 'rejected' && typeof latestDecision.reason === 'string' && latestDecision.reason.trim()) { %>
-    <section class="form-alert document-rejection-callout" role="status" aria-labelledby="rejection-reason-title">
-      <strong id="rejection-reason-title">Reason for rejection</strong>
-      <p><%= latestDecision.reason.trim() %></p>
-    </section>
-  <% } %>
+  <div class="document-detail-notices">
+    <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+    <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+    <% if (!isStaff && ['good_moral', 'psa_birth_certificate', 'report_card'].includes(document.document_type) && latestDecision?.decision_type === 'rejected' && typeof latestDecision.reason === 'string' && latestDecision.reason.trim()) { %>
+      <section class="form-alert document-rejection-callout" role="status" aria-labelledby="rejection-reason-title">
+        <strong id="rejection-reason-title">Reason for rejection</strong>
+        <p><%= latestDecision.reason.trim() %></p>
+      </section>
+    <% } %>
+  </div>
 
-  <div class="document-detail-overview <%= ['image/jpeg', 'image/png'].includes(document.mime_type) ? 'document-detail-overview--with-preview' : '' %>">
+  <div class="document-review-layout">
+    <section class="admin-section document-source-pane" aria-labelledby="document-source-title">
+      <div class="admin-section__heading"><div><h2 id="document-source-title">Source document</h2><% if (isStaff) { %><p>Inspect the submitted pages before recording a staff decision.</p><% } %></div></div>
   <% if (['image/jpeg', 'image/png'].includes(document.mime_type)) { %>
-    <section class="admin-section document-image-thumbnail-card" aria-labelledby="document-image-title">
-      <div class="admin-section__heading"><div><h2 id="document-image-title">Document preview</h2><p>Select the thumbnail to inspect the full image.</p></div></div>
       <a class="document-image-thumbnail" href="/documents/<%= document.id %>/preview" data-document-preview-trigger data-preview-title="<%= document.original_filename %>" data-preview-mime="<%= document.mime_type || '' %>" aria-haspopup="dialog" aria-controls="document-preview-dialog" aria-label="Open full-size preview of <%= document.original_filename %>">
         <span class="document-image-thumbnail__viewport"><img src="/documents/<%= document.id %>/preview" alt="Uploaded <%= documentTypeLabel(document.document_type) %> image: <%= document.original_filename %>"></span>
         <span class="document-image-thumbnail__label">Open full-size image</span>
       </a>
-    </section>
+  <% } else if (document.mime_type === 'application/pdf') { %>
+      <iframe class="document-source-frame" src="/documents/<%= document.id %>/preview" title="Source PDF: <%= document.original_filename %>" loading="lazy"></iframe>
+  <% } else { %>
+      <p class="empty-state">Use the document link above to inspect this file in the browser.</p>
   <% } %>
+      <p class="document-source-links"><a class="text-link" href="/documents/<%= document.id %>/preview" target="_blank" rel="noopener">Open source in a new tab</a><span aria-hidden="true">·</span><a class="text-link" href="/documents/<%= document.id %>/download">Download source</a></p>
+    </section>
 
-  <section class="admin-section document-detail-card" aria-labelledby="submission-title">
+  <section class="admin-section document-detail-card document-submission-facts" aria-labelledby="submission-title">
     <div class="admin-section__heading"><div><h2 id="submission-title">Submission</h2><p><% if (document.isArchivedReportCard) { %>This historical report-card file is retained as a read-only archive. New previous-school report-card scans are enrollment submissions; current grades use the separate teacher workbook review workflow.<% } else if (document.document_type === 'report_card') { %>This digital scan was submitted as an enrollment requirement. It receives a limited precheck for the visible linked student name and configured file format. Staff inspect the source and make every final decision. The precheck does not extract or change grades.<% } else if (document.document_type === 'form_137') { %>This is a historical Form 137 file. New records use a separate physical status workflow; authorized staff may send a temporary scan to Gemini for field suggestions. Scans and suggestions are not retained in that workflow.<% } else if (isStaff) { %>Gemini provides field suggestions for staff. Inspect the source file before making a decision.<% } else { %>This is the file submitted for review. Staff make the final decision after inspecting the source.<% } %></p></div></div>
     <dl class="student-profile-grid">
       <div><dt>File name</dt><dd><%= document.original_filename %></dd></div>
@@ -46,13 +53,12 @@
       <div><dt>Submission version</dt><dd><%= document.supersedes_document_id ? `Corrected from submission #${document.supersedes_document_id}` : 'Original submission' %></dd></div>
     </dl>
   </section>
-
   </div>
 
   <% if (document.isArchivedReportCard) { %>
-    <section class="admin-section"><p class="muted-copy">This historical report card can be read and downloaded by authorized staff. It does not enter current Gemini field-extraction or document-review workflows.</p></section>
+    <section class="admin-section document-findings-pane"><p class="muted-copy">This historical report card can be read and downloaded by authorized staff. It does not enter current Gemini field-extraction or document-review workflows.</p></section>
   <% } else if (document.document_type === 'report_card') { %>
-    <section class="admin-section document-detail-card" aria-labelledby="report-card-review-title">
+    <section class="admin-section document-detail-card document-findings-pane" aria-labelledby="report-card-review-title">
       <div class="admin-section__heading"><div><h2 id="report-card-review-title"><%= isStaff ? 'Previous-school report-card scan review' : 'Staff review' %></h2><p>This review is for the digital enrollment submission. The limited precheck compares the visible student name with the linked record and checks PDF/JPEG/PNG format. It does not extract grades, establish authenticity, or make an acceptance decision. Staff must inspect the source; this workflow never writes grades.</p></div></div>
       <% if (isStaff) { %>
         <% if (document.validation) { %>
@@ -95,7 +101,7 @@
     </section>
   <% } else if (isStaff && document.document_type !== 'form_137') { %>
     <% const automatedCheckOutcome = document.validation?.automatedCheckOutcome || 'unavailable'; %>
-    <section class="admin-section document-detail-card" aria-labelledby="precheck-result-title">
+    <section class="admin-section document-detail-card document-findings-pane" aria-labelledby="precheck-result-title">
       <div class="admin-section__heading"><div><h2 id="precheck-result-title">Automated precheck</h2><p>Gemini receives the uploaded file bytes and returns configured field suggestions: the linked student name and, for Good Moral Certificates, issuing school and visible certificate-context clues. Suggestions can be inaccurate.</p></div></div>
       <div class="document-precheck-status document-precheck-status--<%= automatedCheckOutcome %>" role="status">
         <strong><%= automatedCheckOutcome === 'pass' ? 'Configured checks passed' : automatedCheckOutcome === 'attention' ? 'Needs attention' : 'Checks unavailable' %></strong>
@@ -146,11 +152,11 @@
       <% } %>
     </section>
   <% } else if (isStaff) { %>
-    <section class="admin-section"><p class="muted-copy">This historical Form 137 file is available to authorized staff. Current status history is stored separately; authorized staff may send the paper for temporary Gemini suggestions. Scans and results are not saved in that workflow.</p></section>
+    <section class="admin-section document-findings-pane"><p class="muted-copy">This historical Form 137 file is available to authorized staff. Current status history is stored separately; authorized staff may send the paper for temporary Gemini suggestions. Scans and results are not saved in that workflow.</p></section>
   <% } %>
 
   <% if (isStaff && !document.isArchivedReportCard && document.document_type !== 'form_137' && ['needs_review', 'failed'].includes(document.status) && !['verified', 'rejected'].includes(latestDecision?.decision_type)) { %>
-    <section class="admin-section" aria-labelledby="review-actions-title">
+    <section class="admin-section document-decision-pane" aria-labelledby="review-actions-title">
       <div class="admin-section__heading"><div><h2 id="review-actions-title">Staff review decision</h2><p>Inspect the source document, then complete the checklist to record verification, request a corrected upload, or reject it. The checklist records staff observations and does not determine authenticity. <% if (document.validation?.requiresOverrideReason) { %>A reason is required to verify despite a configured-check warning or unavailable precheck.<% } %></p></div></div>
       <div class="document-review-actions">
         <form class="form-stack document-review-action document-review-action--verification" method="post" action="/documents/<%= document.id %>/decision" data-submitting-message="Recording the staff decision. Please wait.">
@@ -165,19 +171,26 @@
           <div class="field"><label for="verify-reason">Verification reason <%= document.validation?.requiresOverrideReason ? '(required for a check warning or unavailable precheck)' : '(optional)' %></label><textarea id="verify-reason" name="reason" rows="3" maxlength="1000" <%= document.validation?.requiresOverrideReason ? 'required' : '' %>></textarea></div>
           <button class="button button--primary button--align-start" type="submit">Record staff verification</button>
         </form>
+        <details class="document-review-disclosure"><summary>Request a correction</summary>
         <form class="form-stack document-review-action document-review-action--correction" method="post" action="/documents/<%= document.id %>/correction" data-submitting-message="Sending the correction instruction. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <div class="field"><label for="correction-instruction">Correction instruction <%= (document.document_type === 'report_card' || document.document_type === 'psa_birth_certificate') && document.upload_source !== 'student' ? 'for staff' : 'for the student' %></label><textarea id="correction-instruction" name="instruction" rows="4" maxlength="1000" required></textarea></div>
           <button class="button button--secondary button--align-start" type="submit">Request correction</button>
         </form>
+        </details>
+        <details class="document-review-disclosure"><summary>Reject this submission</summary>
         <form class="form-stack document-review-action document-review-action--rejection" method="post" action="/documents/<%= document.id %>/decision" data-submitting-message="Recording the staff decision. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="decision" value="rejected">
           <div class="field"><label for="rejection-reason">Rejection reason</label><textarea id="rejection-reason" name="reason" rows="3" maxlength="1000" required></textarea></div>
           <button class="button button--secondary button--align-start" type="submit">Reject submission</button>
         </form>
+        </details>
       </div>
     </section>
-    <% if (correctionRequested && document.document_type !== 'report_card') { %>
+  <% } %>
+
+  <div class="document-secondary-actions">
+    <% if (isStaff && correctionRequested && !document.isArchivedReportCard && document.document_type !== 'report_card') { %>
       <section class="admin-section" aria-labelledby="staff-correction-title">
         <div class="admin-section__heading"><div><h2 id="staff-correction-title">Submit corrected file</h2><p>Upload a new linked submission while preserving this original.</p></div></div>
         <form class="form-stack document-upload-form" method="post" action="/documents/<%= document.id %>/reupload" enctype="multipart/form-data" data-submitting-message="Uploading the corrected document. Please wait.">
@@ -189,7 +202,7 @@
       </section>
     <% } %>
 
-  <% } else if (!document.isArchivedReportCard && correctionRequested && (document.document_type !== 'psa_birth_certificate' || document.upload_source === 'student')) { %>
+    <% if (!isStaff && !document.isArchivedReportCard && correctionRequested && (document.document_type !== 'psa_birth_certificate' || document.upload_source === 'student')) { %>
     <section class="admin-section" aria-labelledby="correction-title">
       <div class="admin-section__heading"><div><h2 id="correction-title">Correction requested</h2><p>Follow the instruction from staff, then upload the corrected file as a new submission.</p></div></div>
       <p class="form-alert" role="status"><%= latestDecision?.reason || document.reviewEvents[0]?.instruction %></p>
@@ -216,9 +229,11 @@
       <% } %>
     </section>
   <% } %>
+  </div>
 
-  <section class="admin-section" aria-labelledby="versions-title">
-    <div class="admin-section__heading"><div><h2 id="versions-title">Submissions for this document type</h2><p>Each row is a separate stored file. Earlier submissions remain available.</p></div></div>
+  <details class="admin-section document-history-disclosure" aria-labelledby="versions-title">
+    <summary id="versions-title">Submissions for this document type · <%= document.history.length %></summary>
+    <p class="muted-copy">Each row is a separate stored file. Earlier submissions remain available.</p>
     <% if (document.history.length) { %>
       <div class="table-scroll document-history-scroll" tabindex="0" aria-label="Related document submissions">
         <table class="admin-table document-history-table"><caption class="visually-hidden">Submissions for this student and document type</caption>
@@ -233,7 +248,7 @@
         </table>
       </div>
     <% } else { %><p class="empty-state">No related submissions are available.</p><% } %>
-  </section>
+  </details>
 
   <dialog class="document-preview-dialog" id="document-preview-dialog" data-document-preview-dialog aria-labelledby="document-preview-title">
     <div class="document-preview-dialog__header">
@@ -254,8 +269,9 @@
     <iframe class="document-preview-dialog__frame" data-document-preview-frame title="Document preview" src="about:blank"></iframe>
   </dialog>
 
-  <% if (!document.isArchivedReportCard) { %><section class="admin-section" aria-labelledby="review-history-title">
-    <div class="admin-section__heading"><div><h2 id="review-history-title">Review history</h2><p>Staff decisions and correction instructions recorded for this submission.</p></div></div>
+  <% if (!document.isArchivedReportCard) { %><details class="admin-section document-history-disclosure" aria-labelledby="review-history-title">
+    <summary id="review-history-title">Review history · <%= document.decisions.length + document.reviewEvents.length %> event<%= document.decisions.length + document.reviewEvents.length === 1 ? '' : 's' %></summary>
+    <p class="muted-copy">Staff decisions and correction instructions recorded for this submission.</p>
     <% if (document.decisions.length || document.reviewEvents.length) { %>
       <ul class="document-review-history">
         <% for (const decision of document.decisions) { %>
@@ -271,6 +287,6 @@
         <% } %>
       </ul>
     <% } else { %><p class="empty-state">No review events have been recorded.</p><% } %>
-  </section><% } %>
+  </details><% } %>
 </main>
 <%- include('../partials/foot') %>

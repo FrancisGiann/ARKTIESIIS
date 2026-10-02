@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const bcrypt = require('bcrypt');
 const { createApp } = require('../src/app');
+const { StudentDocumentRequestError } = require('../src/services/studentDocumentRequestService');
 const {
   StudentRecordsError,
   createStudentRecordsService,
@@ -510,14 +511,19 @@ test('student records workspace keeps create forms collapsed, opens failed forms
         searchTerm: '', academicTermId: null, totalStudents: 0, page: 1, pageSize: 25, totalPages: 1
       };
     },
-    async createTerm() { throw new StudentRecordsError('The academic term is invalid.', 400); },
+    async createTerm(_userId, input) {
+      if (input.schoolYear === 'bad-year') throw new StudentRecordsError('The academic term is invalid.', 400);
+      return { id: 3 };
+    },
     async createSection() { throw new StudentRecordsError('The section is invalid.', 400); }
   };
   await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment, studentRecordsService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
-    const response = await fetch(`${baseUrl}/registrar/records`, { headers: { cookie } });
+    const response = await fetch(`${baseUrl}/registrar/records?view=setup`, { headers: { cookie } });
     const html = await response.text();
     assert.equal(response.status, 200);
+    assert.match(html, /<h1>Academic setup<\/h1>/);
+    assert.match(html, /href="\/registrar\/records\?view=setup" aria-current="page">Academic setup<\/a>/);
     assert.match(html, /<details class="records-create-disclosure"\s*>\s*<summary>Add academic term/);
     assert.match(html, /<details class="records-create-disclosure"\s*>\s*<summary>Add section/);
     assert.match(html, /<details class="records-section-group" open>\s*<summary><strong>2026-2027 · First term/);
@@ -529,6 +535,7 @@ test('student records workspace keeps create forms collapsed, opens failed forms
     });
     assert.equal(termError.status, 400);
     const termErrorHtml = await termError.text();
+    assert.match(termErrorHtml, /href="\/registrar\/records\?view=setup" aria-current="page">Academic setup<\/a>/);
     assert.match(termErrorHtml, /<details class="records-create-disclosure" open>\s*<summary>Add academic term/);
     assert.match(termErrorHtml, /name="schoolYear"[^>]*value="bad-year"/);
     assert.match(termErrorHtml, /name="isCurrent" value="1" type="checkbox" checked/);
@@ -542,6 +549,12 @@ test('student records workspace keeps create forms collapsed, opens failed forms
     assert.match(sectionErrorHtml, /name="name"[^>]*value="STEM C"/);
     assert.match(sectionErrorHtml, /option value="2" selected/);
     assert.match(sectionErrorHtml, /option value="hybrid" selected/);
+
+    const termCreated = await postForm(baseUrl, '/registrar/records/terms', cookie, {
+      _csrf: token, schoolYear: '2027-2028', term: 'First'
+    });
+    assert.equal(termCreated.status, 303);
+    assert.equal(termCreated.headers.get('location'), '/registrar/records?view=setup&notice=termCreated');
   });
 });
 
@@ -597,10 +610,19 @@ test('database administrators can search the master list and open a unified prof
   };
   const academicRecordsService = {
     async getStudentAcademicRecord() {
-        return { enrollments: [{ id: 5, school_year: '2026-2027', term: 'First', is_current: true, grade_level: 'Grade 11', section_name: 'Mabini', enrollment_status: 'enrolled', subjects: [{ subjectCode: 'ENG1', subjectName: 'English', grades: [{ gradingPeriod: 'Quarter 1', gradeValue: 94 }] }] }] };
+        return {
+          student: { id: 12, student_no: 'S-12', first_name: 'Jamie', last_name: 'Lee', status: 'active' },
+          subjects: [],
+          enrollments: [{ id: 5, school_year: '2026-2027', term: 'First', is_current: true, grade_level: 'Grade 11', section_name: 'Mabini', enrollment_status: 'enrolled', subjects: [{ subjectCode: 'ENG1', subjectName: 'English', grades: [{ gradingPeriod: 'Quarter 1', gradeValue: 94 }] }] }]
+        };
     }
   };
-  const dependencies = { studentRecordsService, academicRecordsService, documentRequestService: { async getStudentRequests() { return []; } } };
+  const dependencies = {
+    studentRecordsService,
+    academicRecordsService,
+    documentRequestService: { async getStudentRequests() { return []; } },
+    documentClearanceService: { async getRegistrarData() { return { financeSummary: { status: 'Needs finance review', outstanding: null }, requests: [] }; } }
+  };
   await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, ...dependencies }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'database_admin');
     const list = await fetch(`${baseUrl}/registrar/records?search=Jamie%20Lee`, { headers: { cookie } });
@@ -620,7 +642,7 @@ test('database administrators can search the master list and open a unified prof
     const detail = await fetch(`${baseUrl}/registrar/records/students/12`, { headers: { cookie } });
     const detailHtml = await detail.text();
     assert.equal(detail.status, 200);
-    assert.match(detailHtml, /Enrollment, subjects, and grades/);
+    assert.match(detailHtml, /Student record overview/);
     assert.match(detailHtml, /Good Moral Certificate/);
     assert.match(detailHtml, /Needs staff review/);
     assert.match(detailHtml, /PSA birth certificate/);
@@ -633,8 +655,12 @@ test('database administrators can search the master list and open a unified prof
     assert.match(detailHtml, /href="\/documents\/students\/12#form137-status-title"/);
     assert.match(detailHtml, /Review digital submission/);
     assert.match(detailHtml, /Not submitted/);
-    assert.match(detailHtml, /Quarter 1[\s\S]*?94/);
     assert.match(detailHtml, /href="\/documents\/students\/12"/);
+    const academics = await fetch(`${baseUrl}/registrar/records/students/12/academic`, { headers: { cookie } });
+    const academicsHtml = await academics.text();
+    assert.equal(academics.status, 200);
+    assert.match(academicsHtml, /Enrollment history/);
+    assert.match(academicsHtml, /Quarter 1[\s\S]*?Grade: 94/);
   });
 
   let deniedReads = 0;
@@ -681,14 +707,16 @@ test('records mutations reject missing CSRF tokens before calling the service', 
     const masterList = await fetch(`${baseUrl}/registrar/records`, { headers: { cookie } });
     assert.equal(masterList.status, 200);
     const masterListHtml = await masterList.text();
-    assert.match(masterListHtml, /Student master list/);
+    assert.match(masterListHtml, /Find a student record/);
     assert.match(masterListHtml, /LRN 123456789012/);
     assert.match(masterListHtml, /Good Moral <strong>Review needed/);
     assert.match(masterListHtml, /Form 137 physical record \(staff only\) <strong>received/);
     assert.match(masterListHtml, /records-context-strip--term/);
     assert.match(masterListHtml, /record-status--active">Active/);
     assert.match(masterListHtml, />Edit profile<\/a>/);
-    assert.match(masterListHtml, /Open student record/);
+    assert.match(masterListHtml, /Open record/);
+    assert.match(masterListHtml, /<details class="records-student-details">/);
+    assert.doesNotMatch(masterListHtml, /<details class="records-student-details" open>/);
     assert.match(masterListHtml, /Showing 1–25 of 61 students/);
     assert.match(masterListHtml, /href="\/registrar\/intake"/);
     assert.doesNotMatch(masterListHtml, /href="\/registrar\/records\/students\/new"/);
@@ -731,6 +759,7 @@ test('records mutations reject missing CSRF tokens before calling the service', 
 test('registrar follow-up ledgers are linked from student records and protected by staff role and CSRF', async () => {
   const documentCalls = [];
   const overviewCalls = [];
+  let failCreateRequest = false;
   const student = { id: 12, student_no: 'S-12', first_name: 'Jamie', last_name: 'Lee', status: 'active' };
   const recordsService = {
     async getStudent() { return { student, terms: [], sections: [], enrollments: [] }; },
@@ -742,7 +771,10 @@ test('registrar follow-up ledgers are linked from student records and protected 
       { id: '81111111-1111-4111-8111-111111111111', document_type: 'Transcript', document_name: 'Grade 11 Transcript', requested_on: new Date('2026-09-30T00:00:00Z'), status: 'requested', history: [{ event_type: 'corrected', status_to: 'requested', document_name_before: 'Transcript', document_name_after: 'Grade 11 Transcript', document_type_before: 'Transcript', document_type_after: 'Transcript', requested_on_before: new Date('2026-09-29T00:00:00Z'), requested_on_after: new Date('2026-09-30T00:00:00Z'), reference_before: null, reference_after: 'REF-1', actor_first_name: 'Rae', actor_last_name: 'G.' }] },
       { id: '82222222-2222-4222-8222-222222222222', document_type: 'Certificate', document_name: 'Enrollment Certificate', requested_on: new Date('2026-09-01T00:00:00Z'), released_on: new Date('2026-09-10T00:00:00Z'), recipient: 'Original Recipient', status: 'released', history: [{ event_type: 'corrected', status_from: 'released', status_to: 'released', document_name_before: 'Enrollment Certificate', document_name_after: 'Enrollment Certificate', document_type_before: 'Certificate', document_type_after: 'Certificate', requested_on_before: new Date('2026-09-01T00:00:00Z'), requested_on_after: new Date('2026-09-01T00:00:00Z'), reference_before: null, reference_after: null, released_on_before: new Date('2026-09-09T00:00:00Z'), released_on_after: new Date('2026-09-10T00:00:00Z'), recipient_before: 'Mistyped Recipient', recipient_after: 'Original Recipient', actor_first_name: 'Rae', actor_last_name: 'G.' }] }
     ]; },
-    async createRequest(...args) { documentCalls.push(['create', ...args]); },
+    async createRequest(...args) {
+      documentCalls.push(['create', ...args]);
+      if (failCreateRequest) throw new StudentDocumentRequestError('Document type is required.', 400);
+    },
     async transitionRequest(...args) { documentCalls.push(['transition', ...args]); },
     async correctRequest(...args) { documentCalls.push(['correct', ...args]); }
   };
@@ -759,21 +791,40 @@ test('registrar follow-up ledgers are linked from student records and protected 
     studentRecordsService: recordsService,
     academicRecordsService: { async getStudentAcademicRecord() { return { student, enrollments: [] }; } },
     documentRequestService,
+    documentClearanceService: {
+      async getRegistrarData() {
+        return {
+          financeSummary: { status: 'Needs finance review', outstanding: null },
+          requests: [
+            { requestId: '81111111-1111-4111-8111-111111111111', status: 'pending', history: [], claimSlipHistory: [], claimSlipCurrent: false },
+            { requestId: '82222222-2222-4222-8222-222222222222', status: 'historical_no_clearance', history: [], claimSlipHistory: [], claimSlipCurrent: false }
+          ]
+        };
+      }
+    },
     gradeOverviewService
   });
   await withServer(app, async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
     const profilePage = await fetch(`${baseUrl}/registrar/records/students/12`, { headers: { cookie } });
     assert.equal(profilePage.status, 200);
-    const html = await profilePage.text();
+    const studentOverviewHtml = await profilePage.text();
+    assert.match(studentOverviewHtml, /<h2 class="student-record-view-title">Overview<\/h2>/);
+    assert.doesNotMatch(studentOverviewHtml, /Document requests and release history|Student profile revision history|Record document request/);
+    const requestsPage = await fetch(`${baseUrl}/registrar/records/students/12?view=requests`, { headers: { cookie } });
+    assert.equal(requestsPage.status, 200);
+    const html = await requestsPage.text();
+    const studentNavigation = html.match(/<nav class="student-record-navigation"[\s\S]*?<\/nav>/)?.[0];
+    assert.match(studentNavigation || '', /href="\/documents\/students\/12" aria-current="page">Documents<\/a>/);
+    assert.equal((studentNavigation?.match(/aria-current="page"/g) || []).length, 1);
     assert.match(html, /Document requests and release history/);
-    assert.match(html, /Student profile revision history/);
-    assert.match(html, /Grade completion overview/);
-    assert.match(html, /<option value="processing">Processing<\/option><option value="ready">Ready<\/option><option value="cancelled">Cancelled<\/option>/);
-    assert.doesNotMatch(html, /<option value="released">Released<\/option><option value="cancelled">Cancelled<\/option>/);
+    assert.doesNotMatch(html, /Student profile revision history/);
+    assert.match(studentNavigation, /href="\/registrar\/records\/students\/12\/academic"\s*>Academics<\/a>/);
+    assert.match(html, /<option value="processing" >Processing<\/option><option value="cancelled" >Cancelled<\/option>/);
+    assert.doesNotMatch(html, /<option value="released"/);
     assert.match(html, /data-status-only="released" hidden/);
-    assert.match(html, /name="releasedOn" type="date" data-required-status="released" disabled/);
-    assert.match(html, /name="recipient" maxlength="150" data-required-status="released" disabled/);
+    assert.match(html, /name="releasedOn" type="date"[^>]*data-required-status="released" disabled/);
+    assert.match(html, /name="recipient" maxlength="150"[^>]*data-required-status="released" disabled/);
     assert.match(html, /Document name: Transcript → Grade 11 Transcript/);
     assert.match(html, /Request date: 2026-09-29 → 2026-09-30/);
     assert.match(html, /Reference: None → REF-1/);
@@ -788,12 +839,23 @@ test('registrar follow-up ledgers are linked from student records and protected 
     });
     assert.equal(denied.status, 403);
     assert.equal(documentCalls.length, 0);
+    failCreateRequest = true;
+    const failed = await postForm(baseUrl, '/registrar/records/students/12/document-requests', cookie, {
+      _csrf: csrfToken, documentType: '', documentName: 'Draft transcript', requestedOn: '2026-09-30', idempotencyKey: key
+    });
+    assert.equal(failed.status, 400);
+    const failedHtml = await failed.text();
+    assert.match(failedHtml, /Document type is required/);
+    assert.match(failedHtml, /href="\/documents\/students\/12" aria-current="page">Documents<\/a>/);
+    assert.match(failedHtml, /name="documentName" maxlength="150" value="Draft transcript"/);
+    assert.match(failedHtml, new RegExp(`name="idempotencyKey" value="${key}"`));
+    failCreateRequest = false;
     const created = await postForm(baseUrl, '/registrar/records/students/12/document-requests', cookie, {
       _csrf: csrfToken, documentType: 'Transcript', documentName: 'Grade 11 Transcript',
       requestedOn: '2026-09-30', idempotencyKey: key
     });
     assert.equal(created.status, 303);
-    assert.match(created.headers.get('location'), /notice=documentRequestCreated/);
+    assert.match(created.headers.get('location'), /view=requests.*notice=documentRequestCreated/);
     assert.equal(documentCalls[0][0], 'create');
     const corrected = await postForm(baseUrl, '/registrar/records/students/12/document-requests/82222222-2222-4222-8222-222222222222/correct', cookie, {
       _csrf: csrfToken, idempotencyKey: '83333333-3333-4333-8333-333333333333', documentType: 'Certificate',
@@ -801,7 +863,15 @@ test('registrar follow-up ledgers are linked from student records and protected 
       recipient: 'Original Recipient', reason: 'Corrected a transcription error.'
     });
     assert.equal(corrected.status, 303);
-    assert.equal(documentCalls[1][0], 'correct');
+    assert.equal(documentCalls[2][0], 'correct');
+
+    const historyPage = await fetch(`${baseUrl}/registrar/records/students/12?view=history`, { headers: { cookie } });
+    assert.equal(historyPage.status, 200);
+    const historyHtml = await historyPage.text();
+    assert.match(historyHtml, /Student profile revision history/);
+    assert.doesNotMatch(historyHtml, /Document requests and release history|Record document request/);
+    const unsupportedView = await fetch(`${baseUrl}/registrar/records/students/12?view=unexpected`, { headers: { cookie } });
+    assert.match(await unsupportedView.text(), /<h2 class="student-record-view-title">Overview<\/h2>/);
 
     const overview = await fetch(`${baseUrl}/registrar/records/grades/missing?termId=4&sectionId=8&subjectId=9`, { headers: { cookie } });
     assert.equal(overview.status, 200);
@@ -819,7 +889,7 @@ test('registrar follow-up ledgers are linked from student records and protected 
     const response = await fetch(`${baseUrl}/registrar/records/grades/missing`, { headers: { cookie } });
     assert.equal(response.status, 403);
     assert.equal(overviewCalls.length, 1);
-    assert.equal(documentCalls.length, 2);
+    assert.equal(documentCalls.length, 3);
   });
 });
 

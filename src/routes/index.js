@@ -38,6 +38,7 @@ const { createAnnualEnrollmentService } = require('../services/annualEnrollmentS
 const { createAnnualFinanceService } = require('../services/annualFinanceService');
 const { createPhysicalChecklistService } = require('../services/physicalChecklistService');
 const { createStudentDocumentRequestService } = require('../services/studentDocumentRequestService');
+const { createStudentDocumentFinanceClearanceService } = require('../services/studentDocumentFinanceClearanceService');
 const { createRegistrarGradeOverviewService } = require('../services/registrarGradeOverviewService');
 const { createRegistrarDashboardService } = require('../services/registrarDashboardService');
 const { createFinanceDashboardService } = require('../services/financeDashboardService');
@@ -71,7 +72,7 @@ async function verifyPassword(user, password, comparePassword = bcrypt.compare) 
   return Boolean(active && passwordMatches);
 }
 
-function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment = defaultEnvironment, twoFactorService = twoFactor, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, registrarDashboardService, annualEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, gradeOverviewService } = {}) {
+function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment = defaultEnvironment, twoFactorService = twoFactor, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, registrarDashboardService, annualEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService } = {}) {
   const router = express.Router();
   const authRouter = express.Router();
   const requireAuth = createRequireAuth({ getPool, sql, environment });
@@ -89,6 +90,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     getPool, sql, physicalChecklistService: physicalChecklistsService, annualFinanceService: annualFinancesService
   });
   const studentDocumentRequests = documentRequestService || createStudentDocumentRequestService({ getPool, sql });
+  const studentDocumentClearance = documentClearanceService || createStudentDocumentFinanceClearanceService({ getPool, sql });
   const registrarGradeOverview = gradeOverviewService || createRegistrarGradeOverviewService({ getPool, sql });
   const registrarDashboard = registrarDashboardService || createRegistrarDashboardService({ getPool, sql });
   const studentSetup = studentSetupService || createStudentSetupService({ getPool, sql });
@@ -188,9 +190,9 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     annualFinanceService: annualFinancesService, physicalChecklistService: physicalChecklistsService
   }));
   router.use('/registrar/intake/legacy', requireAuth, requireRole('registrar'), createStudentIntakeRouter({ getPool, sql, studentSetupService: studentSetup }));
-  router.use('/finance', requireAuth, requireRole('finance', 'database_admin'), createFinanceRouter({ getPool, sql, financeService: financesService, annualFinanceService: annualFinancesService, financeCasesService: annualFinanceCases, financeReportsService: annualFinanceReports, financeDashboardService: financeDashboard }));
+  router.use('/finance', requireAuth, requireRole('finance', 'database_admin'), createFinanceRouter({ getPool, sql, financeService: financesService, annualFinanceService: annualFinancesService, financeCasesService: annualFinanceCases, financeReportsService: annualFinanceReports, financeDashboardService: financeDashboard, documentClearanceService: studentDocumentClearance }));
   router.use('/admin', requireAuth, requireRole('database_admin'), createAdminRouter({ getPool, sql, adminService }));
-  router.use('/registrar/records', requireAuth, requireRole('registrar', 'database_admin'), createStudentRecordsRouter({ getPool, sql, studentRecordsService: recordsService, academicRecordsService: academicsService, documentRequestService: studentDocumentRequests, gradeOverviewService: registrarGradeOverview }));
+  router.use('/registrar/records', requireAuth, requireRole('registrar', 'database_admin'), createStudentRecordsRouter({ getPool, sql, studentRecordsService: recordsService, academicRecordsService: academicsService, documentRequestService: studentDocumentRequests, documentClearanceService: studentDocumentClearance, gradeOverviewService: registrarGradeOverview }));
   router.use('/registrar/records', requireAuth, requireRole('registrar', 'database_admin'), createAcademicRecordsRouter({ getPool, sql, academicRecordsService: academicsService, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
   router.use('/registrar/schedules', requireAuth, requireRole('registrar'), createClassSchedulesRouter({ getPool, sql, classScheduleService: schedulesService }));
   router.use('/student', requireAuth, createStudentPortalRouter({ getPool, sql, studentRecordsService: recordsService, academicRecordsService: academicsService, financeService: financesService, annualFinanceService: annualFinancesService, classScheduleService: schedulesService }));
