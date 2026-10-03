@@ -413,7 +413,30 @@ function schoolLocalDate() {
   return `${fields.year}-${fields.month}-${fields.day}`;
 }
 
-function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService, annualFinanceService, physicalChecklistService } = {}) {
+function safeDiagnosticCode(value, pattern, maximumLength) {
+  return typeof value === 'string' && value.length <= maximumLength && pattern.test(value) ? value : null;
+}
+
+function annualIntakeErrorDiagnostics(error) {
+  const diagnostics = {};
+  const name = safeDiagnosticCode(error?.name, /^[A-Za-z0-9_$.-]+$/, 80);
+  const code = safeDiagnosticCode(error?.code, /^[A-Za-z0-9_-]+$/, 64);
+  const sqlState = safeDiagnosticCode(error?.sqlState, /^[A-Z0-9]{5}$/, 5);
+  const frames = typeof error?.stack === 'string' ? error.stack.split('\n').slice(1, 12) : [];
+  if (name) diagnostics.errorName = name;
+  if (code) diagnostics.errorCode = code;
+  if (Number.isSafeInteger(error?.errno) && error.errno >= 0) diagnostics.errorNumber = error.errno;
+  if (sqlState) diagnostics.sqlState = sqlState;
+  for (const frame of frames) {
+    const match = /(?:^|\/)(src\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.js):(\d{1,7}):(\d{1,6})\)?$/.exec(frame.trim());
+    if (!match) continue;
+    diagnostics.sourceLocation = `${match[1]}:${match[2]}:${match[3]}`;
+    break;
+  }
+  return diagnostics;
+}
+
+function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService, annualFinanceService, physicalChecklistService, logger = console } = {}) {
   const router = express.Router();
   const feeService = annualFinanceService || null;
   const checklistService = physicalChecklistService || (getPool ? createPhysicalChecklistService({ getPool, sql }) : null);
@@ -448,7 +471,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
     }
   }
 
-  async function renderForm(req, res, { status = 200, error = null, values = {}, activeStep = 1 } = {}) {
+  async function renderForm(req, res, { status = 200, error = null, values = {}, activeStep = 1, fallbackMessage = null } = {}) {
     try {
       const [options, paperRequirements] = await Promise.all([
         service.loadIntakeOptions(req.authUser.id),
@@ -462,7 +485,9 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
           values[`paper_${item.requirement_code}_token`] || crypto.randomUUID()]))
       });
     } catch {
-      return res.status(503).render('error', { title: 'Annual Intake Unavailable', message: 'Academic terms and sections could not be loaded.' });
+      return res.status(503).render('error', {
+        title: 'Annual Intake Unavailable', message: fallbackMessage || 'Academic terms and sections could not be loaded.'
+      });
     }
   }
 
@@ -622,7 +647,21 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       if (error instanceof PhysicalChecklistError) return renderForm(req, res, { status: error.status, error: error.message, values, activeStep: 3 });
       if (error instanceof AnnualEnrollmentError) return renderForm(req, res, { status: error.status, error: error.message, values, activeStep: annualIntakeErrorStep(error) });
       if (isDuplicateKeyError(error)) return renderForm(req, res, { status: 409, error: 'This student already has an annual enrollment for the selected school year.', values, activeStep: 2 });
-      return res.status(503).render('error', { title: 'Annual Intake Unavailable', message: 'The annual enrollment could not be saved.' });
+      const incidentId = crypto.randomUUID();
+      try {
+        logger.error('Annual intake save failed', {
+          incidentId,
+          operation: 'registrar.annual_intake.create',
+          ...annualIntakeErrorDiagnostics(error)
+        });
+      } catch { /* Logging must not replace the safe user response. */ }
+      return renderForm(req, res, {
+        status: 503,
+        error: `The save did not return a confirmation. Your entries are still on this form and can be retried. Support reference: ${incidentId}.`,
+        fallbackMessage: `The save did not return a confirmation. Check the annual intake list before starting a new submission. Support reference: ${incidentId}.`,
+        values,
+        activeStep: 3
+      });
     }
   });
 

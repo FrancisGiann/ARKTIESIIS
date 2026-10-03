@@ -335,6 +335,123 @@ test('registrar intake opens the guided annual form and links the roster to fee 
   });
 });
 
+test('unexpected annual intake failures log safe diagnostics and retain the submission token in the form', async () => {
+  const app = express();
+  const session = {};
+  const errors = [];
+  const failure = new Error('raw SQL details and private@example.test');
+  failure.code = 'ER_BAD_FIELD_ERROR';
+  failure.errno = 1054;
+  failure.sqlState = '42S22';
+  failure.stack = [
+    'Error: raw SQL details and private@example.test',
+    '    at createAnnualIntake (/srv/application/src/services/annualEnrollmentService.js:712:19)',
+    '    at /srv/application/src/routes/studentSetup.js:640:27'
+  ].join('\n');
+  app.set('views', path.join(__dirname, '..', 'views'));
+  app.set('view engine', 'ejs');
+  app.locals.formatStudentPlacement = require('../src/utils/formatStudentPlacement').formatStudentPlacement;
+  app.locals.formatMoney = require('../src/utils/formatMoney').formatMoney;
+  app.use(express.urlencoded({ extended: false }));
+  app.use((req, _res, next) => { req.authUser = registrar; req.session = session; next(); });
+  app.use('/registrar/intake', createAnnualStudentIntakeRouter({
+    annualEnrollmentService: {
+      async loadIntakeOptions() {
+        return { schoolYears: [{ school_year: '2026-2027' }], terms: [], sections: [] };
+      },
+      async createAnnualIntake() { throw failure; }
+    },
+    logger: { error(...args) { errors.push(args); } }
+  }));
+
+  await withServer(app, async (baseUrl) => {
+    const openingResponse = await fetch(`${baseUrl}/registrar/intake/new`);
+    const openingHtml = await openingResponse.text();
+    assert.equal(openingResponse.status, 200);
+    const csrfToken = openingHtml.match(/name="_csrf" value="([^"]+)"/)?.[1];
+    const idempotencyKey = openingHtml.match(/name="idempotencyKey" value="([^"]+)"/)?.[1];
+    assert.ok(csrfToken);
+    assert.ok(idempotencyKey);
+
+    const response = await fetch(`${baseUrl}/registrar/intake`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        _csrf: csrfToken, idempotencyKey, email: 'new.student+fixture@gmail.com', lrn: '123456789012',
+        firstName: 'Casey', middleName: 'R', lastName: 'Example', suffix: '', birthDate: '2008-07-14',
+        sex: 'Male', address: 'Synthetic address', phone: '09170000000', schoolYear: '2026-2027',
+        gradeLevel: 'Grade 11', voucherCode: 'PUB', voucherCategory: 'A', intakeKind: 'standard',
+        entryTermNumber: '1', enrollmentStartDate: '2026-10-03', sectionMode: 'same', annualSectionId: '8'
+      })
+    });
+    const html = await response.text();
+    assert.equal(response.status, 503);
+    assert.match(response.headers.get('cache-control'), /no-store/);
+    assert.match(html, /data-active-step="3"/);
+    assert.match(html, /value="new\.student\+fixture@gmail\.com"/);
+    assert.match(html, /value="123456789012"/);
+    assert.match(html, /name="idempotencyKey" value="[^"]+"/);
+    assert.match(html, new RegExp(`name="idempotencyKey" value="${idempotencyKey}"`));
+    assert.match(html, /Support reference: [0-9a-f-]{36}\./);
+
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0][0], 'Annual intake save failed');
+    const { incidentId, ...diagnostics } = errors[0][1];
+    assert.deepEqual(diagnostics, {
+      operation: 'registrar.annual_intake.create',
+      errorName: 'Error',
+      errorCode: 'ER_BAD_FIELD_ERROR',
+      errorNumber: 1054,
+      sqlState: '42S22',
+      sourceLocation: 'src/services/annualEnrollmentService.js:712:19'
+    });
+    assert.match(incidentId, /^[0-9a-f-]{36}$/);
+    assert.doesNotMatch(JSON.stringify(errors), /private@example\.test|raw SQL details|new\.student|123456789012|SELECT/i);
+  });
+});
+
+test('annual intake error fallback tells staff to check for a committed record before starting over', async () => {
+  const app = express();
+  const session = {};
+  let optionLoads = 0;
+  let incident = null;
+  app.set('views', path.join(__dirname, '..', 'views'));
+  app.set('view engine', 'ejs');
+  app.locals.formatStudentPlacement = require('../src/utils/formatStudentPlacement').formatStudentPlacement;
+  app.locals.formatMoney = require('../src/utils/formatMoney').formatMoney;
+  app.use(express.urlencoded({ extended: false }));
+  app.use((req, _res, next) => { req.authUser = registrar; req.session = session; next(); });
+  app.use('/registrar/intake', createAnnualStudentIntakeRouter({
+    annualEnrollmentService: {
+      async loadIntakeOptions() {
+        optionLoads += 1;
+        if (optionLoads > 1) throw new Error('synthetic options lookup failure');
+        return { schoolYears: [], terms: [], sections: [] };
+      },
+      async createAnnualIntake() { throw new Error('synthetic save failure'); }
+    },
+    logger: { error(_message, details) { incident = details; } }
+  }));
+
+  await withServer(app, async (baseUrl) => {
+    const openingResponse = await fetch(`${baseUrl}/registrar/intake/new`);
+    const openingHtml = await openingResponse.text();
+    assert.equal(openingResponse.status, 200);
+    const csrfToken = openingHtml.match(/name="_csrf" value="([^"]+)"/)?.[1];
+    const idempotencyKey = openingHtml.match(/name="idempotencyKey" value="([^"]+)"/)?.[1];
+    const response = await fetch(`${baseUrl}/registrar/intake`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey })
+    });
+    const html = await response.text();
+    assert.equal(response.status, 503);
+    assert.match(html, /Check the annual intake list before starting a new submission\./);
+    assert.match(html, new RegExp(`Support reference: ${incident.incidentId}\\.`));
+    assert.doesNotMatch(html, /name="idempotencyKey"/);
+    assert.equal(optionLoads, 2);
+    assert.equal(incident.operation, 'registrar.annual_intake.create');
+  });
+});
+
 test('finalization requires an explicitly cleared pending enrollment and an inactive student login', async () => {
   for (const state of [
     { clearance_status: 'pending', is_active: false, message: /has not cleared/ }
