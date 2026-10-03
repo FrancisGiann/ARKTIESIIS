@@ -3,56 +3,21 @@
   <section class="dashboard-heading">
     <div>
       <h1>Database administration</h1>
-      <p>Manage school accounts, search student records, and review recorded system activity.</p>
+      <p>Choose an account group, student records, or an oversight task.</p>
     </div>
-    <div class="admin-heading-actions"><a class="button button--secondary" href="/admin/student-accounts">Set up student logins</a><a class="button button--primary" href="/admin/users/new">Add user</a></div>
+    <div class="admin-heading-actions">
+      <a class="button button--secondary" href="/admin/student-accounts">Set up student logins</a>
+      <a class="button button--primary" href="/admin/users/new">Add user</a>
+    </div>
   </section>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
 
-  <section class="admin-section admin-dashboard-users" aria-labelledby="users-title">
-    <div class="admin-section__heading">
-      <div>
-        <h2 id="users-title">User accounts</h2>
-        <p>Search by email or student number. Results are limited to 250 accounts.</p>
-      </div>
-    </div>
-    <% if (searchError) { %><p class="form-alert" role="alert"><%= searchError %></p><% } %>
-    <form class="admin-search" method="get" action="/admin">
-      <div class="field">
-        <label for="account-search">Find an account by email or student number</label>
-        <input id="account-search" name="search" type="search" maxlength="100" value="<%= searchTerm %>" autocomplete="off">
-      </div>
-      <button class="button button--secondary" type="submit">Search accounts</button>
-      <% if (searchTerm) { %><a class="table-action" href="/admin">Clear search</a><% } %>
-    </form>
-    <p class="admin-result-count"><%= users.length %> matching account<%= users.length === 1 ? '' : 's' %><% if (users.length === 250) { %> (showing the newest 250)<% } %></p>
-    <% if (users.length) { %>
-      <div class="table-scroll" tabindex="0" aria-label="Scrollable user accounts table">
-        <table class="admin-table">
-          <caption class="visually-hidden">User accounts and access status</caption>
-          <thead><tr><th scope="col">Name</th><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Created</th><th scope="col"><span class="visually-hidden">Account actions</span></th></tr></thead>
-          <tbody>
-            <% for (const user of users) { %>
-              <tr>
-                <td data-label="Name"><%= user.display_name %></td>
-                <td data-label="Email"><%= user.email %></td>
-                <td data-label="Role"><%= user.role.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) %></td>
-                <td data-label="Status"><span class="account-status <%= user.is_active ? 'account-status--active' : 'account-status--inactive' %>"><%= user.is_active ? 'Active' : 'Inactive' %></span></td>
-                <td data-label="Created"><%= user.created_at ? new Date(user.created_at).toLocaleDateString() : '—' %></td>
-                <td data-label="Actions"><a class="table-action" href="/admin/users/<%= user.id %>/edit">Manage</a></td>
-              </tr>
-            <% } %>
-          </tbody>
-        </table>
-      </div>
-    <% } else { %>
-      <p class="empty-state">No user accounts are available.</p>
-    <% } %>
-  </section>
   <nav class="admin-work-links" aria-label="Administration workspaces">
+    <a href="/admin/users?category=students"><strong>Student accounts</strong><span>Find and manage student sign-in accounts.</span></a>
+    <a href="/admin/users?category=staff"><strong>Staff accounts</strong><span>Find teachers, registrars, finance staff, and database administrators.</span></a>
     <a href="/registrar/records"><strong>Student records</strong><span>Search student profiles and review enrollment and document status.</span></a>
-    <a href="/admin/audit"><strong>Audit activity</strong><span>Review actions recorded by the system.</span></a>
+    <a href="/admin/audit"><strong>Audit activity</strong><span>Filter the recorded system actions.</span></a>
   </nav>
 </main>
 <%- include('../partials/foot') %>

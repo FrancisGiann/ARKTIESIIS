@@ -87,7 +87,7 @@ test('role dashboards lead with useful work and omit decorative summary strips',
       summary: { account_count: 10, accounts_due_count: 4, accounts_settled_count: 5, accounts_credit_count: 1, charge_count: 12, payment_count: 8 }
     },
     {
-      role: 'database_admin', path: '/admin', label: /User accounts/,
+      role: 'database_admin', path: '/admin', label: /Student accounts/,
       summary: { active_user_count: 10, inactive_user_count: 2, active_student_count: 8, archived_student_count: 1, documents_awaiting_review_count: 2 }
     }
   ];
@@ -96,7 +96,6 @@ test('role dashboards lead with useful work and omit decorative summary strips',
     const summaryCalls = [];
     const services = {
       adminService: {
-        async listDashboard() { return { users: [], auditLogs: [], searchTerm: '' }; },
         async getDashboardSummary(actorId) { summaryCalls.push(['admin', actorId]); return scenario.summary; }
       },
       studentRecordsService: {

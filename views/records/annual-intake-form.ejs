@@ -81,26 +81,25 @@
 
     <section class="intake-step" data-step-panel="3" aria-labelledby="intake-documents-heading">
       <div class="intake-step__heading"><h2 id="intake-documents-heading">Documents received</h2></div>
-      <p>Check a row only when recording a paper update today. Existing history remains unchanged unless you select a row and add an update. Missing papers do not block enrollment.</p>
-      <p class="muted-copy">Record counts only when known. SF10 / Form 137 keeps its separate staff-only history. Do not upload scans here.</p>
+      <p>Select a paper only after staff has received and checked it. Checking the box records that item as verified today; leave it unchecked when it was not received and checked. Existing history stays unchanged unless you select a row. Missing papers do not block enrollment.</p>
+      <p class="muted-copy">Place submitted papers together in a long brown envelope; the envelope is a storage container and is not tracked. Enter only counts that apply to each paper, and leave counts blank if unknown. SF10 / Form 137 keeps its separate staff-only history. Do not upload scans here.</p>
       <div class="paper-checklist-rows">
-        <% for (const requirement of paperRequirements) { const code = requirement.requirement_code; const appliesByGrade = requirement.applicability === 'grade11' ? 'Applies to Grade 11 intake' : requirement.applicability === 'grade12' ? 'Applies to Grade 12 intake' : null; const manualApplicability = ['als', 'esc', 'optional'].includes(requirement.applicability); const formPrefix = `paper_${code}`; %>
+        <% for (const requirement of paperRequirements) { const code = requirement.requirement_code; const appliesByGrade = requirement.applicability === 'grade11' ? 'Applies to Grade 11 intake' : requirement.applicability === 'grade12' ? 'Applies to Grade 12 intake' : null; const manualApplicability = ['als', 'esc', 'optional'].includes(requirement.applicability); const hasCountTypes = Number(requirement.originals_required) > 0 || Number(requirement.copies_required) > 0 || Number(requirement.pieces_required) > 0; const formPrefix = `paper_${code}`; %>
           <article class="paper-checklist-row" data-requirement-applicability="<%= requirement.applicability %>">
             <div class="paper-checklist-row__main">
               <label class="paper-checklist-row__check"><input type="checkbox" name="<%= formPrefix %>_record" value="1" data-paper-record <%= values[`${formPrefix}_record`] === '1' ? 'checked' : '' %>><span><strong><%= requirement.requirement_name %></strong><% if (requirement.guidance) { %><small><%= requirement.guidance %></small><% } %></span></label>
-              <details class="paper-checklist-row__details" data-paper-details <%= values[`${formPrefix}_record`] === '1' ? 'open' : '' %>><summary>Record an update</summary>
+              <% if (!manualApplicability) { %><input type="hidden" name="<%= formPrefix %>_applicable" value="1"><% } %>
+              <% if (manualApplicability || hasCountTypes) { %><details class="paper-checklist-row__details" data-paper-details <%= values[`${formPrefix}_record`] === '1' ? 'open' : '' %>><summary><%= manualApplicability ? (hasCountTypes ? 'Applicability and counts' : 'Applicability') : 'Optional counts' %></summary>
                 <div class="paper-checklist-row__fields" data-paper-update-fields>
                 <% if (manualApplicability) { %><label class="field"><span>Applies to this learner?</span><select name="<%= formPrefix %>_applicable"><option value="">Choose</option><option value="1" <%= values[`${formPrefix}_applicable`] === '1' ? 'selected' : '' %>>Yes</option><option value="0" <%= values[`${formPrefix}_applicable`] === '0' ? 'selected' : '' %>>No</option></select></label>
-                <% } else { %><input type="hidden" name="<%= formPrefix %>_applicable" value="1"><span class="paper-applicability"><%= appliesByGrade || 'Applies to all learners' %></span><% } %>
-                <label class="field"><span>Record status</span><select name="<%= formPrefix %>_status"><option value="">Choose status</option><% for (const state of ['pending', 'received', 'verified', 'correction', 'rejected']) { %><option value="<%= state %>" <%= values[`${formPrefix}_status`] === state ? 'selected' : '' %>><%= ({ pending: 'Pending', received: 'Received', verified: 'Verified', correction: 'Correction needed', rejected: 'Rejected' })[state] %></option><% } %></select></label>
+                <% } else { %><span class="paper-applicability"><%= appliesByGrade || 'Applies to all learners' %></span><% } %>
                 </div>
                 <div class="paper-counts">
-                  <label class="field"><span>Originals</span><input type="number" min="0" max="20" name="<%= formPrefix %>_originals" value="<%= values[`${formPrefix}_originals`] || '' %>"></label>
-                  <label class="field"><span>Photocopies</span><input type="number" min="0" max="50" name="<%= formPrefix %>_copies" value="<%= values[`${formPrefix}_copies`] || '' %>"></label>
-                  <label class="field"><span>Pieces</span><input type="number" min="0" max="50" name="<%= formPrefix %>_pieces" value="<%= values[`${formPrefix}_pieces`] || '' %>"></label>
-                  <label class="field paper-note"><span>Staff note <span class="muted-copy">(required for correction)</span></span><input type="text" maxlength="1000" name="<%= formPrefix %>_note" data-paper-note value="<%= values[`${formPrefix}_note`] || '' %>"></label>
+                  <% if (Number(requirement.originals_required) > 0) { %><label class="field"><span>Originals received</span><input type="number" min="0" max="20" name="<%= formPrefix %>_originals" value="<%= values[`${formPrefix}_originals`] || '' %>"></label><% } %>
+                  <% if (Number(requirement.copies_required) > 0) { %><label class="field"><span>Photocopies received</span><input type="number" min="0" max="50" name="<%= formPrefix %>_copies" value="<%= values[`${formPrefix}_copies`] || '' %>"></label><% } %>
+                  <% if (Number(requirement.pieces_required) > 0) { %><label class="field"><span>Pieces received</span><input type="number" min="0" max="50" name="<%= formPrefix %>_pieces" value="<%= values[`${formPrefix}_pieces`] || '' %>"></label><% } %>
                 </div>
-              </details>
+              </details><% } %>
               </div>
             <input type="hidden" name="<%= formPrefix %>_token" value="<%= paperTokens[code] %>">
           </article>

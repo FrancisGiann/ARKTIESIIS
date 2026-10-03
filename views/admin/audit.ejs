@@ -1,35 +1,78 @@
 <%- include('../partials/head', { title }) %>
+<%
+  const queryString = (values) => Object.entries(values)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`).join('&');
+  const pageHref = (page) => `/admin/audit?${queryString({ category: filters.category, search: filters.searchTerm, page })}`;
+  const categoryLabels = {
+    all: 'All activity', accounts: 'Accounts', students: 'Student records',
+    documents: 'Documents', finance: 'Finance', academics: 'Academic work', other: 'Other records'
+  };
+%>
 <main class="page-shell dashboard-page admin-page admin-audit-page" id="main-content">
   <a class="context-back" href="/admin">Back to overview</a>
   <section class="dashboard-heading">
     <div>
       <h1>Audit activity</h1>
-      <p>Latest 100 recorded actions. Sensitive event details are not shown here.</p>
+      <p>Search and page through recorded actions. Sensitive event details are not shown.</p>
     </div>
   </section>
 
   <section class="admin-section" aria-labelledby="audit-title">
     <div class="admin-section__heading">
       <div>
-        <h2 id="audit-title">Recent system activity</h2>
-        <p>Review administrator and staff actions recorded by the system.</p>
+        <h2 id="audit-title">Recorded activity</h2>
+        <p>Search by actor, action, or record identifier, then narrow by category.</p>
       </div>
     </div>
-    <% if (auditLogs.length) { %>
-      <ol class="admin-audit-list" aria-label="Recent system audit activity">
-        <% for (const event of auditLogs) { %>
-          <li class="admin-audit-event">
-            <dl class="admin-audit-event__fields">
-              <div><dt>When</dt><dd><%= event.created_at ? new Date(event.created_at).toLocaleString() : '—' %></dd></div>
-              <div><dt>Actor</dt><dd><%= event.actor_email || `User ${event.user_id || 'system'}` %></dd></div>
-              <div><dt>Action</dt><dd><%= (event.action || 'Unknown').replaceAll('.', ' · ').replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></dd></div>
-              <div><dt>Record</dt><dd><%= event.entity_type || '—' %><%= event.entity_id ? ` #${event.entity_id}` : '' %></dd></div>
-            </dl>
-          </li>
-        <% } %>
-      </ol>
-    <% } else { %>
-      <p class="empty-state">No audit events have been recorded.</p>
+    <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+    <form class="admin-search admin-audit-search" method="get" action="/admin/audit">
+      <div class="field">
+        <label for="audit-search">Actor, action, or record</label>
+        <input id="audit-search" name="search" type="search" maxlength="100" value="<%= filters.searchTerm %>" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="audit-category">Category</label>
+        <select id="audit-category" name="category">
+          <% for (const [value, label] of Object.entries(categoryLabels)) { %><option value="<%= value %>" <%= filters.category === value ? 'selected' : '' %>><%= label %></option><% } %>
+        </select>
+      </div>
+      <button class="button button--secondary" type="submit">Apply filters</button>
+      <% if (filters.searchTerm || filters.category !== 'all') { %><a class="table-action" href="/admin/audit">Clear filters</a><% } %>
+    </form>
+
+    <p class="admin-result-count" role="status">
+      <% if (pagination.totalRecords) { %>Showing <%= pagination.from %>–<%= pagination.to %> of <%= pagination.totalRecords %> recorded action<%= pagination.totalRecords === 1 ? '' : 's' %>.<% } else { %>0 recorded actions match these filters.<% } %>
+    </p>
+    <% if (events.length) { %>
+      <div class="table-scroll admin-audit-scroll" tabindex="0" aria-label="Scrollable audit activity table">
+        <table class="admin-table admin-audit-table">
+          <caption class="visually-hidden">Audit activity without sensitive event details</caption>
+          <thead><tr><th scope="col">Date and time · Manila (PHT)</th><th scope="col">Actor</th><th scope="col">Action</th><th scope="col">Record</th></tr></thead>
+          <tbody>
+            <% for (const event of events) { %>
+              <tr>
+                <td data-label="Date and time · Manila (PHT)"><time<% if (event.displayDateTime.iso) { %> datetime="<%= event.displayDateTime.iso %>"<% } %>><%= event.displayDateTime.display %></time></td>
+                <td data-label="Actor"><%= event.actor_email || (event.user_id ? `User ${event.user_id}` : 'System') %></td>
+                <td data-label="Action"><%= (event.action || 'Unknown').replaceAll('.', ' · ').replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></td>
+                <td data-label="Record"><%= event.entity_type ? event.entity_type.replaceAll('_', ' ') : '—' %><%= event.entity_id ? ` #${event.entity_id}` : '' %></td>
+              </tr>
+            <% } %>
+          </tbody>
+        </table>
+      </div>
+    <% } else if (!error) { %>
+      <p class="empty-state">No audit events match these filters.</p>
+    <% } %>
+
+    <% if (pagination.totalPages > 1) { %>
+      <nav class="records-pagination admin-directory-pagination" aria-label="Audit activity pages">
+        <p>Page <span aria-current="page"><%= pagination.page %></span> of <%= pagination.totalPages %></p>
+        <div>
+          <% if (pagination.page > 1) { %><a class="button button--secondary" rel="prev" href="<%= pageHref(pagination.page - 1) %>">Previous page</a><% } else { %><span class="button button--secondary" aria-disabled="true">Previous page</span><% } %>
+          <% if (pagination.page < pagination.totalPages) { %><a class="button button--secondary" rel="next" href="<%= pageHref(pagination.page + 1) %>">Next page</a><% } else { %><span class="button button--secondary" aria-disabled="true">Next page</span><% } %>
+        </div>
+      </nav>
     <% } %>
   </section>
 </main>

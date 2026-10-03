@@ -44,13 +44,16 @@ function services({ ownStudentRecords = null } = {}) {
       async listTeacherAssignments() { return []; }
     },
     adminService: {
-      async listDashboard() {
+      async listAccounts(filters = {}) {
         return {
           users: [],
-          searchTerm: ''
+          filters: { category: filters.category || 'students', role: filters.role || '', status: filters.status || 'all', searchTerm: filters.search || '' },
+          pagination: { page: 1, pageSize: 25, totalRecords: 0, totalPages: 1, from: 0, to: 0 }
         };
       },
-      async listAuditLogs() { return []; },
+      async listAuditLogs(filters = {}) {
+        return { events: [], filters: { category: filters.category || 'all', searchTerm: filters.search || '' }, pagination: { page: 1, pageSize: 25, totalRecords: 0, totalPages: 1, from: 0, to: 0 } };
+      },
       async getDashboardSummary() {
         return {
           active_user_count: 4,
@@ -245,7 +248,8 @@ test('authenticated navigation only exposes destinations available to each role'
       assert.equal((html.match(/action="\/logout"/g) || []).length, 1, 'sign-out appears only in the shared header');
       assert.ok(csrfFromHtml(html).length >= 32);
       if (scenario.role === 'database_admin') {
-        assert.match(html, /User accounts/);
+        assert.match(html, /Student accounts/);
+        assert.match(html, /Staff accounts/);
         assert.match(html, /href="\/registrar\/records"/);
         assert.doesNotMatch(html, /Recent audit activity/);
         assert.match(html, /href="\/admin\/audit"/);
@@ -298,7 +302,7 @@ test('database administrator audit page has its own current navigation destinati
     assert.equal(response.status, 200);
     assert.match(html, /<h1>Audit activity<\/h1>/);
     assert.match(html, /href="\/admin\/audit" aria-current="page"/);
-    assert.match(html, /No audit events have been recorded\./);
+    assert.match(html, /No audit events match these filters\./);
     const navigation = html.match(/<aside class="desktop-nav"[\s\S]*?<\/aside>/)[0];
     assert.equal((navigation.match(/aria-current="page"/g) || []).length, 1);
     assert.equal((navigation.match(/href="\/admin\/audit"/g) || []).length, 1);
@@ -393,7 +397,7 @@ test('nested workspace pages mark the current destination and provide fixed pare
     const accountForm = await fetch(`${baseUrl}/admin/users/new`, { headers: { cookie } });
     const html = await accountForm.text();
     assert.match(html, /class="app-nav__link is-current" href="\/admin\/users" aria-current="page"/);
-    assert.match(html, /class="context-back" href="\/admin#users-title"/);
+    assert.match(html, /class="context-back" href="\/admin\/users\?category=staff"/);
   });
 
   const financeApp = createApp({ databasePool: createAuthPool('finance'), environment, ...services() });

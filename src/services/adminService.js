@@ -4,6 +4,19 @@ const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database
 const PASSWORD_HASH_ROUNDS = 12;
 const STAFF_ROLES = new Set(['database_admin', 'registrar', 'finance', 'teacher']);
 const ROLES = new Set([...STAFF_ROLES, 'student']);
+const ACCOUNT_PAGE_SIZE = 25;
+const AUDIT_PAGE_SIZE = 25;
+const ACCOUNT_CATEGORIES = new Set(['students', 'staff']);
+const ACCOUNT_STATUSES = new Set(['all', 'active', 'inactive']);
+const AUDIT_CATEGORIES = new Set(['all', 'accounts', 'students', 'documents', 'finance', 'academics', 'other']);
+const AUDIT_CATEGORY_SQL = Object.freeze({
+  accounts: "a.entity_type IN ('user', 'student_account_setup')",
+  students: "a.entity_type IN ('student', 'enrollment', 'annual_enrollment')",
+  documents: "a.entity_type IN ('document', 'form137_status', 'previous_school_report_card_physical_status', 'student_document_request', 'student_physical_checklist')",
+  finance: "a.entity_type IN ('financial_account', 'annual_finance', 'annual_finance_case')",
+  academics: "a.entity_type IN ('academic_term', 'section', 'subject', 'student_subject', 'grade', 'class_schedule', 'grade_import', 'teacher_grade_submission')",
+  other: "(a.entity_type IS NULL OR a.entity_type NOT IN ('user', 'student_account_setup', 'student', 'enrollment', 'annual_enrollment', 'document', 'form137_status', 'previous_school_report_card_physical_status', 'student_document_request', 'student_physical_checklist', 'financial_account', 'annual_finance', 'annual_finance_case', 'academic_term', 'section', 'subject', 'student_subject', 'grade', 'class_schedule', 'grade_import', 'teacher_grade_submission'))"
+});
 
 class AdminServiceError extends Error {
   constructor(message, status = 400) {
@@ -38,6 +51,49 @@ function normalizeSearchTerm(value) {
 
 function escapeLikePattern(value) {
   return value.replace(/[~%_[\]]/g, (character) => `~${character}`);
+}
+
+function normalizePage(value) {
+  if (typeof value !== 'string' || !/^\d{1,10}$/.test(value)) return 1;
+  const page = Number(value);
+  return Number.isSafeInteger(page) && page > 0 ? page : 1;
+}
+
+function normalizeAccountFilters(input = {}) {
+  const category = input.category === undefined ? 'students' : input.category;
+  if (typeof category !== 'string' || !ACCOUNT_CATEGORIES.has(category)) {
+    throw new AdminServiceError('Choose either the student or staff account list.');
+  }
+  const status = input.status === undefined ? 'all' : input.status;
+  if (typeof status !== 'string' || !ACCOUNT_STATUSES.has(status)) {
+    throw new AdminServiceError('Choose a valid account status.');
+  }
+  const searchTerm = normalizeSearchTerm(input.search);
+  const role = input.role === undefined || input.role === '' ? '' : input.role;
+  if (typeof role !== 'string' || (role && (!STAFF_ROLES.has(role) || category !== 'staff'))) {
+    throw new AdminServiceError('Choose a valid staff role.');
+  }
+  return { category, status, role, searchTerm, page: normalizePage(input.page) };
+}
+
+function normalizeAuditFilters(input = {}) {
+  const category = input.category === undefined ? 'all' : input.category;
+  if (typeof category !== 'string' || !AUDIT_CATEGORIES.has(category)) {
+    throw new AdminServiceError('Choose a valid audit category.');
+  }
+  return {
+    category,
+    searchTerm: normalizeSearchTerm(input.search),
+    page: normalizePage(input.page)
+  };
+}
+
+function makePagination(totalRecords, requestedPage, pageSize) {
+  const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+  const page = Math.min(requestedPage, totalPages);
+  const from = totalRecords ? ((page - 1) * pageSize) + 1 : 0;
+  const to = Math.min(page * pageSize, totalRecords);
+  return { page, pageSize, totalRecords, totalPages, from, to };
 }
 
 function validatePassword(password) {
@@ -208,39 +264,89 @@ function createAdminService({
     }
   }
 
-  async function listDashboard(searchInput = '') {
-    const searchTerm = normalizeSearchTerm(searchInput);
-    const searchPattern = searchTerm ? `%${escapeLikePattern(searchTerm)}%` : null;
+  async function listAccounts(input = {}) {
+    const filters = normalizeAccountFilters(input);
+    const searchPattern = filters.searchTerm ? `%${escapeLikePattern(filters.searchTerm)}%` : null;
+    const conditions = [filters.category === 'students' ? "u.role = 'student'" : "u.role IN ('database_admin', 'registrar', 'finance', 'teacher')"];
+    if (filters.status === 'active') conditions.push('u.is_active = 1');
+    if (filters.status === 'inactive') conditions.push('u.is_active = 0');
+    if (filters.role) conditions.push('u.role = @role');
+
+    const studentName = "CONCAT_WS(' ', NULLIF(TRIM(s.first_name), ''), NULLIF(TRIM(s.middle_name), ''), NULLIF(TRIM(s.last_name), ''), NULLIF(TRIM(s.suffix), ''))";
+    const staffName = "CONCAT_WS(' ', NULLIF(TRIM(sp.first_name), ''), NULLIF(TRIM(sp.last_name), ''))";
+    const nameExpression = filters.category === 'students' ? studentName : staffName;
+    if (searchPattern) {
+      conditions.push(`(u.email LIKE @searchPattern ESCAPE '~' OR ${nameExpression} LIKE @searchPattern ESCAPE '~'${filters.category === 'students' ? " OR s.student_no LIKE @searchPattern ESCAPE '~'" : ''})`);
+    }
+    const where = conditions.join('\n        AND ');
     const pool = await getPool();
-    const users = await pool.request()
-      .input('searchPattern', sql.NVarChar(204), searchPattern)
+    const bindFilters = (request) => {
+      request.input('searchPattern', sql.NVarChar(204), searchPattern);
+      if (filters.role) request.input('role', sql.NVarChar(30), filters.role);
+      return request;
+    };
+    const count = await bindFilters(pool.request()).query(`
+      SELECT COUNT(*) AS total_records
+      FROM users AS u
+      LEFT JOIN staff_profiles AS sp ON sp.user_id = u.id
+      LEFT JOIN students AS s ON s.user_id = u.id
+      WHERE ${where}`);
+    const totalRecords = Number(count.recordset?.[0]?.total_records || 0);
+    const pagination = makePagination(totalRecords, filters.page, ACCOUNT_PAGE_SIZE);
+    const result = await bindFilters(pool.request())
+      .input('pageSize', sql.Int, ACCOUNT_PAGE_SIZE)
+      .input('offset', sql.Int, (pagination.page - 1) * ACCOUNT_PAGE_SIZE)
       .query(`
-      SELECT
-        u.id, u.email, u.role, u.is_active, u.created_at,
+      SELECT u.id, u.email, u.role, u.is_active, u.created_at,
         CASE WHEN u.role = 'student'
-          THEN COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(s.first_name, ' ', s.middle_name, ' ', s.last_name, ' ', s.suffix))), ''), CONCAT('User ', u.id))
-          ELSE COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(sp.first_name, ' ', sp.last_name))), ''), CONCAT('User ', u.id))
+          THEN COALESCE(NULLIF(${studentName}, ''), CONCAT('User ', u.id))
+          ELSE COALESCE(NULLIF(${staffName}, ''), CONCAT('User ', u.id))
         END AS display_name,
         s.student_no, sp.department
       FROM users AS u
       LEFT JOIN staff_profiles AS sp ON sp.user_id = u.id
       LEFT JOIN students AS s ON s.user_id = u.id
-      WHERE @searchPattern IS NULL
-        OR u.email LIKE @searchPattern ESCAPE '~'
-        OR s.student_no LIKE @searchPattern ESCAPE '~'
-      ORDER BY u.created_at DESC, u.id DESC LIMIT 250`);
-    return { users: users.recordset || [], searchTerm };
+      WHERE ${where}
+      ORDER BY u.created_at DESC, u.id DESC
+      LIMIT @pageSize OFFSET @offset`);
+    return {
+      users: result.recordset || [],
+      filters,
+      pagination
+    };
   }
 
-  async function listAuditLogs() {
+  async function listAuditLogs(input = {}) {
+    const filters = normalizeAuditFilters(input);
+    const searchPattern = filters.searchTerm ? `%${escapeLikePattern(filters.searchTerm)}%` : null;
+    const conditions = [];
+    if (AUDIT_CATEGORY_SQL[filters.category]) conditions.push(AUDIT_CATEGORY_SQL[filters.category]);
+    if (searchPattern) conditions.push(`(actor.email LIKE @searchPattern ESCAPE '~'
+      OR a.action LIKE @searchPattern ESCAPE '~'
+      OR a.entity_type LIKE @searchPattern ESCAPE '~'
+      OR a.entity_id LIKE @searchPattern ESCAPE '~')`);
+    const where = conditions.length ? `WHERE ${conditions.join('\n        AND ')}` : '';
     const pool = await getPool();
-    const result = await pool.request().query(`
+    const bindFilters = (request) => request.input('searchPattern', sql.NVarChar(204), searchPattern);
+    const count = await bindFilters(pool.request()).query(`
+      SELECT COUNT(*) AS total_records
+      FROM audit_logs AS a
+      LEFT JOIN users AS actor ON actor.id = a.user_id
+      ${where}`);
+    const totalRecords = Number(count.recordset?.[0]?.total_records || 0);
+    const pagination = makePagination(totalRecords, filters.page, AUDIT_PAGE_SIZE);
+    const result = await bindFilters(pool.request())
+      .input('pageSize', sql.Int, AUDIT_PAGE_SIZE)
+      .input('offset', sql.Int, (pagination.page - 1) * AUDIT_PAGE_SIZE)
+      .query(`
       SELECT a.id, a.user_id, actor.email AS actor_email, a.action, a.entity_type,
         a.entity_id, a.created_at
       FROM audit_logs AS a
       LEFT JOIN users AS actor ON actor.id = a.user_id
-      ORDER BY a.created_at DESC, a.id DESC LIMIT 100`);
-    return result.recordset || [];
+      ${where}
+      ORDER BY a.created_at DESC, a.id DESC
+      LIMIT @pageSize OFFSET @offset`);
+    return { events: result.recordset || [], filters, pagination };
   }
 
   async function getDashboardSummary(actorInput) {
@@ -386,13 +492,15 @@ function createAdminService({
     });
   }
 
-  return { listDashboard, listAuditLogs, getDashboardSummary, getUser, createUser, updateUser, resetPassword };
+  return { listAccounts, listAuditLogs, getDashboardSummary, getUser, createUser, updateUser, resetPassword };
 }
 
 module.exports = {
   AdminServiceError,
   createAdminService,
   normalizeUserId,
+  normalizeAccountFilters,
+  normalizeAuditFilters,
   validatePassword,
   validateCreateUser,
   validateUpdateUser

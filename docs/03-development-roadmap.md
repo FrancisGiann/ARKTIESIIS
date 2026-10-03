@@ -32,11 +32,11 @@
 - Share per-account attempt and send limits across sessions.
 
 ## Phase 4 - Database Admin
-- [x] User account listing, creation, and updates.
+- [x] Separate student and staff account directories with role/status filters, searchable names and emails, and 25-account server-side pagination; all matching accounts remain reachable.
 - [x] Role management for the approved roles, including staff profile maintenance.
 - [x] Account activation/deactivation with last-active-administrator and self-lockout safeguards.
 - [x] Password reset with bcrypt hashing and pending sign-in code invalidation.
-- [x] Database-admin-only audit log viewer that omits raw event details.
+- [x] Database-admin-only audit activity viewer with actor/action search, record categories, stable 25-event pagination, Manila timestamps, and no raw event details.
 - [x] Student logins link to existing unlinked student records; Phase 4 does not create or edit student master records.
 - [x] Database administrators may archive student records; linked login access and pending OTPs are disabled while academic and finance history remains.
 - [x] Database administrators may set up logins in bulk for existing unlinked students from a bounded Excel roster; profiles and enrollments are not changed, and the one-time temporary credentials are never persisted in plaintext.

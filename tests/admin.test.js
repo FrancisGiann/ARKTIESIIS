@@ -170,30 +170,116 @@ test('editing a user to teacher updates the account and staff profile in one tra
   assert.equal(profileUpdate.values.lastName, 'Teacher');
 });
 
-test('user search binds an escaped email/student-number pattern and validates its length', async () => {
+test('student account directory uses separated filters, escaped search, and 25-row pagination beyond 250 accounts', async () => {
+  const calls = [];
+  let queryCount = 0;
+  const pool = {
+    request() {
+      const values = {};
+      return {
+        input(name, _type, value) { values[name] = value; return this; },
+        async query(statement) {
+          calls.push({ statement, values: { ...values } });
+          queryCount += 1;
+          return statement.includes('COUNT(*)')
+            ? { recordset: [{ total_records: 1374 }] }
+            : { recordset: [{ id: 1300, display_name: 'A Student', student_no: 'S-1300' }] };
+        }
+      };
+    }
+  };
+  const service = createAdminService({ getPool: async () => pool, sql: fakeSql() });
+
+  const directory = await service.listAccounts({ category: 'students', status: 'inactive', search: 'acct_%[x]~', page: '11' });
+  const countQuery = calls[0];
+  const accountQuery = calls[1];
+  assert.equal(queryCount, 2);
+  assert.equal(directory.filters.searchTerm, 'acct_%[x]~');
+  assert.equal(directory.pagination.totalRecords, 1374);
+  assert.deepEqual(directory.pagination, { page: 11, pageSize: 25, totalRecords: 1374, totalPages: 55, from: 251, to: 275 });
+  assert.equal(accountQuery.values.searchPattern, '%acct~_~%~[x~]~~%');
+  assert.equal(accountQuery.values.pageSize, 25);
+  assert.equal(accountQuery.values.offset, 250);
+  assert.match(countQuery.statement, /u\.role = 'student'/);
+  assert.match(accountQuery.statement, /u\.is_active = 0/);
+  assert.match(accountQuery.statement, /u\.email LIKE @searchPattern/);
+  assert.match(accountQuery.statement, /s\.student_no LIKE @searchPattern/);
+  assert.match(accountQuery.statement, /CONCAT_WS\(' ', NULLIF\(TRIM\(s\.first_name\)/);
+  assert.match(accountQuery.statement, /ORDER BY u\.created_at DESC, u\.id DESC\s+LIMIT @pageSize OFFSET @offset/);
+  assert.doesNotMatch(accountQuery.statement, /LIMIT 250/);
+  assert.doesNotMatch(accountQuery.statement, /acct_%\[x\]/);
+  await assert.rejects(service.listAccounts({ search: 'x'.repeat(101) }), /100 printable characters or fewer/);
+  await assert.rejects(service.listAccounts({ search: ['one', 'two'] }), /100 printable characters or fewer/);
+  for (const page of [['2'], { requested: '2' }]) {
+    const invalidPage = await service.listAccounts({ category: 'students', page });
+    assert.equal(invalidPage.pagination.page, 1);
+    assert.equal(calls.at(-1).values.offset, 0);
+  }
+});
+
+test('staff directory applies approved role and active status and safely clamps pages', async () => {
   const calls = [];
   const pool = {
     request() {
       const values = {};
       return {
         input(name, _type, value) { values[name] = value; return this; },
-        async query(statement) { calls.push({ statement, values: { ...values } }); return { recordset: [] }; }
+        async query(statement) {
+          calls.push({ statement, values: { ...values } });
+          return statement.includes('COUNT(*)') ? { recordset: [{ total_records: 52 }] } : { recordset: [] };
+        }
       };
     }
   };
   const service = createAdminService({ getPool: async () => pool, sql: fakeSql() });
+  const directory = await service.listAccounts({ category: 'staff', role: 'teacher', status: 'active', page: '9999999999' });
+  assert.match(calls[0].statement, /u\.role IN \('database_admin', 'registrar', 'finance', 'teacher'\)/);
+  assert.match(calls[1].statement, /u\.role = @role/);
+  assert.match(calls[1].statement, /u\.is_active = 1/);
+  assert.equal(calls[1].values.role, 'teacher');
+  assert.equal(calls[1].values.offset, 50);
+  assert.equal(directory.pagination.page, 3);
+  assert.equal(directory.pagination.totalPages, 3);
+  assert.deepEqual(directory.pagination, { page: 3, pageSize: 25, totalRecords: 52, totalPages: 3, from: 51, to: 52 });
+  assert.doesNotMatch(calls[1].statement, /s\.student_no LIKE/);
+  await assert.rejects(service.listAccounts({ category: 'students', role: 'teacher' }), /valid staff role/);
+  await assert.rejects(service.listAccounts({ category: 'staff', role: 'owner' }), /valid staff role/);
+  await assert.rejects(service.listAccounts({ status: 'enabled' }), /valid account status/);
+});
 
-  const dashboard = await service.listDashboard('acct_%[x]~');
-  const userQuery = calls[0];
-  assert.equal(calls.length, 1, 'the overview query does not load audit activity');
-  assert.doesNotMatch(userQuery.statement, /dbo\.audit_logs/);
-  assert.equal(dashboard.searchTerm, 'acct_%[x]~');
-  assert.equal(userQuery.values.searchPattern, '%acct~_~%~[x~]~~%');
-  assert.match(userQuery.statement, /u\.email LIKE @searchPattern/);
-  assert.match(userQuery.statement, /s\.student_no LIKE @searchPattern/);
-  assert.match(userQuery.statement, /ORDER BY u\.created_at DESC, u\.id DESC LIMIT 250/);
-  assert.doesNotMatch(userQuery.statement, /acct_%\[x\]/);
-  await assert.rejects(service.listDashboard('x'.repeat(101)), /100 printable characters or fewer/);
+test('audit directory searches actor/action, filters known categories, omits details, and clamps pagination', async () => {
+  const calls = [];
+  const pool = {
+    request() {
+      const values = {};
+      return {
+        input(name, _type, value) { values[name] = value; return this; },
+        async query(statement) {
+          calls.push({ statement, values: { ...values } });
+          return statement.includes('COUNT(*)') ? { recordset: [{ total_records: 51 }] } : { recordset: [{ id: 88, actor_email: 'staff@example.edu', action: 'registrar.form137_status_recorded' }] };
+        }
+      };
+    }
+  };
+  const service = createAdminService({ getPool: async () => pool, sql: fakeSql() });
+  const result = await service.listAuditLogs({ category: 'documents', search: 'actor_%[x]~', page: '9999' });
+  assert.equal(result.pagination.page, 3);
+  assert.equal(result.pagination.from, 51);
+  assert.equal(calls[1].values.offset, 50);
+  assert.equal(calls[1].values.pageSize, 25);
+  assert.equal(calls[1].values.searchPattern, '%actor~_~%~[x~]~~%');
+  assert.match(calls[1].statement, /form137_status/);
+  assert.match(calls[1].statement, /previous_school_report_card_physical_status/);
+  assert.match(calls[1].statement, /student_document_request/);
+  assert.match(calls[1].statement, /student_physical_checklist/);
+  assert.match(calls[1].statement, /actor\.email LIKE @searchPattern/);
+  assert.match(calls[1].statement, /a\.action LIKE @searchPattern/);
+  assert.match(calls[1].statement, /ORDER BY a\.created_at DESC, a\.id DESC/);
+  assert.doesNotMatch(calls[1].statement, /details_json/);
+  await service.listAuditLogs({ category: 'other' });
+  assert.match(calls[3].statement, /a\.entity_type IS NULL OR a\.entity_type NOT IN/);
+  await assert.rejects(service.listAuditLogs({ category: 'secret' }), /valid audit category/);
+  await assert.rejects(service.listAuditLogs({ search: {} }), /100 printable characters or fewer/);
 });
 
 test('the final active database administrator cannot be demoted or deactivated', async () => {
@@ -350,13 +436,13 @@ test('database administrator read matrix permits staff workspaces and denies stu
     }
   };
   const adminService = {
-    async listDashboard(searchTerm) {
-      calls.push(['listDashboard', searchTerm]);
-      return { users: [], auditLogs: [], searchTerm };
+    async listAccounts(filters) {
+      calls.push(['listAccounts', { ...filters }]);
+      return { users: [], filters: { category: filters.category || 'students', role: filters.role || '', status: filters.status || 'all', searchTerm: filters.search || '' }, pagination: { page: 1, pageSize: 25, totalRecords: 0, totalPages: 1, from: 0, to: 0 } };
     },
-    async listAuditLogs() {
-      calls.push(['listAuditLogs']);
-      return [];
+    async listAuditLogs(filters) {
+      calls.push(['listAuditLogs', { ...filters }]);
+      return { events: [], filters: { category: filters.category || 'all', searchTerm: filters.search || '' }, pagination: { page: 1, pageSize: 25, totalRecords: 0, totalPages: 1, from: 0, to: 0 } };
     },
     async getDashboardSummary(actorId) {
       calls.push(['getDashboardSummary', actorId]);
@@ -388,6 +474,7 @@ test('database administrator read matrix permits staff workspaces and denies stu
     const cookie = await signIn(baseUrl, 'database_admin@example.edu');
     const cases = [
       ['/admin', 200, /Database Admin Dashboard/],
+      ['/admin/users?category=staff', 200, /Staff accounts/],
       ['/admin/audit', 200, /Audit activity/],
       ['/registrar/records', 200, /Student Records/],
       ['/documents', 200, /Documents/],
@@ -402,8 +489,8 @@ test('database administrator read matrix permits staff workspaces and denies stu
     }
 
     assert.deepEqual(calls, [
-      ['listDashboard', ''],
-      ['listAuditLogs'],
+      ['listAccounts', { category: 'staff' }],
+      ['listAuditLogs', {}],
       ['listWorkspace', '', ''],
       ['listDocuments', 7],
       ['annualFinanceRoster']
@@ -414,12 +501,12 @@ test('database administrator read matrix permits staff workspaces and denies stu
 test('non-admin role receives 403 for admin routes without loading admin data', async () => {
   let dashboardReads = 0;
   const adminService = {
-    async listDashboard() { dashboardReads += 1; return { users: [] }; },
-    async listAuditLogs() { dashboardReads += 1; return []; }
+    async listAccounts() { dashboardReads += 1; return {}; },
+    async listAuditLogs() { dashboardReads += 1; return {}; }
   };
   await withServer(createApp({ databasePool: createAuthPool('registrar'), environment: testEnvironment, adminService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar@example.edu');
-    for (const route of ['/admin', '/admin/audit']) {
+    for (const route of ['/admin', '/admin/users', '/admin/audit']) {
       const response = await fetch(`${baseUrl}${route}`, { headers: { cookie } });
       assert.equal(response.status, 403);
     }
@@ -430,7 +517,7 @@ test('non-admin role receives 403 for admin routes without loading admin data', 
 test('a signed-in staff session does not gain administrator access after a role upgrade', async () => {
   let dashboardReads = 0;
   const pool = createAuthPool('registrar');
-  const adminService = { async listDashboard() { dashboardReads += 1; return { users: [], auditLogs: [] }; } };
+  const adminService = { async listAccounts() { dashboardReads += 1; return {}; } };
   await withServer(createApp({ databasePool: pool, environment: testEnvironment, adminService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar@example.edu');
     pool.user.role = 'database_admin';
@@ -562,11 +649,12 @@ test('create and reset forms reject mismatched passwords without returning submi
 
 test('audit viewer omits stored detail JSON', async () => {
   const adminService = {
-    async listDashboard() {
-      throw new Error('The audit route must not load overview data.');
-    },
     async listAuditLogs() {
-      return [{ id: 1, actor_email: 'database_admin@example.edu', action: 'admin.user_created', entity_type: 'user', entity_id: '9', details_json: '{"password":"must-not-render"}' }];
+      return {
+        events: [{ id: 1, user_id: 7, actor_email: 'database_admin@example.edu', action: 'admin.user_created', entity_type: 'user', entity_id: '9', created_at: '2026-10-02 00:00:03', details_json: '{"password":"must-not-render"}' }],
+        filters: { category: 'all', searchTerm: '' },
+        pagination: { page: 1, pageSize: 25, totalRecords: 1, totalPages: 1, from: 1, to: 1 }
+      };
     }
   };
   await withServer(createApp({ databasePool: createAuthPool('database_admin'), environment: testEnvironment, adminService }), async (baseUrl) => {
@@ -575,6 +663,63 @@ test('audit viewer omits stored detail JSON', async () => {
     const html = await response.text();
     assert.equal(response.status, 200);
     assert.match(html, /Admin · user created/);
+    assert.match(html, /Date and time · Manila \(PHT\)/);
+    assert.match(html, /08:00:03 AM/);
     assert.doesNotMatch(html, /must-not-render/);
+  });
+});
+
+test('account directory routes to separate lists, marks Accounts current, and preserves filters in pagination', async () => {
+  const requests = [];
+  const adminService = {
+    async listAccounts(filters) {
+      requests.push(filters);
+      const category = filters.category || 'students';
+      const staff = category === 'staff';
+      const totalRecords = 51;
+      const page = Math.min(Number(filters.page) || 1, 3);
+      return {
+        users: [{ id: 88, display_name: staff ? 'Taylor Teacher' : 'Alex Student', email: staff ? 'teacher@example.edu' : 'student@example.edu', role: staff ? 'teacher' : 'student', is_active: true, student_no: 'S-88', department: 'English' }],
+        filters: { category, role: filters.role || '', status: filters.status || 'all', searchTerm: filters.search || '' },
+        pagination: { page, pageSize: 25, totalRecords, totalPages: 3, from: (page - 1) * 25 + 1, to: Math.min(page * 25, totalRecords) }
+      };
+    }
+  };
+  await withServer(createApp({ databasePool: createAuthPool('database_admin'), environment: testEnvironment, adminService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'database_admin@example.edu');
+    const students = await fetch(`${baseUrl}/admin/users`, { headers: { cookie } });
+    const studentsHtml = await students.text();
+    assert.equal(students.status, 200);
+    assert.match(studentsHtml, /href="\/admin\/users" aria-current="page"/);
+    assert.match(studentsHtml, /Student accounts/);
+    assert.match(studentsHtml, /Alex Student/);
+    assert.doesNotMatch(studentsHtml, /Taylor Teacher/);
+    assert.doesNotMatch(studentsHtml, /data-label="Role"/);
+
+    const staff = await fetch(`${baseUrl}/admin/users?category=staff&role=teacher&status=inactive&search=teacher%40example.edu&page=2`, { headers: { cookie } });
+    const staffHtml = await staff.text();
+    assert.equal(staff.status, 200);
+    assert.match(staffHtml, /Staff accounts/);
+    assert.match(staffHtml, /data-label="Role">Teacher/);
+    assert.match(staffHtml, /value="teacher" selected/);
+    assert.match(staffHtml, /value="inactive" selected/);
+    assert.match(staffHtml, /rel="next" href="\/admin\/users\?category=staff&amp;role=teacher&amp;status=inactive&amp;search=teacher%40example.edu&amp;page=3"/);
+    assert.match(staffHtml, /rel="prev" href="\/admin\/users\?category=staff&amp;role=teacher&amp;status=inactive&amp;search=teacher%40example.edu&amp;page=1"/);
+    assert.equal(requests.length, 2);
+  });
+});
+
+test('invalid account filters are rejected and legacy overview search opens the student directory', async () => {
+  let reads = 0;
+  const adminService = { async listAccounts() { reads += 1; throw new AdminServiceError('Choose a valid account status.'); } };
+  await withServer(createApp({ databasePool: createAuthPool('database_admin'), environment: testEnvironment, adminService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'database_admin@example.edu');
+    const invalid = await fetch(`${baseUrl}/admin/users?category=staff&status=active&status=inactive`, { headers: { cookie } });
+    assert.equal(invalid.status, 400);
+    assert.match(await invalid.text(), /Choose a valid account status\./);
+    assert.equal(reads, 1);
+    const legacy = await fetch(`${baseUrl}/admin?search=some%20student`, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(legacy.status, 303);
+    assert.equal(legacy.headers.get('location'), '/admin/users?category=students&search=some%20student');
   });
 });

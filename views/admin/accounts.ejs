@@ -1,0 +1,102 @@
+<%- include('../partials/head', { title }) %>
+<%
+  const queryString = (values) => Object.entries(values)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`).join('&');
+  const accountHref = (category) => `/admin/users?${queryString({ category, role: category === 'staff' ? filters.role : '', status: filters.status, search: filters.searchTerm })}`;
+  const pageHref = (page) => `/admin/users?${queryString({ category: filters.category, role: filters.role, status: filters.status, search: filters.searchTerm, page })}`;
+  const categoryName = filters.category === 'students' ? 'student' : 'staff';
+%>
+<main class="page-shell dashboard-page admin-page admin-accounts-page" id="main-content">
+  <a class="context-back" href="/admin">Back to overview</a>
+  <section class="dashboard-heading">
+    <div>
+      <h1>Accounts</h1>
+      <p>Search one account group at a time, then open an account to manage access.</p>
+    </div>
+    <div class="admin-heading-actions">
+      <a class="button button--secondary" href="/admin/student-accounts">Set up student logins</a>
+      <a class="button button--primary" href="/admin/users/new">Add user</a>
+    </div>
+  </section>
+
+  <nav class="admin-directory-tabs" aria-label="Account groups">
+    <a href="<%= accountHref('students') %>"<% if (filters.category === 'students') { %> aria-current="page"<% } %>>Students</a>
+    <a href="<%= accountHref('staff') %>"<% if (filters.category === 'staff') { %> aria-current="page"<% } %>>Staff</a>
+  </nav>
+
+  <section class="admin-section admin-account-directory" aria-labelledby="accounts-title">
+    <div class="admin-section__heading">
+      <div>
+        <h2 id="accounts-title"><%= filters.category === 'students' ? 'Student accounts' : 'Staff accounts' %></h2>
+        <p><%= filters.category === 'students' ? 'Search by student name, student number, or email.' : 'Search by staff name or email. Narrow the list by staff role or access status.' %></p>
+      </div>
+    </div>
+    <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+    <form class="admin-search admin-account-search" method="get" action="/admin/users">
+      <input type="hidden" name="category" value="<%= filters.category %>">
+      <div class="field">
+        <label for="account-search">Name or email<% if (filters.category === 'students') { %> or student number<% } %></label>
+        <input id="account-search" name="search" type="search" maxlength="100" value="<%= filters.searchTerm %>" autocomplete="off">
+      </div>
+      <% if (filters.category === 'staff') { %>
+        <div class="field">
+          <label for="account-role">Staff role</label>
+          <select id="account-role" name="role">
+            <option value="">All staff roles</option>
+            <% for (const role of ['teacher', 'registrar', 'finance', 'database_admin']) { %>
+              <option value="<%= role %>" <%= filters.role === role ? 'selected' : '' %>><%= role.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) %></option>
+            <% } %>
+          </select>
+        </div>
+      <% } %>
+      <div class="field">
+        <label for="account-status">Access status</label>
+        <select id="account-status" name="status">
+          <option value="all" <%= filters.status === 'all' ? 'selected' : '' %>>All statuses</option>
+          <option value="active" <%= filters.status === 'active' ? 'selected' : '' %>>Active</option>
+          <option value="inactive" <%= filters.status === 'inactive' ? 'selected' : '' %>>Inactive</option>
+        </select>
+      </div>
+      <button class="button button--secondary" type="submit">Apply filters</button>
+      <% if (filters.searchTerm || filters.role || filters.status !== 'all') { %><a class="table-action" href="/admin/users?category=<%= filters.category %>">Clear filters</a><% } %>
+    </form>
+
+    <p class="admin-result-count" role="status">
+      <% if (pagination.totalRecords) { %>Showing <%= pagination.from %>–<%= pagination.to %> of <%= pagination.totalRecords %> <%= categoryName %> account<%= pagination.totalRecords === 1 ? '' : 's' %>.<% } else { %>0 matching <%= categoryName %> accounts.<% } %>
+    </p>
+    <% if (users.length) { %>
+      <div class="table-scroll" tabindex="0" aria-label="Scrollable <%= categoryName %> accounts table">
+        <table class="admin-table admin-account-table <%= filters.category === 'staff' ? 'admin-account-table--staff' : '' %>">
+          <caption class="visually-hidden"><%= categoryName %> account access and status</caption>
+          <thead><tr><th scope="col">Name</th><% if (filters.category === 'students') { %><th scope="col">Student number</th><% } else { %><th scope="col">Department</th><% } %><th scope="col">Email</th><% if (filters.category === 'staff') { %><th scope="col">Role</th><% } %><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Account actions</span></th></tr></thead>
+          <tbody>
+            <% for (const user of users) { const active = user.is_active === true || user.is_active === 1; %>
+              <tr>
+                <td data-label="Name"><%= user.display_name %></td>
+                <td data-label="<%= filters.category === 'students' ? 'Student number' : 'Department' %>"><%= filters.category === 'students' ? (user.student_no || '—') : (user.department || '—') %></td>
+                <td data-label="Email"><%= user.email %></td>
+                <% if (filters.category === 'staff') { %><td data-label="Role"><%= user.role.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) %></td><% } %>
+                <td data-label="Status"><span class="account-status <%= active ? 'account-status--active' : 'account-status--inactive' %>"><%= active ? 'Active' : 'Inactive' %></span></td>
+                <td data-label="Actions"><a class="table-action" href="/admin/users/<%= user.id %>/edit">Manage</a></td>
+              </tr>
+            <% } %>
+          </tbody>
+        </table>
+      </div>
+    <% } else if (!error) { %>
+      <p class="empty-state">No <%= categoryName %> accounts match these filters.</p>
+    <% } %>
+
+    <% if (pagination.totalPages > 1) { %>
+      <nav class="records-pagination admin-directory-pagination" aria-label="Account pages">
+        <p>Page <span aria-current="page"><%= pagination.page %></span> of <%= pagination.totalPages %></p>
+        <div>
+          <% if (pagination.page > 1) { %><a class="button button--secondary" rel="prev" href="<%= pageHref(pagination.page - 1) %>">Previous page</a><% } else { %><span class="button button--secondary" aria-disabled="true">Previous page</span><% } %>
+          <% if (pagination.page < pagination.totalPages) { %><a class="button button--secondary" rel="next" href="<%= pageHref(pagination.page + 1) %>">Next page</a><% } else { %><span class="button button--secondary" aria-disabled="true">Next page</span><% } %>
+        </div>
+      </nav>
+    <% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

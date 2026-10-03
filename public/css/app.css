@@ -323,11 +323,23 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); outline
 .document-preview-dialog__frame, .document-preview-dialog__image-viewer { max-height: 75vh; overflow: auto; }
 .document-preview-dialog__image-viewer img { max-width: 100%; }
 .document-preview-dialog__header { display: flex; justify-content: space-between; gap: 1rem; }
-.admin-audit-list { display: grid; gap: 0.75rem; }
-.admin-audit-event { padding: 1rem; border: 1px solid var(--line); border-radius: var(--radius-control); }
-.admin-audit-event__fields { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; }
-.admin-audit-event__fields dt { color: var(--muted); }
-.admin-audit-event__fields dd { margin: 0; overflow-wrap: anywhere; }
+.admin-audit-table { table-layout: fixed; }
+.admin-audit-table th:first-child, .admin-audit-table td:first-child { width: 24%; }
+.admin-audit-table th:nth-child(2), .admin-audit-table td:nth-child(2) { width: 26%; }
+.admin-audit-table th:nth-child(3), .admin-audit-table td:nth-child(3) { width: 34%; }
+.admin-audit-table th:nth-child(4), .admin-audit-table td:nth-child(4) { width: 16%; }
+.admin-audit-table td, .admin-account-table td { overflow-wrap: anywhere; }
+.admin-audit-table td:first-child time { white-space: nowrap; }
+.admin-directory-tabs { display: flex; gap: 1.1rem; margin: -0.25rem 0 1rem; border-bottom: 1px solid var(--line); }
+.admin-directory-tabs a { display: inline-flex; min-height: 2.8rem; align-items: center; padding: 0.25rem 0.15rem; color: var(--ink-soft); border-bottom: 3px solid transparent; font-size: 0.88rem; font-weight: 700; text-decoration: none; }
+.admin-directory-tabs a:hover { color: var(--accent); }
+.admin-directory-tabs a[aria-current="page"] { color: var(--accent); border-color: var(--accent); }
+.admin-account-directory { padding: 1.1rem; }
+.admin-account-search .field, .admin-audit-search .field { min-width: min(100%, 13rem); flex: 1 1 15rem; }
+.admin-account-search .button, .admin-audit-search .button { white-space: nowrap; }
+.admin-directory-pagination > div { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.admin-directory-pagination [aria-disabled="true"] { color: var(--muted); background: #f4f6f6; border-color: var(--line); cursor: default; }
+.admin-audit-scroll { max-width: 100%; }
 .records-context-strip, .records-context-strip--term { padding: 0.75rem 1rem; margin: 0 0 1rem; background: var(--surface-soft); border-radius: var(--radius-control); }
 .records-context-strip p { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; margin: 0; }
 .records-management-grid, .student-record-layout, .student-academic-workspace { display: grid; grid-template-columns: minmax(14rem, 0.7fr) minmax(20rem, 1.3fr); gap: 1rem; align-items: start; }
@@ -427,8 +439,6 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); outline
   .admin-heading-actions .button { flex: 1; }
   .registrar-work-index__link { align-items: flex-start; flex-direction: column; }
   .registrar-work-index__action { align-self: flex-start; }
-  .admin-audit-event__fields { grid-template-columns: 1fr; }
-  .admin-audit-event__fields dd { margin-bottom: 0.35rem; }
   .schedule-edit form { position: relative; left: auto; }
 
   .admin-table thead, .portal-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
@@ -440,6 +450,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); outline
   .document-history-table { min-width: 0; }
   .admin-table td, .portal-table td { display: grid; grid-template-columns: minmax(5.3rem, 0.5fr) minmax(0, 1fr); gap: 0.7rem; padding: 0.45rem 0; border: 0; overflow-wrap: anywhere; }
   .admin-table td::before, .portal-table td::before { content: attr(data-label); color: var(--muted); font-size: 0.77rem; font-weight: 700; }
+  .admin-audit-table { table-layout: auto; }
+  .admin-audit-table td:first-child, .admin-audit-table td:nth-child(2), .admin-audit-table td:nth-child(4) { width: auto; white-space: normal; }
+  .admin-audit-table td:first-child time { white-space: normal; }
 }
 
 @media (max-width: 420px) {
@@ -791,9 +804,10 @@ label { font-size: 0.84rem; }
 .teacher-dashboard-class-status { color: var(--muted); font-size: 0.8rem; }
 .teacher-dashboard-action { display: inline-flex; min-height: 2.35rem; align-items: center; padding: 0.45rem 0.7rem; color: var(--accent); background: var(--accent-soft); border-radius: var(--radius-control); white-space: nowrap; }
 .teacher-dashboard-page .registrar-work-index__link:hover .teacher-dashboard-action { color: var(--accent-hover); text-decoration: underline; }
-.admin-work-links { display: flex; flex-wrap: wrap; gap: 0.6rem 1.4rem; padding: 0.85rem 0; margin: 0 0 1rem; border-block: 1px solid var(--line); }
-.admin-work-links a { display: grid; flex: 1 1 18rem; max-width: none; gap: 0.15rem; padding: 0.25rem 0; color: var(--ink); text-decoration: none; }
-.admin-work-links a + a { padding-left: 1.3rem; border-left: 1px solid var(--line); }
+.admin-work-links { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 0.9rem; padding: 0.85rem 0; margin: 0 0 1rem; border-block: 1px solid var(--line); }
+.admin-work-links a { display: grid; min-width: 0; gap: 0.15rem; padding: 0.25rem 0; color: var(--ink); text-decoration: none; }
+.admin-work-links a:nth-child(even) { padding-left: 0.9rem; border-left: 1px solid var(--line); }
+.admin-work-links a:nth-child(n+3) { padding-top: 0.7rem; border-top: 1px solid var(--line); }
 .admin-work-links a:hover strong { color: var(--accent); text-decoration: underline; text-underline-offset: 0.18em; }
 .admin-work-links strong { font-size: 0.88rem; }
 .admin-work-links span { color: var(--muted); font-size: 0.77rem; }
@@ -802,6 +816,18 @@ label { font-size: 0.84rem; }
 .admin-dashboard-users .admin-search .button { min-width: 9.5rem; }
 .admin-search { gap: 0.65rem; margin-bottom: 0.75rem; }
 .admin-search .field { flex-basis: 20rem; }
+.admin-account-search { flex-wrap: nowrap; }
+.admin-account-search .field { min-width: 0; flex: 1 1 0; }
+.admin-account-search .button { flex: 0 0 auto; }
+.admin-account-table--staff { table-layout: fixed; }
+.admin-account-table--staff th:nth-child(1), .admin-account-table--staff td:nth-child(1) { width: 18%; }
+.admin-account-table--staff th:nth-child(2), .admin-account-table--staff td:nth-child(2) { width: 14%; }
+.admin-account-table--staff th:nth-child(3), .admin-account-table--staff td:nth-child(3) { width: 32%; }
+.admin-account-table--staff th:nth-child(4), .admin-account-table--staff td:nth-child(4) { width: 14%; }
+.admin-account-table--staff th:nth-child(5), .admin-account-table--staff td:nth-child(5) { width: 12%; }
+.admin-account-table--staff th:nth-child(6), .admin-account-table--staff td:nth-child(6) { width: 10%; }
+.admin-account-table td[data-label="Status"] .account-status { width: fit-content; justify-self: start; white-space: nowrap; }
+.admin-account-table td[data-label="Actions"], .admin-account-table td[data-label="Actions"] .table-action { white-space: nowrap; }
 .admin-result-count, .records-list-count { margin: 0.4rem 0 0.7rem; font-size: 0.8rem; }
 
 /* Student home: term, today's classes, then the rest of the record. */
@@ -897,7 +923,6 @@ label { font-size: 0.84rem; }
 .records-form-section, .records-student-enrollment, .academic-enrollment, .academic-subject, .academic-grade-item { padding: 0.8rem; background: #f7f9f9; border-radius: var(--radius-control); }
 .document-precheck-scope, .document-precheck-status, .document-field-findings, .document-precheck-list, .document-review-history, .document-review-action { background: #f7f9f9; border-radius: var(--radius-control); }
 .document-status-overview__type { padding: 0.85rem; background: #f7f9f9; border-radius: var(--radius-control); }
-.admin-audit-event { padding: 0.8rem; border-radius: var(--radius-control); }
 .status-page { display: grid; align-content: start; max-width: 52rem; min-height: 52vh; padding-top: clamp(2.5rem, 9vh, 5rem); }
 .status-content { padding: clamp(1.15rem, 3vw, 1.8rem); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); }
 .status-content h1 { margin-bottom: 0.6rem; font-size: 1.55rem; }
@@ -960,6 +985,16 @@ label { font-size: 0.84rem; }
   .finance-detail-page .finance-entry { grid-template-columns: minmax(0, 1fr); max-width: none; }
   .finance-detail-page .finance-entry__field--wide, .finance-detail-page .finance-entry__clearance, .finance-detail-page .finance-entry .button { grid-column: auto; }
   .finance-detail-page .finance-task-heading { align-items: flex-start; }
+  .admin-account-search { flex-wrap: wrap; }
+  .admin-account-search .field { width: 100%; flex: 1 1 100%; }
+  .admin-account-table--staff { table-layout: auto; }
+  .admin-account-table--staff th:nth-child(n), .admin-account-table--staff td:nth-child(n) { width: auto; }
+  .admin-audit-table { table-layout: auto; }
+  .admin-audit-table th:nth-child(n), .admin-audit-table td:nth-child(n) { width: auto; }
+  .admin-work-links { grid-template-columns: 1fr; }
+  .admin-work-links a:nth-child(even) { padding-left: 0; border-left: 0; }
+  .admin-work-links a:nth-child(n+3) { padding-top: 0.7rem; border-top: 1px solid var(--line); }
+  .admin-work-links a:first-child { padding-top: 0.25rem; border-top: 0; }
   .subject-catalog__summary { grid-template-columns: minmax(5rem, 0.55fr) minmax(0, 1fr) auto; gap: 0.45rem; }
   .subject-catalog__units { grid-column: 2; }
   .subject-catalog__edit { grid-column: 3; grid-row: 1 / span 2; }

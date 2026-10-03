@@ -36,6 +36,19 @@ function count(value, label, maximum) {
   return number;
 }
 
+function validateConfiguredCounts(update, definition) {
+  const countTypes = [
+    ['originals', 'originals_required', 'Originals'],
+    ['copies', 'copies_required', 'Photocopies'],
+    ['pieces', 'pieces_required', 'Pieces']
+  ];
+  for (const [updateKey, definitionKey, label] of countTypes) {
+    if (definition[definitionKey] != null && Number(definition[definitionKey]) <= 0 && update[updateKey] > 0) {
+      throw new PhysicalChecklistError(`${label} are not tracked for this paper requirement.`);
+    }
+  }
+}
+
 function normalizeIntakeChecklistUpdates(input = {}) {
   const updates = [];
   for (const key of Object.keys(input || {})) {
@@ -43,8 +56,9 @@ function normalizeIntakeChecklistUpdates(input = {}) {
     const requirementCode = key.slice('paper_'.length, -'_record'.length);
     const record = input[key];
     if (record !== '1') throw new PhysicalChecklistError('Choose a valid paper checklist update.');
-    const status = typeof input[`paper_${requirementCode}_status`] === 'string'
-      && VALID_STATUSES.has(input[`paper_${requirementCode}_status`]) ? input[`paper_${requirementCode}_status`] : null;
+    const submittedStatus = input[`paper_${requirementCode}_status`];
+    const status = submittedStatus == null || submittedStatus === '' ? 'verified'
+      : typeof submittedStatus === 'string' && VALID_STATUSES.has(submittedStatus) ? submittedStatus : null;
     if (!status) throw new PhysicalChecklistError('Choose a valid paper requirement status.');
     const note = cleanText(input[`paper_${requirementCode}_note`] ?? '', 'Staff note', 1000);
     if (status === 'correction' && !note) throw new PhysicalChecklistError('Enter a note when requesting a correction.');
@@ -156,7 +170,7 @@ function createPhysicalChecklistService({
           LEFT JOIN staff_profiles AS profile ON profile.user_id = ranked.recorded_by
           WHERE ranked.row_number = 1
         ) AS latest ON latest.requirement_code = definition.requirement_code
-        WHERE definition.requirement_code <> 'sf10_form137'
+        WHERE definition.requirement_code NOT IN ('sf10_form137', 'long_brown_envelopes')
         ORDER BY definition.display_order`)
         .then(async (result) => result),
       pool.request().input('studentId', sql.Int, studentId).query(`SELECT event.id, event.requirement_code,
@@ -194,7 +208,7 @@ function createPhysicalChecklistService({
     const result = await pool.request().query(`SELECT requirement_code, requirement_name, guidance, applicability,
         originals_required, copies_required, pieces_required, is_optional, display_order
       FROM physical_requirement_definitions
-      WHERE requirement_code <> 'sf10_form137'
+      WHERE requirement_code NOT IN ('sf10_form137', 'long_brown_envelopes')
       ORDER BY display_order`);
     return result.recordset || [];
   }
@@ -251,12 +265,16 @@ function createPhysicalChecklistService({
     const eventIds = [];
     for (const update of updates) {
       const definitionResult = await tx.request().input('requirementCode', sql.NVarChar(60), update.requirementCode)
-        .query(`SELECT requirement_code, requirement_name, applicability FROM physical_requirement_definitions
+        .query(`SELECT requirement_code, requirement_name, applicability, originals_required, copies_required, pieces_required FROM physical_requirement_definitions
           WHERE requirement_code = @requirementCode FOR UPDATE`);
       const definition = definitionResult.recordset?.[0];
       if (!definition || definition.requirement_code === 'sf10_form137' || definition.applicability === 'staff') {
         throw new PhysicalChecklistError('Choose a paper requirement that applies to this intake.');
       }
+      if (definition.requirement_code === 'long_brown_envelopes') {
+        throw new PhysicalChecklistError('Long brown envelopes are storage containers and are not tracked as paper requirements.', 409);
+      }
+      validateConfiguredCounts(update, definition);
       if (definition.applicability === 'grade11' && gradeInput !== 'Grade 11'
         || definition.applicability === 'grade12' && gradeInput !== 'Grade 12') {
         throw new PhysicalChecklistError('This card requirement does not apply to the selected grade.');
@@ -309,7 +327,7 @@ function createPhysicalChecklistService({
       ) AS current_section ON current_section.student_id = student.id
       CROSS JOIN physical_requirement_definitions AS definition
       LEFT JOIN latest ON latest.student_id = student.id AND latest.requirement_code = definition.requirement_code AND latest.event_rank = 1
-      WHERE student.id IN (${placeholders.join(', ')}) AND definition.requirement_code <> 'sf10_form137'
+      WHERE student.id IN (${placeholders.join(', ')}) AND definition.requirement_code NOT IN ('sf10_form137', 'long_brown_envelopes')
       GROUP BY student.id`);
     return new Map((result.recordset || []).map((row) => [Number(row.student_id), row]));
   }
@@ -344,12 +362,16 @@ function createPhysicalChecklistService({
       if (!studentResult.recordset?.length) throw new PhysicalChecklistError('Student record not found.', 404);
       if (studentResult.recordset[0].status === 'archived') throw new PhysicalChecklistError('Archived student paper histories are read-only.', 409);
       const definitionResult = customName ? { recordset: [] } : await tx.request().input('requirementCode', sql.NVarChar(60), requirementCode)
-        .query(`SELECT requirement_code, requirement_name, applicability FROM physical_requirement_definitions
+        .query(`SELECT requirement_code, requirement_name, applicability, originals_required, copies_required, pieces_required FROM physical_requirement_definitions
           WHERE requirement_code = @requirementCode FOR UPDATE`);
       const definition = definitionResult.recordset?.[0] || (customName ? {
         requirement_code: requirementCode, requirement_name: customName, applicability: 'optional'
       } : null);
       if (!definition || definition.requirement_code === 'sf10_form137') throw new PhysicalChecklistError('Choose a named student paper requirement. SF10 / Form 137 uses its existing staff-only history.', 409);
+      if (definition.requirement_code === 'long_brown_envelopes') {
+        throw new PhysicalChecklistError('Long brown envelopes are storage containers and are not tracked as paper requirements.', 409);
+      }
+      validateConfiguredCounts(update, definition);
       if (customName || ['als', 'esc', 'optional'].includes(definition.applicability)) {
         // Applicability is entered by staff; it is not inferred from the learner’s voucher.
       } else if (!isApplicable) {

@@ -128,13 +128,11 @@
       const gradeOnly = applicability === 'grade11' ? 'Grade 11' : applicability === 'grade12' ? 'Grade 12' : null;
       row.hidden = Boolean(gradeOnly && grade.value && grade.value !== gradeOnly);
       const record = row.querySelector('[data-paper-record]');
-      const fields = row.querySelector('[data-paper-update-fields]');
       const details = row.querySelector('[data-paper-details]');
       const active = record.checked && !row.hidden;
       record.disabled = row.hidden;
-      fields.hidden = !active;
-      details.open = active;
-      fields.querySelectorAll('select').forEach((control) => {
+      if (details) details.open = active;
+      row.querySelectorAll('[data-paper-update-fields] select').forEach((control) => {
         control.disabled = !active;
         control.required = active;
       });
@@ -142,9 +140,6 @@
         control.disabled = !active;
         control.required = false;
       });
-      const note = row.querySelector('[data-paper-note]');
-      const status = fields.querySelector('select[name$="_status"]');
-      if (note) note.required = active && status?.value === 'correction';
     });
   };
 

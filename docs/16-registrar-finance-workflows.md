@@ -44,7 +44,9 @@ There is no demo reset command. Start again with a new empty local demo database
 
 ## Physical requirements checklist
 
-The staff-only physical checklist is separate from digital uploads, AI processing, grades, and enrollment blocking. It presents a compact list of latest status, applicability, and original/copy/piece counts; staff open one item to append a status update and review that item's history. Staff use the existing statuses: pending, received, verified, correction, rejected, and can add named extra requirements per learner. Grade 10 / ALS-AF5 is an alternative JHS card requirement; the Grade 11 card is applicable to Grade 12 learners, not current Grade 11 intake. SF10/Form 137 remains in its own staff-only physical history and appears alongside the checklist summary.
+The staff-only physical checklist is separate from digital uploads, AI processing, grades, and enrollment blocking. It presents each requirement's latest status and applicability, with quantity fields only for count types enabled by that requirement's definition. Counts are recorded only when known; the configured expected quantity is not copied into the received count. Staff open one item to append a status update and review that item's history. Staff use the existing statuses: pending, received, verified, correction, rejected, and can add named extra requirements per learner with optional quantities. Grade 10 / ALS-AF5 is an alternative JHS card requirement; the Grade 11 card is applicable to Grade 12 learners, not current Grade 11 intake. SF10/Form 137 remains in its own staff-only physical history and appears alongside the checklist summary.
+
+On annual intake, selecting a paper checkbox records the registrar's assertion that the paper was received and checked by staff that day; an unchecked row creates no paper event. The checkbox records a verified status without a separate status selection. Staff can use the student paper-checklist workspace to append other status transitions or correction instructions. Digital uploads and AI prechecks do not create or verify paper-copy events.
 
 Initial requirement names and guidance:
 
@@ -58,11 +60,10 @@ Initial requirement names and guidance:
 | ESC Certificate (Private School) | Original plus 1 photocopy; staff selects applicability for relevant ESC learners |
 | National ID (if you have) | 1 photocopy; optional |
 | 2x2 Picture with name tag & white background | 3 pieces |
-| Long Brown Envelopes | 2 pieces |
-| Grade 11 card | Guidance and counts may be recorded for Grade 12; never relabel as Grade 10 |
+| Grade 11 card | Recorded for Grade 12 learners; never relabel as Grade 10 |
 | SF10 / Form 137 | Continue recording in the existing separate staff-only history |
 
-ALS and ESC applicability is selected manually by staff; the system does not infer it from PUB, ESC, or NV voucher classification. An incomplete checklist is informational and does not block intake or term finalization. Students see only the latest permitted paper-card status/date already exposed by the paper report-card channel; this checklist and its notes stay staff-only.
+Long brown envelopes are storage containers for submitted papers, not checklist requirements. Existing envelope events remain visible in the read-only event history, while active checklists, intake controls, and completion counts exclude them. New envelope events are rejected. ALS and ESC applicability is selected manually by staff; the system does not infer it from PUB, ESC, or NV voucher classification. An incomplete checklist is informational and does not block intake or term finalization. Students see only the latest permitted paper-card status/date already exposed by the paper report-card channel; this checklist and its notes stay staff-only.
 
 ## Registrar follow-up records
 

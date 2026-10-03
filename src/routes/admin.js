@@ -29,6 +29,51 @@ function isUniqueConflict(error) {
   return isDuplicateKeyError(error);
 }
 
+function safeAccountFilters(query = {}) {
+  const category = ['students', 'staff'].includes(query.category) ? query.category : 'students';
+  const status = ['all', 'active', 'inactive'].includes(query.status) ? query.status : 'all';
+  const role = category === 'staff' && ['database_admin', 'registrar', 'finance', 'teacher'].includes(query.role) ? query.role : '';
+  return {
+    category,
+    status,
+    role,
+    searchTerm: typeof query.search === 'string' ? query.search.slice(0, 100) : ''
+  };
+}
+
+function safeAuditFilters(query = {}) {
+  return {
+    category: ['all', 'accounts', 'students', 'documents', 'finance', 'academics', 'other'].includes(query.category) ? query.category : 'all',
+    searchTerm: typeof query.search === 'string' ? query.search.slice(0, 100) : ''
+  };
+}
+
+function emptyPagination(pageSize = 25) {
+  return { page: 1, pageSize, totalRecords: 0, totalPages: 1, from: 0, to: 0 };
+}
+
+function formatAuditDateTime(value) {
+  if (!value) return { display: '—', iso: '' };
+  let date;
+  if (value instanceof Date) {
+    date = value;
+  } else if (typeof value === 'string') {
+    const raw = value.trim();
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+    date = new Date(hasTimezone ? raw : `${raw.replace(' ', 'T')}Z`);
+  } else {
+    return { display: '—', iso: '' };
+  }
+  if (!Number.isFinite(date.valueOf())) return { display: '—', iso: '' };
+  return {
+    display: new Intl.DateTimeFormat('en-PH', {
+      timeZone: 'Asia/Manila', year: 'numeric', month: 'short', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+    }).format(date),
+    iso: date.toISOString()
+  };
+}
+
 function createAdminRouter({ getPool, sql, adminService } = {}) {
   const router = express.Router();
   const service = adminService || createAdminService({ getPool, sql });
@@ -41,47 +86,62 @@ function createAdminRouter({ getPool, sql, adminService } = {}) {
   });
 
   router.get('/', async (req, res) => {
-    const searchTerm = req.query.search === undefined ? '' : req.query.search;
+    if (req.query.search !== undefined) {
+      const search = typeof req.query.search === 'string' ? `&search=${encodeURIComponent(req.query.search)}` : '';
+      return res.redirect(303, `/admin/users?category=students${search}`);
+    }
+    return res.render('dashboards/database-admin', {
+      title: 'Database Admin Dashboard',
+      csrfToken: ensureCsrfToken(req),
+      currentUser: req.authUser,
+      notice: notices[req.query.notice] || null
+    });
+  });
+
+  router.get('/users', async (req, res) => {
+    const base = {
+      title: 'Accounts',
+      csrfToken: ensureCsrfToken(req),
+      currentUser: req.authUser,
+      users: [],
+      filters: safeAccountFilters(req.query),
+      pagination: emptyPagination(),
+      error: null
+    };
     try {
-      const dashboard = await service.listDashboard(searchTerm);
-      res.render('dashboards/database-admin', {
-        title: 'Database Admin Dashboard',
-        csrfToken: ensureCsrfToken(req),
-        currentUser: req.authUser,
-        users: dashboard.users,
-        searchTerm: dashboard.searchTerm,
-        searchError: null,
-        notice: notices[req.query.notice] || null
-      });
+      const directory = await service.listAccounts(req.query);
+      return res.render('admin/accounts', { ...base, ...directory, error: null });
     } catch (error) {
-      if (error instanceof AdminServiceError) {
-        return res.status(error.status).render('dashboards/database-admin', {
-          title: 'Database Admin Dashboard',
-          csrfToken: ensureCsrfToken(req),
-          currentUser: req.authUser,
-          users: [],
-          searchTerm: '',
-          searchError: error.message,
-          notice: null
-        });
-      }
-      res.status(503).render('error', { title: 'Service Unavailable', message: 'Database administration is temporarily unavailable.' });
+      const isInputError = error instanceof AdminServiceError;
+      return res.status(isInputError ? error.status : 503).render('admin/accounts', {
+        ...base,
+        error: isInputError ? error.message : 'Accounts are temporarily unavailable. Try again shortly.'
+      });
     }
   });
 
   router.get('/audit', async (req, res) => {
+    const base = {
+      title: 'Audit activity',
+      csrfToken: ensureCsrfToken(req),
+      currentUser: req.authUser,
+      events: [],
+      filters: safeAuditFilters(req.query),
+      pagination: emptyPagination(),
+      error: null
+    };
     try {
-      const auditLogs = await service.listAuditLogs();
-      return res.render('admin/audit', {
-        title: 'Audit activity',
-        csrfToken: ensureCsrfToken(req),
-        currentUser: req.authUser,
-        auditLogs
-      });
-    } catch {
-      return res.status(503).render('error', {
-        title: 'Service Unavailable',
-        message: 'Audit activity is temporarily unavailable.'
+      const result = await service.listAuditLogs(req.query);
+      const events = result.events.map((event) => ({
+        ...event,
+        displayDateTime: formatAuditDateTime(event.created_at)
+      }));
+      return res.render('admin/audit', { ...base, ...result, events, error: null });
+    } catch (error) {
+      const isInputError = error instanceof AdminServiceError;
+      return res.status(isInputError ? error.status : 503).render('admin/audit', {
+        ...base,
+        error: isInputError ? error.message : 'Audit activity is temporarily unavailable. Try again shortly.'
       });
     }
   });

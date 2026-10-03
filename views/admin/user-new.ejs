@@ -1,6 +1,7 @@
 <%- include('../partials/head', { title }) %>
+<% const accountCategory = values.role === 'student' ? 'students' : 'staff'; %>
 <main class="page-shell dashboard-page admin-page" id="main-content">
-  <a class="context-back" href="/admin#users-title">Back to accounts</a>
+  <a class="context-back" href="/admin/users?category=<%= accountCategory %>">Back to accounts</a>
   <section class="dashboard-heading">
     <div>
       <h1>Create user account</h1>
@@ -63,7 +64,7 @@
       </div>
       <div class="admin-form-actions">
         <button class="button button--primary" type="submit">Create account</button>
-        <a class="button button--secondary" href="/admin#users-title">Cancel</a>
+        <a class="button button--secondary" href="/admin/users?category=<%= accountCategory %>">Cancel</a>
       </div>
     </form>
   </section>

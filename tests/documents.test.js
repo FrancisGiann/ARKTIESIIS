@@ -1608,9 +1608,22 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
           student: { id: studentId, student_no: 'SHS-2026-0321', first_name: 'Maria', last_name: 'Santos', requestedBy: 'registrar' },
           requirements: [{
             id: 1, requirement_code: 'birth_certificate', requirement_name: 'PSA birth certificate', guidance: 'Submit a copy.',
-            is_optional: 0, is_applicable: 1, applicability: 'required', status: 'pending', originals_received: 0,
+            is_optional: 0, is_applicable: 1, applicability: 'all', originals_required: 0, copies_required: 3, pieces_required: 0, status: 'pending', originals_received: 0,
             copies_received: 0, pieces_received: 0, note: null
-          }], history: [], additionalItems: [],
+          }, {
+            id: 2, requirement_code: 'good_moral', requirement_name: 'Good Moral Certificate', guidance: 'Original + 1 photocopy.',
+            is_optional: 0, is_applicable: 1, applicability: 'all', originals_required: 1, copies_required: 1, pieces_required: 0, status: 'pending', originals_received: 0,
+            copies_received: 0, pieces_received: 0, note: null
+          }, {
+            id: 3, requirement_code: 'two_by_two_photo', requirement_name: '2x2 Picture', guidance: '3 pieces.',
+            is_optional: 0, is_applicable: 1, applicability: 'all', originals_required: 0, copies_required: 0, pieces_required: 3, status: 'pending', originals_received: 0,
+            copies_received: 0, pieces_received: 0, note: null
+          }, {
+            id: 4, requirement_code: 'grade11_card', requirement_name: 'Grade 11 Card', guidance: 'Grade 11 card applies to Grade 12 learners.',
+            is_optional: 0, is_applicable: 1, applicability: 'grade12', originals_required: 0, copies_required: 0, pieces_required: 0, status: 'pending', originals_received: 0,
+            copies_received: 0, pieces_received: 0, note: null
+          }], history: [{ id: 81, requirement_code: 'long_brown_envelopes', requirement_name: 'Long Brown Envelopes', status: 'verified', is_applicable: 1, pieces_received: 2,
+            originals_received: 0, copies_received: 0, note: null, created_at: '2026-09-01T00:00:00.000Z', recorded_by_name: 'Synthetic Registrar' }], additionalItems: [],
           summary: { requiredCount: 9, completeCount: 2 }
         };
       },
@@ -1900,7 +1913,8 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     assert.match(paperErrorHtml, /Enter a note when requesting a correction/);
     assert.match(paperErrorHtml, /<details class="physical-checklist-update" open>/);
     assert.match(paperErrorHtml, /id="paper-status-birth_certificate" name="status" required><option value="pending" >Pending<\/option><option value="received" >Received<\/option><option value="verified" >Verified<\/option><option value="correction" selected>Correction needed/);
-    assert.match(paperErrorHtml, /id="paper-originals-birth_certificate" name="originalsReceived" type="number" min="0" max="20" value="2"/);
+    assert.match(paperErrorHtml, /id="paper-copies-birth_certificate" name="copiesReceived" type="number" min="0" max="50" value="0"/);
+    assert.doesNotMatch(paperErrorHtml, /paper-originals-birth_certificate|paper-pieces-birth_certificate/);
     assert.match(paperErrorHtml, /name="idempotencyKey" value="paper-checklist-token"/);
 
     const additionalPaperError = await fetch(`${baseUrl}/documents/students/44/physical-checklist`, {
@@ -1915,6 +1929,13 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     assert.match(additionalPaperErrorHtml, /name="idempotencyKey" value="additional-paper-token"/);
     assert.match(staffPageHtml, /PSA birth certificate/);
     assert.match(staffPageHtml, /Previous-school report-card paper copy/);
+    assert.match(staffPageHtml, /Place submitted papers in a long brown envelope; envelopes are storage containers, not checklist items/);
+    assert.doesNotMatch(staffPageHtml, /aria-labelledby="paper-long_brown_envelopes-title"|name="requirementCode" value="long_brown_envelopes"/);
+    assert.match(staffPageHtml, /historical quantity: 2 envelopes/);
+    assert.match(staffPageHtml, /id="paper-pieces-two_by_two_photo" name="piecesReceived"/);
+    assert.doesNotMatch(staffPageHtml, /paper-(?:originals|copies)-two_by_two_photo/);
+    assert.doesNotMatch(staffPageHtml, /paper-(?:originals|copies|pieces)-grade11_card/);
+    assert.match(staffPageHtml, /<summary>Optional quantities<\/summary>/);
     assert.match(staffPageHtml, /Staff-only paper note: bring a clearer copy/);
     assert.match(staffPageHtml, /action="\/documents\/students\/44\/previous-school-report-card-status"/);
     assert.doesNotMatch(staffPageHtml, /option value="form_137"/);

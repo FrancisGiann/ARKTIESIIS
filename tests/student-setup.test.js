@@ -274,7 +274,14 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     lines: [{ termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Prelim', grossAmount: '1234.50', waivedAmount: '0.00', amount: '1234.50', isOptional: false }],
     snapshotFingerprint: 'a'.repeat(64)
   };
+  const paperRequirements = [
+    { requirement_code: 'birth_certificate', requirement_name: 'Birth Certificate', guidance: '3 photocopies.', applicability: 'all', originals_required: 0, copies_required: 3, pieces_required: 0 },
+    { requirement_code: 'good_moral', requirement_name: 'Good Moral Certificate', guidance: 'Original + 1 photocopy.', applicability: 'all', originals_required: 1, copies_required: 1, pieces_required: 0 },
+    { requirement_code: 'two_by_two_photo', requirement_name: '2x2 Picture', guidance: '3 pieces.', applicability: 'all', originals_required: 0, copies_required: 0, pieces_required: 3 },
+    { requirement_code: 'grade11_card', requirement_name: 'Grade 11 Card', guidance: 'Grade 11 card applies to Grade 12 learners.', applicability: 'grade12', originals_required: 0, copies_required: 0, pieces_required: 0 }
+  ];
   app.use('/registrar/intake', createAnnualStudentIntakeRouter({ annualEnrollmentService,
+    physicalChecklistService: { async listIntakeRequirements() { return paperRequirements; } },
     annualFinanceService: { async annualAssessmentPreviewForRegistrar() { return feePreview; } }
   }));
   await withServer(app, async (baseUrl) => {
@@ -286,6 +293,19 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(html, /Documents received/);
     assert.match(html, /Fees and confirmation/);
     assert.match(html, /missing papers do not block enrollment/i);
+    assert.match(html, /Select a paper only after staff has received and checked it/i);
+    assert.match(html, /long brown envelope; the envelope is a storage container and is not tracked/i);
+    assert.match(html, /name="paper_birth_certificate_copies"/);
+    assert.doesNotMatch(html, /name="paper_birth_certificate_(?:originals|pieces)"/);
+    assert.match(html, /name="paper_good_moral_originals"/);
+    assert.match(html, /name="paper_good_moral_copies"/);
+    assert.match(html, /name="paper_two_by_two_photo_pieces"/);
+    assert.doesNotMatch(html, /name="paper_two_by_two_photo_(?:originals|copies)"/);
+    assert.doesNotMatch(html, /name="paper_grade11_card_(?:originals|copies|pieces)"/);
+    const zeroCountCardRow = html.match(/<article class="paper-checklist-row" data-requirement-applicability="grade12">[\s\S]*?<\/article>/)?.[0];
+    assert.ok(zeroCountCardRow);
+    assert.doesNotMatch(zeroCountCardRow, /<details/);
+    assert.doesNotMatch(html, /long_brown_envelopes|name="paper_[a-z0-9_]+_status"/);
     assert.match(html, /id="annual-student-mode"/);
     assert.match(html, /name="studentNo"/);
     assert.match(html, /src="\/js\/annual-intake-form.js"/);

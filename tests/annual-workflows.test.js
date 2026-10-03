@@ -6,7 +6,7 @@ const {
   AnnualFinanceError, normalizeLineRows, normalizeAllocations, parsePaymentDate, applyExemptionPreview, canonicalAssessmentSnapshot,
   tuitionInstallmentBreakdown
 } = require('../src/services/annualFinanceService');
-const { PhysicalChecklistError, createPhysicalChecklistService } = require('../src/services/physicalChecklistService');
+const { PhysicalChecklistError, createPhysicalChecklistService, normalizeIntakeChecklistUpdates } = require('../src/services/physicalChecklistService');
 
 const uuid = '41111111-1111-4111-8111-111111111111';
 
@@ -127,3 +127,142 @@ test('paper checklist rejects unsupported status, missing correction note, and c
   await assert.rejects(service.recordRequirement('1', '1', { ...base, copiesReceived: '51' }), /between 0 and 50/);
   assert.equal(connectionAttempts, 0);
 });
+
+test('intake checklist checkbox defaults to verified, omits unchecked rows, and enforces configured count types', async () => {
+  const definitions = {
+    birth_certificate: { requirement_code: 'birth_certificate', requirement_name: 'Birth Certificate', applicability: 'all', originals_required: 0, copies_required: 3, pieces_required: 0 },
+    two_by_two_photo: { requirement_code: 'two_by_two_photo', requirement_name: '2x2 Picture', applicability: 'all', originals_required: 0, copies_required: 0, pieces_required: 3 },
+    grade11_card: { requirement_code: 'grade11_card', requirement_name: 'Grade 11 Card', applicability: 'grade12', originals_required: 0, copies_required: 0, pieces_required: 0 },
+    long_brown_envelopes: { requirement_code: 'long_brown_envelopes', requirement_name: 'Long Brown Envelopes', applicability: 'all', originals_required: 0, copies_required: 0, pieces_required: 2 }
+  };
+  const { tx, state } = mockChecklistTransaction(definitions);
+  const service = createPhysicalChecklistService({ sql: mockChecklistSql() });
+  const updates = normalizeIntakeChecklistUpdates({
+    paper_birth_certificate_record: '1', paper_birth_certificate_applicable: '1', paper_birth_certificate_token: uuid,
+    paper_birth_certificate_copies: '2',
+    paper_two_by_two_photo_record: '1', paper_two_by_two_photo_applicable: '1', paper_two_by_two_photo_token: '51111111-1111-4111-8111-111111111111',
+    paper_two_by_two_photo_pieces: '2',
+    paper_grade11_card_record: '1', paper_grade11_card_applicable: '1', paper_grade11_card_token: '61111111-1111-4111-8111-111111111111'
+  });
+  assert.equal(updates.every((update) => update.status === 'verified'), true);
+  assert.deepEqual(normalizeIntakeChecklistUpdates({}), []);
+  const eventIds = await service.recordIntakeUpdatesInTransaction(tx, '7', '3', 'Grade 12', updates);
+  assert.equal(eventIds.length, 3);
+  assert.deepEqual(state.events.map(({ requirementCode, status, originals, copies, pieces }) => [requirementCode, status, originals, copies, pieces]), [
+    ['birth_certificate', 'verified', 0, 2, 0],
+    ['two_by_two_photo', 'verified', 0, 0, 2],
+    ['grade11_card', 'verified', 0, 0, 0]
+  ]);
+
+  const invalidPhoto = normalizeIntakeChecklistUpdates({
+    paper_two_by_two_photo_record: '1', paper_two_by_two_photo_applicable: '1', paper_two_by_two_photo_token: '71111111-1111-4111-8111-111111111111',
+    paper_two_by_two_photo_originals: '1'
+  });
+  await assert.rejects(service.recordIntakeUpdatesInTransaction(tx, '7', '3', 'Grade 12', invalidPhoto), /Originals are not tracked/);
+  const envelope = normalizeIntakeChecklistUpdates({
+    paper_long_brown_envelopes_record: '1', paper_long_brown_envelopes_applicable: '1', paper_long_brown_envelopes_token: '81111111-1111-4111-8111-111111111111',
+    paper_long_brown_envelopes_pieces: '2'
+  });
+  await assert.rejects(service.recordIntakeUpdatesInTransaction(tx, '7', '3', 'Grade 12', envelope), /storage containers/);
+  assert.equal(state.events.length, 3, 'invalid count types and envelope submissions do not append events');
+});
+
+test('staff checklist rejects irrelevant counts and new envelope events, while named extra quantities remain optional', async () => {
+  const definitions = {
+    birth_certificate: { requirement_code: 'birth_certificate', requirement_name: 'Birth Certificate', applicability: 'all', originals_required: 0, copies_required: 3, pieces_required: 0 },
+    long_brown_envelopes: { requirement_code: 'long_brown_envelopes', requirement_name: 'Long Brown Envelopes', applicability: 'all', originals_required: 0, copies_required: 0, pieces_required: 2 }
+  };
+  const { tx, state } = mockChecklistTransaction(definitions);
+  const service = createPhysicalChecklistService({
+    getPool: async () => ({}),
+    sql: mockChecklistSql(),
+    transactionFactory: () => tx
+  });
+  const base = { status: 'verified', idempotencyKey: uuid, isApplicable: '1', originalsReceived: '0', copiesReceived: '0', piecesReceived: '0' };
+  await assert.rejects(service.recordRequirement('7', '3', { ...base, requirementCode: 'birth_certificate', originalsReceived: '1' }), /Originals are not tracked/);
+  await assert.rejects(service.recordRequirement('7', '3', { ...base, requirementCode: 'long_brown_envelopes', piecesReceived: '2' }), /storage containers/);
+  await service.recordRequirement('7', '3', { ...base, requirementCode: 'additional', requirementName: 'Custom form', piecesReceived: '2' });
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].requirementCode.startsWith('additional:'), true);
+  assert.equal(state.rollbacks, 2);
+  assert.equal(state.commits, 1);
+});
+
+test('active checklist queries exclude envelope while student history preserves old envelope events', async () => {
+  const queries = [];
+  const activeRequirement = { requirement_code: 'birth_certificate', requirement_name: 'Birth Certificate', guidance: '3 photocopies.',
+    applicability: 'all', originals_required: 0, copies_required: 3, pieces_required: 0, is_optional: 0 };
+  const oldEnvelopeEvent = { id: 99, requirement_code: 'long_brown_envelopes', requirement_name: 'Long Brown Envelopes', status: 'verified',
+    note: null, is_applicable: 1, originals_received: 0, copies_received: 0, pieces_received: 2,
+    created_at: '2026-09-01T00:00:00.000Z', recorded_by_name: 'Synthetic Registrar' };
+  const pool = {
+    request() {
+      const inputs = {};
+      return {
+        input(name, _type, value) { inputs[name] = value; return this; },
+        async query(query) {
+          queries.push(query);
+          if (query.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+          if (query.includes('SELECT student.id, student.student_no')) return { recordset: [{ id: 3, student_no: 'SHS-2026-0003', first_name: 'Synthetic', middle_name: null, last_name: 'Learner', suffix: null, grade_level: 'Grade 12' }] };
+          if (query.includes('SELECT definition.requirement_code')) return { recordset: [activeRequirement] };
+          if (query.includes('SELECT event.id, event.requirement_code')) return { recordset: [oldEnvelopeEvent] };
+          if (query.includes('SELECT requirement_code, requirement_name, guidance')) return { recordset: [activeRequirement] };
+          if (query.includes('WITH latest AS')) return { recordset: [{ student_id: 3, required_count: 1, completed_count: 0 }] };
+          return { recordset: [] };
+        }
+      };
+    }
+  };
+  const service = createPhysicalChecklistService({ getPool: async () => pool, sql: mockChecklistSql() });
+  const checklist = await service.getStudentChecklist('7', '3');
+  assert.deepEqual(checklist.requirements.map((item) => item.requirement_code), ['birth_certificate']);
+  assert.deepEqual(checklist.history.map((item) => item.requirement_code), ['long_brown_envelopes']);
+  assert.match(queries.find((query) => query.includes('SELECT definition.requirement_code')), /NOT IN \('sf10_form137', 'long_brown_envelopes'\)/);
+  assert.doesNotMatch(queries.find((query) => query.includes('SELECT event.id, event.requirement_code') && !query.includes('definition.requirement_code')), /long_brown_envelopes/);
+
+  await service.listIntakeRequirements('7');
+  const intakeQuery = queries.find((query) => query.includes('SELECT requirement_code, requirement_name, guidance'));
+  assert.match(intakeQuery, /NOT IN \('sf10_form137', 'long_brown_envelopes'\)/);
+  await service.getStudentSummaries('7', ['3']);
+  const summaryQuery = queries.find((query) => query.includes('WITH latest AS'));
+  assert.match(summaryQuery, /NOT IN \('sf10_form137', 'long_brown_envelopes'\)/);
+});
+
+function mockChecklistSql() {
+  return {
+    ISOLATION_LEVEL: { SERIALIZABLE: 'serializable' },
+    Int: 'int', TinyInt: 'tinyint', Bit: 'bit', UniqueIdentifier: 'uuid', Char: () => 'char', NVarChar: () => 'nvarchar', MAX: 'max'
+  };
+}
+
+function mockChecklistTransaction(definitions) {
+  const state = { events: [], commits: 0, rollbacks: 0 };
+  const request = () => {
+    const inputs = {};
+    return {
+      input(name, _type, value) { inputs[name] = value; return this; },
+      async query(query) {
+        if (query.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+        if (query.includes('FROM students WHERE id = @studentId')) return { recordset: [{ id: 3, status: 'active' }] };
+        if (query.includes('FROM physical_requirement_definitions')) {
+          return { recordset: definitions[inputs.requirementCode] ? [definitions[inputs.requirementCode]] : [] };
+        }
+        if (query.includes('FROM student_physical_checklist_events WHERE idempotency_key')) return { recordset: [] };
+        if (query.includes('INSERT INTO student_physical_checklist_events')) {
+          state.events.push({ requirementCode: inputs.requirementCode, status: inputs.status, originals: inputs.originals, copies: inputs.copies, pieces: inputs.pieces });
+          return { insertId: state.events.length };
+        }
+        return { recordset: [] };
+      }
+    };
+  };
+  return {
+    state,
+    tx: {
+      request,
+      async begin() {},
+      async commit() { state.commits += 1; },
+      async rollback() { state.rollbacks += 1; }
+    }
+  };
+}
