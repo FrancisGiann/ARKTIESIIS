@@ -1,10 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { createHash } = require('node:crypto');
 const { once } = require('node:events');
 const { readFileSync } = require('node:fs');
+const { request: httpRequest } = require('node:http');
 const { spawnSync } = require('node:child_process');
 const { runInNewContext } = require('node:vm');
 const bcrypt = require('bcrypt');
+const ejs = require('ejs');
 const { createApp } = require('../src/app');
 const { validateRequiredText } = require('../src/services/documentValidationService');
 const { bootstrapAdmin, validateBootstrapInput } = require('../scripts/bootstrap-admin');
@@ -228,6 +231,50 @@ test('home page renders with Helmet default content security policy', async () =
     assert.equal(buildingImage.status, 200);
     assert.match(buildingImage.headers.get('content-type'), /image\/png/);
   });
+});
+
+test('home page references the content-hashed stylesheet served by Express', async () => {
+  await withServer(createApp({ databasePool: async () => { throw new Error('Database not used'); } }), async (baseUrl) => {
+    const homeResponse = await fetch(baseUrl);
+    const html = await homeResponse.text();
+    const stylesheetLink = html.match(/href="(\/css\/app\.css\?v=([a-f0-9]{16}))"/);
+
+    assert.equal(homeResponse.status, 200);
+    assert.ok(stylesheetLink, 'expected the home page to reference a versioned stylesheet');
+
+    const sourceStylesheet = readFileSync(require.resolve('../public/css/app.css'));
+    const expectedVersion = createHash('sha256').update(sourceStylesheet).digest('hex').slice(0, 16);
+    assert.equal(stylesheetLink[2], expectedVersion);
+
+    const stylesheetResponse = await fetch(new URL(stylesheetLink[1], baseUrl));
+    const stylesheet = await stylesheetResponse.text();
+    assert.equal(stylesheetResponse.status, 200);
+    assert.match(stylesheetResponse.headers.get('content-type'), /text\/css/);
+    assert.match(stylesheet, /\.home-moment\s*\{/);
+    assert.equal(stylesheet, sourceStylesheet.toString());
+    assert.ok(stylesheetResponse.headers.get('etag'), 'expected Express to provide a validator for revalidation');
+
+    const revalidatedResponse = await new Promise((resolve, reject) => {
+      const request = httpRequest(new URL(stylesheetLink[1], baseUrl), {
+        headers: { 'if-none-match': stylesheetResponse.headers.get('etag') }
+      }, resolve);
+      request.on('error', reject);
+      request.end();
+    });
+    revalidatedResponse.resume();
+    assert.equal(revalidatedResponse.statusCode, 304);
+  });
+});
+
+test('password-required template renders when asset version locals are absent', async () => {
+  const html = await ejs.renderFile(require.resolve('../views/account/password-required.ejs'), {
+    title: 'Change temporary password',
+    csrfToken: 'test-csrf-token',
+    error: null
+  });
+
+  assert.match(html, /href="\/css\/app\.css"/);
+  assert.doesNotMatch(html, /href="\/css\/app\.css\?v=/);
 });
 
 test('login page renders', async () => {

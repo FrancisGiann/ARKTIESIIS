@@ -1,4 +1,6 @@
 const path = require('node:path');
+const { createHash } = require('node:crypto');
+const { readFileSync } = require('node:fs');
 const express = require('express');
 const session = require('express-session');
 const helmet = require('helmet');
@@ -14,8 +16,10 @@ const projectRoot = path.resolve(__dirname, '..');
 
 function createApp({ databasePool = getPool, environment = env, twoFactorService, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, registrarDashboardService, annualEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService } = {}) {
   const app = express();
+  const stylesheetPath = path.join(projectRoot, 'public', 'css', 'app.css');
   app.locals.formatMoney = formatMoney;
   app.locals.formatStudentPlacement = formatStudentPlacement;
+  app.locals.assetVersion = createHash('sha256').update(readFileSync(stylesheetPath)).digest('hex').slice(0, 16);
 
   if (environment.nodeEnv === 'production') app.set('trust proxy', 1);
 

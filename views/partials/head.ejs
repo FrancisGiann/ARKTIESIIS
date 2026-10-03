@@ -6,7 +6,8 @@
   <meta name="theme-color" content="#f7f8f8">
   <meta name="color-scheme" content="light">
   <title><%= title %> | ARKTIESIIS</title>
-  <link rel="stylesheet" href="/css/app.css">
+  <% const stylesheetUrl = typeof assetVersion === 'undefined' ? '/css/app.css' : `/css/app.css?v=${assetVersion}`; %>
+  <link rel="stylesheet" href="<%= stylesheetUrl %>">
 </head>
 <body class="<%= typeof currentUser !== 'undefined' && currentUser && typeof navigationItems !== 'undefined' ? 'workspace-body' : 'public-body' %>">
 <a class="skip-link" href="#main-content">Skip to main content</a>
