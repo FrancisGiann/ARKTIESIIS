@@ -58,7 +58,7 @@
       <% const activeSchedule = schedules.filter((item) => item.status === 'active' && String(item.school_year) === String(annualRecord.school_year) && item.grade_level === annualRecord.grade_level && item.voucher_code === annualRecord.voucher_code); %>
       <% if (!annualRecord.assessment_id) { %>
         <section class="finance-panel" aria-labelledby="assessment-<%= annualRecord.annual_enrollment_id %>">
-          <div class="admin-section__heading"><div><h2 id="assessment-<%= annualRecord.annual_enrollment_id %>">Annual assessment · <%= annualRecord.school_year %></h2><p><%= annualRecord.grade_level %> · <%= annualRecord.voucher_code %><% if (annualRecord.voucher_category) { %> · Voucher category <%= annualRecord.voucher_category %><% } %>. Voucher categories do not change configured line amounts.</p></div></div>
+          <div class="admin-section__heading"><div><h2 id="assessment-<%= annualRecord.annual_enrollment_id %>">Annual assessment · <%= annualRecord.school_year %></h2><p><%= annualRecord.grade_level %> · Voucher type <%= annualRecord.voucher_code %></p></div></div>
           <% if (!activeSchedule.length) { %><p class="empty-state">No active schedule matches this year, grade, and voucher. Configure a schedule before assessing.</p><% } else { %>
             <form class="form-stack" method="post" action="/finance/annual/<%= annualRecord.annual_enrollment_id %>/assessment-preview">
               <input type="hidden" name="_csrf" value="<%= csrfToken %>">

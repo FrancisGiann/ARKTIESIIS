@@ -1,12 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 
-const { AnnualEnrollmentError, normalizeAnnualInput, normalizeAnnualAdministrationDetails, applySameSectionDefaults } = require('../src/services/annualEnrollmentService');
+const { AnnualEnrollmentError, createAnnualEnrollmentService, normalizeAnnualInput, normalizeAnnualAdministrationDetails, applySameSectionDefaults } = require('../src/services/annualEnrollmentService');
 const {
   AnnualFinanceError, normalizeLineRows, normalizeAllocations, parsePaymentDate, applyExemptionPreview, canonicalAssessmentSnapshot,
   tuitionInstallmentBreakdown
 } = require('../src/services/annualFinanceService');
 const { PhysicalChecklistError, createPhysicalChecklistService, normalizeIntakeChecklistUpdates } = require('../src/services/physicalChecklistService');
+const { currentManilaDate, validateStudent } = require('../src/services/studentRecordsService');
 
 const uuid = '41111111-1111-4111-8111-111111111111';
 
@@ -14,12 +16,13 @@ test('annual intake accepts explicit midyear entry with an optional future place
   const valid = normalizeAnnualInput({
     studentNo: 'STU-2026-1', schoolYear: '2026-2027', gradeLevel: 'Grade 12', voucherCode: 'ESC',
     intakeKind: 'transferee', enrollmentStartDate: '2026-10-01', entryTermNumber: '2',
-    voucherCategory: 'D', section2Id: '12', idempotencyKey: uuid
+    voucherCategory: 'forged-stale-value', section2Id: '12', idempotencyKey: uuid
   });
   assert.equal(valid.isReturning, true);
   assert.equal(valid.intakeKind, 'transferee');
   assert.equal(valid.entryTermNumber, 2);
   assert.deepEqual(valid.sectionIds, [null, 12, null]);
+  assert.equal(valid.voucherCategory, null, 'legacy or forged category data is ignored for new inputs');
   assert.throws(() => normalizeAnnualInput({
     studentNo: 'STU-2026-1', schoolYear: '2026-2027', gradeLevel: 'Grade 10', voucherCode: 'PUB',
     entryTermNumber: '2', enrollmentStartDate: '2026-10-01', section2Id: '12', idempotencyKey: uuid
@@ -32,6 +35,162 @@ test('annual intake accepts explicit midyear entry with an optional future place
     studentNo: 'STU-2026-1', schoolYear: '2026-2027', gradeLevel: 'Grade 12', voucherCode: 'PUB',
     entryTermNumber: '2', enrollmentStartDate: '2026-02-30', section2Id: '12', idempotencyKey: uuid
   }), /valid calendar date/);
+});
+
+test('new annual intake rejects malformed profile fields before hashing or database access', async () => {
+  let poolCalls = 0;
+  let hashCalls = 0;
+  const service = createAnnualEnrollmentService({
+    getPool: async () => { poolCalls += 1; throw new Error('database should not be reached'); },
+    hashPassword: async () => { hashCalls += 1; return 'synthetic-hash'; }
+  });
+  const valid = {
+    studentNo: '', email: 'learner@example.edu', lrn: '123456789012', firstName: 'Alex', middleName: '',
+    lastName: 'Learner', suffix: '', birthDate: '', sex: '', phone: '', address: '', schoolYear: '2026-2027',
+    gradeLevel: 'Grade 11', voucherCode: 'PUB', entryTermNumber: '1',
+    enrollmentStartDate: '2026-10-03', sectionMode: 'same', annualSectionId: '8', idempotencyKey: uuid
+  };
+  const futureBirthDate = new Date(`${currentManilaDate()}T00:00:00.000Z`);
+  futureBirthDate.setUTCDate(futureBirthDate.getUTCDate() + 1);
+  for (const [change, message] of [
+    [{ firstName: '12345' }, /First name must contain letters/],
+    [{ middleName: '8' }, /Middle name must contain letters/],
+    [{ lastName: '3578' }, /Last name must contain letters/],
+    [{ sex: 'fish' }, /Choose Male, Female, or Other/],
+    [{ phone: 'phone letters' }, /Phone must use digits/],
+    [{ address: '123456789' }, /Address must include at least one letter/],
+    [{ birthDate: currentManilaDate() }, /Birth date must be before today/],
+    [{ birthDate: futureBirthDate.toISOString().slice(0, 10) }, /Birth date must be before today/],
+    [{ lrn: 'letters' }, /LRN must contain exactly 12 digits/],
+    [{ email: 'jojojo44' }, /valid contact email/]
+  ]) {
+    await assert.rejects(service.createAnnualIntake(7, { ...valid, ...change }), message);
+  }
+  assert.equal(poolCalls, 0);
+  assert.equal(hashCalls, 0);
+});
+
+test('registrar voucher type updates preserve legacy category and keep assessment review controls', async () => {
+  const statements = [];
+  const state = { voucherCode: 'PUB', voucherCategory: 'D' };
+  let auditDetails = null;
+  let committed = false;
+  let rolledBack = false;
+  const sql = {
+    Int: 'Int', MAX: 'MAX',
+    NVarChar: (length) => `NVarChar(${length})`,
+    ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' }
+  };
+  const transaction = {
+    async begin(level) { assert.equal(level, sql.ISOLATION_LEVEL.SERIALIZABLE); },
+    async commit() { committed = true; },
+    async rollback() { rolledBack = true; },
+    request() {
+      const values = {};
+      return {
+        input(name, _type, value) { values[name] = value; return this; },
+        async query(statement) {
+          statements.push({ statement, values: { ...values } });
+          if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+          if (statement.includes('SELECT annual.id, annual.voucher_code')) {
+            return { recordset: [{ id: 71, voucher_code: state.voucherCode, voucher_category: state.voucherCategory, student_status: 'active' }] };
+          }
+          if (statement.includes('UPDATE annual_enrollments SET voucher_code')) {
+            state.voucherCode = values.voucherCode;
+            if (/voucher_category\s*=/.test(statement)) state.voucherCategory = values.voucherCategory;
+            return { rowsAffected: [1] };
+          }
+          if (statement.includes('SELECT id FROM annual_assessments')) return { recordset: [{ id: 81 }] };
+          if (statement.includes("'voucher_review_flagged'")) return { recordset: [] };
+          if (statement.includes('INSERT INTO audit_logs')) {
+            auditDetails = JSON.parse(values.detailsJson);
+            return { recordset: [] };
+          }
+          throw new Error(`Unexpected query in voucher update test: ${statement}`);
+        }
+      };
+    }
+  };
+  const service = createAnnualEnrollmentService({
+    getPool: async () => ({}), sql, transactionFactory: () => transaction
+  });
+
+  const result = await service.updateVoucher(7, 71, 'ESC', 'Verified voucher type change');
+
+  const update = statements.find(({ statement }) => statement.includes('UPDATE annual_enrollments SET voucher_code'));
+  assert.ok(update);
+  assert.match(update.statement, /voucher_code = @voucherCode/);
+  assert.doesNotMatch(update.statement, /voucher_category\s*=/i);
+  assert.equal(Object.hasOwn(update.values, 'voucherCategory'), false);
+  assert.equal(state.voucherCode, 'ESC');
+  assert.equal(state.voucherCategory, 'D');
+  assert.ok(statements.some(({ statement, values }) => statement.includes("'voucher_review_flagged'") && values.reason === 'Verified voucher type change'));
+  assert.deepEqual(result, { annualEnrollmentId: 71, assessmentReviewRequired: true });
+  assert.equal(auditDetails.oldVoucherCategory, 'D');
+  assert.equal(Object.hasOwn(auditDetails, 'voucherCategory'), false);
+  assert.equal(auditDetails.assessmentReviewRequired, true);
+  assert.equal(committed, true);
+  assert.equal(rolledBack, false);
+});
+
+test('annual intake idempotency replays accept legacy null or category fingerprints but reject changed voucher types', async () => {
+  const payload = {
+    studentNo: '', email: 'learner@example.edu', lrn: '123456789012', firstName: 'Alex', middleName: '',
+    lastName: 'Learner', suffix: '', birthDate: '', sex: '', phone: '', address: '', schoolYear: '2026-2027',
+    gradeLevel: 'Grade 11', voucherCode: 'PUB', voucherCategory: 'stale-input-value', entryTermNumber: '1',
+    enrollmentStartDate: '2026-10-03', sectionMode: 'same', annualSectionId: '8', idempotencyKey: uuid
+  };
+  const profileInput = validateStudent(payload, { requireStudentNo: false });
+  const fingerprintFor = (voucherCode, category) => {
+    // This is the pre-removal normalized shape, with category in its original property position.
+    const legacyEntry = {
+      isReturning: false, intakeKind: 'new', studentNo: null, email: 'learner@example.edu',
+      schoolYear: '2026-2027', gradeLevel: 'Grade 11', voucherCode, voucherCategory: category,
+      entryTermNumber: 1, enrollmentStartDate: '2026-10-03', sectionIds: [8, null, null],
+      sectionMode: 'same', annualSectionId: 8, sectionOverrides: [false, false, false], idempotencyKey: uuid
+    };
+    return crypto.createHash('sha256')
+      .update(JSON.stringify({ entry: legacyEntry, profileInput, checklistUpdates: [] })).digest('hex');
+  };
+  const makeReplayService = (voucherCategory, requestFingerprint) => {
+    const sql = {
+      Int: 'Int', MAX: 'MAX', UniqueIdentifier: 'UniqueIdentifier',
+      NVarChar: (length) => `NVarChar(${length})`,
+      ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' }
+    };
+    const transaction = {
+      async begin() {}, async commit() {}, async rollback() {},
+      request() {
+        const values = {};
+        return {
+          input(name, _type, value) { values[name] = value; return this; },
+          async query(statement) {
+            if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+            if (statement.includes('SELECT id AS annual_enrollment_id, student_id, request_fingerprint')) {
+              return { recordset: [{ annual_enrollment_id: 71, student_id: 41, voucher_category: voucherCategory, request_fingerprint: requestFingerprint }] };
+            }
+            throw new Error(`Unexpected query during replay: ${statement}`);
+          }
+        };
+      }
+    };
+    return createAnnualEnrollmentService({
+      getPool: async () => ({}), sql, transactionFactory: () => transaction,
+      hashPassword: async () => 'synthetic-hash', createPassword: () => 'synthetic-password'
+    });
+  };
+
+  const nullReplay = await makeReplayService(null, fingerprintFor('PUB', null)).createAnnualIntake(7, payload);
+  assert.equal(nullReplay.alreadyCreated, true);
+
+  const categoryReplay = await makeReplayService('A', fingerprintFor('PUB', 'A')).createAnnualIntake(7, payload);
+  assert.equal(categoryReplay.alreadyCreated, true);
+
+  const changedVoucherPayload = { ...payload, voucherCode: 'ESC' };
+  await assert.rejects(
+    makeReplayService('A', fingerprintFor('PUB', 'A')).createAnnualIntake(7, changedVoucherPayload),
+    (error) => error instanceof AnnualEnrollmentError && error.status === 409
+  );
 });
 
 test('annual section defaults map only unique exact term matches and preserve explicit term choices', () => {

@@ -611,7 +611,7 @@ let studentUserId;
     passed('increased charges and payment reversals preserve historical approval rows without changing registrar enrollment history');
 
     const registrar = activationEnrollmentService;
-    await registrar.updateVoucher(registrarId, parentA.id, 'ESC', 'D', 'Synthetic verified voucher update');
+    await registrar.updateVoucher(registrarId, parentA.id, 'ESC', 'Synthetic verified voucher update');
     const flaggedLedger = await finance.getStudentLedger(financeId, studentA);
     const flaggedTerms = flaggedLedger.terms.filter((term) => Number(term.annual_enrollment_id) === Number(parentA.id));
     assert.equal(flaggedTerms[0].assessed_voucher_code, 'PUB');

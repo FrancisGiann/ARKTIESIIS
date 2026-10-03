@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <% const accountCategory = values.role === 'student' ? 'students' : 'staff'; %>
-<main class="page-shell dashboard-page admin-page" id="main-content">
+<main class="page-shell dashboard-page admin-page admin-account-form-page" id="main-content">
   <a class="context-back" href="/admin/users?category=<%= accountCategory %>">Back to accounts</a>
   <section class="dashboard-heading">
     <div>
@@ -11,26 +11,28 @@
 
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
-  <section class="admin-form-section" aria-labelledby="account-details-title">
+  <section class="admin-form-section admin-account-form-section" aria-labelledby="account-details-title">
     <h2 id="account-details-title">Account details</h2>
-    <form class="form-stack admin-form" method="post" action="/admin/users" data-password-match-form data-submitting-message="Creating the account. Please wait.">
+    <form class="form-stack admin-form admin-user-form" method="post" action="/admin/users" data-password-match-form data-submitting-message="Creating the account. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-      <div class="field">
-        <label for="email">Email address</label>
-        <input id="email" name="email" type="email" maxlength="255" autocomplete="email" required value="<%= values.email || '' %>">
+      <div class="admin-form-grid">
+        <div class="field">
+          <label for="email">Email address</label>
+          <input id="email" name="email" type="email" maxlength="255" autocomplete="email" required value="<%= values.email || '' %>">
+        </div>
+        <div class="field">
+          <label for="role">Role</label>
+          <select id="role" name="role" required>
+            <% for (const role of ['registrar', 'teacher', 'finance', 'database_admin', 'student']) { %>
+              <option value="<%= role %>" <%= values.role === role ? 'selected' : '' %>><%= role.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) %></option>
+            <% } %>
+          </select>
+          <span class="field-help">The role controls which protected system areas the account can access.</span>
+        </div>
       </div>
-      <div class="field">
-        <label for="role">Role</label>
-        <select id="role" name="role" required>
-          <% for (const role of ['registrar', 'teacher', 'finance', 'database_admin', 'student']) { %>
-            <option value="<%= role %>" <%= values.role === role ? 'selected' : '' %>><%= role.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) %></option>
-          <% } %>
-        </select>
-        <span class="field-help">The role controls which protected system areas the account can access.</span>
-      </div>
-      <fieldset class="admin-fieldset">
+      <fieldset class="admin-fieldset admin-user-profile">
         <legend>Profile information</legend>
-        <p class="field-help">Staff roles use these name and department fields. A student login must link to an existing student record by student number.</p>
+        <p class="field-help admin-user-profile__help">Staff roles use these name and department fields. A student login must link to an existing student record by student number.</p>
         <div class="admin-form-grid">
           <div class="field">
             <label for="first-name">First name (staff)</label>

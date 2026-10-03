@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <% const accountCategory = user.role === 'student' ? 'students' : 'staff'; %>
-<main class="page-shell dashboard-page admin-page" id="main-content">
+<main class="page-shell dashboard-page admin-page admin-account-form-page" id="main-content">
   <a class="context-back" href="/admin/users?category=<%= accountCategory %>">Back to accounts</a>
   <section class="dashboard-heading">
     <div>
@@ -13,9 +13,9 @@
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% if (currentUserId === user.id) { %><p class="form-success" role="status">Changing your email address or password signs out this session. Sign in again with the updated credentials.</p><% } %>
 
-  <section class="admin-form-section" aria-labelledby="account-settings-title">
+  <section class="admin-form-section admin-account-form-section" aria-labelledby="account-settings-title">
     <h2 id="account-settings-title">Account settings</h2>
-    <form class="form-stack admin-form" method="post" action="/admin/users/<%= user.id %>" data-submitting-message="Saving the account. Please wait.">
+    <form class="form-stack admin-form admin-user-form" method="post" action="/admin/users/<%= user.id %>" data-submitting-message="Saving the account. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="admin-form-grid">
         <div class="field">
@@ -31,9 +31,9 @@
           </select>
         </div>
       </div>
-      <fieldset class="admin-fieldset">
+      <fieldset class="admin-fieldset admin-user-profile">
         <legend>Profile information</legend>
-        <p class="field-help">Staff roles use the name and department below. Student roles must be linked to an existing student number. Changing between student and staff keeps the student record itself and its academic history.</p>
+        <p class="field-help admin-user-profile__help">Staff roles use the name and department below. Student roles must be linked to an existing student number. Changing between student and staff keeps the student record itself and its academic history.</p>
         <div class="admin-form-grid">
           <div class="field">
             <label for="first-name">First name (staff)</label>
@@ -56,9 +56,9 @@
           </div>
         </div>
       </fieldset>
-      <label class="checkbox-field" for="is-active">
+      <label class="checkbox-field admin-user-active" for="is-active">
         <input id="is-active" name="isActive" type="checkbox" value="1" <%= user.is_active ? 'checked' : '' %>>
-        <span><strong>Active account</strong><span class="field-help">Inactive accounts cannot sign in. At least one active database administrator must remain.</span></span>
+        <span class="admin-user-active__copy"><strong>Active account</strong><span class="field-help">Inactive accounts cannot sign in. At least one active database administrator must remain.</span></span>
       </label>
       <div class="admin-form-actions">
         <button class="button button--primary" type="submit">Save account</button>
@@ -67,10 +67,10 @@
     </form>
   </section>
 
-  <section class="admin-form-section" aria-labelledby="password-reset-title">
+  <section class="admin-form-section admin-account-form-section admin-user-password-section" aria-labelledby="password-reset-title">
     <h2 id="password-reset-title">Reset password</h2>
-    <p>Set a new password for this account. Pending email sign-in codes will be invalidated.</p>
-    <form class="form-stack admin-form" method="post" action="/admin/users/<%= user.id %>/password" data-password-match-form data-submitting-message="Resetting the password. Please wait.">
+    <p class="admin-user-password-intro">Set a new password for this account. Pending email sign-in codes will be invalidated.</p>
+    <form class="form-stack admin-form admin-user-form" method="post" action="/admin/users/<%= user.id %>/password" data-password-match-form data-submitting-message="Resetting the password. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="admin-form-grid">
         <div class="field">

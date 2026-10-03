@@ -114,11 +114,7 @@ function normalizeAnnualInput(input = {}) {
   const gradeLevel = printable(input.gradeLevel || '', 'Grade level', 50, { required: true });
   if (!['Grade 11', 'Grade 12'].includes(gradeLevel)) throw new AnnualEnrollmentError('Choose Grade 11 or Grade 12.');
   const voucherCode = input.voucherCode;
-  if (!['PUB', 'ESC', 'NV'].includes(voucherCode)) throw new AnnualEnrollmentError('Choose PUB, ESC, or NV for the voucher classification.');
-  const voucherCategory = input.voucherCategory === '' || input.voucherCategory == null ? null : input.voucherCategory;
-  if (voucherCategory !== null && !['A', 'B', 'C', 'D', 'E'].includes(voucherCategory)) {
-    throw new AnnualEnrollmentError('Voucher category must be A, B, C, D, or E.');
-  }
+  if (!['PUB', 'ESC', 'NV'].includes(voucherCode)) throw new AnnualEnrollmentError('Choose a voucher type: PUB, ESC, or NV.');
   const entryTermNumber = Number(input.entryTermNumber);
   if (!Number.isInteger(entryTermNumber) || entryTermNumber < 1 || entryTermNumber > 3) {
     throw new AnnualEnrollmentError('Choose the entry term from the configured school-year term order.');
@@ -152,7 +148,8 @@ function normalizeAnnualInput(input = {}) {
   if (!sectionIds[entryTermNumber - 1]) throw new AnnualEnrollmentError('Choose a section for the entry term before saving intake.');
   const enrollmentStartDate = normalizeDate(input.enrollmentStartDate || '', 'Enrollment start date');
   const intakeKind = input.intakeKind === 'transferee' ? 'transferee' : isReturning ? 'returning' : 'new';
-  return { isReturning, intakeKind, studentNo, email, schoolYear, gradeLevel, voucherCode, voucherCategory,
+  // Keep the legacy null key position for new fingerprints; existing category fingerprints use the locked stored value on replay.
+  return { isReturning, intakeKind, studentNo, email, schoolYear, gradeLevel, voucherCode, voucherCategory: null,
     entryTermNumber, enrollmentStartDate, sectionIds, sectionMode, annualSectionId, sectionOverrides,
     idempotencyKey: normalizeUuid(input.idempotencyKey) };
 }
@@ -683,21 +680,25 @@ function createAnnualEnrollmentService({
       }
     })();
     const checklistFingerprint = checklistUpdates.map(({ idempotencyKey, ...update }) => update);
-    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ entry, profileInput, checklistUpdates: checklistFingerprint })).digest('hex');
+    const fingerprintForEntry = (fingerprintEntry) => crypto.createHash('sha256')
+      .update(JSON.stringify({ entry: fingerprintEntry, profileInput, checklistUpdates: checklistFingerprint })).digest('hex');
+    const fingerprint = fingerprintForEntry(entry);
     const placeholderHash = profileInput ? await hashPassword(createPassword(), BCRYPT_ROUNDS) : null;
     return runTransaction(async (transaction) => {
       const actor = await requireRegistrar(transaction.request(), actorInput);
 
       const priorResult = await transaction.request()
         .input('idempotencyKey', sql.UniqueIdentifier, entry.idempotencyKey)
-        .query(`SELECT id AS annual_enrollment_id, student_id, request_fingerprint FROM annual_enrollments
+        .query(`SELECT id AS annual_enrollment_id, student_id, request_fingerprint, voucher_category FROM annual_enrollments
           WHERE idempotency_key = @idempotencyKey FOR UPDATE`);
       if (priorResult.recordset?.[0]) {
-        if (priorResult.recordset[0].request_fingerprint !== fingerprint) {
+        const prior = priorResult.recordset[0];
+        const legacyFingerprint = fingerprintForEntry({ ...entry, voucherCategory: prior.voucher_category ?? null });
+        if (prior.request_fingerprint !== fingerprint && prior.request_fingerprint !== legacyFingerprint) {
           throw new AnnualEnrollmentError('This submission token was already used for different annual enrollment details.', 409);
         }
-        return { annualEnrollmentId: priorResult.recordset[0].annual_enrollment_id,
-          studentId: priorResult.recordset[0].student_id, alreadyCreated: true };
+        return { annualEnrollmentId: prior.annual_enrollment_id,
+          studentId: prior.student_id, alreadyCreated: true };
       }
 
       const termOrderResult = await transaction.request().input('schoolYear', sql.NVarChar(20), entry.schoolYear)
@@ -868,7 +869,6 @@ function createAnnualEnrollmentService({
         .input('schoolYear', sql.NVarChar(20), entry.schoolYear)
         .input('gradeLevel', sql.NVarChar(50), entry.gradeLevel)
         .input('voucherCode', sql.NVarChar(10), entry.voucherCode)
-        .input('voucherCategory', sql.NChar(1), entry.voucherCategory)
         .input('intakeKind', sql.NVarChar(20), entry.intakeKind)
         .input('entryTermNumber', sql.TinyInt, entry.entryTermNumber)
         .input('enrollmentStartDate', sql.Date, entry.enrollmentStartDate)
@@ -879,7 +879,7 @@ function createAnnualEnrollmentService({
         .query(`INSERT INTO annual_enrollments
             (student_id, school_year, grade_level, voucher_code, voucher_category, intake_kind, entry_term_number,
               enrollment_start_date, account_activation_pending, created_by, idempotency_key, request_fingerprint)
-          VALUES (@studentId, @schoolYear, @gradeLevel, @voucherCode, @voucherCategory, @intakeKind, @entryTermNumber,
+          VALUES (@studentId, @schoolYear, @gradeLevel, @voucherCode, NULL, @intakeKind, @entryTermNumber,
             @enrollmentStartDate, @activationPending, @actorId, @idempotencyKey, @requestFingerprint)`);
       const annualEnrollmentId = annualResult.insertId;
       if (!Number.isSafeInteger(annualEnrollmentId) || annualEnrollmentId < 1) throw new Error('Annual enrollment insert returned no identifier.');
@@ -933,7 +933,7 @@ function createAnnualEnrollmentService({
       await writeAudit(transaction, actor, 'annual_enrollment_created', annualEnrollmentId, {
         studentId: student.id, schoolYear: entry.schoolYear, gradeLevel: entry.gradeLevel,
         intakeKind: entry.intakeKind, entryTermNumber: entry.entryTermNumber, enrollmentStartDate: entry.enrollmentStartDate,
-        voucherCode: entry.voucherCode, voucherCategory: entry.voucherCategory, enrollmentIds,
+        voucherCode: entry.voucherCode, enrollmentIds,
         physicalChecklistEventIds
       });
       return { annualEnrollmentId, enrollmentIds, studentId: student.id, studentNo: student.student_no || null,
@@ -1478,12 +1478,10 @@ function createAnnualEnrollmentService({
     });
   }
 
-  async function updateVoucher(actorInput, annualEnrollmentInput, voucherInput, categoryInput, reasonInput) {
+  async function updateVoucher(actorInput, annualEnrollmentInput, voucherInput, reasonInput) {
     const annualEnrollmentId = normalizeId(annualEnrollmentInput, 'annual enrollment');
-    if (!['PUB', 'ESC', 'NV'].includes(voucherInput)) throw new AnnualEnrollmentError('Choose PUB, ESC, or NV.');
-    const category = categoryInput === '' || categoryInput == null ? null : categoryInput;
-    if (category !== null && !['A', 'B', 'C', 'D', 'E'].includes(category)) throw new AnnualEnrollmentError('Voucher category must be A, B, C, D, or E.');
-    const reason = printable(reasonInput || '', 'Voucher change reason', 1000, { required: true });
+    if (!['PUB', 'ESC', 'NV'].includes(voucherInput)) throw new AnnualEnrollmentError('Choose a voucher type: PUB, ESC, or NV.');
+    const reason = printable(reasonInput || '', 'Voucher type change reason', 1000, { required: true });
     return runTransaction(async (transaction) => {
       const actor = await requireRegistrar(transaction.request(), actorInput);
       const currentResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
@@ -1497,9 +1495,8 @@ function createAnnualEnrollmentService({
       await transaction.request()
         .input('annualEnrollmentId', sql.Int, annualEnrollmentId)
         .input('voucherCode', sql.NVarChar(10), voucherInput)
-        .input('voucherCategory', sql.NChar(1), category)
         .query(`UPDATE annual_enrollments SET voucher_code = @voucherCode,
-            voucher_category = @voucherCategory, updated_at = UTC_TIMESTAMP(6)
+            updated_at = UTC_TIMESTAMP(6)
           WHERE id = @annualEnrollmentId`);
       const assessmentResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
         .query('SELECT id FROM annual_assessments WHERE annual_enrollment_id = @annualEnrollmentId');
@@ -1513,7 +1510,7 @@ function createAnnualEnrollmentService({
       }
       await writeAudit(transaction, actor, 'annual_voucher_changed', annualEnrollmentId, {
         oldVoucherCode: current.voucher_code, oldVoucherCategory: current.voucher_category,
-        voucherCode: voucherInput, voucherCategory: category, assessmentReviewRequired: Boolean(assessmentResult.recordset?.length), reason
+        voucherCode: voucherInput, assessmentReviewRequired: Boolean(assessmentResult.recordset?.length), reason
       });
       return { annualEnrollmentId, assessmentReviewRequired: Boolean(assessmentResult.recordset?.length) };
     });

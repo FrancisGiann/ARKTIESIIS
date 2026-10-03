@@ -10,6 +10,8 @@ const {
   createStudentSetupService
 } = require('../src/services/studentSetupService');
 const { createStudentBulkAccountsRouter, createStudentIntakeRouter, createAnnualStudentIntakeRouter } = require('../src/routes/studentSetup');
+const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
+const { latestBirthDate } = require('../src/services/studentRecordsService');
 const { validateTransaction, createFinanceService } = require('../src/services/financeService');
 
 function fakeSql() {
@@ -258,7 +260,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
         sections: [1, 2, 3].map((number) => ({ id: number + 7, name: 'Mabini', grade_level: 'Grade 11', academic_term_id: number, school_year: '2026-2027', term: `Term ${number}`, cluster: 'A', strand: 'STEM', adviser: 'Synthetic Adviser', modality: 'face_to_face' }))
       };
     },
-    async listAnnualEnrollments() { return [{ annual_enrollment_id: 71, enrollment_id: 51, student_id: 41, student_no: 'SHS-2026-0321', first_name: 'Synthetic', last_name: 'Learner', email: 'learner@example.edu', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB', entry_term_number: 1, term: 'Term 1', section_id: 8, section_name: 'Mabini', term_scope_status: 'applicable', annual_term_number: 1, enrollment_status: 'pending_payment', signed_clearance_status: 'not signed' }]; },
+    async listAnnualEnrollments() { return [{ annual_enrollment_id: 71, enrollment_id: 51, student_id: 41, student_no: 'SHS-2026-0321', first_name: 'Synthetic', last_name: 'Learner', email: 'learner@example.edu', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB', voucher_category: 'D', entry_term_number: 1, term: 'Term 1', section_id: 8, section_name: 'Mabini', term_scope_status: 'applicable', annual_term_number: 1, enrollment_status: 'pending_payment', signed_clearance_status: 'not signed' }]; },
     async listAnnualEnrollmentCounts() { return [{ school_year: '2026-2027', grade_level: 'Grade 11', term: 'Term 1', annual_term_number: 1, section_name: 'Mabini', cluster: 'A', strand: 'STEM', gender: 'Not recorded', enrollment_status: 'pending_payment', student_count: 1 }]; },
     async confirmAnnualEnrollment(actorId, annualId, input) {
       confirmationCall = { actorId, annualId, input };
@@ -280,6 +282,12 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     { requirement_code: 'two_by_two_photo', requirement_name: '2x2 Picture', guidance: '3 pieces.', applicability: 'all', originals_required: 0, copies_required: 0, pieces_required: 3 },
     { requirement_code: 'grade11_card', requirement_name: 'Grade 11 Card', guidance: 'Grade 11 card applies to Grade 12 learners.', applicability: 'grade12', originals_required: 0, copies_required: 0, pieces_required: 0 }
   ];
+  let validationPoolCalls = 0;
+  const intakeValidationService = createAnnualEnrollmentService({
+    getPool: async () => { validationPoolCalls += 1; throw new Error('database should not be reached for invalid profile input'); },
+    hashPassword: async () => 'synthetic-hash'
+  });
+  annualEnrollmentService.createAnnualIntake = (actorId, input) => intakeValidationService.createAnnualIntake(actorId, input);
   app.use('/registrar/intake', createAnnualStudentIntakeRouter({ annualEnrollmentService,
     physicalChecklistService: { async listIntakeRequirements() { return paperRequirements; } },
     annualFinanceService: { async annualAssessmentPreviewForRegistrar() { return feePreview; } }
@@ -313,11 +321,51 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(html, /name="section1Id"/);
     assert.match(html, /name="section2Id"/);
     assert.match(html, /name="section3Id"/);
-    assert.match(html, /does not change the fees/);
+    assert.match(html, /Voucher type/);
+    assert.doesNotMatch(html, /name="voucherCategory"|voucher category/i);
+    assert.match(html, /pattern="\\p\{L\}/);
+    assert.match(html, /name="sex"/);
+    assert.match(html, new RegExp(`max="${latestBirthDate()}"`));
+    const intakeCsrfToken = html.match(/name="_csrf" value="([^"]+)"/)?.[1];
+    assert.ok(intakeCsrfToken);
+    const invalidStudent = await fetch(`${baseUrl}/registrar/intake`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        _csrf: intakeCsrfToken, idempotencyKey: '41111111-1111-4111-8111-111111111111', lrn: '123456789012',
+        email: 'learner@example.edu', firstName: '12345', middleName: '8', lastName: '3578', suffix: '',
+        birthDate: '', sex: '', phone: '', address: '', schoolYear: '2026-2027', gradeLevel: 'Grade 11',
+        voucherCode: 'PUB', entryTermNumber: '1', enrollmentStartDate: '2026-10-03',
+        sectionMode: 'same', annualSectionId: '8'
+      })
+    });
+    const invalidStudentHtml = await invalidStudent.text();
+    assert.equal(invalidStudent.status, 400);
+    assert.match(invalidStudentHtml, /data-active-step="1"/);
+    assert.match(invalidStudentHtml, /First name must contain letters/);
+    assert.match(invalidStudentHtml, /value="12345"/);
+    assert.equal(validationPoolCalls, 0);
+    const invalidGender = await fetch(`${baseUrl}/registrar/intake`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        _csrf: intakeCsrfToken, idempotencyKey: '41111111-1111-4111-8111-111111111111', lrn: '123456789012',
+        email: 'learner@example.edu', firstName: 'Alex', middleName: '', lastName: 'Learner', suffix: '',
+        birthDate: '', sex: 'fish', phone: '', address: '', schoolYear: '2026-2027', gradeLevel: 'Grade 11',
+        voucherCode: 'PUB', entryTermNumber: '1', enrollmentStartDate: '2026-10-03',
+        sectionMode: 'same', annualSectionId: '8'
+      })
+    });
+    const invalidGenderHtml = await invalidGender.text();
+    assert.equal(invalidGender.status, 400);
+    assert.match(invalidGenderHtml, /Choose Male, Female, or Other for gender/);
+    assert.match(invalidGenderHtml, /<option value="fish" selected>Invalid value \(choose again\): fish<\/option>/);
+    assert.equal(validationPoolCalls, 0);
     const pending = await fetch(`${baseUrl}/registrar/intake`);
     const pendingHtml = await pending.text();
     assert.equal(pending.status, 200);
     assert.match(pendingHtml, /SHS-2026-0321/);
+    assert.match(pendingHtml, /Voucher type PUB/);
+    assert.match(pendingHtml, /Update voucher type/);
+    assert.doesNotMatch(pendingHtml, /Category D|name="voucherCategory"/);
     assert.match(pendingHtml, /Enrollment confirmation/);
     assert.match(pendingHtml, /Review fees and confirm enrollment/);
     assert.match(pendingHtml, /Record paper requirements checklist/);
@@ -411,6 +459,7 @@ test('unexpected annual intake failures log safe diagnostics and retain the subm
     assert.match(html, /value="123456789012"/);
     assert.match(html, /name="idempotencyKey" value="[^"]+"/);
     assert.match(html, new RegExp(`name="idempotencyKey" value="${idempotencyKey}"`));
+    assert.doesNotMatch(html, /name="voucherCategory"/);
     assert.match(html, /Support reference: [0-9a-f-]{36}\./);
 
     assert.equal(errors.length, 1);

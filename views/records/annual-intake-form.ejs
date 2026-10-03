@@ -14,7 +14,7 @@
     <li data-step-indicator="4" aria-label="Step 4 of 4: Fees and confirmation"><span class="intake-step-label--full">Fees and confirmation</span><span class="intake-step-label--short">Fees</span></li>
   </ol>
   <form class="form-stack admin-form annual-intake-form" method="post" action="/registrar/intake"
-    data-intake-wizard data-active-step="<%= activeStep || 1 %>" data-submitting-message="Saving the student and paper updates. Please wait.">
+    data-intake-wizard data-profile-validation data-active-step="<%= activeStep || 1 %>" data-submitting-message="Saving the student and paper updates. Please wait.">
     <input type="hidden" name="_csrf" value="<%= csrfToken %>">
     <input type="hidden" name="idempotencyKey" value="<%= values.idempotencyKey || idempotencyKey %>">
 
@@ -34,16 +34,16 @@
         </div>
       </div>
       <div class="admin-form-grid" id="new-student-fields">
-        <div class="field"><label for="annual-lrn">Learner Reference Number (LRN)</label><input id="annual-lrn" name="lrn" inputmode="numeric" pattern="[0-9]{12}" maxlength="12" value="<%= values.lrn || '' %>"></div>
+        <div class="field"><label for="annual-lrn">Learner Reference Number (LRN)</label><input id="annual-lrn" name="lrn" inputmode="numeric" pattern="[0-9]{12}" maxlength="12" title="Enter exactly 12 digits." value="<%= values.lrn || '' %>"></div>
         <div class="field"><label for="annual-email">Contact and sign-in email</label><input id="annual-email" name="email" type="email" autocomplete="email" maxlength="255" value="<%= values.email || '' %>"></div>
-        <div class="field"><label for="annual-first-name">First name</label><input id="annual-first-name" name="firstName" maxlength="100" value="<%= values.firstName || '' %>"></div>
-        <div class="field"><label for="annual-middle-name">Middle name <span class="muted-copy">(optional)</span></label><input id="annual-middle-name" name="middleName" maxlength="100" value="<%= values.middleName || '' %>"></div>
-        <div class="field"><label for="annual-last-name">Last name</label><input id="annual-last-name" name="lastName" maxlength="100" value="<%= values.lastName || '' %>"></div>
-        <div class="field"><label for="annual-suffix">Suffix <span class="muted-copy">(optional)</span></label><input id="annual-suffix" name="suffix" maxlength="20" value="<%= values.suffix || '' %>"></div>
-        <div class="field"><label for="annual-birth-date">Birth date <span class="muted-copy">(optional)</span></label><input id="annual-birth-date" name="birthDate" type="date" value="<%= values.birthDate || '' %>"></div>
-        <div class="field"><label for="annual-sex">Gender <span class="muted-copy">(optional)</span></label><input id="annual-sex" name="sex" maxlength="20" value="<%= values.sex || '' %>"></div>
-        <div class="field"><label for="annual-phone">Phone <span class="muted-copy">(optional)</span></label><input id="annual-phone" name="phone" type="tel" maxlength="50" value="<%= values.phone || '' %>"></div>
-        <div class="field field--full"><label for="annual-address">Address <span class="muted-copy">(optional)</span></label><textarea id="annual-address" name="address" maxlength="500" rows="2"><%= values.address || '' %></textarea></div>
+        <div class="field"><label for="annual-first-name">First name</label><input id="annual-first-name" name="firstName" maxlength="100" pattern="\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?(?:\s+\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?)*" title="Use letters; spaces, hyphens, apostrophes, and initials are allowed." value="<%= values.firstName || '' %>"></div>
+        <div class="field"><label for="annual-middle-name">Middle name <span class="muted-copy">(optional)</span></label><input id="annual-middle-name" name="middleName" maxlength="100" pattern="\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?(?:\s+\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?)*" title="Use letters; spaces, hyphens, apostrophes, and initials are allowed." value="<%= values.middleName || '' %>"></div>
+        <div class="field"><label for="annual-last-name">Last name</label><input id="annual-last-name" name="lastName" maxlength="100" pattern="\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?(?:\s+\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?)*" title="Use letters; spaces, hyphens, apostrophes, and initials are allowed." value="<%= values.lastName || '' %>"></div>
+        <div class="field"><label for="annual-suffix">Suffix <span class="muted-copy">(optional)</span></label><input id="annual-suffix" name="suffix" maxlength="20" pattern="\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?(?:\s+\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?)*" title="Use letters; spaces, hyphens, apostrophes, and initials are allowed." value="<%= values.suffix || '' %>"></div>
+        <div class="field"><label for="annual-birth-date">Birth date <span class="muted-copy">(optional)</span></label><input id="annual-birth-date" name="birthDate" type="date" max="<%= maxBirthDate %>" value="<%= values.birthDate || '' %>"></div>
+        <div class="field"><label for="annual-sex">Gender <span class="muted-copy">(optional)</span></label><select id="annual-sex" name="sex"><option value="" <%= values.sex ? '' : 'selected' %>>Not recorded</option><% for (const gender of ['Male', 'Female', 'Other']) { %><option value="<%= gender %>" <%= String(values.sex || '').toLowerCase() === gender.toLowerCase() ? 'selected' : '' %>><%= gender %></option><% } %><% if (values.sex && !['male', 'female', 'other'].includes(String(values.sex).toLowerCase())) { %><option value="<%= values.sex %>" selected>Invalid value (choose again): <%= values.sex %></option><% } %></select></div>
+        <div class="field"><label for="annual-phone">Phone <span class="muted-copy">(optional)</span></label><input id="annual-phone" name="phone" type="tel" maxlength="50" pattern="\+?[0-9\x28\x29\x20\x2d]{7,50}" title="Use 7 to 15 digits; a leading +, spaces, hyphens, and balanced parentheses are allowed." value="<%= values.phone || '' %>"></div>
+        <div class="field field--full"><label for="annual-address">Address <span class="muted-copy">(optional)</span></label><textarea id="annual-address" name="address" maxlength="500" rows="2" aria-describedby="annual-address-help"><%= values.address || '' %></textarea><small id="annual-address-help">Include street or area text. Numbers and punctuation are welcome.</small></div>
       </div>
       <div class="intake-actions"><button class="button button--primary" type="button" data-step-next>Continue to enrollment</button><a class="button button--secondary" href="/registrar/intake">Cancel</a></div>
     </section>
@@ -53,8 +53,7 @@
       <div class="admin-form-grid">
         <div class="field"><label for="annual-school-year">School year</label><select id="annual-school-year" name="schoolYear" required><option value="">Choose school year</option><% for (const year of schoolYears) { %><option value="<%= year.school_year %>" <%= values.schoolYear === year.school_year ? 'selected' : '' %>><%= year.school_year %></option><% } %></select></div>
         <div class="field"><label for="annual-grade">Grade level</label><select id="annual-grade" name="gradeLevel" required><option value="">Choose grade</option><% for (const grade of ['Grade 11', 'Grade 12']) { %><option value="<%= grade %>" <%= values.gradeLevel === grade ? 'selected' : '' %>><%= grade %></option><% } %></select></div>
-        <div class="field"><label for="annual-voucher">Voucher classification</label><select id="annual-voucher" name="voucherCode" required><option value="">Choose voucher</option><% for (const [voucher, label] of [['PUB', 'Public-school voucher (PUB)'], ['ESC', 'ESC voucher'], ['NV', 'No voucher (NV)']]) { %><option value="<%= voucher %>" <%= values.voucherCode === voucher ? 'selected' : '' %>><%= label %></option><% } %></select></div>
-        <div class="field"><label for="annual-voucher-category">Voucher category <span class="muted-copy">(optional)</span></label><select id="annual-voucher-category" name="voucherCategory"><option value="">Not recorded</option><% for (const category of ['A', 'B', 'C', 'D', 'E']) { %><option value="<%= category %>" <%= values.voucherCategory === category ? 'selected' : '' %>><%= category %></option><% } %></select><small>This is a registrar reference and does not change the fees.</small></div>
+        <div class="field"><label for="annual-voucher">Voucher type</label><select id="annual-voucher" name="voucherCode" required><option value="">Choose voucher type</option><% for (const [voucher, label] of [['PUB', 'Public-school voucher (PUB)'], ['ESC', 'ESC voucher'], ['NV', 'No voucher (NV)']]) { %><option value="<%= voucher %>" <%= values.voucherCode === voucher ? 'selected' : '' %>><%= label %></option><% } %></select></div>
         <div class="field"><label for="annual-intake-kind">Intake type</label><select id="annual-intake-kind" name="intakeKind"><option value="standard">Standard intake</option><option value="transferee" <%= values.intakeKind === 'transferee' ? 'selected' : '' %>>Transferee</option></select></div>
         <div class="field"><label for="annual-entry-term">Entry term</label><select id="annual-entry-term" name="entryTermNumber" required><option value="">Choose entry term</option><% for (let termNumber = 1; termNumber <= 3; termNumber += 1) { %><option value="<%= termNumber %>" <%= String(values.entryTermNumber || '1') === String(termNumber) ? 'selected' : '' %>>Term <%= termNumber %></option><% } %></select></div>
         <div class="field"><label for="annual-start-date">Enrollment start date</label><input id="annual-start-date" name="enrollmentStartDate" type="date" value="<%= values.enrollmentStartDate || '' %>" required></div>
@@ -110,5 +109,6 @@
   </form>
   <% if (!schoolYears.length || !sections.length) { %><p class="notice-panel">Term order and section setup are needed before the intake can be saved. Ask the registrar administrator to finish school-year setup.</p><% } %>
 </main>
+<script src="/js/student-profile-validation.js" defer></script>
 <script src="/js/annual-intake-form.js" defer></script>
 <%- include('../partials/foot') %>

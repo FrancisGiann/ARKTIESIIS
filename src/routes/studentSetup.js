@@ -8,6 +8,7 @@ const { StudentSetupError, MAX_BULK_ROWS, createStudentSetupService } = require(
 const { AnnualEnrollmentError, createAnnualEnrollmentService } = require('../services/annualEnrollmentService');
 const { AnnualFinanceError } = require('../services/annualFinanceService');
 const { PhysicalChecklistError, createPhysicalChecklistService } = require('../services/physicalChecklistService');
+const { latestBirthDate } = require('../services/studentRecordsService');
 const { isDuplicateKeyError } = require('../config/database');
 
 const MAX_BULK_FILE_BYTES = 2 * 1024 * 1024;
@@ -312,7 +313,7 @@ function createStudentIntakeRouter({ getPool, sql, studentSetupService } = {}) {
     try {
       const options = await service.loadIntakeOptions(req.authUser.id);
       return setPrivateHeaders(res).render('records/student-intake-form', {
-        title: 'New Student Intake', csrfToken: ensureCsrfToken(req), ...options, values: {}, error: null
+        title: 'New Student Intake', csrfToken: ensureCsrfToken(req), ...options, maxBirthDate: latestBirthDate(), values: {}, error: null
       });
     } catch {
       return res.status(503).render('error', { title: 'Intake Unavailable', message: 'Academic terms and sections could not be loaded.' });
@@ -333,7 +334,7 @@ function createStudentIntakeRouter({ getPool, sql, studentSetupService } = {}) {
         try {
           const options = await service.loadIntakeOptions(req.authUser.id);
           return setPrivateHeaders(res).status(error.status).render('records/student-intake-form', {
-            title: 'New Student Intake', csrfToken: ensureCsrfToken(req), ...options, values, error: error.message
+            title: 'New Student Intake', csrfToken: ensureCsrfToken(req), ...options, maxBirthDate: latestBirthDate(), values, error: error.message
           });
         } catch {
           return res.status(503).render('error', { title: 'Intake Unavailable', message: 'The student intake could not be saved.' });
@@ -342,7 +343,7 @@ function createStudentIntakeRouter({ getPool, sql, studentSetupService } = {}) {
       if (isDuplicateKeyError(error)) {
         const options = await service.loadIntakeOptions(req.authUser.id);
         return setPrivateHeaders(res).status(409).render('records/student-intake-form', {
-          title: 'New Student Intake', csrfToken: ensureCsrfToken(req), ...options, values,
+          title: 'New Student Intake', csrfToken: ensureCsrfToken(req), ...options, maxBirthDate: latestBirthDate(), values,
           error: 'A record conflict occurred. Check the LRN and contact email, then retry the intake.'
         });
       }
@@ -400,7 +401,7 @@ function createStudentIntakeRouter({ getPool, sql, studentSetupService } = {}) {
 function annualIntakeErrorStep(error) {
   const message = String(error?.message || '').toLocaleLowerCase();
   if (/paper|requirement|applicable|checklist/.test(message)) return 3;
-  if (/student number|existing student|lrn|email|first name|last name|suffix|birth date|archived student|linked account|login/.test(message)) return 1;
+  if (/student number|existing student|lrn|email|first name|middle name|last name|suffix|birth date|gender|sex|phone|address|archived student|linked account|login/.test(message)) return 1;
   if (/school year|grade|voucher|term|section|schedule|assessment/.test(message)) return 2;
   return 4;
 }
@@ -479,7 +480,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       ]);
       return setPrivateHeaders(res).status(status).render('records/annual-intake-form', {
         title: 'New Annual Enrollment', csrfToken: ensureCsrfToken(req), idempotencyKey: crypto.randomUUID(),
-        ...options, values: { ...values, enrollmentStartDate: values.enrollmentStartDate || schoolLocalDate() }, error, activeStep,
+        ...options, maxBirthDate: latestBirthDate(), values: { ...values, enrollmentStartDate: values.enrollmentStartDate || schoolLocalDate() }, error, activeStep,
         paperRequirements,
         paperTokens: Object.fromEntries((paperRequirements || []).map((item) => [item.requirement_code,
           values[`paper_${item.requirement_code}_token`] || crypto.randomUUID()]))
@@ -628,7 +629,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
   router.post('/', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     const values = {};
-    for (const key of ['studentNo', 'intakeKind', 'enrollmentStartDate', 'entryTermNumber', 'schoolYear', 'gradeLevel', 'voucherCode', 'voucherCategory', 'email', 'lrn', 'firstName', 'middleName', 'lastName', 'suffix', 'birthDate', 'sex', 'address', 'phone', 'sectionMode', 'annualSectionId', 'section1Id', 'section2Id', 'section3Id', 'section1Override', 'section2Override', 'section3Override', 'idempotencyKey']) {
+    for (const key of ['studentNo', 'intakeKind', 'enrollmentStartDate', 'entryTermNumber', 'schoolYear', 'gradeLevel', 'voucherCode', 'email', 'lrn', 'firstName', 'middleName', 'lastName', 'suffix', 'birthDate', 'sex', 'address', 'phone', 'sectionMode', 'annualSectionId', 'section1Id', 'section2Id', 'section3Id', 'section1Override', 'section2Override', 'section3Override', 'idempotencyKey']) {
       values[key] = typeof req.body?.[key] === 'string' ? req.body[key].slice(0, 500) : '';
     }
     for (const [key, value] of Object.entries(req.body || {})) {
@@ -668,7 +669,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
   router.post('/:annualId/voucher', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     try {
-      await service.updateVoucher(req.authUser.id, req.params.annualId, req.body?.voucherCode, req.body?.voucherCategory, req.body?.reason);
+      await service.updateVoucher(req.authUser.id, req.params.annualId, req.body?.voucherCode, req.body?.reason);
       return res.redirect(303, '/registrar/intake?notice=voucherUpdated');
     } catch (error) {
       if (error instanceof AnnualEnrollmentError) return renderList(req, res, { status: error.status, error: error.message });

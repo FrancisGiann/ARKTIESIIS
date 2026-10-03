@@ -19,7 +19,7 @@
     <div class="admin-heading-actions"><a class="button button--secondary" href="/registrar/intake/setup/terms">Configure term order</a><a class="button button--secondary" href="/registrar/intake/new">Start annual intake</a></div>
   </section>
   <% if (notice === 'annualCreated') { %><p class="form-success" role="status">Annual enrollment saved. Open a learner’s paper requirements checklist from the roster to record submitted originals, photocopies, and pieces.</p><% } %>
-  <% if (notice === 'voucherUpdated') { %><p class="form-success" role="status">Voucher metadata updated. Existing assessed charges remain unchanged and require finance review.</p><% } %>
+  <% if (notice === 'voucherUpdated') { %><p class="form-success" role="status">Voucher type updated. Existing assessed charges remain unchanged and require finance review.</p><% } %>
   <% if (notice === 'termStatusUpdated') { %><p class="form-success" role="status">Term placement status and reason recorded.</p><% } %>
   <% if (notice === 'placementUpdated') { %><p class="form-success" role="status">Term section placement updated.</p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
@@ -38,7 +38,7 @@
         <summary>More filters</summary>
         <div class="annual-filter-grid">
           <div class="field"><label for="annual-filter-grade">Grade level</label><select id="annual-filter-grade" name="gradeLevel"><option value="">All grades</option><% for (const grade of ['Grade 11', 'Grade 12']) { %><option value="<%= grade %>" <%= filters.gradeLevel === grade ? 'selected' : '' %>><%= grade %></option><% } %></select></div>
-          <div class="field"><label for="annual-filter-voucher">Voucher</label><select id="annual-filter-voucher" name="voucherCode"><option value="">All vouchers</option><% for (const voucher of ['PUB', 'ESC', 'NV']) { %><option value="<%= voucher %>" <%= filters.voucherCode === voucher ? 'selected' : '' %>><%= voucher %></option><% } %></select></div>
+          <div class="field"><label for="annual-filter-voucher">Voucher type</label><select id="annual-filter-voucher" name="voucherCode"><option value="">All voucher types</option><% for (const voucher of ['PUB', 'ESC', 'NV']) { %><option value="<%= voucher %>" <%= filters.voucherCode === voucher ? 'selected' : '' %>><%= voucher %></option><% } %></select></div>
           <div class="field"><label for="annual-filter-section">Section</label><select id="annual-filter-section" name="sectionId"><option value="">All sections</option><% for (const section of sections) { %><option value="<%= section.id %>" <%= String(filters.sectionId || '') === String(section.id) ? 'selected' : '' %>><%= section.school_year %> · <%= section.term %> · <%= section.grade_level %> · <%= section.name %></option><% } %></select></div>
           <div class="field"><label for="annual-filter-cluster">Cluster</label><input id="annual-filter-cluster" name="cluster" maxlength="80" value="<%= filters.cluster %>"></div>
           <div class="field"><label for="annual-filter-strand">Strand</label><input id="annual-filter-strand" name="strand" maxlength="80" value="<%= filters.strand %>"></div>
@@ -69,7 +69,7 @@
           <article class="annual-record">
             <header class="annual-record__summary">
               <span class="annual-record__identity"><strong id="annual-record-title-<%= record.annual_enrollment_id %>"><%= fullName %></strong><span>Student no. <%= record.student_no %> · LRN <%= record.lrn || 'Not recorded' %></span><span class="annual-record__confirmation-status"><strong>Enrollment confirmation:</strong> <%= confirmationLabel %></span></span>
-              <span class="annual-record__context"><strong><%= record.school_year %> · <%= record.grade_level %></strong><span>Voucher <%= record.voucher_code %><%= record.voucher_category ? ` · Category ${record.voucher_category}` : '' %></span></span>
+              <span class="annual-record__context"><strong><%= record.school_year %> · <%= record.grade_level %></strong><span>Voucher type <%= record.voucher_code %></span></span>
               <span class="annual-record__placement-count"><%= annualRows.length %> matching <%= annualRows.length === 1 ? 'term placement' : 'term placements' %></span>
             </header>
             <nav class="annual-record__primary-actions" aria-label="Primary actions for <%= fullName %>">
@@ -80,13 +80,12 @@
               <summary class="annual-record__toggle">Review term placements and secondary actions</summary>
               <div class="annual-record__body">
             <details class="annual-voucher-details">
-              <summary>Update voucher details</summary>
+              <summary>Update voucher type</summary>
               <form class="form-stack records-compact-form annual-voucher-form" method="post" action="/registrar/intake/<%= record.annual_enrollment_id %>/voucher">
                 <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-                <div class="field"><label for="voucher-<%= record.annual_enrollment_id %>">Voucher</label><select id="voucher-<%= record.annual_enrollment_id %>" name="voucherCode" required><% for (const voucher of ['PUB', 'ESC', 'NV']) { %><option value="<%= voucher %>" <%= record.voucher_code === voucher ? 'selected' : '' %>><%= voucher %></option><% } %></select></div>
-                <div class="field"><label for="voucher-category-<%= record.annual_enrollment_id %>">Voucher category</label><select id="voucher-category-<%= record.annual_enrollment_id %>" name="voucherCategory"><option value="">No category</option><% for (const category of ['A', 'B', 'C', 'D', 'E']) { %><option value="<%= category %>" <%= record.voucher_category === category ? 'selected' : '' %>><%= category %></option><% } %></select></div>
+                <div class="field"><label for="voucher-<%= record.annual_enrollment_id %>">Voucher type</label><select id="voucher-<%= record.annual_enrollment_id %>" name="voucherCode" required><% for (const voucher of ['PUB', 'ESC', 'NV']) { %><option value="<%= voucher %>" <%= record.voucher_code === voucher ? 'selected' : '' %>><%= voucher %></option><% } %></select></div>
                 <div class="field"><label for="voucher-reason-<%= record.annual_enrollment_id %>">Reason for change</label><input id="voucher-reason-<%= record.annual_enrollment_id %>" name="reason" maxlength="1000" required></div>
-                <button class="table-action table-button" type="submit">Save voucher</button>
+                <button class="table-action table-button" type="submit">Save voucher type</button>
               </form>
             </details>
             <ol class="annual-placement-list" aria-label="Term placements for <%= fullName %>">

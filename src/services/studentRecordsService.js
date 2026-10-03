@@ -41,6 +41,99 @@ function requiredText(value, label, maxLength) {
   return text;
 }
 
+const NAME_PATTERN = /^\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?(?:\s+\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?)*$/u;
+
+function validateName(value, label, { required = false, maxLength = 100 } = {}) {
+  if (value !== undefined && value !== null && value !== '' && typeof value !== 'string') {
+    throw new StudentRecordsError(`${label} must contain letters; spaces, hyphens, apostrophes, and initials are allowed.`);
+  }
+  const text = printableText(value, maxLength);
+  if (text === null) {
+    throw new StudentRecordsError(required
+      ? `${label} is required and must be ${maxLength} printable characters or fewer.`
+      : `${label} must be ${maxLength} printable characters or fewer.`);
+  }
+  if (!text) {
+    if (required) throw new StudentRecordsError(`${label} is required and must contain letters.`);
+    return null;
+  }
+  if (!NAME_PATTERN.test(text)) {
+    throw new StudentRecordsError(`${label} must contain letters; spaces, hyphens, apostrophes, and initials are allowed.`);
+  }
+  return text;
+}
+
+function currentManilaDate() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date());
+  const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${fields.year}-${fields.month}-${fields.day}`;
+}
+
+function latestBirthDate() {
+  const date = new Date(`${currentManilaDate()}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizeAddress(value) {
+  if (value === undefined || value === null || value === '') return '';
+  if (typeof value !== 'string') throw new StudentRecordsError('Address must be text and include at least one letter.');
+  const text = value.replace(/\r\n?/g, '\n').trim();
+  if (text.length > 500) throw new StudentRecordsError('Address must be 500 characters or fewer.');
+  if (/[\u0000-\u0009\u000b-\u001f\u007f]/.test(text)) throw new StudentRecordsError('Address cannot contain control characters.');
+  if (text && !/\p{L}/u.test(text)) throw new StudentRecordsError('Address must include at least one letter.');
+  return text;
+}
+
+function normalizePhone(value, label) {
+  if (value !== undefined && value !== null && value !== '' && typeof value !== 'string') {
+    throw new StudentRecordsError(`${label} must contain 7 to 15 digits in a valid phone format.`);
+  }
+  const text = printableText(value, 50);
+  if (text === null) throw new StudentRecordsError(`${label} must be 50 printable characters or fewer.`);
+  if (!text) return null;
+  if (!/^[+0-9() \x2d]+$/.test(text) || text.indexOf('+', 1) !== -1) {
+    throw new StudentRecordsError(`${label} must use digits and may include a leading +, spaces, hyphens, or parentheses.`);
+  }
+  const digits = text.replace(/\D/g, '');
+  const visible = text.replace(/^\+/, '').trim();
+  if (digits.length < 7 || digits.length > 15 || !/^[0-9(]/.test(visible) || !/[0-9)]$/.test(visible)) {
+    throw new StudentRecordsError(`${label} must contain 7 to 15 digits in a valid phone format.`);
+  }
+  let depth = 0;
+  let parenthesisHasDigit = false;
+  for (const character of text) {
+    if (character === '(') {
+      if (depth !== 0) throw new StudentRecordsError(`${label} must use balanced parentheses.`);
+      depth = 1;
+      parenthesisHasDigit = false;
+    } else if (character === ')') {
+      if (depth !== 1 || !parenthesisHasDigit) throw new StudentRecordsError(`${label} must use balanced parentheses.`);
+      depth = 0;
+    } else if (depth === 1 && /[0-9]/.test(character)) {
+      parenthesisHasDigit = true;
+    }
+  }
+  if (depth !== 0) throw new StudentRecordsError(`${label} must use balanced parentheses.`);
+  return text;
+}
+
+function normalizeGender(value, { allowLegacyUnspecified = false } = {}) {
+  if (value !== undefined && value !== null && value !== '' && typeof value !== 'string') {
+    throw new StudentRecordsError('Choose Male, Female, or Other for gender.');
+  }
+  const text = printableText(value, 20);
+  if (text === null) throw new StudentRecordsError('Gender must be 20 printable characters or fewer.');
+  if (!text) return null;
+  const canonical = new Map([['male', 'Male'], ['female', 'Female'], ['other', 'Other']]);
+  const normalized = canonical.get(text.toLocaleLowerCase());
+  if (normalized) return normalized;
+  if (allowLegacyUnspecified && text === 'unspecified') return text;
+  throw new StudentRecordsError('Choose Male, Female, or Other for gender.');
+}
+
 function normalizeOptionalId(value, label) {
   if (value === undefined || value === null || value === '') return null;
   const id = normalizeRecordId(value, label);
@@ -71,6 +164,7 @@ function normalizeDate(value) {
   if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
     throw new StudentRecordsError('Enter a valid birth date.');
   }
+  if (value >= currentManilaDate()) throw new StudentRecordsError('Birth date must be before today.');
   return value;
 }
 
@@ -83,51 +177,50 @@ function normalizeLrn(value, { required = true } = {}) {
   return lrn;
 }
 
-function validateStudent(input = {}, { requireLrn = true, requireStudentNo = true } = {}) {
+function validateStudent(input = {}, { requireLrn = true, requireStudentNo = true, allowLegacyUnspecifiedSex = false } = {}) {
   const studentNo = requireStudentNo ? requiredText(input.studentNo, 'Student number', 50) : null;
-  const firstName = requiredText(input.firstName, 'First name', 100);
-  const lastName = requiredText(input.lastName, 'Last name', 100);
-  const middleName = printableText(input.middleName, 100);
-  const suffix = printableText(input.suffix, 20);
-  const sex = printableText(input.sex, 20);
-  const address = printableText(input.address, 500);
-  const phone = printableText(input.phone, 50);
+  const firstName = validateName(input.firstName, 'First name', { required: true });
+  const lastName = validateName(input.lastName, 'Last name', { required: true });
+  const middleName = validateName(input.middleName, 'Middle name');
+  const suffix = validateName(input.suffix, 'Suffix', { maxLength: 20 });
+  const sex = normalizeGender(input.sex, { allowLegacyUnspecified: allowLegacyUnspecifiedSex });
+  const address = normalizeAddress(input.address);
+  const phone = normalizePhone(input.phone, 'Phone');
   const birthplace = printableText(input.birthplace, 160);
   const facebookName = printableText(input.facebookName, 120);
   const emergencyContactPerson = printableText(input.emergencyContactPerson, 160);
   const emergencyContactRelationship = printableText(input.emergencyContactRelationship, 80);
-  const emergencyContactPhone = printableText(input.emergencyContactPhone, 50);
-  const emergencyContactAddress = printableText(input.emergencyContactAddress, 500);
+  const emergencyContactPhone = normalizePhone(input.emergencyContactPhone, 'Emergency contact phone');
+  const emergencyContactAddress = normalizeAddress(input.emergencyContactAddress);
   const motherName = printableText(input.motherName, 160);
-  const motherPhone = printableText(input.motherPhone, 50);
+  const motherPhone = normalizePhone(input.motherPhone, 'Mother’s phone');
   const fatherName = printableText(input.fatherName, 160);
-  const fatherPhone = printableText(input.fatherPhone, 50);
-  if ([middleName, suffix, sex, address, phone, birthplace, facebookName, emergencyContactPerson,
-    emergencyContactRelationship, emergencyContactPhone, emergencyContactAddress, motherName, motherPhone,
-    fatherName, fatherPhone].includes(null)) {
+  const fatherPhone = normalizePhone(input.fatherPhone, 'Father’s phone');
+  if ([address, birthplace, facebookName, emergencyContactPerson, emergencyContactRelationship,
+    emergencyContactAddress, motherName, fatherName].includes(null)) {
     throw new StudentRecordsError('Check that each optional profile field is within its allowed length and contains no control characters.');
   }
   return {
     studentNo,
     lrn: normalizeLrn(input.lrn, { required: requireLrn }),
     firstName,
-    middleName: middleName || null,
+    middleName,
     lastName,
-    suffix: suffix || null,
+    suffix,
     birthDate: normalizeDate(input.birthDate),
-    sex: sex || null,
+    sex,
     address: address || null,
-    phone: phone || null,
+    phone,
     birthplace: birthplace || null,
     facebookName: facebookName || null,
     emergencyContactPerson: emergencyContactPerson || null,
     emergencyContactRelationship: emergencyContactRelationship || null,
-    emergencyContactPhone: emergencyContactPhone || null,
+    emergencyContactPhone,
     emergencyContactAddress: emergencyContactAddress || null,
     motherName: motherName || null,
-    motherPhone: motherPhone || null,
+    motherPhone,
     fatherName: fatherName || null,
-    fatherPhone: fatherPhone || null
+    fatherPhone
   };
 }
 
@@ -552,7 +645,11 @@ function createStudentRecordsService({
   async function saveStudent(actorId, studentId, input) {
     const id = studentId === null ? null : normalizeRecordId(studentId);
     if (studentId !== null && !id) throw new StudentRecordsError('Student record not found.', 404);
-    const student = validateStudent(input, { requireLrn: id === null, requireStudentNo: id !== null });
+    const student = validateStudent(input, {
+      requireLrn: id === null,
+      requireStudentNo: id !== null,
+      allowLegacyUnspecifiedSex: id !== null
+    });
     return runTransaction(async (transaction) => {
       const actor = await requireAcademicActor(transaction, actorId);
       if (id === null && actor.role !== 'database_admin') {
@@ -913,6 +1010,8 @@ module.exports = {
   normalizeSearchTerm,
   validateStudent,
   normalizeLrn,
+  currentManilaDate,
+  latestBirthDate,
   validateTerm,
   validateSection,
   validateEnrollment,

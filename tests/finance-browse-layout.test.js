@@ -99,6 +99,8 @@ test('finance annual roster pages annual records and groups term placements unde
   const summary = html.match(/<details class="finance-roster-record[^\"]*">\s*<summary>([\s\S]*?)<\/summary>/)?.[1] || '';
   assert.match(summary, /Annual balance[\s\S]*₱12,345\.67/);
   assert.match(summary, /Voucher review[\s\S]*Required/);
+  assert.match(summary, /Voucher type ESC · 2 term placements/);
+  assert.doesNotMatch(summary, /Category A|voucher category/i);
   assert.doesNotMatch(summary, /Legacy balance|Opening liability/);
   assert.match(html, /Legacy balance<\/dt><dd>₱0\.00/);
   assert.match(html, /Opening liability<\/dt><dd>₱0\.00/);
@@ -107,6 +109,36 @@ test('finance annual roster pages annual records and groups term placements unde
   assert.doesNotMatch(html, /Term 1 · Term 1|pending payment/);
   assert.match(html, /schoolYear=2026-2027/);
   assert.match(html, /termId=1/);
+
+  const legacyAnnualRecord = {
+    annual_enrollment_id: 10, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC',
+    voucher_category: 'A', intake_status: 'active', assessment_id: null, schedule_version: 2,
+    terms: [{
+      annual_enrollment_id: 10, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC',
+      voucher_category: 'A', intake_status: 'active', assessment_id: null, schedule_version: 2,
+      term: 'Term 1', annual_term_number: 1, enrollment_id: 81, enrollment_status: 'enrolled',
+      term_scope_status: 'applicable', outstanding: '0.00', signed_clearance_status: null,
+      voucher_review_required: false, section_name: 'Grade 11 ABM A'
+    }]
+  };
+  const accountHtml = await renderFinanceView('annual-student', {
+    ledger: {
+      student: { id: 22, first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null, student_no: 'S-22', status: 'active' },
+      summary: {
+        annualBalanceSchoolYear: '2026-2027', annualBalance: '0.00', allYearsAnnualBalance: '0.00',
+        annualWaivedAmount: '0.00', unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00',
+        totalBalance: '0.00', currentTermOutstanding: '0.00', priorTermYearDebt: '0.00', availableCredit: '0.00'
+      },
+      terms: legacyAnnualRecord.terms, openingLiabilities: [], charges: [], availablePayments: [],
+      legacyCredits: [], payments: [], adjustments: [], events: [], privateClearances: [],
+      allocationHistory: [], legacyReconciliationHistory: [], feeComments: [], financeHandbookNumbers: [], financeHandbookHistory: []
+    },
+    financeCases: { exemptions: [], specialSubjects: [], departures: [] },
+    schedules: [], tokens: { payment: 'test-payment-token', assessment: 'test-assessment-token' },
+    csrfToken: 'test-csrf-token', notice: null, error: null, preview: null
+  });
+  assert.match(accountHtml, /Grade 11 · Voucher type ESC/);
+  assert.doesNotMatch(accountHtml, /Category A|voucher category/i);
 });
 
 test('finance disclosures keep report, schedule, and zero-charge departure details available', async () => {

@@ -31,7 +31,7 @@ Student intake and profile data use validated registrar forms. New student numbe
 - Student master list.
 - Deactivate linked student login accounts without archiving the student master record.
 - Guide new, returning, and transfer intake through student, enrollment, documents received, and fees/confirmation steps. Review the approved schedule and discounts, then confirm the payable assessment and entry-term enrollment; returning students reuse their linked profile and login.
-- Update the annual voucher (PUB, ESC, NV) and optional category A–E metadata, plus each term's section placement. Voucher metadata does not calculate or change tuition.
+- Update the annual voucher type (PUB, ESC, NV), plus each term's section placement. Type changes after assessment remain visible for finance review and do not rewrite the reviewed charges.
 - Finalize the entry term when the registrar confirms the reviewed fee assessment; later terms are activated individually after the annual confirmation and a valid section. Finance payment or clearance is not an enrollment prerequisite. Only a verified first-time intake activates a pending new login; returning accounts and previously finalized terms do not have credentials rotated. Legacy pending accounts require explicit reviewed activation.
 - Record dated, reasoned cancel/drop/transfer changes without deleting academic history or canceling finance debt.
 - Authorized document management and review.

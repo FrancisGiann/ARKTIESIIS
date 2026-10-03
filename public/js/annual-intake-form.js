@@ -1,6 +1,8 @@
 (() => {
   const form = document.querySelector('[data-intake-wizard]');
   if (!form) return;
+  form.noValidate = true;
+  const profileValidation = window.ARKTIESIISProfileValidation;
   const panels = [...form.querySelectorAll('[data-step-panel]')];
   const indicators = [...document.querySelectorAll('[data-step-indicator]')];
   const mode = document.getElementById('annual-student-mode');
@@ -24,9 +26,11 @@
     newFields.hidden = isReturning;
     returningInput.required = isReturning;
     returningInput.disabled = !isReturning;
-    newFields.querySelectorAll('input, textarea').forEach((input) => {
+    newFields.querySelectorAll('input, select, textarea').forEach((input) => {
       input.disabled = isReturning;
       input.required = !isReturning && ['annual-lrn', 'annual-email', 'annual-first-name', 'annual-last-name'].includes(input.id);
+      if (isReturning) input.setCustomValidity('');
+      else profileValidation.validateControl(input);
     });
   };
 
@@ -156,13 +160,22 @@
 
   form.querySelectorAll('[data-step-next]').forEach((button) => button.addEventListener('click', () => {
     const panel = button.closest('[data-step-panel]');
-    const invalid = [...panel.querySelectorAll('input, select, textarea')].find((control) => !control.disabled && !control.checkValidity());
-    if (invalid) { invalid.reportValidity(); return; }
+    const invalid = profileValidation.firstInvalidControl(panel);
+    if (invalid) { profileValidation.focusInvalidControl(invalid); return; }
     showStep(Number(panel.dataset.stepPanel) + 1, true);
   }));
   form.querySelectorAll('[data-step-back]').forEach((button) => button.addEventListener('click', () => {
     showStep(Number(button.closest('[data-step-panel]').dataset.stepPanel) - 1, true);
   }));
+
+  form.addEventListener('submit', (event) => {
+    const invalid = profileValidation.firstInvalidControl(form);
+    if (!invalid) return;
+    event.preventDefault();
+    const panel = invalid.closest('[data-step-panel]');
+    if (panel) showStep(Number(panel.dataset.stepPanel), true);
+    profileValidation.focusInvalidControl(invalid);
+  }, true);
 
   mode.addEventListener('change', updateMode);
   year.addEventListener('change', () => { commonSection.value = ''; updateSections(); });

@@ -14,7 +14,8 @@ const {
   StudentRecordsError,
   createStudentRecordsService,
   normalizeRecordId,
-  normalizeUniqueConflict
+  normalizeUniqueConflict,
+  latestBirthDate
 } = require('../services/studentRecordsService');
 
 const notices = {
@@ -162,6 +163,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         sections: record?.sections || workspace.sections,
         enrollments: record?.enrollments || [],
         values: formValues,
+        maxBirthDate: latestBirthDate(),
         error,
         notice
       });

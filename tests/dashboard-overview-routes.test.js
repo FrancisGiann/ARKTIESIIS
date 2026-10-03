@@ -267,7 +267,8 @@ test('annual enrollment search groups filtered placements under one student reco
     assert.match(html, /<details class="annual-record-details">/);
     assert.doesNotMatch(html, /<details class="annual-record-details" open>/);
     assert.match(html, /2 matching term placements/);
-    assert.match(html, /Voucher ESC · Category A/);
+    assert.match(html, /Voucher type ESC/);
+    assert.doesNotMatch(html, /Category A|voucher category/i);
     assert.match(html, /Pending activation/);
     assert.match(html, /Term 1/);
     assert.match(html, /Term 2/);

@@ -8,6 +8,8 @@ const {
   StudentRecordsError,
   createStudentRecordsService,
   validateStudent,
+  currentManilaDate,
+  latestBirthDate,
   normalizeLrn,
   validateTerm,
   validateSection,
@@ -131,7 +133,7 @@ test('student record, term, section, and enrollment inputs are bounded and valid
   assert.equal(workbookProfile.emergencyContactPerson, 'Alex Lee');
   assert.equal(workbookProfile.fatherPhone, '09000000002');
   assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee', facebookName: 'x'.repeat(121) }), /optional profile field/);
-  assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee', emergencyContactPhone: '555\n1000' }), /optional profile field/);
+  assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee', emergencyContactPhone: '555\n1000' }), /Emergency contact phone must be 50 printable characters/);
   assert.equal(validateStudent({ lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee' }, { requireStudentNo: false }).studentNo, null);
   assert.throws(() => normalizeLrn('12345678901'), /exactly 12 digits/);
   assert.throws(() => normalizeLrn('12345678901 '), /exactly 12 digits/);
@@ -139,6 +141,32 @@ test('student record, term, section, and enrollment inputs are bounded and valid
   assert.throws(() => validateStudent({ studentNo: 'S-NEW', firstName: 'Jamie', lastName: 'Lee' }), /LRN must contain exactly 12 digits/);
   assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee', birthDate: '2007-02-29' }), /valid birth date/);
   assert.throws(() => validateStudent({ studentNo: 'S-1', firstName: 'Jamie\nLee', lastName: 'Lee' }), /First name is required/);
+  const validNamesAndContacts = validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'José M.',
+    middleName: 'Anne-Marie', lastName: 'O’Neill de la Cruz', suffix: 'Jr.', sex: 'mAlE',
+    birthDate: '2008-02-29', phone: '+63 (917) 123-4567', address: '123 Main Street\nLucena City' });
+  assert.equal(validNamesAndContacts.firstName, 'José M.');
+  assert.equal(validNamesAndContacts.middleName, 'Anne-Marie');
+  assert.equal(validNamesAndContacts.lastName, 'O’Neill de la Cruz');
+  assert.equal(validNamesAndContacts.suffix, 'Jr.');
+  assert.equal(validNamesAndContacts.sex, 'Male');
+  assert.equal(validNamesAndContacts.phone, '+63 (917) 123-4567');
+  assert.equal(validNamesAndContacts.address, '123 Main Street\nLucena City');
+  assert.equal(validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee',
+    phone: '(02) 8123-4567', address: '12B, St. John Street' }).phone, '(02) 8123-4567');
+  for (const [field, value, message] of [
+    ['firstName', '12345', /First name must contain letters/], ['middleName', '8', /Middle name must contain letters/],
+    ['lastName', '3578', /Last name must contain letters/], ['suffix', '!!!', /Suffix must contain letters/],
+    ['sex', 'fish', /Choose Male, Female, or Other/], ['phone', 'call 09170000000', /Phone must use digits/],
+    ['phone', '12345', /Phone must contain 7 to 15 digits/], ['phone', '+63 (917 123-4567', /balanced parentheses/],
+    ['address', '123456789', /Address must include at least one letter/], ['birthDate', currentManilaDate(), /before today/]
+  ]) {
+    assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee', [field]: value }), message);
+  }
+  assert.equal(validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee', sex: '' }).sex, null);
+  assert.equal(validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee', sex: 'unspecified' },
+    { allowLegacyUnspecifiedSex: true }).sex, 'unspecified');
+  assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee', sex: 'unspecified' }), /Choose Male, Female, or Other/);
+  assert.equal(latestBirthDate() < currentManilaDate(), true);
   assert.throws(() => validateTerm({ schoolYear: '2026', term: 'A'.repeat(31) }), StudentRecordsError);
   assert.throws(() => validateSection({ name: 'Grade 7', academicTermId: '3x' }), /valid academic term/);
   assert.throws(() => validateEnrollment({ studentId: '0', academicTermId: '4' }), /valid student/);
