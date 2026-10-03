@@ -4,13 +4,98 @@ const crypto = require('node:crypto');
 
 const { AnnualEnrollmentError, createAnnualEnrollmentService, normalizeAnnualInput, normalizeAnnualAdministrationDetails, applySameSectionDefaults } = require('../src/services/annualEnrollmentService');
 const {
-  AnnualFinanceError, normalizeLineRows, normalizeAllocations, parsePaymentDate, applyExemptionPreview, canonicalAssessmentSnapshot,
+  AnnualFinanceError, createAnnualFinanceService, normalizeLineRows, normalizeAllocations, parsePaymentDate, applyExemptionPreview, canonicalAssessmentSnapshot,
   tuitionInstallmentBreakdown
 } = require('../src/services/annualFinanceService');
 const { PhysicalChecklistError, createPhysicalChecklistService, normalizeIntakeChecklistUpdates } = require('../src/services/physicalChecklistService');
 const { currentManilaDate, validateStudent } = require('../src/services/studentRecordsService');
 
 const uuid = '41111111-1111-4111-8111-111111111111';
+
+test('registrar preview selects the shared active schedule by PUB, ESC, or NV and preserves a saved assessment', async () => {
+  const annualRecords = new Map([
+    [71, { id: 71, student_id: 171, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB', entry_term_number: 1 }],
+    [72, { id: 72, student_id: 172, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC', entry_term_number: 1 }],
+    [73, { id: 73, student_id: 173, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'NV', entry_term_number: 1 }]
+  ]);
+  const activeSchedules = new Map([
+    ['PUB', { id: 301, version_no: 1, amount: '80.00' }],
+    ['ESC', { id: 302, version_no: 4, amount: '60.00' }],
+    ['NV', { id: 303, version_no: 2, amount: '45.00' }]
+  ]);
+  const savedAssessments = new Map();
+  const queryCalls = [];
+  const sql = { Int: 'INT', NVarChar: (length) => `VARCHAR(${length})` };
+  const getPool = async () => ({
+    request() {
+      const inputs = {};
+      return {
+        input(name, _type, value) { inputs[name] = value; return this; },
+        async query(statement) {
+          const normalized = statement.replace(/\s+/g, ' ').trim();
+          queryCalls.push({ statement: normalized, inputs: { ...inputs } });
+          if (normalized.includes('FROM users WHERE id = @actorId')) return { recordset: [{ id: 2, role: 'registrar' }] };
+          if (normalized.includes('FROM annual_enrollments AS annual')) {
+            const parent = annualRecords.get(Number(inputs.annualEnrollmentId));
+            return { recordset: parent ? [{ ...parent, student_no: `S-${parent.id}`, first_name: 'Synthetic', last_name: 'Learner' }] : [] };
+          }
+          if (normalized.includes('FROM annual_assessments AS assessment')) {
+            const assessment = savedAssessments.get(Number(inputs.annualEnrollmentId));
+            return { recordset: assessment ? [assessment] : [] };
+          }
+          if (normalized.includes('FROM finance_schedules')) {
+            const schedule = activeSchedules.get(inputs.voucherCode);
+            return { recordset: schedule ? [{ id: schedule.id, version_no: schedule.version_no }] : [] };
+          }
+          if (normalized.includes('FROM finance_schedule_lines')) {
+            const schedule = [...activeSchedules.values()].find((item) => item.id === Number(inputs.scheduleId));
+            return { recordset: schedule ? [{ id: schedule.id * 10, term_number: 1, fee_category: 'tuition', line_name: 'Tuition',
+              installment: 'Other', amount: schedule.amount, is_optional: 0 }] : [] };
+          }
+          if (normalized.includes('FROM enrollments WHERE annual_enrollment_id')) {
+            const annualId = Number(inputs.annualEnrollmentId);
+            return { recordset: [1, 2, 3].map((termNumber) => ({ enrollment_id: annualId * 10 + termNumber,
+              annual_term_number: termNumber, enrollment_status: 'pending_payment', term_scope_status: 'applicable' })) };
+          }
+          if (normalized.includes('FROM finance_exemption_cases AS exemption')) return { recordset: [] };
+          if (normalized.includes('FROM assessed_charges AS charge')) {
+            return { recordset: [{ id: 901, enrollment_id: 711, term_number: 1, fee_category: 'tuition', line_name: 'Tuition',
+              installment: 'Other', schedule_line_id: 3010, is_optional: 0, amount: '80.00', waived_amount: '0.00' }] };
+          }
+          throw new Error(`Unexpected annual preview query: ${normalized}`);
+        }
+      };
+    }
+  });
+  const service = createAnnualFinanceService({ getPool, sql });
+
+  for (const [voucherCode, annualId, scheduleId, expectedTotal] of [
+    ['PUB', 71, 301, '80.00'], ['ESC', 72, 302, '60.00'], ['NV', 73, 303, '45.00']
+  ]) {
+    queryCalls.length = 0;
+    const preview = await service.annualAssessmentPreviewForRegistrar(2, annualId);
+    assert.equal(preview.voucherCode, voucherCode);
+    assert.equal(Number(preview.scheduleId), scheduleId);
+    assert.equal(preview.total, expectedTotal);
+    assert.deepEqual(preview.tuitionTermTotals, [{ termNumber: 1, amount: expectedTotal }, { termNumber: 2, amount: '0.00' }, { termNumber: 3, amount: '0.00' }]);
+    const scheduleLookup = queryCalls.find(({ statement }) => statement.includes('FROM finance_schedules'));
+    assert.equal(scheduleLookup.inputs.voucherCode, voucherCode);
+    assert.match(scheduleLookup.statement, /voucher_code = @voucherCode AND status = 'active'/);
+  }
+
+  savedAssessments.set(71, { id: 801, schedule_id: 301, schedule_version: 1, voucher_code_snapshot: 'PUB', selection_json: '{}' });
+  activeSchedules.set('PUB', { id: 399, version_no: 2, amount: '999.00' });
+  queryCalls.length = 0;
+  const savedPreview = await service.annualAssessmentPreviewForRegistrar(2, 71);
+  assert.equal(savedPreview.existingAssessment, true);
+  assert.equal(Number(savedPreview.scheduleId), 301);
+  assert.equal(savedPreview.scheduleVersion, 1);
+  assert.equal(savedPreview.total, '80.00');
+  assert.equal(savedPreview.lines[0].installment, 'Other');
+  assert.deepEqual(savedPreview.tuitionTermTotals[0], { termNumber: 1, amount: '80.00' });
+  assert.equal(queryCalls.some(({ statement }) => statement.includes('FROM finance_schedules')), false,
+    'the saved fee snapshot remains authoritative after Finance publishes a newer schedule');
+});
 
 test('annual intake accepts explicit midyear entry with an optional future placement', () => {
   const valid = normalizeAnnualInput({
@@ -376,7 +461,15 @@ test('active checklist queries exclude envelope while student history preserves 
   const checklist = await service.getStudentChecklist('7', '3');
   assert.deepEqual(checklist.requirements.map((item) => item.requirement_code), ['birth_certificate']);
   assert.deepEqual(checklist.history.map((item) => item.requirement_code), ['long_brown_envelopes']);
+  const studentQuery = queries.find((query) => query.includes('SELECT student.id, student.student_no'));
+  assert.match(studentQuery, /AS section_rank/);
+  assert.match(studentQuery, /ranked\.section_rank = 1/);
+  assert.doesNotMatch(studentQuery, /AS row_number|ranked\.row_number/);
   assert.match(queries.find((query) => query.includes('SELECT definition.requirement_code')), /NOT IN \('sf10_form137', 'long_brown_envelopes'\)/);
+  const requirementQuery = queries.find((query) => query.includes('SELECT definition.requirement_code'));
+  assert.match(requirementQuery, /AS event_rank/);
+  assert.match(requirementQuery, /ranked\.event_rank = 1/);
+  assert.doesNotMatch(requirementQuery, /AS row_number|ranked\.row_number/);
   assert.doesNotMatch(queries.find((query) => query.includes('SELECT event.id, event.requirement_code') && !query.includes('definition.requirement_code')), /long_brown_envelopes/);
 
   await service.listIntakeRequirements('7');
@@ -385,6 +478,9 @@ test('active checklist queries exclude envelope while student history preserves 
   await service.getStudentSummaries('7', ['3']);
   const summaryQuery = queries.find((query) => query.includes('WITH latest AS'));
   assert.match(summaryQuery, /NOT IN \('sf10_form137', 'long_brown_envelopes'\)/);
+  assert.match(summaryQuery, /AS section_rank/);
+  assert.match(summaryQuery, /ranked\.section_rank = 1/);
+  assert.doesNotMatch(summaryQuery, /AS row_number|ranked\.row_number/);
 });
 
 function mockChecklistSql() {

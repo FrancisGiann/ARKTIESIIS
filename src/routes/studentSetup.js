@@ -10,6 +10,7 @@ const { AnnualFinanceError } = require('../services/annualFinanceService');
 const { PhysicalChecklistError, createPhysicalChecklistService } = require('../services/physicalChecklistService');
 const { latestBirthDate } = require('../services/studentRecordsService');
 const { isDuplicateKeyError } = require('../config/database');
+const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
 
 const MAX_BULK_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_XLSX_ENTRIES = 80;
@@ -415,29 +416,6 @@ function schoolLocalDate() {
   return `${fields.year}-${fields.month}-${fields.day}`;
 }
 
-function safeDiagnosticCode(value, pattern, maximumLength) {
-  return typeof value === 'string' && value.length <= maximumLength && pattern.test(value) ? value : null;
-}
-
-function annualIntakeErrorDiagnostics(error) {
-  const diagnostics = {};
-  const name = safeDiagnosticCode(error?.name, /^[A-Za-z0-9_$.-]+$/, 80);
-  const code = safeDiagnosticCode(error?.code, /^[A-Za-z0-9_-]+$/, 64);
-  const sqlState = safeDiagnosticCode(error?.sqlState, /^[A-Z0-9]{5}$/, 5);
-  const frames = typeof error?.stack === 'string' ? error.stack.split('\n').slice(1, 12) : [];
-  if (name) diagnostics.errorName = name;
-  if (code) diagnostics.errorCode = code;
-  if (Number.isSafeInteger(error?.errno) && error.errno >= 0) diagnostics.errorNumber = error.errno;
-  if (sqlState) diagnostics.sqlState = sqlState;
-  for (const frame of frames) {
-    const match = /(?:^|\/)(src\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.js):(\d{1,7}):(\d{1,6})\)?$/.exec(frame.trim());
-    if (!match) continue;
-    diagnostics.sourceLocation = `${match[1]}:${match[2]}:${match[3]}`;
-    break;
-  }
-  return diagnostics;
-}
-
 function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService, annualFinanceService, physicalChecklistService, logger = console } = {}) {
   const router = express.Router();
   const feeService = annualFinanceService || null;
@@ -534,7 +512,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         title: 'Review enrollment fees', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
         annualId, preview, error, values: { ...values, idempotencyKey: key },
         confirmationChoices: preview.optionalLineIds || [],
-        successNotice: req.query?.notice === 'confirmed' ? 'Enrollment confirmed. Finance can now record payments.' : null
+        successNotice: req.query?.notice === 'confirmed' ? 'Enrollment confirmed. Finance manages approved schedules and records payments.' : null
       });
     } catch (loadError) {
       if (loadError instanceof AnnualEnrollmentError || loadError instanceof AnnualFinanceError) {
@@ -574,8 +552,16 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
           confirmationComplete: false
         });
       }
-      return res.status(503).render('error', {
-        title: 'Final review unavailable', message: 'Student, paper checklist, and fee details could not be loaded for final review.'
+      const incidentId = crypto.randomUUID();
+      try {
+        logger.error('Annual final review load failed', {
+          incidentId,
+          operation: 'registrar.annual_final_review.load',
+          ...safeErrorDiagnostics(loadError)
+        });
+      } catch { /* Logging must not replace the safe user response. */ }
+      return setPrivateHeaders(res).status(503).render('error', {
+        title: 'Final review unavailable', message: `Student, paper checklist, and fee details could not be loaded for final review. Support reference: ${incidentId}.`
       });
     }
   }
@@ -689,7 +675,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         logger.error('Annual intake save failed', {
           incidentId,
           operation: 'registrar.annual_intake.create',
-          ...annualIntakeErrorDiagnostics(error)
+          ...safeErrorDiagnostics(error)
         });
       } catch { /* Logging must not replace the safe user response. */ }
       return renderForm(req, res, {

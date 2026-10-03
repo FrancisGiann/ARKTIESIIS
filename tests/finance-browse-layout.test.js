@@ -287,24 +287,59 @@ test('schedule validation reopens the form with submitted fee lines and idempote
   assert.equal(calls[0].input.lines[12].isOptional, true);
 });
 
-test('registrar fee preview distinguishes an explicitly configured zero from missing legacy installment data', async () => {
+test('registrar fee preview shows meaningful approved installment labels and payable tuition lines', async () => {
   const html = await ejs.renderFile(path.join(__dirname, '../views/records/annual-intake-fees.ejs'), {
     title: 'Fee preview test', formatMoney, annualId: 41, csrfToken: 'test-csrf',
     values: { idempotencyKey: '41111111-1111-4111-8111-111111111111' }, successNotice: null, error: null,
     preview: {
       parent: { first_name: 'Synthetic', last_name: 'Learner', student_no: 'S-1', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB' },
-      scheduleVersion: 2, existingAssessment: false, optionalLines: [], optionalLineIds: [], termTotals: [], lines: [],
-      total: '0.00', scheduleId: 3, assessmentId: null, voucherCode: 'PUB', snapshotFingerprint: 'a'.repeat(64),
-      tuitionBreakdown: [{ termNumber: 1, installments: [
-        { label: 'DP', configured: true, amount: '0.00' },
-        { label: 'Prelim', configured: false, amount: null },
-        { label: 'Midterm', configured: true, amount: '25.00' },
-        { label: 'Finals', configured: false, amount: null }
-      ] }]
+      scheduleVersion: 2, existingAssessment: false, optionalLines: [], optionalLineIds: [],
+      termTotals: [{ termNumber: 1, amount: '25.00' }, { termNumber: 2, amount: '0.00' }],
+      tuitionTermTotals: [{ termNumber: 1, amount: '25.00' }, { termNumber: 2, amount: '0.00' }],
+      lines: [
+        { termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'DP', amount: '0.00', grossAmount: '0.00', waivedAmount: '0.00', isOptional: false },
+        { termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Prelim', amount: '25.00', grossAmount: '25.00', waivedAmount: '0.00', isOptional: false }
+      ],
+      total: '25.00', scheduleId: 3, assessmentId: null, voucherCode: 'PUB', snapshotFingerprint: 'a'.repeat(64)
     }
   });
-  assert.match(html, /Tuition payable by installment/);
+  assert.match(html, /Approved tuition by installment/);
+  assert.match(html, /Payable by term/);
   assert.match(html, /DP/);
   assert.match(html, /₱0\.00/);
-  assert.match(html, /Not configured/);
+  assert.match(html, />Prelim</);
+  assert.match(html, /₱25\.00/);
+  assert.doesNotMatch(html, /Not configured|Not applicable/);
+  assert.match(html, /<details class="fee-breakdown">/);
+  assert.doesNotMatch(html, /<details class="fee-breakdown" open>/);
+  assert.equal((html.match(/data-fee-submit/g) || []).length, 1);
+});
+
+test('legacy tuition schedules show approved term totals and hide unhelpful installment labels', async () => {
+  const html = await ejs.renderFile(path.join(__dirname, '../views/records/annual-intake-fees.ejs'), {
+    title: 'Legacy fee preview test', formatMoney, annualId: 42, csrfToken: 'test-csrf',
+    values: { idempotencyKey: '41111111-1111-4111-8111-111111111112' }, successNotice: null, error: null,
+    preview: {
+      parent: { first_name: 'Synthetic', last_name: 'Learner', student_no: 'S-2', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC' },
+      scheduleVersion: 1, existingAssessment: false, optionalLines: [], optionalLineIds: [],
+      termTotals: [{ termNumber: 1, amount: '25.00' }, { termNumber: 2, amount: '0.00' }],
+      tuitionTermTotals: [{ termNumber: 1, amount: '25.00' }, { termNumber: 2, amount: '0.00' }],
+      lines: [
+        { termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Other', amount: '0.00', grossAmount: '0.00', waivedAmount: '0.00', isOptional: false },
+        { termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Other', amount: '25.00', grossAmount: '25.00', waivedAmount: '0.00', isOptional: false }
+      ],
+      total: '25.00', scheduleId: 4, assessmentId: null, voucherCode: 'ESC', snapshotFingerprint: 'b'.repeat(64)
+    }
+  });
+  const tuitionSummary = html.match(/<div class="fee-approved-tuition"[\s\S]*?<\/div>\s*<div class="fee-review-actions"/)?.[0];
+  assert.ok(tuitionSummary);
+  assert.match(tuitionSummary, /Approved tuition by term/);
+  assert.match(tuitionSummary, /Term 1/);
+  assert.match(tuitionSummary, /₱25\.00/);
+  assert.match(tuitionSummary, /Term 2/);
+  assert.match(tuitionSummary, /₱0\.00/);
+  assert.doesNotMatch(tuitionSummary, /Other|Installment/);
+  assert.match(html, /<details class="fee-breakdown">[\s\S]*?Other/);
+  assert.doesNotMatch(html, /Not configured|Not applicable/);
+  assert.equal((html.match(/data-fee-submit/g) || []).length, 1);
 });

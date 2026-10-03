@@ -8,8 +8,9 @@ const { Readable } = require('node:stream');
 const { once } = require('node:events');
 const vm = require('node:vm');
 const bcrypt = require('bcrypt');
+const express = require('express');
 const { createApp } = require('../src/app');
-const { configuredMaxBytes, documentStatusLabel } = require('../src/routes/documents');
+const { configuredMaxBytes, createDocumentsRouter, documentStatusLabel } = require('../src/routes/documents');
 const { PhysicalChecklistError } = require('../src/services/physicalChecklistService');
 const {
   DocumentServiceError,
@@ -1360,6 +1361,58 @@ async function withServer(app, run) {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
 }
+
+test('student document workspace load failures return a support reference with sanitized diagnostics', async () => {
+  const app = express();
+  const errors = [];
+  const failure = new Error('raw statement contains personal@example.test');
+  failure.code = 'ER_PARSE_ERROR';
+  failure.errno = 1064;
+  failure.sqlState = '42000';
+  failure.stack = [
+    'Error: raw statement contains personal@example.test',
+    '    at query (/srv/application/src/config/database.js:218:47)',
+    '    at getStudentChecklist (/srv/application/src/services/physicalChecklistService.js:164:17)'
+  ].join('\n');
+  app.set('views', path.join(__dirname, '..', 'views'));
+  app.set('view engine', 'ejs');
+  app.use((req, _res, next) => { req.authUser = { id: 2, role: 'registrar' }; req.session = {}; next(); });
+  app.use('/documents', createDocumentsRouter({
+    environment: { upload: { maxMb: 1 } },
+    documentService: {
+      async getStudentDocuments(_actorId, studentId) {
+        return { student: { id: studentId }, documents: [], blockedNewOriginalTypes: [] };
+      }
+    },
+    documentProcessingService: { schedulePendingProcessing() {} },
+    form137ScanService: { async scan() { return {}; } },
+    physicalChecklistService: { async getStudentChecklist() { throw failure; } },
+    logger: { error(...args) { errors.push(args); } }
+  }));
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/documents/students/44`);
+    const html = await response.text();
+    assert.equal(response.status, 503);
+    assert.match(response.headers.get('cache-control'), /private, no-store/);
+    assert.match(response.headers.get('pragma'), /no-cache/);
+    assert.match(html, /Student documents could not be loaded\. Support reference: [0-9a-f-]{36}\./);
+    assert.doesNotMatch(html, /personal@example\.test|raw statement|ER_PARSE_ERROR|SELECT/i);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0][0], 'Student document workspace load failed');
+    const { incidentId, ...diagnostics } = errors[0][1];
+    assert.deepEqual(diagnostics, {
+      operation: 'documents.student_workspace.load',
+      errorName: 'Error',
+      errorCode: 'ER_PARSE_ERROR',
+      errorNumber: 1064,
+      sqlState: '42000',
+      sourceLocation: 'src/config/database.js:218:47'
+    });
+    assert.match(incidentId, /^[0-9a-f-]{36}$/);
+    assert.doesNotMatch(JSON.stringify(errors), /personal@example\.test|raw statement|SELECT/i);
+  });
+});
 
 function csrfFromHtml(html) {
   const match = html.match(/name="_csrf" value="([^"]+)"/);

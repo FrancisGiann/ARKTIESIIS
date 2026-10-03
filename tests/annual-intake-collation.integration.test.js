@@ -8,6 +8,7 @@ const path = require('node:path');
 const mysql = require('mysql2/promise');
 const { PoolFacade, Transaction, sql } = require('../src/config/database');
 const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
+const { createPhysicalChecklistService } = require('../src/services/physicalChecklistService');
 
 const DATABASE_NAME = 'arktiesiis_collation_test';
 const socketPath = process.env.ANNUAL_INTAKE_COLLATION_TEST_SOCKET;
@@ -55,6 +56,7 @@ test('annual intake works across mixed school-year collations and retries idempo
     hashPassword: async () => 'integration-only-not-a-login-hash',
     createPassword: () => 'integration-only-not-a-login-password'
   });
+  const checklistService = createPhysicalChecklistService({ getPool: async () => pool, sql });
 
   try {
     const [databaseRows] = await rawPool.query('SELECT DATABASE() AS database_name');
@@ -168,6 +170,11 @@ test('annual intake works across mixed school-year collations and retries idempo
     const newStudentReplay = await service.createAnnualIntake(actorId, newStudentInput);
     assert.equal(newStudentReplay.annualEnrollmentId, newStudent.annualEnrollmentId);
     assert.equal(newStudentReplay.alreadyCreated, true);
+    const newStudentChecklist = await checklistService.getStudentChecklist(actorId, newStudent.studentId);
+    assert.equal(Number(newStudentChecklist.student.id), Number(newStudent.studentId));
+    assert.equal(newStudentChecklist.requirements.length > 0, true);
+    const checklistSummaries = await checklistService.getStudentSummaries(actorId, [String(newStudent.studentId)]);
+    assert.equal(checklistSummaries.has(Number(newStudent.studentId)), true);
     const [newPlacementRows] = await rawPool.execute(
       'SELECT section_id FROM enrollments WHERE annual_enrollment_id = ? ORDER BY annual_term_number',
       [newStudent.annualEnrollmentId]

@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page annual-confirmation-result" id="main-content">
-  <header class="dashboard-heading"><div><h1>Enrollment confirmed</h1><p>The fee assessment was saved and the entry term is active. Finance will record payments separately.</p></div></header>
+  <header class="dashboard-heading"><div><h1>Enrollment confirmed</h1><p>The voucher-based fee assessment was saved and the entry term is active. Finance manages approved schedules and records payments.</p></div></header>
   <section class="admin-section" aria-labelledby="confirmed-student-title">
     <div class="admin-section__heading"><div><h2 id="confirmed-student-title"><%= [enrollment.firstName, enrollment.middleName, enrollment.lastName, enrollment.suffix].filter(Boolean).join(' ') %></h2><p>Student number <%= enrollment.studentNo %></p></div></div>
     <dl class="enrollment-summary-list">

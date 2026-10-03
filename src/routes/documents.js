@@ -8,6 +8,7 @@ const { createDocumentProcessingService } = require('../services/documentProcess
 const { createGeminiFieldExtractionService } = require('../services/geminiFieldExtractionService');
 const { Form137ScanError, createForm137ScanService } = require('../services/form137ScanService');
 const { PhysicalChecklistError, createPhysicalChecklistService } = require('../services/physicalChecklistService');
+const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
 
 const STAFF_ROLES = ['registrar', 'database_admin'];
 const PREVIEW_FILE_EXTENSIONS = Object.freeze({
@@ -79,7 +80,7 @@ function clearUploadBuffer(file) {
   if (Buffer.isBuffer(file?.buffer)) file.buffer.fill(0);
 }
 
-function createDocumentsRouter({ getPool, sql, environment, documentService, documentProcessingService, form137ScanService, physicalChecklistService } = {}) {
+function createDocumentsRouter({ getPool, sql, environment, documentService, documentProcessingService, form137ScanService, physicalChecklistService, logger = console } = {}) {
   const router = express.Router();
   const maxUploadBytes = configuredMaxBytes(environment);
   const uploadMaxMb = configuredMaxMegabytes(environment);
@@ -122,14 +123,27 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
 
   router.use(requireRole('student', ...STAFF_ROLES));
 
-  function renderError(res, error, fallback = 'Documents could not be loaded.') {
+  function renderError(res, error, fallback = 'Documents could not be loaded.', { operation = null } = {}) {
     if (error instanceof DocumentServiceError) {
       return res.status(error.status).render('error', {
         title: error.status === 404 ? 'Not Found' : error.status === 403 ? 'Forbidden' : 'Document Request',
         message: error.message
       });
     }
-    return res.status(503).render('error', { title: 'Service Unavailable', message: fallback });
+    const incidentId = operation ? crypto.randomUUID() : null;
+    if (incidentId) {
+      try {
+        logger.error('Student document workspace load failed', {
+          incidentId,
+          operation,
+          ...safeErrorDiagnostics(error)
+        });
+      } catch { /* Logging must not replace the safe user response. */ }
+      res.set({ 'Cache-Control': 'private, no-store', Pragma: 'no-cache' });
+    }
+    return res.status(503).render('error', {
+      title: 'Service Unavailable', message: incidentId ? `${fallback} Support reference: ${incidentId}.` : fallback
+    });
   }
 
   function parseUpload(req, res, next) {
@@ -243,7 +257,7 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
         documentStatusLabel
       });
     } catch (loadError) {
-      return renderError(res, loadError, 'Student documents could not be loaded.');
+      return renderError(res, loadError, 'Student documents could not be loaded.', { operation: 'documents.student_workspace.load' });
     }
   }
 

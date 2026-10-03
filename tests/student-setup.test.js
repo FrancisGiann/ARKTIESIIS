@@ -433,7 +433,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.equal(fees.status, 200);
     assert.match(fees.headers.get('cache-control'), /no-store/);
     assert.match(feesHtml, /<title>Review enrollment fees \| ARKTIESIIS<\/title>/);
-    assert.match(feesHtml, /Payable total/);
+    assert.match(feesHtml, /Student payable/);
     assert.match(feesHtml, /View itemized fee breakdown/);
     assert.match(feesHtml, /Update fee total/);
     assert.match(feesHtml, /name="idempotencyKey" value="[0-9a-f-]{36}"/);
@@ -451,7 +451,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.equal(updatedFees.status, 200);
     assert.match(updatedFeesHtml, /value="90" checked/);
     assert.match(updatedFeesHtml, /name="idempotencyKey" value="[^"]+"/);
-    assert.match(updatedFeesHtml, /Payable total/);
+    assert.match(updatedFeesHtml, /Student payable/);
     assert.match(updatedFeesHtml, /formaction="\/registrar\/intake\/71\/review"/);
 
     const finalReview = await fetch(`${baseUrl}/registrar/intake/71/review?${new URLSearchParams({
@@ -463,6 +463,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.ok(csrfToken);
     assert.match(reviewHtml, /data-active-step="5"|aria-current="step"/);
     assert.match(reviewHtml, /Review enrollment details/);
+    assert.match(reviewHtml, /voucher-based assessment/);
     assert.match(reviewHtml, /123456789012/);
     assert.match(reviewHtml, /2008-04-21/);
     assert.match(reviewHtml, /<dt>Intake type<\/dt><dd>Standard intake<\/dd>/);
@@ -497,12 +498,62 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.equal(confirmResponse.status, 200);
     assert.match(confirmResponse.headers.get('cache-control'), /no-store/);
     assert.match(confirmedHtml, /Enrollment confirmed/);
+    assert.match(confirmedHtml, /Finance manages approved schedules and records payments/);
     assert.match(confirmedHtml, /₱1,234\.50/);
     assert.match(confirmedHtml, /Open paper requirements checklist/);
     assert.deepEqual(confirmationCall, { actorId: registrar.id, annualId: '71', input: {
       _csrf: csrfToken, idempotencyKey, scheduleId: '9',
       scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64), optionalLineIds: '90'
     } });
+  });
+});
+
+test('final review unexpected load failures return a support reference and only safe diagnostics', async () => {
+  const app = express();
+  const errors = [];
+  const failure = new Error('SQL text and private@example.test must not escape');
+  failure.code = 'ER_PARSE_ERROR';
+  failure.errno = 1064;
+  failure.sqlState = '42000';
+  failure.stack = [
+    'Error: SQL text and private@example.test must not escape',
+    '    at query (/srv/application/src/config/database.js:218:47)',
+    '    at getStudentChecklist (/srv/application/src/services/physicalChecklistService.js:164:17)'
+  ].join('\n');
+  app.set('views', path.join(__dirname, '..', 'views'));
+  app.set('view engine', 'ejs');
+  app.use((req, _res, next) => { req.authUser = registrar; req.session = {}; next(); });
+  app.use('/registrar/intake', createAnnualStudentIntakeRouter({
+    annualEnrollmentService: {
+      async getAnnualManagementRecord() {
+        return { parent: { student_id: 41, registrar_confirmation_id: null }, terms: [] };
+      }
+    },
+    physicalChecklistService: { async getStudentChecklist() { throw failure; } },
+    annualFinanceService: { async annualAssessmentPreviewForRegistrar() { return { lines: [], total: '0.00' }; } },
+    logger: { error(...args) { errors.push(args); } }
+  }));
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/registrar/intake/71/review`);
+    const html = await response.text();
+    assert.equal(response.status, 503);
+    assert.match(response.headers.get('cache-control'), /private, no-store/);
+    assert.match(html, /Support reference: [0-9a-f-]{36}\./);
+    assert.doesNotMatch(html, /private@example\.test|SQL text|ER_PARSE_ERROR|SELECT/i);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0][0], 'Annual final review load failed');
+    const { incidentId, ...diagnostics } = errors[0][1];
+    assert.deepEqual(diagnostics, {
+      operation: 'registrar.annual_final_review.load',
+      errorName: 'Error',
+      errorCode: 'ER_PARSE_ERROR',
+      errorNumber: 1064,
+      sqlState: '42000',
+      sourceLocation: 'src/config/database.js:218:47'
+    });
+    assert.match(incidentId, /^[0-9a-f-]{36}$/);
+    assert.doesNotMatch(JSON.stringify(errors), /private@example\.test|SQL text|SELECT/i);
   });
 });
 

@@ -141,11 +141,11 @@ function createPhysicalChecklistService({
           SELECT ranked.student_id, ranked.grade_level FROM (
             SELECT enrollment.student_id, section.grade_level,
               ROW_NUMBER() OVER (PARTITION BY enrollment.student_id
-                ORDER BY term.is_current DESC, term.id DESC, enrollment.id DESC) AS row_number
+                ORDER BY term.is_current DESC, term.id DESC, enrollment.id DESC) AS section_rank
             FROM enrollments AS enrollment
             INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
             LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
-          ) AS ranked WHERE ranked.row_number = 1
+          ) AS ranked WHERE ranked.section_rank = 1
         ) AS latest_section ON latest_section.student_id = student.id
         WHERE student.id = @studentId`);
     const student = studentResult.recordset?.[0];
@@ -164,11 +164,11 @@ function createPhysicalChecklistService({
           FROM (
             SELECT event.id, event.requirement_code, event.status, event.note, event.is_applicable,
               event.originals_received, event.copies_received, event.pieces_received, event.created_at, event.recorded_by,
-              ROW_NUMBER() OVER (PARTITION BY event.requirement_code ORDER BY event.created_at DESC, event.id DESC) AS row_number
+              ROW_NUMBER() OVER (PARTITION BY event.requirement_code ORDER BY event.created_at DESC, event.id DESC) AS event_rank
             FROM student_physical_checklist_events AS event WHERE event.student_id = @studentId
           ) AS ranked
           LEFT JOIN staff_profiles AS profile ON profile.user_id = ranked.recorded_by
-          WHERE ranked.row_number = 1
+          WHERE ranked.event_rank = 1
         ) AS latest ON latest.requirement_code = definition.requirement_code
         WHERE definition.requirement_code NOT IN ('sf10_form137', 'long_brown_envelopes')
         ORDER BY definition.display_order`)
@@ -319,11 +319,11 @@ function createPhysicalChecklistService({
         SELECT ranked.student_id, ranked.grade_level FROM (
           SELECT enrollment.student_id, section.grade_level,
             ROW_NUMBER() OVER (PARTITION BY enrollment.student_id
-              ORDER BY term.is_current DESC, term.id DESC, enrollment.id DESC) AS row_number
+              ORDER BY term.is_current DESC, term.id DESC, enrollment.id DESC) AS section_rank
           FROM enrollments AS enrollment
           INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
           LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
-        ) AS ranked WHERE ranked.row_number = 1
+        ) AS ranked WHERE ranked.section_rank = 1
       ) AS current_section ON current_section.student_id = student.id
       CROSS JOIN physical_requirement_definitions AS definition
       LEFT JOIN latest ON latest.student_id = student.id AND latest.requirement_code = definition.requirement_code AND latest.event_rank = 1

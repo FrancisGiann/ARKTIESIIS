@@ -711,7 +711,8 @@ label { font-size: 0.84rem; }
 .site-footer { width: min(calc(100% - 3rem), 92rem); padding: 1rem 0 1.25rem; font-size: 0.76rem; }
 
 /* Guided registrar intake and fee confirmation */
-.registrar-intake, .annual-fee-review, .annual-confirmation-result { max-width: 68rem; }
+.registrar-intake, .annual-confirmation-result { max-width: 68rem; }
+.annual-fee-review { max-width: none; }
 .intake-steps { display: flex; align-items: stretch; gap: 0.3rem; padding: 0; margin: 0 0 1rem; border-bottom: 1px solid var(--line-strong); list-style: none; }
 .intake-steps li { flex: 1 1 0; min-width: 0; padding: 0.65rem 0.7rem 0.75rem; color: var(--muted); border-bottom: 3px solid transparent; font-size: 0.83rem; font-weight: 650; text-align: center; }
 .intake-steps li[aria-current="step"] { color: var(--accent); border-bottom-color: var(--accent); }
@@ -746,7 +747,7 @@ label { font-size: 0.84rem; }
 .intake-progress ol { display: flex; gap: 0.25rem; padding: 0; margin: 0; border-bottom: 1px solid var(--line-strong); list-style: none; }
 .intake-progress li { flex: 1 1 0; min-width: 0; padding: 0.65rem 0.5rem 0.75rem; color: var(--muted); font-size: 0.82rem; font-weight: 650; text-align: center; }
 .intake-progress li[aria-current="step"] { color: var(--accent); border-bottom: 3px solid var(--accent); }
-.fee-optional-choice { display: grid; justify-items: start; gap: 0.65rem; margin: 0 0 1rem; }
+.fee-optional-choice { display: grid; justify-items: stretch; gap: 0.65rem; width: 100%; margin: 0 0 1rem; }
 .fee-optional-choice fieldset { display: grid; width: 100%; gap: 0.4rem; padding: 0; margin: 0; border: 0; }
 .fee-optional-choice legend { margin-bottom: 0.35rem; font-weight: 700; }
 .fee-optional-choice__row { padding: 0.55rem 0; border-top: 1px solid var(--line); }
@@ -755,9 +756,18 @@ label { font-size: 0.84rem; }
 .fee-total-line { display: grid; gap: 0.1rem; justify-items: end; text-align: right; white-space: nowrap; }
 .fee-total-line span, .fee-term-summary span { color: var(--muted); font-size: 0.78rem; font-weight: 650; }
 .fee-total-line strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.fee-review-heading { align-items: flex-start; }
+.fee-review-heading .fee-total-line { margin: 0.2rem 0 0; }
 .fee-term-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.55rem; padding-top: 0.7rem; border-top: 1px solid var(--line); }
 .fee-term-summary p { display: grid; gap: 0.1rem; margin: 0; }
 .fee-term-summary strong { font-variant-numeric: tabular-nums; }
+.fee-approved-tuition { display: grid; gap: 0.45rem; padding-top: 0.8rem; margin-top: 0.15rem; border-top: 1px solid var(--line); }
+.fee-approved-tuition h3 { margin: 0 0 0.2rem; font-size: 1rem; }
+.fee-approved-tuition p { margin: 0; }
+.fee-review-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; padding-top: 0.85rem; margin-top: 0.2rem; border-top: 1px solid var(--line); }
+.fee-breakdown { margin-top: 0.85rem; }
+.fee-breakdown > summary { width: fit-content; color: var(--accent); cursor: pointer; font-weight: 700; }
+.fee-breakdown > .table-scroll { margin-top: 0.65rem; }
 .fee-confirmation { border-color: var(--line-strong); }
 .fee-confirmation__form { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; }
 .enrollment-summary-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.8rem 1.4rem; margin: 0 0 1.2rem; }
@@ -1453,7 +1463,8 @@ label { font-size: 0.84rem; }
 }
 
 @media (max-width: 760px) {
-  .registrar-intake, .annual-fee-review, .annual-confirmation-result { width: min(calc(100% - 1.5rem), 68rem); }
+  .registrar-intake, .annual-confirmation-result { width: min(calc(100% - 1.5rem), 68rem); }
+  .annual-fee-review { width: min(calc(100% - 1.5rem), 77rem); }
   .annual-intake-form { padding: 0.9rem; }
   .intake-steps { gap: 0; }
   .intake-steps li { padding-inline: 0.25rem; font-size: 0.72rem; overflow-wrap: anywhere; }
@@ -1468,11 +1479,11 @@ label { font-size: 0.84rem; }
   .paper-checklist-row__fields, .paper-counts { grid-template-columns: minmax(0, 1fr); }
   .paper-note { grid-column: auto; }
   .enrollment-summary-list { grid-template-columns: minmax(0, 1fr); }
-  .fee-confirmation__form { align-items: stretch; flex-direction: column; }
-  .fee-confirmation__form .button { width: 100%; }
+  .fee-review-actions, .fee-confirmation__form { align-items: stretch; flex-direction: column; }
+  .fee-review-actions .button, .fee-confirmation__form .button { width: 100%; }
   .finance-schedule-create-body .admin-section__heading [data-add-finance-line] { flex: 0 0 auto; width: auto; white-space: nowrap; }
   .annual-fee-review .admin-section__heading { flex-direction: column; align-items: stretch; gap: 0.4rem; }
-  .fee-total-line { justify-items: start; text-align: left; }
+  .fee-review-heading .fee-total-line { justify-items: start; text-align: left; }
   .class-context-panel, .schedule-create-disclosure { padding: 0.9rem; }
   .student-grade-filters { grid-template-columns: minmax(0, 1fr); }
   .student-grade-filters .button { justify-self: start; }

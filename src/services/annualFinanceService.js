@@ -218,6 +218,15 @@ function assessmentTermTotals(lines, entryTermNumber) {
   });
 }
 
+function tuitionTermTotals(lines, entryTermNumber) {
+  return [1, 2, 3].filter((termNumber) => termNumber >= Number(entryTermNumber || 1)).map((termNumber) => {
+    const cents = lines.filter((line) => Number(line.termNumber) === termNumber
+      && String(line.category || '').toLowerCase() === 'tuition')
+      .reduce((sum, line) => sum + parseMoneyCents(String(line.amount || '0.00'), { allowZero: true }), 0n);
+    return { termNumber, amount: formatMoneyCents(cents) };
+  });
+}
+
 function canonicalAllocations(allocations) {
   return allocations.map((allocation) => ({
     chargeId: allocation.chargeId,
@@ -462,6 +471,7 @@ function createAnnualFinanceService({
         voucherCode: posted.voucher_code_snapshot, assessmentId: Number(posted.id), existingAssessment: true,
         optionalLineIds: [...selected], lines, total: formatMoneyCents(totalCents), totalCents,
         optionalLines: [], termTotals: assessmentTermTotals(lines, parent.entry_term_number),
+        tuitionTermTotals: tuitionTermTotals(lines, parent.entry_term_number),
         tuitionBreakdown: tuitionInstallmentBreakdown(lines, parent.entry_term_number),
         snapshotFingerprint: snapshot.fingerprint };
     }
@@ -532,6 +542,7 @@ function createAnnualFinanceService({
     return { parent, scheduleId: schedule.id, scheduleVersion: schedule.version_no, voucherCode: parent.voucher_code,
       assessmentId: null, existingAssessment: false, optionalLineIds: [...selectedOptionalLines], optionalLines, lines,
       total: formatMoneyCents(totalCents), totalCents, termTotals: assessmentTermTotals(lines, entryTermNumber),
+      tuitionTermTotals: tuitionTermTotals(lines, entryTermNumber),
       tuitionBreakdown: tuitionInstallmentBreakdown(lines, entryTermNumber),
       snapshotFingerprint: snapshot.fingerprint };
   }
@@ -2324,5 +2335,6 @@ module.exports = {
   cleanText,
   canonicalAssessmentSnapshot,
   applyExemptionPreview,
-  assessmentTermTotals
+  assessmentTermTotals,
+  tuitionTermTotals
 };

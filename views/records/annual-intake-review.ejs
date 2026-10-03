@@ -100,7 +100,7 @@
         <div class="admin-section__heading"><div><h2 id="review-confirm-title">Enrollment already confirmed</h2><p>This annual enrollment has a registrar confirmation on record.</p></div></div>
         <a class="button button--secondary" href="/registrar/intake/<%= annualId %>/manage">Open student record</a>
       <% } else { %>
-        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Finalize enrollment</h2><p>Confirming saves the reviewed assessment and activates the entry term. Finance records payments separately.</p></div></div>
+        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Finalize enrollment</h2><p>Confirming saves the voucher-based assessment and activates the entry term. Finance manages approved schedules and records payments.</p></div></div>
         <form method="post" action="/registrar/intake/<%= annualId %>/confirm" class="fee-confirmation__form">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <input type="hidden" name="idempotencyKey" value="<%= values.idempotencyKey %>">
