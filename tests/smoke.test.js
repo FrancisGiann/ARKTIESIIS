@@ -209,22 +209,19 @@ test('home page renders with Helmet default content security policy', async () =
     assert.match(html, /ARKTIESIIS/);
     assert.match(html, /src="\/images\/arktiesiis-campus-building-hero\.png"/);
     assert.match(html, /Street view of the Ark Technological Institute Education System Incorporated building at Lucena Branch/);
-    assert.match(html, /aria-label="Page sections"/);
-    for (const section of ['home-overview', 'home-features', 'home-audiences', 'home-help']) {
+    assert.match(html, /src="\/images\/arktiesiis-school-seal\.png"/);
+    for (const section of ['home-overview', 'home-school-day', 'home-documents', 'home-access']) {
       assert.match(html, new RegExp(`id="${section}"`));
-      assert.match(html, new RegExp(`href="#${section}"`));
     }
-    assert.match(html, /Student records and enrollment/);
-    assert.match(html, /Schedules and grades/);
-    assert.match(html, /Document review/);
-    assert.match(html, /Finance workflows/);
-    for (const role of ['Registrar', 'Teacher', 'Finance', 'Database administrator']) {
-      assert.match(html, new RegExp(`<dt>${role}<\/dt>`));
-    }
-    assert.match(html, /email address and password linked to your school account/);
-    assert.match(html, /Ask school staff if you have not received an account/);
-    assert.match(html, /<details class="home-faq-item">/);
-    assert.match(html, /Authorized staff inspect submissions and decide/);
+    assert.match(html, /Welcome to ARKTIESIIS, Lucena Branch\./);
+    assert.match(html, /Keep the school day in view\./);
+    assert.match(html, /Schedules.*Enrollment.*Approved grades/);
+    assert.match(html, /Keep school requirements moving with clear next steps\./);
+    assert.match(html, /authorized staff inspect documents and make every acceptance decision/);
+    assert.match(html, /Connected to school life at ARKTIESIIS\./);
+    assert.match(html, /school-issued account/);
+    assert.match(html, /recovery option on the sign-in page/);
+    assert.doesNotMatch(html, /Who it.s for|Database administrator/);
     assert.match(html, /href="\/login"/);
     assert.match(response.headers.get('content-security-policy'), /default-src 'self'/);
     const buildingImage = await fetch(`${baseUrl}/images/arktiesiis-campus-building-hero.png`);

@@ -2,7 +2,7 @@
 
 ## Direction
 
-The shipped interface follows a calm school-app direction. Staff pages are task-oriented workspaces built around searchable records, enrollment, document review, and grade approval. Student pages make the current term and today's classes easy to find, followed by the student's own grades, balance, and document status. The public home introduces the system, explains its role-based audiences and capabilities, and guides school users to sign-in and help.
+The shipped interface follows a calm school-app direction. Staff pages are task-oriented workspaces built around searchable records, enrollment, document review, and grade approval. Student pages make the current term and today's classes easy to find, followed by the student's own grades, balance, and document status. The public home foregrounds the Lucena campus and school identity, introduces portal benefits in community terms, and provides a concise path to sign-in and account help.
 
 The interface uses near-white surfaces, deep readable ink, cool rules, and the school's restrained crimson for primary actions, focus, and selected destinations. A single system sans-serif family keeps tables, forms, headings, and controls familiar. Panels are compact; headings are direct; action lists and record rows carry the content without decorative dashboards.
 
@@ -42,7 +42,7 @@ The interface uses near-white surfaces, deep readable ink, cool rules, and the s
 - Native disclosure controls handle mobile navigation and progressive details. Password-match, file-preview, and submitting feedback keep their existing behavior.
 - Empty states describe the next useful action. Dashboard counts describe saved enrollment or finance workflow states and link to relevant work where a matching filtered view exists; generic role-dashboard KPI strips are omitted.
 - The public entry page, sign-in flow, and all role workspaces share the same light surfaces, readable ink, restrained school crimson, visible focus, and supplied seal. Role-specific task order and server-side access remain intact.
-- The public entry page leads with a direct sign-in action beside the campus image, then gives anchor navigation to system capabilities, audience roles, and getting-started help. Its editorial feature list, student/staff role guide, native FAQ, and closing sign-in action use the established near-white and school-crimson palette. Sign-in keeps status messages and the applicable development, demo, or email-verification instruction together with the credential form. Student quick links follow today's classes.
+- The public entry page opens with a full-width Lucena campus photograph and an overlaid welcome panel with school identity and direct sign-in. Distinct school-day and document-status moments lead to a crimson school-community close with brief account guidance. The page uses the near-white and restrained school-crimson palette without turning into a role directory or procedural guide. Sign-in keeps status messages and the applicable development, demo, or email-verification instruction together with the credential form. Student quick links follow today's classes.
 - Reduced-motion preferences are respected. The interface does not use page-load choreography or decorative motion.
 
 ## Responsive behavior
@@ -52,7 +52,7 @@ The interface uses near-white surfaces, deep readable ink, cool rules, and the s
 - At 768px, multi-column forms, student panels, schedules, and review layouts stack.
 - At 390px and 320px, header identity wraps, the menu remains operable, tables reflow or scroll in their labeled region, and the page has no horizontal layout overflow.
 - Synthetic browser review covered public home/sign-in, primary pages for all five roles, and the registrar records, setup, student, documents, and intake flows at 1366px, 1440px, 390px, and 320px. The shared student-record tabs wrap and remain visible at both phone widths; no page-level horizontal overflow or console errors were observed. A synthetic PDF preview endpoint and its desktop/mobile iframe layout were exercised, but the viewer area rendered black, so readable document contents were not verified. Browser screenshots were inline and could not be exported by the available harness.
-- Landing-page verification checked all section anchors, FAQ expansion with Enter and Space, the sign-in path and return-to-home link, and the responsive campus-image crop. The image measured about 541 × 381px at 1440px viewport width, 382px tall at 1366px, 250px tall at 390px, and 201px tall at 320px; no descendant extended beyond the page viewport.
+- Landing-page smoke checks cover school identity, the campus image and supplied seal, portal content, staff-led document decisions, account guidance, and direct sign-in. Final browser review at 1440px, 1366px, 390px, and 320px confirmed the page stays within the document width, the campus image leads on desktop and mobile, and the portal anchor, sign-in, and return-home paths work without browser errors or warnings.
 
 ## Accessibility and identity
 
