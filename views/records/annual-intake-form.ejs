@@ -4,14 +4,15 @@
   <a class="context-back" href="/registrar/intake">Back to annual enrollment</a>
   <header class="dashboard-heading">
     <div><h1>Enroll a student</h1>
-      <p>Enter the student, choose the annual section, record any papers received, then review the configured fees.</p></div>
+      <p>Enter the student and annual placement, record the documents received, then review fees and details before confirming.</p></div>
   </header>
   <% if (error) { %><p class="form-alert" role="alert" tabindex="-1" data-wizard-error><%= error %></p><% } %>
   <ol class="intake-steps" aria-label="Enrollment steps">
-    <li data-step-indicator="1" aria-label="Step 1 of 4: Student"><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li>
-    <li data-step-indicator="2" aria-label="Step 2 of 4: Enrollment"><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li>
-    <li data-step-indicator="3" aria-label="Step 3 of 4: Documents received"><span class="intake-step-label--full">Documents received</span><span class="intake-step-label--short">Documents</span></li>
-    <li data-step-indicator="4" aria-label="Step 4 of 4: Fees and confirmation"><span class="intake-step-label--full">Fees and confirmation</span><span class="intake-step-label--short">Fees</span></li>
+    <li data-step-indicator="1" aria-label="Step 1 of 5: Student"><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li>
+    <li data-step-indicator="2" aria-label="Step 2 of 5: Enrollment"><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li>
+    <li data-step-indicator="3" aria-label="Step 3 of 5: Documents received"><span class="intake-step-label--full">Documents received</span><span class="intake-step-label--short">Papers</span></li>
+    <li data-step-indicator="4" aria-label="Step 4 of 5: Fees"><span class="intake-step-label--full">Fees</span><span class="intake-step-label--short">Fees</span></li>
+    <li data-step-indicator="5" aria-label="Step 5 of 5: Review details"><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li>
   </ol>
   <form class="form-stack admin-form annual-intake-form" method="post" action="/registrar/intake"
     data-intake-wizard data-profile-validation data-active-step="<%= activeStep || 1 %>" data-submitting-message="Saving the student and paper updates. Please wait.">

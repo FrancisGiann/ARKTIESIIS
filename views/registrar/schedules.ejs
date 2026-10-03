@@ -34,7 +34,7 @@
   </section>
 
   <section class="schedule-controls" aria-label="Selected class schedule">
-    <% if (!assignments.length) { %><p class="empty-state">No active teacher assignments match this context. Create an assignment before setting class times.</p><% } %>
+    <% if (!assignments.length) { %><p class="empty-state">No active teacher assignments match this context. <a class="table-action" href="/registrar/records/teacher-assignments?termId=<%= academicTermId || '' %><% if (selectedSectionId) { %>&amp;sectionId=<%= selectedSectionId %><% } %>#create-teacher-assignment-title">Create a teacher assignment</a> before setting class times.</p><% } %>
     <details class="schedule-create-disclosure" <%= showCreate || error ? 'open' : '' %>>
       <summary class="schedule-create-summary" id="schedule-create-title">Add a class time</summary>
       <form class="schedule-create-form" method="post" action="/registrar/schedules" aria-labelledby="schedule-create-title" id="schedule-create-form">

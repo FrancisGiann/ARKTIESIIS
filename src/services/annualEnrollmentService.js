@@ -323,9 +323,12 @@ function createAnnualEnrollmentService({
           annual.vms_status, annual.vms_remarks, annual.acquaintance_waiver_status, annual.acquaintance_party,
           annual.educational_tour_status, annual.internal_agreement_remarks, annual.modules_claimed_date,
           annual.student_id_claimed_date, annual.uniform_claimed_date, annual.pe_uniform_claimed_date,
-          student.first_name, student.middle_name, student.last_name, student.suffix, student.status AS student_status,
+          student.first_name, student.middle_name, student.last_name, student.suffix, student.birth_date,
+          student.sex, student.address, student.phone, student.status AS student_status,
+          student_account.email AS student_email,
           confirmation.id AS registrar_confirmation_id
         FROM annual_enrollments AS annual INNER JOIN students AS student ON student.id = annual.student_id
+        LEFT JOIN users AS student_account ON student_account.id = student.user_id
         LEFT JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = annual.id
         WHERE annual.id = @annualEnrollmentId`);
     const parent = parentResult.recordset?.[0];
@@ -722,8 +725,9 @@ function createAnnualEnrollmentService({
           FROM sections AS section
           INNER JOIN academic_terms AS term ON term.id = section.academic_term_id
           INNER JOIN school_year_term_order AS configured
-            ON configured.academic_term_id = term.id AND configured.school_year = term.school_year
-          WHERE section.id IN (@section1Id, @section2Id, @section3Id)
+            ON configured.academic_term_id = term.id AND configured.school_year = @schoolYear
+          WHERE (section.id IN (@section1Id, @section2Id, @section3Id)
+              AND term.school_year = @schoolYear)
             OR (term.school_year = @schoolYear AND section.grade_level = @gradeLevel
               AND configured.term_number >= @entryTermNumber) FOR UPDATE`);
       const sections = selectedSectionsResult.recordset || [];
@@ -764,7 +768,7 @@ function createAnnualEnrollmentService({
               FROM sections AS section
               INNER JOIN academic_terms AS term ON term.id = section.academic_term_id
               INNER JOIN school_year_term_order AS configured
-                ON configured.academic_term_id = term.id AND configured.school_year = term.school_year
+                ON configured.academic_term_id = term.id AND configured.school_year = @schoolYear
               WHERE term.school_year = @schoolYear AND section.grade_level = @gradeLevel
                 AND configured.term_number = @termNumber AND section.name = @sectionName
                 AND ((section.cluster = @cluster) OR (section.cluster IS NULL AND @cluster IS NULL))

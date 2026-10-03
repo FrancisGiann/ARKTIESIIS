@@ -4,7 +4,9 @@ const { Request, Transaction, isDuplicateKeyError } = require('../src/config/dat
 
 test('request supports typed and mssql-style two-argument input with prepared binding', async () => {
   let execution;
+  const sessionStatements = [];
   const connection = {
+    async query(statement) { sessionStatements.push(statement); },
     async execute(statement, values) {
       execution = { statement, values };
       return [{ affectedRows: 1 }, []];
@@ -18,7 +20,63 @@ test('request supports typed and mssql-style two-argument input with prepared bi
     .query('SELECT @first AS first, @second AS second');
 
   assert.deepEqual(execution, { statement: 'SELECT ? AS first, ? AS second', values: [17, 'bound'] });
+  assert.deepEqual(sessionStatements, ['SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci']);
   assert.equal(result.affectedRows, 1);
+});
+
+test('each acquired pooled connection initializes its MariaDB charset before prepared statements', async () => {
+  const state = { queries: [], executions: 0, releases: 0 };
+  const connection = {
+    async query(statement) { state.queries.push(statement); },
+    async execute() { state.executions += 1; return [[{ ok: 1 }], []]; },
+    release() { state.releases += 1; }
+  };
+  const source = { async getConnection() { return connection; } };
+  const request = () => new Request(null, source).input('value', 'text');
+
+  await request().query('SELECT @value');
+  await request().query('SELECT @value');
+
+  assert.deepEqual(state.queries, ['SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci']);
+  assert.equal(state.executions, 2);
+  assert.equal(state.releases, 2);
+});
+
+test('pooled wrappers sharing one physical session initialize it only once', async () => {
+  const state = { queries: 0, executions: 0, releases: 0 };
+  const physical = {
+    async query() { state.queries += 1; },
+    async execute() { state.executions += 1; return [[{ ok: 1 }], []]; }
+  };
+  const source = {
+    async getConnection() {
+      return {
+        connection: physical,
+        query: physical.query.bind(physical),
+        execute: physical.execute.bind(physical),
+        release() { state.releases += 1; }
+      };
+    }
+  };
+
+  await new Request(null, source).query('SELECT 1');
+  await new Request(null, source).query('SELECT 1');
+
+  assert.deepEqual(state, { queries: 1, executions: 2, releases: 2 });
+});
+
+test('a connection is discarded if charset initialization fails', async () => {
+  const state = { releases: 0, destroys: 0 };
+  const connection = {
+    async query() { throw new Error('session initialization failed'); },
+    async execute() { throw new Error('must not execute SQL'); },
+    release() { state.releases += 1; },
+    destroy() { state.destroys += 1; }
+  };
+  const request = new Request(null, { async getConnection() { return connection; } });
+
+  await assert.rejects(request.query('SELECT 1'), /session initialization failed/);
+  assert.deepEqual(state, { releases: 0, destroys: 1 });
 });
 
 test('MariaDB duplicate-key errors are recognized from driver code or errno', () => {
@@ -63,4 +121,32 @@ test('failed rollback destroys rather than releasing a possibly open transaction
   assert.deepEqual(state, { rollback: 1, release: 0, destroy: 1 });
   assert.equal(transaction.active, false);
   assert.equal(transaction.connection, null);
+});
+
+test('transaction initializes charset before starting and discards on initialization failure', async () => {
+  const statements = [];
+  const connection = {
+    async query(statement) { statements.push(statement); },
+    async beginTransaction() { statements.push('BEGIN'); },
+    async rollback() { statements.push('ROLLBACK'); },
+    release() {},
+    destroy() { statements.push('DESTROY'); }
+  };
+  const transaction = new Transaction({ source: { async getConnection() { return connection; } } });
+  await transaction.begin();
+  assert.deepEqual(statements.slice(0, 3), [
+    'SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci', 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ', 'BEGIN'
+  ]);
+  await transaction.rollback();
+
+  const failedStatements = [];
+  const failedConnection = {
+    async query() { throw new Error('charset setup failed'); },
+    async rollback() { failedStatements.push('ROLLBACK'); },
+    release() { failedStatements.push('RELEASE'); },
+    destroy() { failedStatements.push('DESTROY'); }
+  };
+  const failedTransaction = new Transaction({ source: { async getConnection() { return failedConnection; } } });
+  await assert.rejects(failedTransaction.begin(), /charset setup failed/);
+  assert.deepEqual(failedStatements, ['DESTROY']);
 });

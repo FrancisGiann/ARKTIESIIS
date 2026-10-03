@@ -78,12 +78,16 @@ function createAdminRouter({ getPool, sql, adminService } = {}) {
   const router = express.Router();
   const service = adminService || createAdminService({ getPool, sql });
 
-  const renderNewUser = (req, res, { error = null, status = 200, values = {} } = {}) => res.status(status).render('admin/user-new', {
-    title: 'Create User Account',
-    csrfToken: ensureCsrfToken(req),
-    error,
-    values: { role: 'registrar', ...values }
-  });
+  const renderNewUser = (req, res, { error = null, status = 200, values = {} } = {}) => {
+    const requestedRole = ['database_admin', 'registrar', 'teacher', 'finance'].includes(req.query?.role)
+      ? req.query.role : 'registrar';
+    return res.status(status).render('admin/user-new', {
+      title: 'Create User Account',
+      csrfToken: ensureCsrfToken(req),
+      error,
+      values: { role: requestedRole, ...values }
+    });
+  };
 
   router.get('/', async (req, res) => {
     if (req.query.search !== undefined) {

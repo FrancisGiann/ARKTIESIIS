@@ -7,13 +7,17 @@
       <h1>Subject catalog</h1>
       <p>Maintain the subjects available for student enrollments.</p>
     </div>
+    <nav class="admin-heading-actions" aria-label="Academic setup tasks">
+      <a class="button button--secondary" href="/registrar/records?view=setup">Academic setup</a>
+      <a class="button button--secondary" href="/registrar/records/teacher-assignments">Teacher assignments</a>
+    </nav>
   </section>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
   <% if (canManageSubjects) { %>
     <section class="admin-form-section records-form-section" aria-labelledby="new-subject-title">
-      <details class="subject-create-details" <%= error ? 'open' : '' %>>
+      <details class="subject-create-details" <%= showCreateForm ? 'open' : '' %>>
         <summary id="new-subject-title">Add subject</summary>
         <p>Subject codes are stored in uppercase. Units are optional.</p>
         <form class="form-stack admin-form" method="post" action="/registrar/records/subjects">

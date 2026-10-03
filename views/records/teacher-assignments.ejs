@@ -1,7 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page teacher-assignment-page" id="main-content">
   <a class="context-back" href="/registrar">Back to registrar workspace</a>
-  <section class="dashboard-heading"><div><h1>Teacher assignments</h1><p>Choose a term and section once, then manage the active teacher and class schedules in that context.</p></div></section>
+  <section class="dashboard-heading"><div><h1>Teacher assignments</h1><p>Choose a term, section, teacher, and subject to connect a class. Class times are added after assignment.</p></div><nav class="admin-heading-actions" aria-label="Academic setup tasks"><a class="button button--secondary" href="/registrar/records?view=setup">Academic setup</a><a class="button button--secondary" href="/registrar/records/subjects?openForm=1#subject-code">Add subject</a></nav></section>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
@@ -24,25 +24,26 @@
     </form>
     <% if (sectionFilterNotice) { %><p class="form-alert" role="status"><%= sectionFilterNotice %></p><% } %>
     <% const selectedTerm = terms.find((term) => Number(term.id) === Number(selectedTermId)); %>
-    <% if (selectedTerm) { %><p class="class-context-summary">Showing <strong><%= selectedTerm.school_year %> · <%= selectedTerm.term %></strong><% if (selectedSectionId) { const selectedSection = sections.find((section) => Number(section.id) === Number(selectedSectionId)); %> · <strong><%= formatStudentPlacement(selectedSection.grade_level, selectedSection.name) %></strong><% } else { %> · all sections<% } %></p><% } else { %><p class="empty-state">Add an academic term before creating teacher assignments.</p><% } %>
+    <% if (selectedTerm) { %><p class="class-context-summary">Showing <strong><%= selectedTerm.school_year %> · <%= selectedTerm.term %></strong><% if (selectedSectionId) { const selectedSection = sections.find((section) => Number(section.id) === Number(selectedSectionId)); %> · <strong><%= formatStudentPlacement(selectedSection.grade_level, selectedSection.name) %></strong><% } else { %> · all sections<% } %></p><% } else { %><p class="empty-state">Add an academic term before creating teacher assignments. <a class="table-action" href="/registrar/records?view=setup&amp;openForm=term#school-year">Add an academic term</a></p><% } %>
   </section>
 
   <section class="admin-section assignment-create-panel" aria-labelledby="create-teacher-assignment-title">
     <div class="admin-section__heading"><div><h2 id="create-teacher-assignment-title">Assign a teacher</h2><p>Only active teacher accounts can receive assignments. Revoke an active assignment before transferring a class context.</p></div></div>
-    <% if (!selectedSectionId) { %>
-      <p class="empty-state">Choose a specific section above to assign a teacher and subject.</p>
-    <% } else if (!teachers.length || !subjects.length) { %>
-      <p class="empty-state">Add an active teacher account and subject before creating assignments.</p>
+    <% if (!selectedTerm) { %>
+      <p class="empty-state">Choose or create an academic term before assigning classes.</p>
+    <% } else if (!sections.length) { %>
+      <p class="empty-state">There are no sections in <strong><%= selectedTerm.school_year %> · <%= selectedTerm.term %></strong>. <a class="table-action" href="/registrar/records?view=setup&amp;openForm=section&amp;termId=<%= selectedTerm.id %>#section-name">Add a section for this term</a></p>
+    <% } else if (!teachers.length) { %>
+      <p class="empty-state">An active teacher account is needed before a class can be assigned.<% if (currentUser.role === 'database_admin') { %> <a class="table-action" href="/admin/users/new?category=staff&amp;role=teacher">Create a teacher account</a><% } else { %> Ask a database administrator to create the account.<% } %></p>
+    <% } else if (!subjects.length) { %>
+      <p class="empty-state">Add a subject to the catalog before assigning a class. <a class="table-action" href="/registrar/records/subjects?openForm=1#subject-code">Add a subject</a></p>
     <% } else { %>
-      <% const currentSection = sections.find((section) => Number(section.id) === Number(selectedSectionId)); %>
       <form class="form-stack records-compact-form" method="post" action="/registrar/records/teacher-assignments">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <input type="hidden" name="academicTermId" value="<%= selectedTermId %>">
-        <input type="hidden" name="sectionId" value="<%= selectedSectionId %>">
         <input type="hidden" name="filterTermId" value="<%= selectedTermId %>">
-        <input type="hidden" name="filterSectionId" value="<%= selectedSectionId %>">
-        <p class="class-context-summary">Assigning in <strong><%= selectedTerm.school_year %> · <%= selectedTerm.term %></strong> · <strong><%= formatStudentPlacement(currentSection.grade_level, currentSection.name) %></strong>.</p>
         <div class="admin-form-grid">
+          <div class="field"><label for="assignment-section">Section</label><select id="assignment-section" name="sectionId" required><option value="">Choose section</option><% for (const section of sections) { %><option value="<%= section.id %>" <%= String(values.sectionId || selectedSectionId || '') === String(section.id) ? 'selected' : '' %>><%= formatStudentPlacement(section.grade_level, section.name) %></option><% } %></select></div>
           <div class="field"><label for="teacher-id">Teacher</label><select id="teacher-id" name="teacherId" required><option value="">Choose teacher</option><% for (const teacher of teachers) { %><option value="<%= teacher.id %>" <%= String(values.teacherId || '') === String(teacher.id) ? 'selected' : '' %>><%= teacher.last_name %>, <%= teacher.first_name %> · <%= teacher.email %></option><% } %></select></div>
           <div class="field"><label for="subject-id">Subject</label><select id="subject-id" name="subjectId" required><option value="">Choose subject</option><% for (const subject of subjects) { %><option value="<%= subject.id %>" <%= String(values.subjectId || '') === String(subject.id) ? 'selected' : '' %>><%= subject.subject_code %> · <%= subject.subject_name %></option><% } %></select></div>
         </div>

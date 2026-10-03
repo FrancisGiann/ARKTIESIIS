@@ -1,0 +1,120 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page admin-page records-page annual-intake-review" id="main-content">
+  <a class="context-back" href="/registrar/intake/<%= annualId %>/fees<% if (preview) { %>?<%= new URLSearchParams([['idempotencyKey', values.idempotencyKey], ...preview.optionalLineIds.map((id) => ['optionalLineIds', String(id)])]).toString() %><% } %>">Back to fees</a>
+  <header class="dashboard-heading">
+    <div>
+      <h1>Review enrollment details</h1>
+      <p>Check the saved student, placement, paper checklist, and fee details before finalizing enrollment.</p>
+    </div>
+  </header>
+  <nav class="intake-progress" aria-label="Enrollment steps">
+    <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Documents received</span><span class="intake-step-label--short">Papers</span></li><li><span class="intake-step-label--full">Fees</span><span class="intake-step-label--short">Fees</span></li><li aria-current="step"><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li></ol>
+  </nav>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <% if (!record || !checklist || !preview) { %>
+    <section class="admin-section"><p>The final review could not be loaded. Return to fees to try again.</p><a class="button button--secondary" href="/registrar/intake/<%= annualId %>/fees">Return to fees</a></section>
+  <% } else { %>
+    <% const parent = record.parent; const birthDate = parent.birth_date ? (parent.birth_date instanceof Date ? parent.birth_date.toISOString().slice(0, 10) : String(parent.birth_date).slice(0, 10)) : 'Not recorded'; const startDate = parent.enrollment_start_date ? (parent.enrollment_start_date instanceof Date ? parent.enrollment_start_date.toISOString().slice(0, 10) : String(parent.enrollment_start_date).slice(0, 10)) : 'Not recorded'; %>
+    <% const statusLabel = (value) => {
+      const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+      const labels = {
+        pending: 'Pending', enrolled: 'Enrolled', cancelled: 'Cancelled', dropped: 'Dropped', transferred: 'Transferred',
+        legacy: 'Legacy', pending_payment: 'Pending payment', not_applicable: 'Not applicable', applicable: 'Applicable',
+        received: 'Received', verified: 'Verified', correction: 'Correction requested', rejected: 'Rejected'
+      };
+      if (!normalized) return 'Not recorded';
+      return labels[normalized] || normalized.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+    }; %>
+    <section class="admin-section" aria-labelledby="review-student-title">
+      <div class="admin-section__heading"><div><h2 id="review-student-title">Student profile</h2><p>From the saved student record</p></div></div>
+      <dl class="enrollment-summary-list">
+        <div><dt>Student</dt><dd><%= [parent.first_name, parent.middle_name, parent.last_name, parent.suffix].filter(Boolean).join(' ') %></dd></div>
+        <div><dt>Student number</dt><dd><%= parent.student_no || 'Not recorded' %></dd></div>
+        <div><dt>LRN</dt><dd><%= parent.lrn || 'Not recorded' %></dd></div>
+        <div><dt>Date of birth</dt><dd><%= birthDate %></dd></div>
+        <div><dt>Gender</dt><dd><%= parent.sex || 'Not recorded' %></dd></div>
+        <div><dt>Email</dt><dd><%= parent.student_email || 'Not recorded' %></dd></div>
+        <div><dt>Phone</dt><dd><%= parent.phone || 'Not recorded' %></dd></div>
+        <div><dt>Address</dt><dd><%= parent.address || 'Not recorded' %></dd></div>
+      </dl>
+    </section>
+
+    <section class="admin-section" aria-labelledby="review-enrollment-title">
+      <div class="admin-section__heading"><div><h2 id="review-enrollment-title">Annual enrollment</h2><p>School year <%= parent.school_year %> · <%= parent.grade_level %></p></div></div>
+      <dl class="enrollment-summary-list">
+        <div><dt>Intake type</dt><dd><%= ({ new: 'New student', standard: 'Standard intake', returning: 'Returning student', transferee: 'Transferee' })[parent.intake_kind] || 'Not recorded' %></dd></div>
+        <div><dt>Voucher type</dt><dd><%= parent.voucher_code || 'Not recorded' %></dd></div>
+        <div><dt>Entry term</dt><dd>Term <%= parent.entry_term_number || 'Not recorded' %></dd></div>
+        <div><dt>Enrollment start date</dt><dd><%= startDate %></dd></div>
+        <div><dt>Intake status</dt><dd><%= statusLabel(parent.intake_status) %></dd></div>
+      </dl>
+      <div class="table-scroll" tabindex="0" aria-label="Annual enrollment term placements">
+        <table class="admin-table">
+          <thead><tr><th scope="col">Term</th><th scope="col">Section</th><th scope="col">Placement</th><th scope="col">Status</th></tr></thead>
+          <tbody><% for (const term of record.terms) { const standardTermLabel = term.annual_term_number ? `Term ${term.annual_term_number}` : 'Term not recorded'; const configuredTermLabel = typeof term.term === 'string' ? term.term.trim() : ''; const termLabel = configuredTermLabel && configuredTermLabel.toLowerCase() !== standardTermLabel.toLowerCase() ? `${standardTermLabel} · ${configuredTermLabel}` : standardTermLabel; %><tr>
+            <th scope="row"><%= termLabel %></th>
+            <td data-label="Section"><%= term.section_name ? formatStudentPlacement(term.grade_level || parent.grade_level, term.section_name) : 'No section selected' %><% if (term.section_name && (term.cluster || term.strand || term.modality)) { %><small><%= [term.cluster && `Cluster ${term.cluster}`, term.strand && `Strand ${term.strand}`, term.modality && term.modality.replaceAll('_', ' ')].filter(Boolean).join(' · ') %></small><% } %></td>
+            <td data-label="Placement"><%= statusLabel(term.term_scope_status) %></td>
+            <td data-label="Status"><%= statusLabel(term.enrollment_status) %></td>
+          </tr><% } %></tbody>
+        </table>
+      </div>
+      <p><a class="table-action" href="/registrar/records/students/<%= parent.student_id %>/edit">Edit profile or term placements</a></p>
+    </section>
+
+    <section class="admin-section" aria-labelledby="review-papers-title">
+      <div class="admin-section__heading"><div><h2 id="review-papers-title">Paper checklist</h2><p><%= checklist.summary.completeCount %> of <%= checklist.summary.requiredCount %> applicable required items recorded as verified or not applicable.</p></div></div>
+      <div class="table-scroll" tabindex="0" aria-label="Submitted paper requirements and checklist statuses">
+        <table class="admin-table">
+          <thead><tr><th scope="col">Requirement</th><th scope="col">Status</th><th scope="col">Received</th><th scope="col">Registrar note</th></tr></thead>
+          <tbody><% for (const item of checklist.requirements) { const notApplicable = item.is_applicable === 0 || item.is_applicable === false; %><tr>
+            <th scope="row"><%= item.requirement_name %><% if (item.is_optional) { %><small>Optional</small><% } %></th>
+            <td data-label="Status"><%= statusLabel(notApplicable ? 'not_applicable' : item.status) %></td>
+            <td data-label="Received"><% if (notApplicable) { %>—<% } else { %><%= item.originals_required ? `${item.originals_received || 0} originals` : '' %><%= item.copies_required ? `${item.originals_required ? ', ' : ''}${item.copies_received || 0} photocopies` : '' %><%= item.pieces_required ? `${item.originals_required || item.copies_required ? ', ' : ''}${item.pieces_received || 0} pieces` : '' %><% if (!item.originals_required && !item.copies_required && !item.pieces_required) { %>No count required<% } %><% } %></td>
+            <td data-label="Registrar note"><%= item.note || '—' %></td>
+          </tr><% } %></tbody>
+        </table>
+      </div>
+      <p><a class="table-action" href="/documents/students/<%= parent.student_id %>#physical-checklist-title">Update paper checklist</a></p>
+    </section>
+
+    <section class="admin-section" aria-labelledby="review-fees-title">
+      <div class="admin-section__heading"><div><h2 id="review-fees-title">Fees, options, and discounts</h2><p>Schedule version <%= preview.scheduleVersion %> · Voucher <%= preview.voucherCode %><% if (preview.existingAssessment) { %> · Saved assessment<% } %></p></div><p class="fee-total-line"><span>Total payable</span><strong>₱<%= formatMoney(preview.total) %></strong></p></div>
+      <div class="table-scroll" tabindex="0" aria-label="Exact fee assessment and approved discounts">
+        <table class="admin-table fee-assessment-table">
+          <thead><tr><th scope="col">Term</th><th scope="col">Fee</th><th scope="col">Installment</th><th scope="col">Amount</th><th scope="col">Approved discount</th><th scope="col">Payable</th></tr></thead>
+          <tbody><% if (preview.lines.length) { for (const line of preview.lines) { %><tr>
+            <td data-label="Term">Term <%= line.termNumber %></td><td data-label="Fee"><%= line.lineName %><small><%= line.category.replaceAll('_', ' ') %><% if (line.isOptional) { %> · Optional<% } %></small></td>
+            <td data-label="Installment"><%= line.installment %></td><td data-label="Amount">₱<%= formatMoney(line.grossAmount) %></td>
+            <td data-label="Approved discount"><%= line.waivedAmount === '0.00' ? '—' : `₱${formatMoney(line.waivedAmount)}` %></td><td data-label="Payable"><strong>₱<%= formatMoney(line.amount) %></strong></td>
+          </tr><% } } else { %><tr><td colspan="6">No payable fee lines apply to this entry term and selection.</td></tr><% } %></tbody>
+          <tfoot><tr><th scope="row" colspan="5">Total payable</th><td data-label="Total payable"><strong>₱<%= formatMoney(preview.total) %></strong></td></tr></tfoot>
+        </table>
+      </div>
+      <% if (preview.optionalLines?.length) { %><h3>Optional charges</h3><ul class="review-summary-list"><% for (const line of preview.optionalLines) { %><li><span>Term <%= line.termNumber %> · <%= line.lineName %> · <%= line.installment %></span><strong><%= line.selected ? `Included · ₱${formatMoney(line.amount)}` : `Not selected · ₱${formatMoney(line.amount)}` %></strong></li><% } %></ul><% } %>
+      <div class="fee-term-summary" aria-label="Payable by term"><% for (const subtotal of preview.termTotals) { %><p><span>Term <%= subtotal.termNumber %></span><strong>₱<%= formatMoney(subtotal.amount) %></strong></p><% } %></div>
+    </section>
+
+    <section class="admin-section fee-confirmation" aria-labelledby="review-confirm-title">
+      <% if (confirmationComplete) { %>
+        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Enrollment already confirmed</h2><p>This annual enrollment has a registrar confirmation on record.</p></div></div>
+        <a class="button button--secondary" href="/registrar/intake/<%= annualId %>/manage">Open student record</a>
+      <% } else { %>
+        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Finalize enrollment</h2><p>Confirming saves the reviewed assessment and activates the entry term. Finance records payments separately.</p></div></div>
+        <form method="post" action="/registrar/intake/<%= annualId %>/confirm" class="fee-confirmation__form">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <input type="hidden" name="idempotencyKey" value="<%= values.idempotencyKey %>">
+          <input type="hidden" name="scheduleId" value="<%= preview.scheduleId %>">
+          <input type="hidden" name="scheduleVersion" value="<%= preview.scheduleVersion %>">
+          <input type="hidden" name="voucherCode" value="<%= preview.voucherCode %>">
+          <input type="hidden" name="assessmentId" value="<%= preview.assessmentId || '' %>">
+          <input type="hidden" name="snapshotFingerprint" value="<%= preview.snapshotFingerprint %>">
+          <% for (const lineId of preview.optionalLineIds) { %><input type="hidden" name="optionalLineIds" value="<%= lineId %>"><% } %>
+          <button class="button button--primary" type="submit">Confirm enrollment</button>
+          <a class="button button--secondary" href="/registrar/intake/<%= annualId %>/fees?<%= new URLSearchParams([['idempotencyKey', values.idempotencyKey], ...preview.optionalLineIds.map((id) => ['optionalLineIds', String(id)])]).toString() %>">Back to fees</a>
+        </form>
+      <% } %>
+    </section>
+  <% } %>
+</main>
+<%- include('../partials/foot') %>

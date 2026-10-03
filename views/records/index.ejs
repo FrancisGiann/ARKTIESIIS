@@ -22,6 +22,22 @@
     <p><strong>Current term</strong><span><% if (currentTerm) { %><%= currentTerm.school_year %> · <%= currentTerm.term %><% } else { %>No academic term is marked current.<% } %></span></p>
   </section><% } %>
 
+  <% if (view === 'setup') { %>
+    <section class="records-context-strip records-context-strip--term" aria-label="Academic setup next step">
+      <p><strong>Current term</strong><span><% if (currentTerm) { %><%= currentTerm.school_year %> · <%= currentTerm.term %><% } else { %>No academic term is marked current.<% } %></span></p>
+      <% const currentTermSections = currentTerm ? sections.filter((section) => Number(section.academic_term_id) === Number(currentTerm.id)) : []; %>
+      <% if (currentTerm && !currentTermSections.length) { %>
+        <p><strong>Next step</strong><span>No sections are set up for the current term.</span><a class="button button--primary" href="/registrar/records?view=setup&amp;openForm=section&amp;termId=<%= currentTerm.id %>#section-name">Add a section for this term</a></p>
+      <% } else if (!currentTerm) { %>
+        <p><strong>Next step</strong><span>Create an academic term before adding sections.</span><a class="button button--primary" href="/registrar/records?view=setup&amp;openForm=term#school-year">Add an academic term</a></p>
+      <% } %>
+      <nav class="admin-heading-actions" aria-label="Academic setup tasks">
+        <a class="button button--secondary" href="/registrar/records/subjects?openForm=1#subject-code">Subjects</a>
+        <a class="button button--secondary" href="/registrar/records/teacher-assignments<% if (currentTerm) { %>?termId=<%= currentTerm.id %><% } %>">Teacher assignments</a>
+      </nav>
+    </section>
+  <% } %>
+
   <% if (view !== 'setup') { %>
   <section class="admin-section records-list-panel" aria-labelledby="students-title">
     <div class="admin-section__heading">

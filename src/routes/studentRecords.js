@@ -109,6 +109,16 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         res.locals.currentPage = navigation.currentPage;
       }
       const workspace = await loadWorkspace(search, termId, page);
+      const setupTerms = workspace.terms || [];
+      const setupSections = workspace.sections || [];
+      const requestedOpenForm = ['term', 'section'].includes(req.query?.openForm) ? req.query.openForm : null;
+      const requestedSetupTermId = typeof req.query?.termId === 'string' ? req.query.termId : '';
+      const currentSetupTerm = setupTerms.find((term) => term.is_current === true || term.is_current === 1) || null;
+      const selectedSetupTerm = setupTerms.find((term) => String(term.id) === requestedSetupTermId) || currentSetupTerm;
+      const formSectionTermId = formValues.academicTermId || selectedSetupTerm?.id || '';
+      const setupNeedsSection = Boolean(selectedSetupTerm)
+        && !setupSections.some((section) => Number(section.academic_term_id) === Number(selectedSetupTerm.id));
+      const defaultOpenForm = setupTerms.length === 0 ? 'term' : setupNeedsSection ? 'section' : null;
       return res.status(status).render('records/index', {
         title: 'Student Records',
         csrfToken: ensureCsrfToken(req),
@@ -116,8 +126,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         notice,
         error,
         view,
-        openForm,
-        formValues,
+        openForm: openForm || requestedOpenForm || (view === 'setup' ? defaultOpenForm : null),
+        formValues: { ...formValues, ...(formSectionTermId ? { academicTermId: formSectionTermId } : {}) },
         ...workspace,
         students: workspace.students || [],
         terms: workspace.terms || [],

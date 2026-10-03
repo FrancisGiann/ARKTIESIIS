@@ -463,6 +463,7 @@ test('teacher assignment list keeps concise context and working status and revok
     assert.match(html, /name="sectionId"/);
     assert.match(html, /<label for="assignment-term-context">Academic term<\/label>/);
     assert.match(html, /<label for="assignment-section-context">Section<\/label>/);
+    assert.match(html, /<label for="assignment-section">Section<\/label>/);
     assert.match(html, /<label for="teacher-id">Teacher<\/label>/);
     assert.match(html, /<label for="subject-id">Subject<\/label>/);
     assert.equal((html.match(/name="termId"/g) || []).length, 1, 'assignment creation does not ask for term twice');
@@ -470,14 +471,14 @@ test('teacher assignment list keeps concise context and working status and revok
     assert.match(html, /<details/);
     assert.match(html, /\/registrar\/schedules\?termId=2&amp;sectionId=3&amp;assignmentId=20&amp;showCreate=1#schedule-create-title/);
     const createResponse = await postForm(baseUrl, '/registrar/records/teacher-assignments', cookie, {
-      _csrf: csrfFromHtml(html), academicTermId: '2', sectionId: '3', filterTermId: '2', filterSectionId: '3',
+      _csrf: csrfFromHtml(html), academicTermId: '2', sectionId: '3', filterTermId: '2',
       teacherId: '6', subjectId: '4'
     });
     assert.equal(createResponse.status, 409);
     const createErrorHtml = await createResponse.text();
     assert.match(createErrorHtml, /The selected term, section, or subject is unavailable/);
     assert.match(createErrorHtml, /name="academicTermId" value="2"/);
-    assert.match(createErrorHtml, /name="sectionId" value="3"/);
+    assert.match(createErrorHtml, /<option value="3" selected>Grade 11 · Section A<\/option>/);
     assert.match(createErrorHtml, /option value="6" selected/);
     assert.match(createErrorHtml, /option value="4" selected/);
     assert.deepEqual(assignmentContextCalls.at(-1), { termId: '2', sectionId: '3' });

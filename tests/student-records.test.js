@@ -528,12 +528,13 @@ test('finance cannot access the student master list and denied requests do not l
 test('student records workspace keeps create forms collapsed, opens failed forms with values, and groups sections by term', async () => {
   const currentTerm = { id: 2, school_year: '2026-2027', term: 'First term', is_current: true };
   const previousTerm = { id: 1, school_year: '2025-2026', term: 'Third term', is_current: false };
+  let currentTermHasSection = true;
   const studentRecordsService = {
     async listWorkspace() {
       return {
         students: [], terms: [currentTerm, previousTerm],
         sections: [
-          { id: 31, academic_term_id: 2, school_year: currentTerm.school_year, term: currentTerm.term, name: 'STEM A', grade_level: 'Grade 11' },
+          ...(currentTermHasSection ? [{ id: 31, academic_term_id: 2, school_year: currentTerm.school_year, term: currentTerm.term, name: 'STEM A', grade_level: 'Grade 11' }] : []),
           { id: 30, academic_term_id: 1, school_year: previousTerm.school_year, term: previousTerm.term, name: 'ABM B', grade_level: 'Grade 12' }
         ],
         searchTerm: '', academicTermId: null, totalStudents: 0, page: 1, pageSize: 25, totalPages: 1
@@ -556,6 +557,16 @@ test('student records workspace keeps create forms collapsed, opens failed forms
     assert.match(html, /<details class="records-create-disclosure"\s*>\s*<summary>Add section/);
     assert.match(html, /<details class="records-section-group" open>\s*<summary><strong>2026-2027 · First term/);
     assert.match(html, /<details class="records-section-group"\s*>\s*<summary><strong>2025-2026 · Third term/);
+
+    currentTermHasSection = false;
+    const emptyCurrentResponse = await fetch(`${baseUrl}/registrar/records?view=setup`, { headers: { cookie } });
+    const emptyCurrentHtml = await emptyCurrentResponse.text();
+    assert.equal(emptyCurrentResponse.status, 200);
+    assert.match(emptyCurrentHtml, /No sections are set up for the current term/);
+    assert.match(emptyCurrentHtml, /href="\/registrar\/records\?view=setup&amp;openForm=section&amp;termId=2#section-name">Add a section for this term/);
+    assert.match(emptyCurrentHtml, /<details class="records-create-disclosure" open>\s*<summary>Add section/);
+    assert.match(emptyCurrentHtml, /option value="2" selected>2026-2027 · First term/);
+    currentTermHasSection = true;
 
     const token = csrfFromHtml(html);
     const termError = await postForm(baseUrl, '/registrar/records/terms', cookie, {

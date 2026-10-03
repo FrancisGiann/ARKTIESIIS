@@ -17,6 +17,7 @@ const MAX_XLSX_ENTRY_BYTES = 8 * 1024 * 1024;
 const MAX_XLSX_TOTAL_BYTES = 16 * 1024 * 1024;
 const PREVIEW_TTL_MS = 10 * 60 * 1000;
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const INTAKE_IDEMPOTENCY_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const readSheet = require('read-excel-file/node').readSheet;
 
 class WorkbookError extends Error {
@@ -527,9 +528,10 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       if (!feeService?.annualAssessmentPreviewForRegistrar) throw new AnnualFinanceError('Fee assessment is unavailable.', 503);
       const requestedLines = values.optionalLineIds ?? req.query?.optionalLineIds ?? [];
       const preview = await feeService.annualAssessmentPreviewForRegistrar(req.authUser.id, annualId, requestedLines);
-      const key = values.idempotencyKey || crypto.randomUUID();
+      const submittedKey = values.idempotencyKey || req.query?.idempotencyKey;
+      const key = typeof submittedKey === 'string' && INTAKE_IDEMPOTENCY_KEY.test(submittedKey) ? submittedKey : crypto.randomUUID();
       return setPrivateHeaders(res).status(status).render('records/annual-intake-fees', {
-        title: 'Review fees and confirm enrollment', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        title: 'Review enrollment fees', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
         annualId, preview, error, values: { ...values, idempotencyKey: key },
         confirmationChoices: preview.optionalLineIds || [],
         successNotice: req.query?.notice === 'confirmed' ? 'Enrollment confirmed. Finance can now record payments.' : null
@@ -537,11 +539,44 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
     } catch (loadError) {
       if (loadError instanceof AnnualEnrollmentError || loadError instanceof AnnualFinanceError) {
         return setPrivateHeaders(res).status(loadError.status).render('records/annual-intake-fees', {
-          title: 'Review fees and confirm enrollment', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+          title: 'Review enrollment fees', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
           annualId, preview: null, error: loadError.message, values, confirmationChoices: []
         });
       }
       return res.status(503).render('error', { title: 'Fee review unavailable', message: 'The configured fee assessment could not be loaded.' });
+    }
+  }
+
+  async function renderFinalReview(req, res, annualId, { status = 200, error = null, values = {} } = {}) {
+    try {
+      if (!feeService?.annualAssessmentPreviewForRegistrar || !checklistService?.getStudentChecklist) {
+        throw new AnnualEnrollmentError('The final review is unavailable until student and checklist records can be loaded.', 503);
+      }
+      const record = await service.getAnnualManagementRecord(req.authUser.id, annualId);
+      const [checklist, preview] = await Promise.all([
+        checklistService.getStudentChecklist(req.authUser.id, record.parent.student_id),
+        feeService.annualAssessmentPreviewForRegistrar(req.authUser.id, annualId, values.optionalLineIds ?? req.query?.optionalLineIds ?? [])
+      ]);
+      const submittedKey = values.idempotencyKey || req.query?.idempotencyKey;
+      const idempotencyKey = typeof submittedKey === 'string' && INTAKE_IDEMPOTENCY_KEY.test(submittedKey)
+        ? submittedKey : crypto.randomUUID();
+      return setPrivateHeaders(res).status(status).render('records/annual-intake-review', {
+        title: 'Review enrollment details', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        annualId, record, checklist, preview, error, values: { idempotencyKey },
+        confirmationComplete: Boolean(record.parent.registrar_confirmation_id)
+      });
+    } catch (loadError) {
+      if (loadError instanceof AnnualEnrollmentError || loadError instanceof AnnualFinanceError || loadError instanceof PhysicalChecklistError) {
+        return setPrivateHeaders(res).status(loadError.status).render('records/annual-intake-review', {
+          title: 'Review enrollment details', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+          annualId, record: null, checklist: null, preview: null, error: loadError.message,
+          values: { idempotencyKey: values.idempotencyKey || req.query?.idempotencyKey || crypto.randomUUID() },
+          confirmationComplete: false
+        });
+      }
+      return res.status(503).render('error', {
+        title: 'Final review unavailable', message: 'Student, paper checklist, and fee details could not be loaded for final review.'
+      });
     }
   }
 
@@ -572,6 +607,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
     }
   });
   router.get('/:annualId/fees', (req, res) => renderFeeReview(req, res, req.params.annualId));
+  router.get('/:annualId/review', (req, res) => renderFinalReview(req, res, req.params.annualId));
   router.post('/:annualId/confirm', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     try {
@@ -581,7 +617,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       });
     } catch (error) {
       if (error instanceof AnnualEnrollmentError || error instanceof AnnualFinanceError) {
-        return renderFeeReview(req, res, req.params.annualId, { status: error.status, error: error.message, values: req.body || {} });
+        return renderFinalReview(req, res, req.params.annualId, { status: error.status, error: error.message, values: req.body || {} });
       }
       return res.status(503).render('error', { title: 'Enrollment confirmation unavailable', message: 'The annual enrollment was not confirmed. Review the fee summary and try again.' });
     }

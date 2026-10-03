@@ -3,7 +3,7 @@
   <a class="context-back" href="/registrar/intake">Back to annual intake</a>
   <header class="dashboard-heading">
     <div>
-      <h1>Review fees and confirm enrollment</h1>
+      <h1>Review fees</h1>
       <% if (preview?.parent) { %>
         <p><strong><%= [preview.parent.first_name, preview.parent.middle_name, preview.parent.last_name, preview.parent.suffix].filter(Boolean).join(' ') %></strong>
           · <%= preview.parent.student_no %> · <%= preview.parent.school_year %> · <%= preview.parent.grade_level %> · <%= preview.parent.voucher_code %></p>
@@ -11,13 +11,18 @@
     </div>
   </header>
   <nav class="intake-progress" aria-label="Enrollment steps">
-    <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Documents received</span><span class="intake-step-label--short">Documents</span></li><li aria-current="step"><span class="intake-step-label--full">Fees and confirmation</span><span class="intake-step-label--short">Fees</span></li></ol>
+    <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Documents received</span><span class="intake-step-label--short">Papers</span></li><li aria-current="step"><span class="intake-step-label--full">Fees</span><span class="intake-step-label--short">Fees</span></li><li><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li></ol>
   </nav>
   <% if (successNotice) { %><p class="form-success" role="status"><%= successNotice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% if (!preview) { %>
     <section class="admin-section"><p>The fee summary is unavailable. Return to the intake roster and review it again.</p><a class="button button--secondary" href="/registrar/intake">Return to annual intake</a></section>
   <% } else { %>
+    <form method="get" action="/registrar/intake/<%= annualId %>/fees" class="fee-optional-choice" aria-label="Review fees and optional charges"
+      data-fee-review data-track-optional="<%= !preview.existingAssessment && preview.optionalLines?.length ? 'true' : 'false' %>"
+      data-selected-lines="<%= preview.optionalLineIds.join(',') %>">
+      <input type="hidden" name="idempotencyKey" value="<%= values.idempotencyKey %>">
+      <% if (preview.existingAssessment) { for (const lineId of preview.optionalLineIds) { %><input type="hidden" name="optionalLineIds" value="<%= lineId %>"><% } } %>
     <section class="admin-section" aria-labelledby="fee-context-title">
       <div class="admin-section__heading"><div><h2 id="fee-context-title">Annual fee assessment</h2>
         <p>Schedule version <%= preview.scheduleVersion %> · <%= preview.existingAssessment ? 'Saved assessment' : 'Current approved schedule' %></p></div><p class="fee-total-line"><span>Payable total</span><strong>₱<%= formatMoney(preview.total) %></strong></p></div>
@@ -27,19 +32,17 @@
         <p>Required fees are included. Optional items are included only when selected. The amount below comes from the active approved schedule and any approved fee coverage.</p>
       <% } %>
       <% if (!preview.existingAssessment && preview.optionalLines?.length) { %>
-        <form method="get" action="/registrar/intake/<%= annualId %>/fees" class="fee-optional-choice" aria-label="Choose optional fees">
-          <p class="fee-confirmation__refresh" data-fee-refresh-message hidden role="status">Update the fee total to confirm your new optional fee choices.</p>
-          <fieldset><legend>Optional fees</legend>
-            <% for (const line of preview.optionalLines) { %>
-              <label class="checkbox-field fee-optional-choice__row">
-                <input type="checkbox" name="optionalLineIds" value="<%= line.id %>" <%= line.selected ? 'checked' : '' %>>
-                <span><strong>Term <%= line.termNumber %> · <%= line.lineName %></strong><small><%= line.installment %> · ₱<%= formatMoney(line.amount) %></small></span>
-              </label>
-            <% } %>
-          </fieldset>
-          <button class="button button--secondary" type="submit">Update fee total</button>
-        </form>
-        <noscript><p class="muted-copy">After changing an optional fee, choose “Update fee total” before confirming. The confirmation form uses the choices shown in the current fee summary.</p></noscript>
+        <p class="fee-confirmation__refresh" data-fee-refresh-message hidden role="status">Update the fee total before continuing with these optional charges.</p>
+        <fieldset><legend>Optional fees</legend>
+          <% for (const line of preview.optionalLines) { %>
+            <label class="checkbox-field fee-optional-choice__row">
+              <input type="checkbox" name="optionalLineIds" value="<%= line.id %>" <%= line.selected ? 'checked' : '' %>>
+              <span><strong>Term <%= line.termNumber %> · <%= line.lineName %></strong><small><%= line.installment %> · ₱<%= formatMoney(line.amount) %></small></span>
+            </label>
+          <% } %>
+        </fieldset>
+        <button class="button button--secondary" type="submit">Update fee total</button>
+        <noscript><p class="muted-copy">Review details carries your current optional choices into the final summary.</p></noscript>
       <% } %>
       <div class="fee-term-summary" aria-label="Payable by term">
         <% for (const subtotal of preview.termTotals) { %><p><span>Term <%= subtotal.termNumber %></span><strong>₱<%= formatMoney(subtotal.amount) %></strong></p><% } %>
@@ -55,21 +58,13 @@
       </details>
     </section>
     <section class="admin-section fee-confirmation" aria-labelledby="fee-confirmation-title">
-      <div class="admin-section__heading"><div><h2 id="fee-confirmation-title">Confirm enrollment</h2>
-        <p>Confirming saves this assessment and activates the entry term. Finance records payments separately.</p></div></div>
+      <div class="admin-section__heading"><div><h2 id="fee-confirmation-title">Next: review enrollment details</h2>
+        <p>Check the student profile, term placements, paper checklist, and fees before finalizing.</p></div></div>
       <p class="fee-confirmation__amount"><strong>Payable assessment: ₱<%= formatMoney(preview.total) %></strong></p>
-      <form method="post" action="/registrar/intake/<%= annualId %>/confirm" class="fee-confirmation__form" data-fee-confirmation data-selected-lines="<%= preview.optionalLineIds.join(',') %>">
-        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-        <input type="hidden" name="idempotencyKey" value="<%= values.idempotencyKey %>">
-        <input type="hidden" name="scheduleId" value="<%= preview.scheduleId %>">
-        <input type="hidden" name="scheduleVersion" value="<%= preview.scheduleVersion %>">
-        <input type="hidden" name="voucherCode" value="<%= preview.voucherCode %>">
-        <input type="hidden" name="assessmentId" value="<%= preview.assessmentId || '' %>">
-        <input type="hidden" name="snapshotFingerprint" value="<%= preview.snapshotFingerprint %>">
-        <% for (const lineId of preview.optionalLineIds) { %><input type="hidden" name="optionalLineIds" value="<%= lineId %>"><% } %>
-        <button class="button button--primary" type="submit" data-fee-confirm>Confirm enrollment</button>
+      <div class="fee-confirmation__form">
+        <button class="button button--primary" type="submit" formaction="/registrar/intake/<%= annualId %>/review" data-fee-submit>Review details</button>
         <a class="button button--secondary" href="/registrar/intake/<%= annualId %>/manage">Back to student record</a>
-      </form>
+      </div>
     </section>
     <details class="admin-section fee-breakdown">
       <summary>View itemized fee breakdown</summary>
@@ -94,6 +89,7 @@
         </table>
       </div>
     </details>
+    </form>
   <% } %>
 </main>
 <script src="/js/annual-fee-confirmation.js" defer></script>

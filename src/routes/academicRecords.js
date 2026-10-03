@@ -42,6 +42,7 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, tea
         subjects,
         subjectCount: allSubjects.length,
         search,
+        showCreateForm: req.query?.openForm === '1' || Boolean(error),
         values: subjectValues(values),
         error,
         notice: notices[req.query.notice] || null

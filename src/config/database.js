@@ -72,6 +72,18 @@ function createRawPool() {
 let rawPool;
 let facade;
 let pendingConnection;
+const initializedConnections = new WeakSet();
+
+function physicalConnection(connection) {
+  return connection?.connection || connection;
+}
+
+async function initializeConnection(connection) {
+  const identity = physicalConnection(connection);
+  if (initializedConnections.has(identity)) return;
+  await connection.query('SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci');
+  initializedConnections.add(identity);
+}
 
 function scanSql(source, onCode, onString) {
   let result = '';
@@ -200,11 +212,19 @@ class Request {
     const rawSql = normalizeBasicSql(source);
     const { sql: preparedSql, values } = prepareNamedParameters(rawSql, this.bindings);
     const connection = this.connection || await this.poolSource.getConnection();
+    let safeToRelease = true;
     try {
+      await initializeConnection(connection);
       const [driverResult] = await connection.execute(preparedSql, values);
       return resultFromDriver(driverResult);
+    } catch (error) {
+      if (!this.connection && !initializedConnections.has(physicalConnection(connection))) {
+        safeToRelease = false;
+        discardConnection(connection);
+      }
+      throw error;
     } finally {
-      if (!this.connection) connection.release();
+      if (!this.connection && safeToRelease) connection.release();
     }
   }
 
@@ -231,13 +251,20 @@ class TransactionFacade {
     if (this.active) throw new Error('The transaction has already begun.');
     if (!Object.values(ISOLATION_LEVEL).includes(isolation)) throw new TypeError('Unsupported transaction isolation level.');
     this.connection = await this.poolFacade.source.getConnection();
+    let connectionInitialized = false;
     try {
+      await initializeConnection(this.connection);
+      connectionInitialized = true;
       await this.connection.query(`SET TRANSACTION ISOLATION LEVEL ${isolation}`);
       await this.connection.beginTransaction();
       this.active = true;
     } catch (error) {
       const connection = this.connection;
       this.connection = null;
+      if (!connectionInitialized) {
+        discardConnection(connection);
+        throw error;
+      }
       try {
         await connection.rollback();
         releaseConnection(connection);

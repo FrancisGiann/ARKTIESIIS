@@ -262,6 +262,20 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     },
     async listAnnualEnrollments() { return [{ annual_enrollment_id: 71, enrollment_id: 51, student_id: 41, student_no: 'SHS-2026-0321', first_name: 'Synthetic', last_name: 'Learner', email: 'learner@example.edu', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB', voucher_category: 'D', entry_term_number: 1, term: 'Term 1', section_id: 8, section_name: 'Mabini', term_scope_status: 'applicable', annual_term_number: 1, enrollment_status: 'pending_payment', signed_clearance_status: 'not signed' }]; },
     async listAnnualEnrollmentCounts() { return [{ school_year: '2026-2027', grade_level: 'Grade 11', term: 'Term 1', annual_term_number: 1, section_name: 'Mabini', cluster: 'A', strand: 'STEM', gender: 'Not recorded', enrollment_status: 'pending_payment', student_count: 1 }]; },
+    async getAnnualManagementRecord(actorId, annualId) {
+      assert.equal(actorId, registrar.id);
+      assert.equal(String(annualId), '71');
+      return {
+        parent: { annual_enrollment_id: 71, student_id: 41, student_no: 'SHS-2026-0321', lrn: '123456789012',
+          first_name: 'Synthetic', middle_name: 'Casey', last_name: 'Learner', suffix: '', birth_date: '2008-04-21',
+          sex: 'Female', address: '25 Mabini Street', phone: '09171234567', student_email: 'learner@example.edu',
+          school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB', intake_kind: 'standard',
+          entry_term_number: 1, enrollment_start_date: '2026-10-03', intake_status: 'pending', registrar_confirmation_id: null }
+        , terms: [1, 2, 3].map((number) => ({ annual_term_number: number, term: number === 2 ? 'Second term' : `Term ${number}`, grade_level: 'Grade 11',
+          section_name: 'Mabini', cluster: 'Academic', strand: 'STEM', modality: 'face_to_face', section_id: number + 7,
+          term_scope_status: 'applicable', enrollment_status: 'pending_payment' }))
+      };
+    },
     async confirmAnnualEnrollment(actorId, annualId, input) {
       confirmationCall = { actorId, annualId, input };
       return { annualEnrollmentId: 71, studentId: 41, studentNo: 'SHS-2026-0321', firstName: 'Synthetic', lastName: 'Learner', schoolYear: '2026-2027', gradeLevel: 'Grade 11', term: 'Term 1', sectionName: 'Mabini', total: '1234.50', temporaryPassword: null };
@@ -276,6 +290,40 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     lines: [{ termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Prelim', grossAmount: '1234.50', waivedAmount: '0.00', amount: '1234.50', isOptional: false }],
     snapshotFingerprint: 'a'.repeat(64)
   };
+  const feePreviewCalls = [];
+  const checklistFixture = {
+    student: { id: 41 }, summary: { completeCount: 1, requiredCount: 2 }, history: [], additionalItems: [],
+    requirements: [
+      { requirement_code: 'birth_certificate', requirement_name: 'Birth Certificate', is_optional: 0,
+        is_applicable: 1, status: 'received', originals_required: 0, copies_required: 3, pieces_required: 0,
+        originals_received: 0, copies_received: 3, pieces_received: 0, note: 'Staff checked all copies.' },
+      { requirement_code: 'good_moral', requirement_name: 'Good Moral Certificate', is_optional: 0,
+        is_applicable: 1, status: 'pending', originals_required: 1, copies_required: 1, pieces_required: 0,
+        originals_received: 0, copies_received: 0, pieces_received: 0, note: null },
+      { requirement_code: 'grade11_card', requirement_name: 'Grade 11 Card', is_optional: 0,
+        is_applicable: 0, status: 'verified', originals_required: 0, copies_required: 0, pieces_required: 0,
+        originals_received: 0, copies_received: 0, pieces_received: 0, note: null }
+    ]
+  };
+  const previewFees = async (actorId, annualId, selectedInput = []) => {
+    assert.equal(actorId, registrar.id);
+    assert.equal(String(annualId), '71');
+    const selected = (Array.isArray(selectedInput) ? selectedInput : [selectedInput]).filter(Boolean).map(Number);
+    feePreviewCalls.push(selected);
+    const includeTour = selected.includes(90);
+    return {
+      ...feePreview,
+      optionalLineIds: includeTour ? [90] : [],
+      optionalLines: [{ ...feePreview.optionalLines[0], selected: includeTour }],
+      lines: includeTour ? [...feePreview.lines, {
+        termNumber: 1, lineName: 'Tour', category: 'activity', installment: 'Once', grossAmount: '100.00',
+        waivedAmount: '0.00', amount: '100.00', isOptional: true
+      }] : feePreview.lines,
+      total: includeTour ? '1334.50' : '1234.50',
+      totalCents: includeTour ? 133450 : 123450,
+      termTotals: [{ termNumber: 1, amount: includeTour ? '1334.50' : '1234.50' }, { termNumber: 2, amount: '0.00' }, { termNumber: 3, amount: '0.00' }]
+    };
+  };
   const paperRequirements = [
     { requirement_code: 'birth_certificate', requirement_name: 'Birth Certificate', guidance: '3 photocopies.', applicability: 'all', originals_required: 0, copies_required: 3, pieces_required: 0 },
     { requirement_code: 'good_moral', requirement_name: 'Good Moral Certificate', guidance: 'Original + 1 photocopy.', applicability: 'all', originals_required: 1, copies_required: 1, pieces_required: 0 },
@@ -289,8 +337,15 @@ test('registrar intake opens the guided annual form and links the roster to fee 
   });
   annualEnrollmentService.createAnnualIntake = (actorId, input) => intakeValidationService.createAnnualIntake(actorId, input);
   app.use('/registrar/intake', createAnnualStudentIntakeRouter({ annualEnrollmentService,
-    physicalChecklistService: { async listIntakeRequirements() { return paperRequirements; } },
-    annualFinanceService: { async annualAssessmentPreviewForRegistrar() { return feePreview; } }
+    physicalChecklistService: {
+      async listIntakeRequirements() { return paperRequirements; },
+      async getStudentChecklist(actorId, studentId) {
+        assert.equal(actorId, registrar.id);
+        assert.equal(Number(studentId), 41);
+        return checklistFixture;
+      }
+    },
+    annualFinanceService: { annualAssessmentPreviewForRegistrar: previewFees }
   }));
   await withServer(app, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/registrar/intake/new`);
@@ -299,7 +354,8 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(html, /Student details/);
     assert.match(html, /Enrollment details/);
     assert.match(html, /Documents received/);
-    assert.match(html, /Fees and confirmation/);
+    assert.match(html, /Step 4 of 5: Fees/);
+    assert.match(html, /Step 5 of 5: Review details/);
     assert.match(html, /missing papers do not block enrollment/i);
     assert.match(html, /Select a paper only after staff has received and checked it/i);
     assert.match(html, /long brown envelope; the envelope is a storage container and is not tracked/i);
@@ -376,19 +432,66 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     const feesHtml = await fees.text();
     assert.equal(fees.status, 200);
     assert.match(fees.headers.get('cache-control'), /no-store/);
+    assert.match(feesHtml, /<title>Review enrollment fees \| ARKTIESIIS<\/title>/);
     assert.match(feesHtml, /Payable total/);
     assert.match(feesHtml, /View itemized fee breakdown/);
     assert.match(feesHtml, /Update fee total/);
-    assert.match(feesHtml, /name="snapshotFingerprint" value="a{64}"/);
-    assert.match(feesHtml, /name="scheduleVersion" value="2"/);
-    assert.match(feesHtml, /Confirm enrollment/);
+    assert.match(feesHtml, /name="idempotencyKey" value="[0-9a-f-]{36}"/);
+    assert.match(feesHtml, /data-fee-review/);
+    assert.match(feesHtml, /<form[^>]*class="fee-optional-choice"[^>]*data-fee-review[^>]*>[\s\S]*name="optionalLineIds"[\s\S]*formaction="\/registrar\/intake\/71\/review"/);
+    assert.match(feesHtml, /Review details/);
+    assert.doesNotMatch(feesHtml, /name="snapshotFingerprint"|name="scheduleVersion"/);
     assert.doesNotMatch(feesHtml, /name="paymentAmount"|name="receiptNumber"|financeReviewReason/);
-    const csrfToken = feesHtml.match(/name="_csrf" value="([^"]+)"/)?.[1];
+    const idempotencyKey = feesHtml.match(/name="idempotencyKey" value="([0-9a-f-]{36})"/)?.[1];
+    assert.ok(idempotencyKey);
+    const updatedFees = await fetch(`${baseUrl}/registrar/intake/71/fees?${new URLSearchParams({
+      idempotencyKey, optionalLineIds: '90'
+    })}`);
+    const updatedFeesHtml = await updatedFees.text();
+    assert.equal(updatedFees.status, 200);
+    assert.match(updatedFeesHtml, /value="90" checked/);
+    assert.match(updatedFeesHtml, /name="idempotencyKey" value="[^"]+"/);
+    assert.match(updatedFeesHtml, /Payable total/);
+    assert.match(updatedFeesHtml, /formaction="\/registrar\/intake\/71\/review"/);
+
+    const finalReview = await fetch(`${baseUrl}/registrar/intake/71/review?${new URLSearchParams({
+      idempotencyKey, optionalLineIds: '90'
+    })}`);
+    const reviewHtml = await finalReview.text();
+    assert.equal(finalReview.status, 200);
+    const csrfToken = reviewHtml.match(/name="_csrf" value="([^"]+)"/)?.[1];
     assert.ok(csrfToken);
+    assert.match(reviewHtml, /data-active-step="5"|aria-current="step"/);
+    assert.match(reviewHtml, /Review enrollment details/);
+    assert.match(reviewHtml, /123456789012/);
+    assert.match(reviewHtml, /2008-04-21/);
+    assert.match(reviewHtml, /<dt>Intake type<\/dt><dd>Standard intake<\/dd>/);
+    assert.doesNotMatch(reviewHtml, /<dt>Intake type<\/dt><dd>New student<\/dd>/);
+    assert.match(reviewHtml, /Edit profile or term placements/);
+    assert.match(reviewHtml, /Update paper checklist/);
+    assert.match(reviewHtml, /Staff checked all copies\./);
+    assert.match(reviewHtml, /3 photocopies/);
+    assert.match(reviewHtml, /<dt>Intake status<\/dt><dd>Pending<\/dd>/);
+    assert.match(reviewHtml, /<th scope="row">Term 1<\/th>/);
+    assert.match(reviewHtml, /<th scope="row">Term 2 · Second term<\/th>/);
+    assert.doesNotMatch(reviewHtml, /Term 1 · Term 1/);
+    assert.match(reviewHtml, /data-label="Placement">Applicable<\/td>/);
+    assert.match(reviewHtml, /data-label="Status">Pending payment<\/td>/);
+    assert.match(reviewHtml, /data-label="Status">Received/);
+    assert.match(reviewHtml, /data-label="Status">Pending/);
+    assert.match(reviewHtml, /data-label="Status">Not applicable/);
+    assert.doesNotMatch(reviewHtml, /pending_payment|not_applicable/);
+    assert.match(reviewHtml, /Included · ₱100\.00/);
+    assert.match(reviewHtml, /₱1,334\.50/);
+    assert.match(reviewHtml, /name="snapshotFingerprint" value="a{64}"/);
+    assert.match(reviewHtml, /name="scheduleVersion" value="2"/);
+    assert.match(reviewHtml, /name="optionalLineIds" value="90"/);
+    assert.doesNotMatch(reviewHtml, /name="(?:firstName|middleName|lastName|studentNo|lrn|birthDate|address|phone|email)"/);
+    assert.deepEqual(feePreviewCalls.at(-1), [90]);
     const confirmResponse = await fetch(`${baseUrl}/registrar/intake/71/confirm`, {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey: 'a87e52a5-833d-499d-bca3-86034d83892e',
-        scheduleId: '9', scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64) })
+      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey,
+        scheduleId: '9', scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64), optionalLineIds: '90' })
     });
     const confirmedHtml = await confirmResponse.text();
     assert.equal(confirmResponse.status, 200);
@@ -397,8 +500,8 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(confirmedHtml, /₱1,234\.50/);
     assert.match(confirmedHtml, /Open paper requirements checklist/);
     assert.deepEqual(confirmationCall, { actorId: registrar.id, annualId: '71', input: {
-      _csrf: csrfToken, idempotencyKey: 'a87e52a5-833d-499d-bca3-86034d83892e', scheduleId: '9',
-      scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64)
+      _csrf: csrfToken, idempotencyKey, scheduleId: '9',
+      scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64), optionalLineIds: '90'
     } });
   });
 });
