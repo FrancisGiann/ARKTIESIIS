@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const { readFileSync } = require('node:fs');
 const ejs = require('ejs');
 const { createFinanceRouter } = require('../src/routes/finance');
 const { AnnualFinanceError, createAnnualFinanceService } = require('../src/services/annualFinanceService');
@@ -14,6 +15,54 @@ async function renderFinanceView(name, locals) {
     clearanceValues: {}, transactionValues: {}, formValues: {}, ...locals
   });
 }
+
+function responseRecorder() {
+  return {
+    statusCode: 200,
+    headers: {},
+    status(code) { this.statusCode = code; return this; },
+    set(name, value) { this.headers[name] = value; return this; },
+    render(view, locals) { this.view = view; this.locals = locals; return this; }
+  };
+}
+
+test('finance account and reports load failures return support references without logging raw errors or student identifiers', async () => {
+  const diagnostics = [];
+  const router = createFinanceRouter({
+    getPool: async () => { throw new Error('Unexpected database access in route test'); },
+    annualFinanceService: {
+      async getStudentLedger() { const error = new Error('sensitive student 102 SQL detail'); error.code = 'ER_QUERY_FAILURE'; throw error; },
+      async listSchedules() { return []; }
+    },
+    financeCasesService: {
+      async getStudentCases() { return { exemptions: [], specialSubjects: [], departures: [] }; }
+    },
+    financeReportsService: {
+      async reports() { const error = new Error('sensitive report SQL detail'); error.code = 'ER_QUERY_FAILURE'; throw error; }
+    },
+    logger: { error(...args) { diagnostics.push(args); } }
+  });
+  const routeHandler = (routePath) => router.stack.find((layer) => layer.route?.path === routePath)?.route.stack[0].handle;
+
+  const accountResponse = responseRecorder();
+  await routeHandler('/students/:id/annual')({ params: { id: '102' }, query: { view: 'payments' }, authUser: { id: 7 } }, accountResponse);
+  assert.equal(accountResponse.statusCode, 503);
+  assert.match(accountResponse.locals.message, /annual student account could not be loaded\. Support reference: [a-f0-9-]+/i);
+  assert.equal(diagnostics[0][1].operation, 'finance.annual_student.load');
+  assert.equal(diagnostics[0][1].dependency, 'student_ledger');
+  assert.equal(diagnostics[0][1].errorCode, 'ER_QUERY_FAILURE');
+
+  const reportsResponse = responseRecorder();
+  await routeHandler('/reports')({ query: {}, authUser: { id: 7 } }, reportsResponse);
+  assert.equal(reportsResponse.statusCode, 503);
+  assert.match(reportsResponse.locals.message, /Finance reports could not be loaded\. Support reference: [a-f0-9-]+/i);
+  assert.equal(diagnostics[1][1].operation, 'finance.reports.load');
+  assert.equal(diagnostics[1][1].errorCode, 'ER_QUERY_FAILURE');
+
+  const logged = JSON.stringify(diagnostics);
+  assert.doesNotMatch(logged, /sensitive|102|studentId|raw sql/i);
+  assert.match(logged, /ER_QUERY_FAILURE/);
+});
 
 test('finance annual roster pages annual records and groups term placements under each summary', async () => {
   const observed = [];
@@ -188,6 +237,18 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
   assert.match(reportHtml, /₱0\.01/);
   assert.match(reportHtml, /₱2,500\.00/);
   assert.doesNotMatch(reportHtml, /<details class="finance-term-progress-group" open/);
+  const tabsIndex = reportHtml.indexOf('<nav class="finance-report-tabs"');
+  const controlsIndex = reportHtml.indexOf('<section class="finance-panel finance-report-controls"');
+  const formIndex = reportHtml.indexOf('<form class="finance-report-date-form"');
+  const quickDateIndex = reportHtml.indexOf('<nav class="finance-report-quick-dates"');
+  assert.ok(tabsIndex >= 0 && tabsIndex < controlsIndex, 'report tabs precede the grouped date controls');
+  assert.ok(controlsIndex < formIndex && formIndex < quickDateIndex, 'date submission and shortcuts share one controls panel');
+  assert.match(reportHtml, /name="view" value="term-balances"/);
+  assert.match(reportHtml, /href="\/finance\/reports\?view=term-balances&amp;fromDate=2026-09-28&amp;toDate=2026-10-04">This week/);
+  const appCss = readFileSync(path.join(__dirname, '../public/css/app.css'), 'utf8');
+  assert.match(appCss, /\.finance-reports-page \.finance-report-tabs\s*\{/);
+  assert.match(appCss, /\.finance-report-date-form\s*\{/);
+  assert.match(appCss, /\.finance-report-quick-dates\s*\{/);
 
   const scheduleTuitionLines = [1, 2, 3].flatMap((termNumber) => ['DP', 'Prelim', 'Midterm', 'Finals'].map((installment) => ({
     isRequiredTuition: true, termNumber: String(termNumber), feeCategory: 'tuition', lineName: 'Tuition', installment,

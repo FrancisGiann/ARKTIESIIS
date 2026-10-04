@@ -26,4 +26,13 @@ function formatFinanceDateTime(value) {
   return date ? MANILA_DATE_TIME.format(date) : 'Date unavailable';
 }
 
-module.exports = { formatFinanceDateTime, parseUtcDateTime };
+function manilaWeekStartDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.toISOString().slice(0, 10) !== value) return null;
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+  return date.toISOString().slice(0, 10);
+}
+
+module.exports = { formatFinanceDateTime, manilaWeekStartDate, parseUtcDateTime };

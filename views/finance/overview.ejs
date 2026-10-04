@@ -17,18 +17,20 @@
       <div><h2 id="finance-overview-heading">Term payment status</h2><p>Each active placement appears once in the selected view. Legacy balances and unallocated credit stay separate.</p></div>
       <% if (overview.schoolYears.length) { %>
         <form class="dashboard-filter dashboard-filter--finance" method="get" action="/finance/overview">
-          <label class="field"><span>School year</span><select name="schoolYear" required><% for (const year of overview.schoolYears) { %><option value="<%= year %>" <%= overview.selectedSchoolYear === year ? 'selected' : '' %>><%= year %></option><% } %></select></label>
-          <label class="field"><span>Term</span><select name="termId" required><% for (const term of overview.availableTerms) { %><option value="<%= term.academicTermId %>" <%= String(overview.selectedTermId) === String(term.academicTermId) ? 'selected' : '' %>><%= term.term %></option><% } %></select></label>
-          <label class="field"><span>Tuition tracking</span><select name="installment"><% for (const [value, label] of [['whole','Whole term'],['dp','DP'],['prelim','Prelim'],['midterm','Midterm'],['finals','Finals']]) { %><option value="<%= value %>" <%= overview.selectedInstallment === value ? 'selected' : '' %>><%= label %></option><% } %></select></label>
-          <details class="finance-overview-secondary-filters" <%= overview.selectedGrade || overview.selectedVoucher ? 'open' : '' %>>
-            <summary>Grade and voucher filters</summary>
+          <div class="finance-overview-filter-primary">
+            <label class="field"><span>School year</span><select name="schoolYear" required><% for (const year of overview.schoolYears) { %><option value="<%= year %>" <%= overview.selectedSchoolYear === year ? 'selected' : '' %>><%= year %></option><% } %></select></label>
+            <label class="field"><span>Term</span><select name="termId" required><% for (const term of overview.availableTerms) { %><option value="<%= term.academicTermId %>" <%= String(overview.selectedTermId) === String(term.academicTermId) ? 'selected' : '' %>><%= term.term %></option><% } %></select></label>
+            <label class="field"><span>Tuition tracking</span><select name="installment"><% for (const [value, label] of [['whole','Whole term'],['dp','DP'],['prelim','Prelim'],['midterm','Midterm'],['finals','Finals']]) { %><option value="<%= value %>" <%= overview.selectedInstallment === value ? 'selected' : '' %>><%= label %></option><% } %></select></label>
+          </div>
+          <button class="button button--secondary" type="submit">Apply filters</button>
+          <details class="finance-overview-secondary-filters" <%= overview.selectedGrade || overview.selectedSectionId || overview.selectedVoucher ? 'open' : '' %>>
+            <summary>More filters · grade, section, and voucher</summary>
             <div>
               <label class="field"><span>Grade</span><select name="gradeLevel"><option value="">All grades</option><% for (const grade of overview.gradeLevels) { %><option value="<%= grade %>" <%= overview.selectedGrade === grade ? 'selected' : '' %>><%= grade %></option><% } %></select></label>
               <label class="field"><span>Voucher</span><select name="voucherCode"><option value="">All vouchers</option><% for (const voucher of overview.voucherCodes) { %><option value="<%= voucher %>" <%= overview.selectedVoucher === voucher ? 'selected' : '' %>><%= voucher %></option><% } %></select></label>
               <label class="field"><span>Section</span><select name="sectionId"><option value="">All sections</option><% for (const section of overview.sections) { %><option value="<%= section.id %>" <%= String(overview.selectedSectionId || '') === section.id ? 'selected' : '' %>><%= section.name %><%= section.cluster ? ` · ${section.cluster}` : '' %><%= section.strand ? ` · ${section.strand}` : '' %></option><% } %></select></label>
             </div>
           </details>
-          <button class="button button--secondary" type="submit">Apply filters</button>
         </form>
       <% } %>
     </div>

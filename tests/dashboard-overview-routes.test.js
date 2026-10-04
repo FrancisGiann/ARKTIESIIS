@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
+const { readFileSync } = require('node:fs');
 const { once } = require('node:events');
 const bcrypt = require('bcrypt');
 const { createApp } = require('../src/app');
@@ -115,7 +117,15 @@ function appFor(role, calls = [], intakeRows = [], intakeOptions = { schoolYears
       async getDashboard(actorId, filters) { calls.push(['registrar', actorId, filters]); return registrarOverview; }
     },
     financeDashboardService: {
-      async getOverview(actorId, filters) { calls.push(['finance', actorId, filters]); return financeOverview; }
+      async getOverview(actorId, filters) {
+        calls.push(['finance', actorId, filters]);
+        return {
+          ...financeOverview,
+          selectedGrade: filters.gradeLevel || '',
+          selectedSectionId: filters.sectionId || '',
+          selectedVoucher: filters.voucherCode || ''
+        };
+      }
     },
     annualFinanceService: {
       async listRoster() { return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; }
@@ -196,6 +206,20 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     assert.match(overviewHtml, /Tuition tracking/);
     assert.match(overviewHtml, /Departure reviews/);
     assert.match(overviewHtml, /href="\/finance\/overview" aria-current="page"/);
+    const cardAnchors = [...overviewHtml.matchAll(/<a class="finance-status-card finance-status-card--([^\"]+)" href="([^\"]+)">([\s\S]*?)<\/a>/g)];
+    assert.deepEqual(cardAnchors.map(([, status]) => status), ['unpaid', 'partially_paid', 'fully_paid', 'no_payment_required', 'needs_review']);
+    assert.match(overviewHtml, /<details class="finance-overview-secondary-filters" open>/);
+    const zeroCountCard = cardAnchors.find(([, status]) => status === 'fully_paid');
+    assert.ok(zeroCountCard, 'zero-count statuses remain linked');
+    assert.match(zeroCountCard[3], /<strong>0<\/strong>/);
+    assert.match(zeroCountCard[3], /Open matching roster/);
+    const zeroCountQuery = new URLSearchParams(zeroCountCard[2].split('?')[1].replace(/&amp;/g, '&'));
+    assert.equal(zeroCountQuery.get('financeStatus'), 'fully_paid');
+    assert.equal(zeroCountQuery.get('gradeLevel'), 'Grade 11');
+    const appCss = readFileSync(path.join(__dirname, '../public/css/app.css'), 'utf8');
+    assert.match(appCss, /\.finance-status-cards\s*\{/);
+    assert.match(appCss, /\.finance-status-card\s*\{/);
+    assert.match(appCss, /\.finance-status-card:focus-visible\s*\{/);
     assert.deepEqual(calls.map(([name, actorId]) => [name, actorId]), [['finance', 7]]);
 
     const rosterResponse = await fetch(`${baseUrl}/finance`, { headers: { cookie } });

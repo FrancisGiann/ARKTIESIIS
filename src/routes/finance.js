@@ -14,7 +14,8 @@ const { isDuplicateKeyError } = require('../config/database');
 const { FinanceReviewDraftError } = require('../services/financeReviewDraftService');
 const { actionByPath, createFinanceReviewActionService, normalizeActionInput } = require('../services/financeReviewActionService');
 const { createStatementProjection } = require('../utils/financeStatementProjection');
-const { formatFinanceDateTime } = require('../utils/financeDateTime');
+const { formatFinanceDateTime, manilaWeekStartDate } = require('../utils/financeDateTime');
+const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
 
 const notices = {
   accountCreated: 'Financial account created.',
@@ -648,11 +649,16 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
 
   async function renderAnnualStudent(req, res, studentId, { status = 200, error = null, preview = null, openingPreview = null,
     tokenOverrides = {}, paymentValues = null, accountViewOverride = null, preservedValues = [], failedAction = null } = {}) {
+    let failedDependency = null;
+    const load = (dependency, operation) => Promise.resolve().then(operation).catch((loadError) => {
+      if (!failedDependency) failedDependency = dependency;
+      throw loadError;
+    });
     try {
       const [ledger, schedules, financeCases] = await Promise.all([
-        annual.getStudentLedger(req.authUser.id, studentId, 'finance'),
-        annual.listSchedules(req.authUser.id),
-        cases.getStudentCases(req.authUser.id, studentId)
+        load('student_ledger', () => annual.getStudentLedger(req.authUser.id, studentId, 'finance')),
+        load('fee_schedules', () => annual.listSchedules(req.authUser.id)),
+        load('finance_cases', () => cases.getStudentCases(req.authUser.id, studentId))
       ]);
       const tokens = { payment: crypto.randomUUID(), assessment: crypto.randomUUID(), ...tokenOverrides };
       for (const payment of ledger.availablePayments) tokens[`allocation:${payment.payment_id}`] = crypto.randomUUID();
@@ -695,7 +701,14 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
     } catch (loadError) {
       if (loadError instanceof AnnualFinanceError) return res.status(loadError.status).render('error', { title: 'Annual student account', message: loadError.message });
       if (loadError instanceof FinanceCasesError) return res.status(loadError.status).render('error', { title: 'Annual student account', message: loadError.message });
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The annual student account could not be loaded.' });
+      const supportReference = crypto.randomUUID().slice(0, 12);
+      logger.error?.('Annual student account load failed.', {
+        supportReference, operation: 'finance.annual_student.load', dependency: failedDependency || 'account_render',
+        ...safeErrorDiagnostics(loadError)
+      });
+      return res.status(503).set('Cache-Control', 'private, no-store').render('error', {
+        title: 'Service Unavailable', message: `The annual student account could not be loaded. Support reference: ${supportReference}.`
+      });
     }
   }
 
@@ -861,15 +874,21 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
       const report = await reports.reports(req.authUser.id, filters);
       return res.set('Cache-Control', 'private, no-store').render('finance/reports', {
         title: 'Finance reports', currentUser: req.authUser, report, filters, error: null,
-        today, weekStart: (() => { const date = new Date(`${today}T00:00:00+08:00`); date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7)); return date.toISOString().slice(0, 10); })(),
+        today, weekStart: manilaWeekStartDate(today),
         monthStart: `${today.slice(0, 8)}01`
       });
     } catch (error) {
       if (error instanceof FinanceReportsError) return res.status(error.status).render('finance/reports', {
         title: 'Finance reports', currentUser: req.authUser, report: null, filters, error: error.message,
-        today, weekStart: today, monthStart: `${today.slice(0, 8)}01`
+        today, weekStart: manilaWeekStartDate(today), monthStart: `${today.slice(0, 8)}01`
       });
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'Finance reports could not be loaded.' });
+      const supportReference = crypto.randomUUID().slice(0, 12);
+      logger.error?.('Finance reports request failed.', {
+        supportReference, operation: 'finance.reports.load', ...safeErrorDiagnostics(error)
+      });
+      return res.status(503).set('Cache-Control', 'private, no-store').render('error', {
+        title: 'Service Unavailable', message: `Finance reports could not be loaded. Support reference: ${supportReference}.`
+      });
     }
   });
   router.get('/reports/details', async (req, res) => {

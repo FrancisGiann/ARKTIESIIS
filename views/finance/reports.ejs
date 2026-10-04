@@ -3,27 +3,27 @@
   <a class="context-back" href="/finance">Back to annual finance roster</a>
   <header class="dashboard-heading"><div><h1>Finance reports</h1><p>Choose one Finance task. Date filters apply to cash, corrections, or allocation activity; term balances show today’s account snapshot.</p></div></header>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
-  <section class="finance-panel" aria-labelledby="report-range-title">
-    <div class="admin-section__heading"><div><h2 id="report-range-title">Report date range</h2><p>Up to 367 calendar days.</p></div></div>
-    <form class="admin-form-grid" method="get" action="/finance/reports">
-      <input type="hidden" name="view" value="<%= filters.view %>">
-      <label class="field"><span>From actual payment date</span><input type="date" name="fromDate" value="<%= filters.fromDate %>" required></label>
-      <label class="field"><span>Through actual payment date</span><input type="date" name="toDate" value="<%= filters.toDate %>" required></label>
-      <div class="field field--actions"><button class="button button--primary" type="submit">Run reports</button></div>
-    </form>
-  </section>
   <% const reportViews = [['collections','Collections'],['allocations','Allocations'],['corrections','Corrections'],['term-balances','Term balances']]; %>
   <nav class="finance-report-tabs" aria-label="Finance report views">
     <% for (const [view, label] of reportViews) { const params = new URLSearchParams({ view, fromDate: filters.fromDate, toDate: filters.toDate }); %>
       <a class="finance-report-tab<%= filters.view === view ? ' is-current' : '' %>" href="/finance/reports?<%= params.toString() %>"<%= filters.view === view ? ' aria-current="page"' : '' %>><%= label %></a>
     <% } %>
   </nav>
-  <nav class="finance-report-quick-dates" aria-label="Quick report date range">
-    <% for (const [label, from, to] of [['Today',today,today],['This week',weekStart,today],['This month',monthStart,today]]) { const params = new URLSearchParams({ view: filters.view, fromDate: from, toDate: to }); %>
-      <a class="table-action" href="/finance/reports?<%= params.toString() %>"><%= label %></a>
-    <% } %>
-    <span>All report dates use Asia/Manila.</span>
-  </nav>
+  <section class="finance-panel finance-report-controls" aria-labelledby="report-range-title">
+    <div class="admin-section__heading"><div><h2 id="report-range-title">Report date range</h2><p>Up to 367 calendar days.</p></div></div>
+    <form class="finance-report-date-form" method="get" action="/finance/reports">
+      <input type="hidden" name="view" value="<%= filters.view %>">
+      <label class="field"><span>From actual payment date</span><input type="date" name="fromDate" value="<%= filters.fromDate %>" required></label>
+      <label class="field"><span>Through actual payment date</span><input type="date" name="toDate" value="<%= filters.toDate %>" required></label>
+      <div class="finance-report-date-form__actions"><button class="button button--primary" type="submit">Run reports</button></div>
+    </form>
+    <nav class="finance-report-quick-dates" aria-label="Quick report date range">
+      <% for (const [label, from, to] of [['Today',today,today],['This week',weekStart,today],['This month',monthStart,today]]) { const params = new URLSearchParams({ view: filters.view, fromDate: from, toDate: to }); %>
+        <a class="table-action" href="/finance/reports?<%= params.toString() %>"><%= label %></a>
+      <% } %>
+      <span>All report dates use Asia/Manila.</span>
+    </nav>
+  </section>
   <% if (report) { %>
     <% if (filters.view === 'collections') { %>
     <section class="finance-panel" aria-labelledby="daily-collections-title">
