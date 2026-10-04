@@ -205,6 +205,10 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     assert.match(overviewHtml, /Needs review/);
     assert.match(overviewHtml, /Tuition tracking/);
     assert.match(overviewHtml, /Departure reviews/);
+    assert.match(overviewHtml, /Unallocated credit stays separate\./);
+    assert.match(overviewHtml, /Previous account balances/);
+    assert.doesNotMatch(overviewHtml, /Legacy account history|href="\/finance\/legacy/);
+    assert.equal([...overviewHtml.matchAll(/<a class="finance-queue-link"/g)].length, 3);
     assert.match(overviewHtml, /href="\/finance\/overview" aria-current="page"/);
     const cardAnchors = [...overviewHtml.matchAll(/<a class="finance-status-card finance-status-card--([^\"]+)" href="([^\"]+)">([\s\S]*?)<\/a>/g)];
     assert.deepEqual(cardAnchors.map(([, status]) => status), ['unpaid', 'partially_paid', 'fully_paid', 'no_payment_required', 'needs_review']);
@@ -220,6 +224,7 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     assert.match(appCss, /\.finance-status-cards\s*\{/);
     assert.match(appCss, /\.finance-status-card\s*\{/);
     assert.match(appCss, /\.finance-status-card:focus-visible\s*\{/);
+    assert.match(appCss, /\.finance-queue-links\s*\{[^}]*grid-template-columns:\s*repeat\(3,/);
     assert.deepEqual(calls.map(([name, actorId]) => [name, actorId]), [['finance', 7]]);
 
     const rosterResponse = await fetch(`${baseUrl}/finance`, { headers: { cookie } });

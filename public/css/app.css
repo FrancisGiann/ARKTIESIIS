@@ -636,7 +636,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); outline
 .dashboard-comparison__metric--waiver .dashboard-chart__track > span { background: #477257; }
 .dashboard-empty { padding: 0.85rem 0; margin: 0; color: var(--muted); }
 .finance-overview__method { margin: 0.65rem 0 0; color: var(--muted); font-size: 0.8rem; }
-.finance-queue-links { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.7rem; margin: 0 0 1rem; }
+.finance-queue-links { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.7rem; margin: 0 0 1rem; }
 .finance-queue-link { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: start; gap: 0.2rem 0.6rem; min-width: 0; padding: 0.8rem 0.9rem; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); text-decoration: none; }
 .finance-queue-link > span:first-child { font-weight: 700; }
 .finance-queue-link > strong { grid-column: 2; grid-row: 1; color: var(--accent); font-size: 1.15rem; font-variant-numeric: tabular-nums; }

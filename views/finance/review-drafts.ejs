@@ -16,7 +16,14 @@
               <% if (draft.scheduleContext) { %><span><%= draft.scheduleContext %></span><% } %>
               <% if (draft.amount) { %><span>₱<%= draft.amount.replace(/^₱/, '') %></span><% } %>
               <span>Updated <%= formatFinanceDateTime(draft.updatedAt) %></span></div>
-            <a class="button button--secondary" href="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>">Resume review</a>
+            <% if (isRetiredAction(draft.actionType)) { %>
+              <form method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/discard">
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                <button class="button button--secondary" type="submit">Discard retired review</button>
+              </form>
+            <% } else { %>
+              <a class="button button--secondary" href="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>">Resume review</a>
+            <% } %>
           </li>
         <% } %>
       </ul>

@@ -1,7 +1,7 @@
 const express = require('express');
 const crypto = require('node:crypto');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
-const { FinanceServiceError, createFinanceService, normalizeId, normalizeSearchTerm } = require('../services/financeService');
+const { normalizeId } = require('../services/financeService');
 const { AnnualFinanceError, FINANCE_ROSTER_QUERY_PHASES, createAnnualFinanceService } = require('../services/annualFinanceService');
 const { FinanceCasesError, createAnnualFinanceCasesService } = require('../services/annualFinanceCasesService');
 const {
@@ -12,32 +12,15 @@ const {
   StudentDocumentFinanceClearanceError,
   createStudentDocumentFinanceClearanceService
 } = require('../services/studentDocumentFinanceClearanceService');
-const { isDuplicateKeyError } = require('../config/database');
 const { FinanceReviewDraftError } = require('../services/financeReviewDraftService');
 const { actionByPath, createFinanceReviewActionService, normalizeActionInput } = require('../services/financeReviewActionService');
 const { createStatementProjection } = require('../utils/financeStatementProjection');
 const { formatFinanceDateTime, manilaWeekStartDate } = require('../utils/financeDateTime');
 const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
 
-const notices = {
-  accountCreated: 'Financial account created.',
-  transactionRecorded: 'Financial transaction recorded.',
-  existingPaymentCleared: 'The selected recorded payment was assigned to the enrollment clearance.'
-};
 const FINANCE_ROSTER_QUERY_PHASE_SET = new Set(FINANCE_ROSTER_QUERY_PHASES);
 const FINANCE_REPORT_QUERY_PHASE_SET = new Set(FINANCE_REPORT_QUERY_PHASES);
-
-function formValues(input = {}) {
-  const value = (key, maxLength) => typeof input?.[key] === 'string' ? input[key].slice(0, maxLength) : '';
-  return {
-    transactionType: value('transactionType', 30),
-    amount: value('amount', 32),
-    description: value('description', 500),
-    referenceNo: value('referenceNo', 100),
-    clearEnrollmentId: value('clearEnrollmentId', 10),
-    confirmEnrollmentClearance: value('confirmEnrollmentClearance', 1)
-  };
-}
+const RETIRED_LEGACY_ACCOUNT_POST = /^\/students\/\d{1,10}\/(?:account|transactions|enrollment-clearance)$/;
 
 function submittedText(input, name, maxLength) {
   return typeof input?.[name] === 'string' ? input[name].slice(0, maxLength).replace(/[\u0000-\u001f\u007f]/g, '') : '';
@@ -75,26 +58,8 @@ function recoveryFields(input = {}) {
     .filter((field) => field.value !== '');
 }
 
-function searchTermFromQuery(req) {
-  try {
-    return normalizeSearchTerm(req.query.search);
-  } catch {
-    return '';
-  }
-}
-
-function detailUrl(req, studentId, notice) {
-  const query = new URLSearchParams();
-  const searchTerm = searchTermFromQuery(req);
-  if (searchTerm) query.set('search', searchTerm);
-  if (notice) query.set('notice', notice);
-  const suffix = query.toString();
-  return `/finance/students/${studentId}${suffix ? `?${suffix}` : ''}`;
-}
-
-function createFinanceRouter({ getPool, sql, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, documentClearanceService, financeReviewActionService, sessionSecret = '', logger = console } = {}) {
+function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, documentClearanceService, financeReviewActionService, sessionSecret = '', logger = console } = {}) {
   const router = express.Router();
-  const service = financeService || createFinanceService({ getPool, sql });
   const annual = annualFinanceService || createAnnualFinanceService({ getPool, sql });
   const cases = financeCasesService || createAnnualFinanceCasesService({ getPool, sql });
   const reports = financeReportsService || createAnnualFinanceReportsService({ getPool, sql });
@@ -258,7 +223,7 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
   }
 
   function isRecoverableFinanceValidation(error) {
-    return [FinanceReviewDraftError, AnnualFinanceError, FinanceServiceError, FinanceCasesError, StudentDocumentFinanceClearanceError]
+    return [FinanceReviewDraftError, AnnualFinanceError, FinanceCasesError, StudentDocumentFinanceClearanceError]
       .some((ErrorType) => error instanceof ErrorType) && [400, 409, 422].includes(Number(error.status));
   }
 
@@ -306,11 +271,6 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
         });
       } catch { /* Reopen the account below with the entered values. */ }
     }
-    if (action?.context.studentId && ['legacy_account_create', 'legacy_transaction', 'legacy_enrollment_clearance'].includes(action.type)) {
-      return renderStudent(req, res, action.context.studentId, {
-        status, error: error.message, transactionValues: req.body || {}, clearanceValues: normalizedInput, failedAction
-      });
-    }
     if (action?.type === 'departure_review') return renderDepartureQueue(req, res, { status, error: error.message, failedAction });
     if (action?.type === 'annual_assessment') {
       try {
@@ -351,7 +311,9 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
       const drafts = await reviewActions.listPending(req.authUser.id);
       return res.set('Cache-Control', 'private, no-store').render('finance/review-drafts', {
         title: 'Saved finance reviews', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), drafts,
-        actionLabel: (type) => reviewActions.actionLabel(type), formatFinanceDateTime
+        actionLabel: (type) => reviewActions.actionLabel(type),
+        isRetiredAction: (type) => reviewActions.isRetiredAction?.(type) === true,
+        formatFinanceDateTime
       });
     } catch (error) {
       if (error instanceof FinanceReviewDraftError) return res.status(error.status).render('error', { title: 'Finance reviews', message: error.message });
@@ -446,6 +408,9 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
 
   router.use(async (req, res, next) => {
     if (req.method !== 'POST') return next();
+    if (RETIRED_LEGACY_ACCOUNT_POST.test(req.path)) return res.status(410).set('Cache-Control', 'private, no-store').render('error', {
+      title: 'Legacy account action retired', message: 'Legacy account creation, transactions, and enrollment clearance have been retired. Use annual Finance for current account updates.'
+    });
     if (!hasValidCsrfToken(req)) return res.status(403).set('Cache-Control', 'private, no-store').render('error', {
       title: 'Forbidden', message: 'The form session expired. Reload the page and try again.'
     });
@@ -726,76 +691,6 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
     }
   }
 
-  async function renderWorkspace(req, res, { status = 200, searchTerm = req.query.search || '', searchError = null } = {}) {
-    try {
-      const [result, pendingEnrollments] = await Promise.all([
-        service.searchStudents(searchTerm),
-        service.listPendingEnrollmentClearances?.(req.authUser.id) || []
-      ]);
-      const recentAccounts = !result.searchTerm && service.listRecentAccounts
-        ? await service.listRecentAccounts(req.authUser.id)
-        : [];
-      return res.status(status).set('Cache-Control', 'private, no-store').render('finance/workspace', {
-        title: 'Finance Workspace',
-        currentUser: req.authUser,
-        csrfToken: ensureCsrfToken(req),
-        searchTerm: result.searchTerm,
-        searchSuffix: result.searchTerm ? `?search=${encodeURIComponent(result.searchTerm)}` : '',
-        students: result.students,
-        recentAccounts,
-        pendingEnrollments,
-        searchError,
-        student: null,
-        account: null,
-        transactions: [],
-        error: null,
-        notice: notices[req.query.notice] || null,
-        transactionValues: formValues()
-      });
-    } catch (error) {
-      if (error instanceof FinanceServiceError) {
-        return res.status(error.status).render('finance/workspace', {
-          title: 'Finance Workspace', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), searchTerm: '', students: [],
-          searchSuffix: '',
-          searchError: error.message, recentAccounts: [], student: null, account: null, transactions: [], error: null,
-          notice: null, transactionValues: formValues(), pendingEnrollments: []
-        });
-      }
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The finance workspace is temporarily unavailable.' });
-    }
-  }
-
-  async function renderStudent(req, res, studentId, { status = 200, error = null, transactionValues = {}, clearanceValues = {}, failedAction = null } = {}) {
-    try {
-      const result = await service.getStudentAccount(studentId);
-      if (!result) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
-      const searchTerm = searchTermFromQuery(req);
-      const searchSuffix = searchTerm ? `?search=${encodeURIComponent(searchTerm)}` : '';
-      return res.status(status).render('finance/workspace', {
-        title: 'Financial Account',
-        currentUser: req.authUser,
-        csrfToken: ensureCsrfToken(req),
-        searchTerm,
-        searchSuffix,
-        students: [],
-        searchError: null,
-        student: result.student,
-        account: result.account,
-        transactions: result.transactions,
-        pendingEnrollments: result.pendingEnrollments || [],
-        availableEnrollmentPayments: result.availableEnrollmentPayments || [],
-        error,
-        notice: notices[req.query.notice] || null,
-        transactionValues: formValues(transactionValues), clearanceValues, failedAction, formatFinanceDateTime
-      });
-    } catch (loadError) {
-      if (loadError instanceof FinanceServiceError && loadError.status === 409) {
-        return res.redirect(303, `/finance/students/${studentId}/annual`);
-      }
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The financial account could not be loaded.' });
-    }
-  }
-
   async function renderDocumentClearanceQueue(req, res, { status = 200, error = null, filters = req.query, failedAction = null } = {}) {
     try {
       const queue = await documentClearance.getFinanceQueue(req.authUser.id, filters);
@@ -859,7 +754,9 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
     }
   });
   router.get('/', (req, res) => renderAnnualRoster(req, res));
-  router.get('/legacy', (req, res) => renderWorkspace(req, res));
+  router.get('/legacy', (_req, res) => res.status(410).set('Cache-Control', 'private, no-store').render('error', {
+    title: 'Legacy account history retired', message: 'The legacy account history workspace has been retired. Open the Finance roster to review student accounts.'
+  }));
   router.get('/schedules', (req, res) => renderScheduleWorkspace(req, res));
   router.get('/reports', async (req, res) => {
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
@@ -1186,81 +1083,10 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
   router.get('/students/:id', async (req, res) => {
     const studentId = normalizeId(req.params.id);
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
-    try {
-      const ledger = await annual.getStudentLedger(req.authUser.id, studentId, 'finance');
-      if (ledger.terms.some((term) => term.intake_status !== 'legacy')) return renderAnnualStudent(req, res, studentId);
-      return renderStudent(req, res, studentId);
-    } catch (error) {
-      if (error instanceof AnnualFinanceError) return res.status(error.status).render('error', { title: 'Finance account', message: error.message });
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The finance account could not be loaded.' });
-    }
-  });
-
-  router.post('/students/:id/account', async (req, res) => {
-    if (!hasValidCsrfToken(req)) {
-      return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
-    }
-    const studentId = normalizeId(req.params.id);
-    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
-    try {
-      await service.createAccount(req.authUser.id, studentId);
-      return res.redirect(303, detailUrl(req, studentId, 'accountCreated'));
-    } catch (error) {
-      if (error instanceof FinanceServiceError && error.status === 403) {
-        return res.status(403).render('error', { title: 'Forbidden', message: 'Finance access is no longer active. Sign in again.' });
-      }
-      if (error instanceof FinanceServiceError) return renderStudent(req, res, studentId, { status: error.status, error: error.message });
-      if (isDuplicateKeyError(error)) {
-        return renderStudent(req, res, studentId, { status: 409, error: 'This student already has a financial account.' });
-      }
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The financial account could not be created.' });
-    }
-  });
-
-  router.post('/students/:id/transactions', async (req, res) => {
-    if (!hasValidCsrfToken(req)) {
-      return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
-    }
-    const studentId = normalizeId(req.params.id);
-    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
-    try {
-      await service.recordTransaction(req.authUser.id, studentId, req.body);
-      return res.redirect(303, detailUrl(req, studentId, 'transactionRecorded'));
-    } catch (error) {
-      if (error instanceof FinanceServiceError) {
-        if (error.status === 403) {
-          return res.status(403).render('error', { title: 'Forbidden', message: 'Finance access is no longer active. Sign in again.' });
-        }
-        return renderStudent(req, res, studentId, { status: error.status, error: error.message, transactionValues: req.body });
-      }
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The financial transaction could not be recorded.' });
-    }
-  });
-
-  router.post('/students/:id/enrollment-clearance', async (req, res) => {
-    if (!hasValidCsrfToken(req)) {
-      return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
-    }
-    const studentId = normalizeId(req.params.id);
-    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
-    try {
-      await service.clearEnrollmentWithExistingPayment(
-        req.authUser.id, studentId, req.body?.enrollmentId, req.body?.paymentTransactionId,
-        req.body?.confirmEnrollmentClearance
-      );
-      return res.redirect(303, detailUrl(req, studentId, 'existingPaymentCleared'));
-    } catch (error) {
-      if (error instanceof FinanceServiceError) {
-        if (error.status === 403) {
-          return res.status(403).render('error', { title: 'Forbidden', message: 'Finance access is no longer active. Sign in again.' });
-        }
-        return renderStudent(req, res, studentId, { status: error.status, error: error.message });
-      }
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The enrollment clearance could not be updated.' });
-    }
+    return res.redirect(303, `/finance/students/${studentId}/annual`);
   });
 
   return router;
 }
 
-module.exports = { createFinanceRouter, formValues };
+module.exports = { createFinanceRouter };

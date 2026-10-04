@@ -9,12 +9,11 @@
     <a class="finance-queue-link" href="/finance/departures"><span>Departure reviews</span><strong><%= Number(overview.queueCounts?.departureReview || 0).toLocaleString('en-US') %></strong><span>students awaiting a decision</span></a>
     <a class="finance-queue-link" href="/finance/document-clearance"><span>Document clearance</span><strong><%= Number(overview.queueCounts?.documentClearance || 0).toLocaleString('en-US') %></strong><span>requests awaiting Finance</span></a>
     <a class="finance-queue-link" href="/finance/review-drafts"><span>Saved reviews</span><strong><%= Number(overview.queueCounts?.savedReviews || 0).toLocaleString('en-US') %></strong><span>your unfinished changes</span></a>
-    <a class="finance-queue-link" href="/finance/legacy"><span>Legacy account history</span><strong aria-hidden="true">→</strong><span>open older account records</span></a>
   </nav>
 
   <section class="finance-overview" aria-labelledby="finance-overview-heading">
     <div class="finance-overview__top">
-      <div><h2 id="finance-overview-heading">Term payment status</h2><p>Each active placement appears once in the selected view. Legacy balances and unallocated credit stay separate.</p></div>
+      <div><h2 id="finance-overview-heading">Term payment status</h2><p>Each active placement appears once in the selected view. Unallocated credit stays separate.</p></div>
       <% if (overview.schoolYears.length) { %>
         <form class="dashboard-filter dashboard-filter--finance" method="get" action="/finance/overview">
           <div class="finance-overview-filter-primary">
@@ -53,7 +52,7 @@
     <% } %>
     <details class="finance-overview-method">
       <summary>How Finance status is assigned</summary>
-      <p>Term balances include recorded charges and adjustments after released allocations, reversals, and reconciliations. Whole-term view works with existing whole-term assessments. An installment view needs one assessed DP, Prelim, Midterm, and Finals tuition line; missing or ambiguous lines and missing staff confirmation need review. Unattributed legacy balances and unallocated credits are shown separately and are not assigned to a term.</p>
+      <p>Term balances include recorded charges and adjustments after released allocations, reversals, and reconciliations. Whole-term view works with existing whole-term assessments. An installment view needs one assessed DP, Prelim, Midterm, and Finals tuition line; missing or ambiguous lines and missing staff confirmation need review. Previous account balances and unallocated credits are shown separately and are not assigned to a term.</p>
     </details>
   </section>
 </main>

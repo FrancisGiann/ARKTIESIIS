@@ -195,7 +195,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   }));
   router.use('/registrar/intake/legacy', requireAuth, requireRole('registrar'), createStudentIntakeRouter({ getPool, sql, studentSetupService: studentSetup }));
   router.use('/finance', requireAuth, requireRole('finance', 'database_admin'), createFinanceRouter({ getPool, sql,
-    financeService: financesService, annualFinanceService: annualFinancesService, financeCasesService: annualFinanceCases,
+    annualFinanceService: annualFinancesService, financeCasesService: annualFinanceCases,
     financeReportsService: annualFinanceReports, financeDashboardService: financeDashboard, financeReviewActionService,
     documentClearanceService: studentDocumentClearance, sessionSecret: environment.sessionSecret }));
   router.use('/admin', requireAuth, requireRole('database_admin'), createAdminRouter({ getPool, sql, adminService }));

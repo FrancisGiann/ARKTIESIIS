@@ -4,8 +4,7 @@ const financeNavigationItems = [
   { id: 'finance-schedules', label: 'Fee schedules', href: '/finance/schedules', group: 'Finance' },
   { id: 'finance-reports', label: 'Reports', href: '/finance/reports', group: 'Finance' },
   { id: 'finance-departures', label: 'Departure review', href: '/finance/departures', group: 'Finance' },
-  { id: 'finance-review-drafts', label: 'Saved reviews', href: '/finance/review-drafts', group: 'Finance' },
-  { id: 'finance-legacy', label: 'Legacy account history', href: '/finance/legacy', group: 'Finance' }
+  { id: 'finance-review-drafts', label: 'Saved reviews', href: '/finance/review-drafts', group: 'Finance' }
 ];
 
 const navigationByRole = {
@@ -51,8 +50,7 @@ function buildNavigation(role, currentPath = '') {
   const pathEnd = queryStart === -1 ? queryEnd : Math.min(queryStart, queryEnd);
   const path = source.slice(0, pathEnd) || '/';
   const query = new URLSearchParams(queryStart === -1 || queryStart >= queryEnd ? '' : source.slice(queryStart + 1, queryEnd));
-  const annualFinanceStudentPath = /^\/finance\/students\/[^/]+\/(?:annual|statement)(?:\/|$)/.test(path);
-  const legacyFinanceStudentPath = /^\/finance\/students\/[^/]+(?:\/.*)?$/.test(path) && !annualFinanceStudentPath;
+  const financeStudentPath = /^\/finance\/students\/[^/]+(?:\/.*)?$/.test(path);
   const roleItems = (navigationByRole[role] || []).map((item) => {
     let current = false;
     if (item.id === 'overview') current = path === '/admin' || path === '/registrar';
@@ -74,12 +72,11 @@ function buildNavigation(role, currentPath = '') {
       ? path.startsWith('/student/finance')
       : false;
     else if (item.id === 'finance-overview') current = path === '/finance/overview';
-    else if (item.id === 'finance-roster') current = path === '/finance' || annualFinanceStudentPath;
+    else if (item.id === 'finance-roster') current = path === '/finance' || financeStudentPath;
     else if (item.id === 'finance-schedules') current = path.startsWith('/finance/schedules');
     else if (item.id === 'finance-reports') current = path.startsWith('/finance/reports');
     else if (item.id === 'finance-departures') current = path.startsWith('/finance/departures');
     else if (item.id === 'finance-review-drafts') current = path.startsWith('/finance/review-drafts');
-    else if (item.id === 'finance-legacy') current = path.startsWith('/finance/legacy') || legacyFinanceStudentPath;
     else if (item.id === 'documents') current = path === '/documents' || path.startsWith('/documents/');
     else if (item.id === 'home') current = path === '/student';
     return { ...item, current };

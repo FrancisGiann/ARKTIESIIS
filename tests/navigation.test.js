@@ -179,17 +179,17 @@ test('student section navigation uses real server pages with path-specific curre
   assert.equal(buildNavigation('registrar', '//').currentPage, null, 'malformed network-path input does not make navigation throw');
 });
 
-test('finance navigation marks one destination for workspace, account, and annual statement routes', () => {
+test('finance navigation keeps roster selected for annual accounts, statements, and historic confirmations', () => {
   const contexts = [
     ['/finance/overview', 'finance-overview', '/finance/overview'],
     ['/finance', 'finance-roster', '/finance'],
     ['/finance/schedules', 'finance-schedules', '/finance/schedules'],
     ['/finance/reports', 'finance-reports', '/finance/reports'],
     ['/finance/departures', 'finance-departures', '/finance/departures'],
-    ['/finance/legacy', 'finance-legacy', '/finance/legacy'],
-    ['/finance/students/22', 'finance-legacy', '/finance/legacy'],
+    ['/finance/students/22', 'finance-roster', '/finance'],
     ['/finance/students/22/annual', 'finance-roster', '/finance'],
-    ['/finance/students/22/statement', 'finance-roster', '/finance']
+    ['/finance/students/22/statement', 'finance-roster', '/finance'],
+    ['/finance/students/22/legacy/payments/105/confirmation', 'finance-roster', '/finance']
   ];
 
   for (const role of ['finance', 'database_admin']) {
@@ -200,15 +200,16 @@ test('finance navigation marks one destination for workspace, account, and annua
       assert.equal(navigation.currentPage, expectedId);
       assert.equal(navigation.items.find((item) => item.id === expectedId).href, expectedHref);
     }
+    assert.equal(buildNavigation(role, '/finance/legacy').currentPage, null);
   }
 });
 
 test('authenticated navigation only exposes destinations available to each role', async () => {
   const cases = [
-    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Audit activity', 'Documents', 'Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews', 'Legacy account history'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts', '/finance/legacy'], forbidden: [] },
+    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Audit activity', 'Documents', 'Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: [] },
     { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollment intake', 'Document review', 'Grade review', 'Class schedules', 'Subject catalog', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
     { role: 'teacher', path: '/teacher', labels: ['My classes', 'Submit grades'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/admin'] },
-    { role: 'finance', path: '/finance', labels: ['Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews', 'Legacy account history'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts', '/finance/legacy'], forbidden: ['/registrar/records', '/documents', '/admin'] },
+    { role: 'finance', path: '/finance', labels: ['Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: ['/registrar/records', '/documents', '/admin'] },
     { role: 'student', path: '/student', labels: ['Home', 'Schedule', 'Grades', 'Finance', 'My records', 'Documents'], forbidden: ['/registrar/records', '/finance', '/admin'] }
   ];
 
@@ -403,8 +404,9 @@ test('nested workspace pages mark the current destination and provide fixed pare
   const financeApp = createApp({ databasePool: createAuthPool('finance'), environment, ...services() });
   await withServer(financeApp, async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
-    const account = await fetch(`${baseUrl}/finance/students/22`, { headers: { cookie } });
-    assert.match(await account.text(), /class="context-back" href="\/finance\/legacy"/);
+    const account = await fetch(`${baseUrl}/finance/students/22`, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(account.status, 303);
+    assert.equal(account.headers.get('location'), '/finance/students/22/annual');
   });
 });
 

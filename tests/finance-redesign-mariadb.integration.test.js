@@ -19,6 +19,7 @@ const { createFinanceRouter } = require('../src/routes/finance');
 const { formatMoney } = require('../src/utils/formatMoney');
 
 const socketPath = process.env.FINANCE_REDESIGN_TEST_SOCKET;
+const databaseUser = process.env.FINANCE_REDESIGN_TEST_USER || 'root';
 const temporaryRoot = `${path.resolve(os.tmpdir())}${path.sep}`;
 const repoRoot = path.resolve(__dirname, '..');
 
@@ -79,14 +80,14 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
 
   const databaseName = safeDatabaseName();
   assert.match(databaseName, /^arktiesiis_finance_redesign_\d+_[a-f0-9]{10}$/);
-  const adminPool = mysql.createPool({ socketPath, user: 'root', password: '', waitForConnections: true, connectionLimit: 2, queueLimit: 0 });
+  const adminPool = mysql.createPool({ socketPath, user: databaseUser, password: '', waitForConnections: true, connectionLimit: 2, queueLimit: 0 });
   let appPool;
   let reportReadPool;
   let normalReportPool;
   try {
     await adminPool.query(`CREATE DATABASE \`${databaseName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     appPool = mysql.createPool({
-      socketPath, user: 'root', password: '', database: databaseName,
+      socketPath, user: databaseUser, password: '', database: databaseName,
       waitForConnections: true, connectionLimit: 6, queueLimit: 0,
       supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false,
       dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'], multipleStatements: false
@@ -279,7 +280,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     const cases = createAnnualFinanceCasesService({ getPool, sql });
     const dashboard = createFinanceDashboardService({ getPool, sql });
     reportReadPool = mysql.createPool({
-      socketPath, user: 'root', password: '', database: databaseName,
+      socketPath, user: databaseUser, password: '', database: databaseName,
       waitForConnections: true, connectionLimit: 1, queueLimit: 0,
       supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false,
       dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'], multipleStatements: false
@@ -295,7 +296,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     const financeReports = createAnnualFinanceReportsService({ getPool: async () => reportPool, sql });
     const strictAnnual = createAnnualFinanceService({ getPool: async () => reportPool, sql });
     normalReportPool = mysql.createPool({
-      socketPath, user: 'root', password: '', database: databaseName,
+      socketPath, user: databaseUser, password: '', database: databaseName,
       waitForConnections: true, connectionLimit: 1, queueLimit: 0,
       supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false,
       dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'], multipleStatements: false
@@ -519,7 +520,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     assert.equal(migratedVersions014.at(-1)?.version, 'v2.014');
     await reportReadPool.end();
     reportReadPool = mysql.createPool({
-      socketPath, user: 'root', password: '', database: databaseName,
+      socketPath, user: databaseUser, password: '', database: databaseName,
       waitForConnections: true, connectionLimit: 1, queueLimit: 0,
       supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false,
       dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'], multipleStatements: false
@@ -795,33 +796,41 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     assert.equal(editedStaleDraft.input.amount, '15.00', 'stale allocation drafts remain editable with current balances');
     await reviewActions.discard(actorId, stalePaymentDraft.id);
 
-    const [legacyStudent] = await appPool.execute(
-      "INSERT INTO students (student_no, lrn, first_name, last_name, status) VALUES ('FIN-REDESIGN-LEGACY-ACCOUNT', '123456789099', 'Legacy', 'Account', 'active')"
-    );
-    const legacyStudentId = Number(legacyStudent.insertId);
-    const [createdLegacyAccount] = await appPool.execute('INSERT INTO financial_accounts (student_id, balance) VALUES (?, 0.00)', [legacyStudentId]);
-    const legacyAccountId = Number(createdLegacyAccount.insertId);
-    const legacyDraft = await reviewActions.startDraft(actorId, sessionBinding, `/students/${legacyStudentId}/transactions`, {
-      transactionType: 'charge', amount: '12.34', description: 'Reviewed integration charge'
-    });
-    const reviewedLegacyDraft = await reviewActions.freshReview(actorId, sessionBinding, legacyDraft.id);
+    const retiredDraftId = crypto.randomUUID();
+    const retiredIdempotencyKey = crypto.randomUUID();
+    const retiredStudentId = legacyScenario.studentId;
+    const legacyDraftData = {
+      entityContext: JSON.stringify({ studentId: retiredStudentId }),
+      input: JSON.stringify({ transactionType: 'charge', amount: '12.34', description: 'Historical pending draft' }),
+      preview: JSON.stringify({ actionLabel: 'Record legacy account transaction' })
+    };
+    await appPool.execute(`INSERT INTO finance_review_drafts
+      (id, owner_user_id, action_type, entity_context_json, input_json, preview_json,
+        dependency_fingerprint, idempotency_key, session_binding_hmac, review_expires_at)
+      VALUES (?, ?, 'legacy_transaction', ?, ?, ?, ?, ?, ?, DATE_ADD(UTC_TIMESTAMP(3), INTERVAL 20 MINUTE))`,
+    [retiredDraftId, actorId, legacyDraftData.entityContext, legacyDraftData.input, legacyDraftData.preview,
+      'a'.repeat(64), retiredIdempotencyKey, sessionBinding]);
+    assert.equal(reviewActions.matchesMutation(`/students/${retiredStudentId}/transactions`), false,
+      'retired transaction paths cannot prepare new reviewed drafts');
     async function legacyWriterCounts() {
-      const [account] = await appPool.execute('SELECT CAST(balance AS CHAR(40)) AS balance FROM financial_accounts WHERE id = ?', [legacyAccountId]);
-      const [transactions] = await appPool.execute('SELECT COUNT(*) AS count FROM financial_transactions WHERE financial_account_id = ?', [legacyAccountId]);
+      const [accounts] = await appPool.execute(`SELECT COUNT(*) AS count, CAST(COALESCE(SUM(balance), 0) AS CHAR(40)) AS balance
+        FROM financial_accounts WHERE student_id = ?`, [retiredStudentId]);
+      const [transactions] = await appPool.execute(`SELECT COUNT(*) AS count FROM financial_transactions AS transaction_record
+        INNER JOIN financial_accounts AS account ON account.id = transaction_record.financial_account_id WHERE account.student_id = ?`, [retiredStudentId]);
       const [audits] = await appPool.execute("SELECT COUNT(*) AS count FROM audit_logs WHERE user_id = ? AND action = 'transaction_recorded'", [actorId]);
-      return { balance: String(account[0].balance), transactions: Number(transactions[0].count), audits: Number(audits[0].count) };
+      return { accounts: Number(accounts[0].count), balance: String(accounts[0].balance), transactions: Number(transactions[0].count), audits: Number(audits[0].count) };
     }
-    const legacyBeforeRollback = await legacyWriterCounts();
-    await withDraftCommitFailure(reviewedLegacyDraft.id, async () => {
-      await assert.rejects(reviewActions.commit(actorId, sessionBinding, reviewedLegacyDraft.id,
-        reviewedLegacyDraft.revision, reviewedLegacyDraft.dependencyFingerprint));
-    });
-    assert.deepEqual(await legacyWriterCounts(), legacyBeforeRollback,
-      'legacy account balance, transaction, and audit roll back with draft completion');
-    const savedLegacy = await reviewActions.commit(actorId, sessionBinding, reviewedLegacyDraft.id,
-      reviewedLegacyDraft.revision, reviewedLegacyDraft.dependencyFingerprint);
-    assert.equal(savedLegacy.committed, true);
-    assert.equal((await legacyWriterCounts()).balance, '12.34');
+    const legacyBeforeRetiredCommit = await legacyWriterCounts();
+    await assert.rejects(reviewActions.freshReview(actorId, sessionBinding, retiredDraftId), (error) => error.status === 410);
+    await assert.rejects(reviewActions.updateDraft(actorId, sessionBinding, retiredDraftId, { amount: '99.99' }),
+      (error) => error.status === 410);
+    await assert.rejects(reviewActions.commit(actorId, sessionBinding, retiredDraftId, 1, 'a'.repeat(64)),
+      (error) => error.status === 410);
+    assert.deepEqual(await legacyWriterCounts(), legacyBeforeRetiredCommit,
+      'retired pending drafts cannot reach the legacy transaction writer');
+    await reviewActions.discard(actorId, retiredDraftId);
+    assert.equal((await reviewActions.getDraft(actorId, retiredDraftId)).status, 'discarded',
+      'owners may still discard their retired pending draft');
 
     const ownerDraft = await startPaymentDraft(paymentStudentId, '1.00');
     const [secondActor] = await appPool.execute(

@@ -2,13 +2,13 @@
 
 const crypto = require('node:crypto');
 const { sql: defaultSql, getPool: defaultGetPool } = require('../config/database');
-const { createFinanceService } = require('./financeService');
 const { createAnnualFinanceService } = require('./annualFinanceService');
 const { createAnnualFinanceCasesService } = require('./annualFinanceCasesService');
 const { createStudentDocumentFinanceClearanceService } = require('./studentDocumentFinanceClearanceService');
-const { createFinanceReviewDraftService } = require('./financeReviewDraftService');
+const { FinanceReviewDraftError, createFinanceReviewDraftService } = require('./financeReviewDraftService');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const RETIRED_ACTION_TYPES = new Set(['legacy_account_create', 'legacy_transaction', 'legacy_enrollment_clearance']);
 const SAFE_ACTIONS = Object.freeze([
   { type: 'document_clearance_decision', label: 'Document clearance decision', pattern: /^\/document-clearance\/([0-9a-f-]{36})\/decision$/, ids: ['requestId'] },
   { type: 'schedule_create', label: 'Create fee schedule version', pattern: /^\/schedules$/, ids: [] },
@@ -31,10 +31,7 @@ const SAFE_ACTIONS = Object.freeze([
   { type: 'legacy_opening_transfer', label: 'Transfer verified legacy opening balance', pattern: /^\/students\/(\d{1,10})\/annual\/legacy-opening\/transfer$/, ids: ['studentId'] },
   { type: 'term_finance_approval', label: 'Approve term finance status', pattern: /^\/annual\/terms\/(\d{1,10})\/approval$/, ids: ['enrollmentId'] },
   { type: 'voucher_review_resolution', label: 'Resolve voucher review', pattern: /^\/annual\/(\d{1,10})\/voucher-review-resolution$/, ids: ['annualId'] },
-  { type: 'term_clearance', label: 'Record signed term clearance', pattern: /^\/annual\/terms\/(\d{1,10})\/clearance$/, ids: ['enrollmentId'] },
-  { type: 'legacy_account_create', label: 'Open legacy account', pattern: /^\/students\/(\d{1,10})\/account$/, ids: ['studentId'] },
-  { type: 'legacy_transaction', label: 'Record legacy account transaction', pattern: /^\/students\/(\d{1,10})\/transactions$/, ids: ['studentId'] },
-  { type: 'legacy_enrollment_clearance', label: 'Assign recorded payment to enrollment clearance', pattern: /^\/students\/(\d{1,10})\/enrollment-clearance$/, ids: ['studentId'] }
+  { type: 'term_clearance', label: 'Record signed term clearance', pattern: /^\/annual\/terms\/(\d{1,10})\/clearance$/, ids: ['enrollmentId'] }
 ]);
 
 const READ_ONLY_POSTS = Object.freeze([
@@ -64,10 +61,7 @@ const ACTION_WRITERS = Object.freeze({
   legacy_opening_transfer: ({ services, actorId, studentId, input }) => services.annual.transferLegacyOpeningLiability(actorId, studentId, input),
   term_finance_approval: ({ services, actorId, context, input }) => services.annual.approveTerm(actorId, context.enrollmentId, input),
   voucher_review_resolution: ({ services, actorId, context, input }) => services.annual.resolveVoucherReview(actorId, context.annualId, input),
-  term_clearance: ({ services, actorId, context, input }) => services.annual.signTermClearance(actorId, context.enrollmentId, input),
-  legacy_account_create: async ({ services, actorId, studentId }) => ({ accountId: await services.finance.createAccount(actorId, studentId) }),
-  legacy_transaction: ({ services, actorId, studentId, input }) => services.finance.recordTransaction(actorId, studentId, input),
-  legacy_enrollment_clearance: ({ services, actorId, studentId, input }) => services.finance.clearEnrollmentWithExistingPayment(actorId, studentId, input.enrollmentId, input.paymentTransactionId, input.confirmEnrollmentClearance)
+  term_clearance: ({ services, actorId, context, input }) => services.annual.signTermClearance(actorId, context.enrollmentId, input)
 });
 
 function safeIntegerId(value) {
@@ -189,6 +183,15 @@ function jsonHash(value) {
 
 function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defaultSql, draftService = null } = {}) {
   const drafts = draftService || createFinanceReviewDraftService({ getPool, sql });
+
+  function actionForDraft(actionType) {
+    if (RETIRED_ACTION_TYPES.has(actionType)) {
+      throw new FinanceReviewDraftError('This legacy account review has been retired. Discard it from Saved reviews.', 410);
+    }
+    const action = SAFE_ACTIONS.find((item) => item.type === actionType);
+    if (!action) throw new FinanceReviewDraftError('The saved finance action is no longer supported.', 410);
+    return action;
+  }
 
   async function resolveStudentId(request, context) {
     if (context.studentId) return Number(context.studentId);
@@ -595,7 +598,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
         WHERE transaction_record.id = @transactionId AND account.student_id = @studentId`,
       [['transactionId', sql.Int, legacyTransactionId], ['studentId', sql.Int, context.studentId]]);
     }
-    if (context.studentId && ['legacy_opening_transfer', 'legacy_account_create', 'legacy_transaction'].includes(action.type)) {
+    if (context.studentId && action.type === 'legacy_opening_transfer') {
       await row('Legacy account', `SELECT CONCAT(CASE WHEN account.id IS NULL THEN 'No legacy account opened yet'
           ELSE CONCAT('Account balance ₱', CAST(account.balance AS CHAR(40)), ' · ',
             COALESCE((SELECT COUNT(*) FROM financial_transactions AS transaction_record WHERE transaction_record.financial_account_id = account.id), 0), ' recorded entries') END) AS target
@@ -615,13 +618,6 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
         .query('SELECT school_year, grade_level, voucher_code FROM annual_enrollments WHERE id = @annualId');
       const parent = annual.recordset?.[0];
       if (parent) Object.assign(resolvedContext, { schoolYear: parent.school_year, gradeLevel: parent.grade_level, voucherCode: parent.voucher_code });
-    }
-    if (action.type === 'legacy_enrollment_clearance') {
-      resolvedContext.enrollmentId = safeIntegerId(input.enrollmentId);
-      resolvedContext.paymentTransactionId = safeIntegerId(input.paymentTransactionId);
-    }
-    if (action.type === 'legacy_transaction' && input.clearEnrollmentId) {
-      resolvedContext.enrollmentId = safeIntegerId(input.clearEnrollmentId);
     }
     if (locking && studentId) await lockStudentRows(tx, studentId);
     if (locking) await lockActionTargets(tx, resolvedContext, input);
@@ -762,29 +758,6 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
         amount: adjustment.amount || '—', reason: adjustment.reason || ''
       }));
     }
-    if (studentId && ['legacy_transaction', 'legacy_enrollment_clearance'].includes(action.type)) {
-      const enrollmentRows = await tx.request().input('studentId', sql.Int, studentId)
-        .query(`SELECT enrollment.id, CONCAT(term.school_year, ' · ', term.term,
-            CASE WHEN section.name IS NULL THEN '' ELSE CONCAT(' · ', section.name) END) AS label
-          FROM enrollments AS enrollment INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
-          LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
-          LEFT JOIN enrollment_clearances AS clearance ON clearance.enrollment_id = enrollment.id
-          WHERE enrollment.student_id = @studentId AND enrollment.enrollment_status = 'pending_payment'
-            AND enrollment.finalized_at IS NULL AND COALESCE(clearance.clearance_status, 'pending') = 'pending'
-          ORDER BY term.school_year DESC, term.id, enrollment.id`);
-      const paymentRows = await tx.request().input('studentId', sql.Int, studentId)
-        .query(`SELECT payment.id, DATE_FORMAT(payment.created_at, '%Y-%m-%d') AS event_date,
-            CAST(payment.amount AS CHAR(40)) AS amount, payment.reference_no
-          FROM financial_transactions AS payment INNER JOIN financial_accounts AS account
-            ON account.id = payment.financial_account_id
-          WHERE account.student_id = @studentId AND payment.transaction_type = 'payment'
-            AND NOT EXISTS (SELECT 1 FROM enrollment_clearances AS clearance WHERE clearance.payment_transaction_id = payment.id)
-          ORDER BY payment.created_at DESC, payment.id DESC LIMIT 100`);
-      const enrollmentOptions = (enrollmentRows.recordset || []).map((row) => ({ value: String(row.id), label: String(row.label) }));
-      const paymentOptions = (paymentRows.recordset || []).map((row) => ({ value: String(row.id),
-        label: `${row.event_date} · ₱${row.amount}${row.reference_no ? ` · ${row.reference_no}` : ''}` }));
-      preview.editorOptions = { ...(preview.editorOptions || {}), enrollments: enrollmentOptions, payments: paymentOptions };
-    }
     const fieldLabels = Object.entries(input)
       .filter(([name, value]) => !['allocations', 'allocationMode', 'rules', 'lines', 'adjustments', 'expectedPreviousSchedule'].includes(name)
         && !/id$/i.test(name) && (value == null || ['string', 'number', 'boolean'].includes(typeof value)))
@@ -894,8 +867,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
   async function freshReview(actorId, sessionBindingHmac, draftId) {
     const draft = await drafts.getDraft(actorId, draftId);
     if (draft.status !== 'pending') return draft;
-    const action = SAFE_ACTIONS.find((item) => item.type === draft.actionType);
-    if (!action) throw new Error('The saved finance action is no longer supported.');
+    const action = actionForDraft(draft.actionType);
     const review = await previewOutsideTransaction(action, draft.entityContext, draft.input);
     if (draft.sessionBindingHmac !== sessionBindingHmac || draft.dependencyFingerprint !== review.dependencyFingerprint || draft.reviewExpired) {
       draft.revision = await drafts.updateDraftInput(actorId, draft.id, sessionBindingHmac, review.normalizedInput, review);
@@ -912,8 +884,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
   async function updateDraft(actorId, sessionBindingHmac, draftId, input) {
     const existing = await drafts.getDraft(actorId, draftId);
     if (existing.status !== 'pending') throw new Error('A completed finance review cannot be edited.');
-    const action = SAFE_ACTIONS.find((item) => item.type === existing.actionType);
-    if (!action) throw new Error('The saved finance action is no longer supported.');
+    const action = actionForDraft(existing.actionType);
     const normalized = normalizeInput(input);
     const actionInput = normalizeActionInput(action.type, normalized);
     if (action.type === 'schedule_create') {
@@ -932,7 +903,6 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     const boundPool = { request: () => tx.request() };
     const options = { getPool: async () => boundPool, sql, transaction: tx };
     return {
-      finance: createFinanceService(options),
       annual: createAnnualFinanceService(options),
       cases: createAnnualFinanceCasesService(options),
       documentClearance: createStudentDocumentFinanceClearanceService(options)
@@ -956,8 +926,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       actorId, sessionBindingHmac, draftId, revision,
       review: { dependencyFingerprint: fingerprint, preview: {} },
       previewInTransaction: async (tx, draft) => {
-        const action = SAFE_ACTIONS.find((item) => item.type === draft.actionType);
-        if (!action) throw new Error('The saved finance action is no longer supported.');
+        const action = actionForDraft(draft.actionType);
         return calculateReview(tx, action, draft.entityContext, draft.input, true);
       },
       applyInTransaction: applyReviewedAction
@@ -975,7 +944,9 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     commit,
     discard: (actorId, draftId) => drafts.discardDraft(actorId, draftId),
     listPending: (actorId) => drafts.listPendingDrafts(actorId),
-    actionLabel: (type) => SAFE_ACTIONS.find((action) => action.type === type)?.label || 'Finance update',
+    isRetiredAction: (type) => RETIRED_ACTION_TYPES.has(type),
+    actionLabel: (type) => SAFE_ACTIONS.find((action) => action.type === type)?.label
+      || (RETIRED_ACTION_TYPES.has(type) ? 'Retired legacy account action' : 'Finance update'),
     afterCommitPath: (draft) => {
       const studentId = safeIntegerId(draft.entityContext?.studentId);
       const result = draft.committedResult || {};
@@ -998,11 +969,11 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           if (studentId && draft.input?.transactionType === 'payment' && Number.isSafeInteger(Number(result.transactionId))) {
             return `/finance/students/${studentId}/legacy/payments/${Number(result.transactionId)}/confirmation`;
           }
-          return studentId ? `/finance/students/${studentId}?notice=reviewSaved` : '/finance/legacy?notice=saved';
+          return studentId ? `/finance/students/${studentId}/annual?notice=reviewSaved` : '/finance?notice=saved';
         case 'departure_review': return '/finance/departures?notice=saved';
         case 'document_clearance_decision': return '/finance/document-clearance?notice=saved';
         case 'legacy_account_create':
-        case 'legacy_enrollment_clearance': return studentId ? `/finance/students/${studentId}?notice=reviewSaved` : '/finance/legacy?notice=saved';
+        case 'legacy_enrollment_clearance': return studentId ? `/finance/students/${studentId}/annual?notice=reviewSaved` : '/finance?notice=saved';
         case 'annual_credit_allocation':
         case 'annual_payment_metadata': return accountPath('payments');
         case 'annual_adjustment':
