@@ -4,7 +4,9 @@ const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { FinanceServiceError, createFinanceService, normalizeId, normalizeSearchTerm } = require('../services/financeService');
 const { AnnualFinanceError, FINANCE_ROSTER_QUERY_PHASES, createAnnualFinanceService } = require('../services/annualFinanceService');
 const { FinanceCasesError, createAnnualFinanceCasesService } = require('../services/annualFinanceCasesService');
-const { FinanceReportsError, createAnnualFinanceReportsService } = require('../services/annualFinanceReportsService');
+const {
+  FinanceReportsError, FINANCE_REPORT_QUERY_PHASES, createAnnualFinanceReportsService
+} = require('../services/annualFinanceReportsService');
 const { FinanceDashboardError, createFinanceDashboardService } = require('../services/financeDashboardService');
 const {
   StudentDocumentFinanceClearanceError,
@@ -23,6 +25,7 @@ const notices = {
   existingPaymentCleared: 'The selected recorded payment was assigned to the enrollment clearance.'
 };
 const FINANCE_ROSTER_QUERY_PHASE_SET = new Set(FINANCE_ROSTER_QUERY_PHASES);
+const FINANCE_REPORT_QUERY_PHASE_SET = new Set(FINANCE_REPORT_QUERY_PHASES);
 
 function formValues(input = {}) {
   const value = (key, maxLength) => typeof input?.[key] === 'string' ? input[key].slice(0, maxLength) : '';
@@ -874,16 +877,23 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
         monthStart: `${today.slice(0, 8)}01`
       });
     } catch (error) {
-      if (error instanceof FinanceReportsError) return res.status(error.status).render('finance/reports', {
+      if (error instanceof FinanceReportsError && error.status < 500) return res.status(error.status).render('finance/reports', {
         title: 'Finance reports', currentUser: req.authUser, report: null, filters, error: error.message,
         today, weekStart: manilaWeekStartDate(today), monthStart: `${today.slice(0, 8)}01`
       });
       const supportReference = crypto.randomUUID().slice(0, 12);
+      const diagnosticsError = error instanceof FinanceReportsError ? error.cause || error : error;
+      const queryPhase = error instanceof FinanceReportsError && FINANCE_REPORT_QUERY_PHASE_SET.has(error.queryPhase)
+        ? error.queryPhase : diagnosticsError?.financeReportQueryPhase;
       logger.error?.('Finance reports request failed.', {
-        supportReference, operation: 'finance.reports.load', ...safeErrorDiagnostics(error)
+        supportReference, operation: 'finance.reports.load',
+        ...(FINANCE_REPORT_QUERY_PHASE_SET.has(queryPhase) ? { queryPhase } : {}),
+        ...safeErrorDiagnostics(diagnosticsError)
       });
-      return res.status(503).set('Cache-Control', 'private, no-store').render('error', {
-        title: 'Service Unavailable', message: `Finance reports could not be loaded. Support reference: ${supportReference}.`
+      return res.status(error instanceof FinanceReportsError ? error.status : 503).set('Cache-Control', 'private, no-store').render('finance/reports', {
+        title: 'Finance reports', currentUser: req.authUser, report: null, filters,
+        error: `Finance reports could not be loaded. Support reference: ${supportReference}.`,
+        today, weekStart: manilaWeekStartDate(today), monthStart: `${today.slice(0, 8)}01`
       });
     }
   });
@@ -894,8 +904,21 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
         title: 'Finance report details', currentUser: req.authUser, detail, filters: req.query
       });
     } catch (error) {
-      if (error instanceof FinanceReportsError) return res.status(error.status).render('error', { title: 'Finance report details', message: error.message });
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'Finance report details could not be loaded.' });
+      if (error instanceof FinanceReportsError && error.status < 500) {
+        return res.status(error.status).render('error', { title: 'Finance report details', message: error.message });
+      }
+      const supportReference = crypto.randomUUID().slice(0, 12);
+      const diagnosticsError = error instanceof FinanceReportsError ? error.cause || error : error;
+      const queryPhase = error instanceof FinanceReportsError && FINANCE_REPORT_QUERY_PHASE_SET.has(error.queryPhase)
+        ? error.queryPhase : diagnosticsError?.financeReportQueryPhase;
+      logger.error?.('Finance report details request failed.', {
+        supportReference, operation: 'finance.reports.details',
+        ...(FINANCE_REPORT_QUERY_PHASE_SET.has(queryPhase) ? { queryPhase } : {}),
+        ...safeErrorDiagnostics(diagnosticsError)
+      });
+      return res.status(error instanceof FinanceReportsError ? error.status : 503).render('error', {
+        title: 'Service Unavailable', message: `Finance report details could not be loaded. Support reference: ${supportReference}.`
+      });
     }
   });
   async function renderDepartureQueue(req, res, { status = 200, error = null, failedAction = null } = {}) {

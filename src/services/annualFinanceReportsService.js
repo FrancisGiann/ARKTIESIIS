@@ -1,8 +1,22 @@
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 
 class FinanceReportsError extends Error {
-  constructor(message, status = 400) { super(message); this.name = 'FinanceReportsError'; this.status = status; }
+  constructor(message, status = 400, { cause, queryPhase } = {}) {
+    super(message, cause ? { cause } : undefined);
+    this.name = 'FinanceReportsError';
+    this.status = status;
+    if (cause) this.cause = cause;
+    if (queryPhase) this.queryPhase = queryPhase;
+  }
 }
+
+const FINANCE_REPORT_QUERY_PHASES = Object.freeze([
+  'transaction_begin', 'authorization', 'daily_collections', 'collection_summary',
+  'daily_corrections', 'correction_summary', 'allocation_summary', 'allocation_contexts', 'opening_allocation_contexts',
+  'term_progress_summary',
+  'details_count', 'details_data', 'transaction_commit'
+]);
+const FINANCE_REPORT_VIEWS = new Set(['all', 'collections', 'allocations', 'corrections', 'term-balances']);
 
 function validDate(value, label) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new FinanceReportsError(`Choose a valid ${label} date.`);
@@ -11,20 +25,42 @@ function validDate(value, label) {
   return value;
 }
 
-function createAnnualFinanceReportsService({ getPool = defaultGetPool, sql = defaultSql } = {}) {
-  async function authorizedReportTransaction(actorInput) {
-    const pool = await getPool();
-    const transaction = new sql.Transaction(pool);
-    await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+function createAnnualFinanceReportsService({
+  getPool = defaultGetPool,
+  sql = defaultSql,
+  transactionFactory = (pool) => new sql.Transaction(pool)
+} = {}) {
+  async function authorizedReportTransaction(actorInput, failureMessage) {
+    const actorId = typeof actorInput === 'number' ? actorInput
+      : typeof actorInput === 'string' && /^\d{1,15}$/.test(actorInput) ? Number(actorInput) : NaN;
+    if (!Number.isSafeInteger(actorId) || actorId < 1) {
+      throw new FinanceReportsError('Your finance access is no longer active. Sign in again.', 403);
+    }
+    let transaction;
+    let started = false;
+    let queryPhase = 'transaction_begin';
     try {
-      const actorId = Number(actorInput);
+      const pool = await getPool();
+      transaction = transactionFactory(pool);
+      await transaction.begin(sql.ISOLATION_LEVEL.REPEATABLE_READ);
+      started = true;
+      queryPhase = 'authorization';
       const actor = await transaction.request().input('actorId', sql.Int, actorId)
-        .query(`SELECT id FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin') FOR UPDATE`);
+        .query(`SELECT id FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin')`);
       if (!actor.recordset?.length) throw new FinanceReportsError('Your finance access is no longer active. Sign in again.', 403);
       return transaction;
     } catch (error) {
-      await transaction.rollback().catch(() => {});
-      throw error;
+      if (started) await transaction.rollback().catch(() => {});
+      if (error instanceof FinanceReportsError) throw error;
+      throw new FinanceReportsError(failureMessage, 503, { cause: error, queryPhase });
+    }
+  }
+
+  async function runReportQuery(request, statement, phase, failureMessage) {
+    try {
+      return await request.query(statement);
+    } catch (cause) {
+      throw new FinanceReportsError(failureMessage, 503, { cause, queryPhase: phase });
     }
   }
 
@@ -51,44 +87,67 @@ function createAnnualFinanceReportsService({ getPool = defaultGetPool, sql = def
 
   async function reports(actorInput, filters = {}) {
     const { fromDate, toDate, toExclusive, correctionFromUtc, correctionToUtc } = dateRange(filters);
-    const transaction = await authorizedReportTransaction(actorInput);
+    const view = filters.view === undefined ? 'all' : filters.view;
+    if (!FINANCE_REPORT_VIEWS.has(view)) throw new FinanceReportsError('Choose a valid finance report view.');
+    const failureMessage = 'Finance reports could not be loaded.';
+    const transaction = await authorizedReportTransaction(actorInput, failureMessage);
     let started = false;
+    let queryPhase = 'transaction_commit';
     try {
       started = true;
       const parameters = (request) => request.input('fromDate', sql.Date, fromDate).input('toDate', sql.Date, toDate)
         .input('toExclusive', sql.Date, toExclusive);
-      const daily = await parameters(transaction.request()).query(`SELECT DATE_FORMAT(payment.payment_date, '%Y-%m-%d') AS collection_date,
-          COUNT(DISTINCT payment.student_id) AS distinct_payers, COUNT(*) AS payment_count,
-          CAST(SUM(payment.amount) AS CHAR(40)) AS collected_amount
-        FROM finance_payments AS payment
-        WHERE payment.is_reversed = 0 AND payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive
-        GROUP BY DATE_FORMAT(payment.payment_date, '%Y-%m-%d') ORDER BY collection_date`);
-      const collectionSummary = await parameters(transaction.request()).query(`SELECT COUNT(DISTINCT payment.student_id) AS distinct_payers,
-          COUNT(*) AS payment_count, CAST(COALESCE(SUM(payment.amount), 0) AS CHAR(40)) AS valid_collection_amount
-        FROM finance_payments AS payment
-        WHERE payment.is_reversed = 0 AND payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive`);
       const correctionParameters = (request) => parameters(request)
         .input('correctionFromUtc', sql.DateTime, correctionFromUtc)
         .input('correctionToUtc', sql.DateTime, correctionToUtc);
-      const reversals = await correctionParameters(transaction.request()).query(`SELECT DATE_FORMAT(DATE_ADD(reversal.created_at, INTERVAL 8 HOUR), '%Y-%m-%d') AS reversal_date,
+      const report = {
+        fromDate, toDate, dailyCollections: [], collectionSummary: {},
+        reversals: [], reversalSummary: {}, allocationSummary: {}, allocationContexts: [], termProgress: []
+      };
+      if (view === 'collections' || view === 'all') {
+        queryPhase = 'daily_collections';
+        const daily = await runReportQuery(parameters(transaction.request()), `SELECT DATE_FORMAT(payment.payment_date, '%Y-%m-%d') AS collection_date,
+          COUNT(DISTINCT payment.student_id) AS distinct_payers, COUNT(*) AS payment_count,
+          CAST(SUM(payment.amount) AS CHAR(40)) AS collected_amount
+          FROM finance_payments AS payment
+          WHERE payment.is_reversed = 0 AND payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive
+          GROUP BY DATE_FORMAT(payment.payment_date, '%Y-%m-%d') ORDER BY collection_date`, queryPhase, failureMessage);
+        report.dailyCollections = daily.recordset || [];
+        queryPhase = 'collection_summary';
+        const collectionSummary = await runReportQuery(parameters(transaction.request()), `SELECT COUNT(DISTINCT payment.student_id) AS distinct_payers,
+          COUNT(*) AS payment_count, CAST(COALESCE(SUM(payment.amount), 0) AS CHAR(40)) AS valid_collection_amount
+          FROM finance_payments AS payment
+          WHERE payment.is_reversed = 0 AND payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive`, queryPhase, failureMessage);
+        report.collectionSummary = collectionSummary.recordset?.[0] || {};
+      }
+      if (view === 'corrections' || view === 'all') {
+        queryPhase = 'daily_corrections';
+        const reversals = await runReportQuery(correctionParameters(transaction.request()), `SELECT DATE_FORMAT(DATE_ADD(reversal.created_at, INTERVAL 8 HOUR), '%Y-%m-%d') AS reversal_date,
           COUNT(DISTINCT payment.student_id) AS distinct_payers, COUNT(*) AS reversal_count,
           CAST(SUM(payment.amount) AS CHAR(40)) AS reversed_amount
-        FROM finance_payment_reversals AS reversal
-        INNER JOIN finance_payments AS payment ON payment.id = reversal.payment_id
-        WHERE reversal.created_at >= @correctionFromUtc AND reversal.created_at < @correctionToUtc
-        GROUP BY DATE_FORMAT(DATE_ADD(reversal.created_at, INTERVAL 8 HOUR), '%Y-%m-%d') ORDER BY reversal_date`);
-      const reversalSummary = await correctionParameters(transaction.request()).query(`SELECT COUNT(DISTINCT payment.student_id) AS distinct_payers,
+          FROM finance_payment_reversals AS reversal
+          INNER JOIN finance_payments AS payment ON payment.id = reversal.payment_id
+          WHERE reversal.created_at >= @correctionFromUtc AND reversal.created_at < @correctionToUtc
+          GROUP BY DATE_FORMAT(DATE_ADD(reversal.created_at, INTERVAL 8 HOUR), '%Y-%m-%d') ORDER BY reversal_date`, queryPhase, failureMessage);
+        report.reversals = reversals.recordset || [];
+        queryPhase = 'correction_summary';
+        const reversalSummary = await runReportQuery(correctionParameters(transaction.request()), `SELECT COUNT(DISTINCT payment.student_id) AS distinct_payers,
           COUNT(*) AS reversal_count, CAST(COALESCE(SUM(payment.amount), 0) AS CHAR(40)) AS corrected_record_amount
-        FROM finance_payment_reversals AS reversal
-        INNER JOIN finance_payments AS payment ON payment.id = reversal.payment_id
-        WHERE reversal.created_at >= @correctionFromUtc AND reversal.created_at < @correctionToUtc`);
-      const allocationSummary = await parameters(transaction.request()).query(`SELECT COUNT(DISTINCT payment.student_id) AS distinct_payers,
+          FROM finance_payment_reversals AS reversal
+          INNER JOIN finance_payments AS payment ON payment.id = reversal.payment_id
+          WHERE reversal.created_at >= @correctionFromUtc AND reversal.created_at < @correctionToUtc`, queryPhase, failureMessage);
+        report.reversalSummary = reversalSummary.recordset?.[0] || {};
+      }
+      if (view === 'allocations' || view === 'all') {
+        queryPhase = 'allocation_summary';
+        const allocationSummary = await runReportQuery(parameters(transaction.request()), `SELECT COUNT(DISTINCT payment.student_id) AS distinct_payers,
           CAST(COALESCE(SUM(allocation.net_amount), 0) AS CHAR(40)) AS target_allocated_amount
-        FROM v_finance_net_payment_allocations AS allocation
-        INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id AND payment.is_reversed = 0
-        WHERE payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive`);
-      const allocationContexts = await parameters(transaction.request()).query(`SELECT * FROM (
-          SELECT annual.school_year, enrollment.annual_term_number, section.name AS section_name,
+          FROM v_finance_net_payment_allocations AS allocation
+          INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id AND payment.is_reversed = 0
+          WHERE payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive`, queryPhase, failureMessage);
+        report.allocationSummary = allocationSummary.recordset?.[0] || {};
+        queryPhase = 'allocation_contexts';
+        const allocationContexts = await runReportQuery(parameters(transaction.request()), `SELECT annual.school_year, enrollment.annual_term_number, section.name AS section_name,
             section.strand, annual.voucher_code, charge.fee_category, COUNT(DISTINCT payment.student_id) AS distinct_payers,
             CAST(SUM(allocation.net_amount) AS CHAR(40)) AS allocated_amount, 'assessed charge' AS target_type
           FROM v_finance_net_payment_allocations AS allocation
@@ -99,55 +158,66 @@ function createAnnualFinanceReportsService({ getPool = defaultGetPool, sql = def
           LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
           WHERE allocation.charge_id IS NOT NULL AND payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive
           GROUP BY annual.school_year, enrollment.annual_term_number, section.name, section.strand, annual.voucher_code, charge.fee_category
-          UNION ALL
-          SELECT 'Legacy / unknown term', NULL, 'Legacy account', NULL, NULL, 'opening liability',
-            COUNT(DISTINCT payment.student_id), CAST(SUM(allocation.net_amount) AS CHAR(40)), 'opening liability'
+          ORDER BY annual.school_year, enrollment.annual_term_number, section.name, section.strand, annual.voucher_code, charge.fee_category`,
+        queryPhase, failureMessage);
+        queryPhase = 'opening_allocation_contexts';
+        const openingAllocation = await runReportQuery(parameters(transaction.request()), `SELECT COUNT(DISTINCT payment.student_id) AS distinct_payers,
+          CAST(SUM(allocation.net_amount) AS CHAR(40)) AS allocated_amount
           FROM v_finance_net_payment_allocations AS allocation
           INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id AND payment.is_reversed = 0
           INNER JOIN finance_legacy_opening_charges AS opening ON opening.id = allocation.legacy_opening_charge_id
-          WHERE payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive
-        ) AS allocation_report ORDER BY school_year, annual_term_number, section_name, voucher_code, fee_category`);
-      const termProgress = await transaction.request().query(`SELECT annual.school_year, annual.grade_level, enrollment.academic_term_id,
-          term.term, enrollment.annual_term_number, section.id AS section_id, section.name AS section_name, section.strand, annual.voucher_code,
-          COUNT(DISTINCT CASE WHEN enrollment.enrollment_status IN ('enrolled', 'pending_payment') THEN annual.student_id END) AS applicable_enrollments,
-          COUNT(DISTINCT CASE WHEN enrollment.enrollment_status = 'enrolled' THEN annual.student_id END) AS enrolled_students,
-          COUNT(DISTINCT CASE WHEN enrollment.enrollment_status = 'enrolled' AND COALESCE(balance.amount_due, 0) <= 0 THEN annual.student_id END) AS paid_or_waived_students,
-          COUNT(DISTINCT CASE WHEN enrollment.enrollment_status = 'enrolled' AND COALESCE(balance.amount_due, 0) <= 0
-            AND COALESCE(waiver.waived_total, 0) > 0 THEN annual.student_id END) AS waived_students,
-          CAST(SUM(CASE WHEN COALESCE(balance.amount_due, 0) > 0 THEN balance.amount_due ELSE 0 END) AS CHAR(40)) AS outstanding_amount,
-          CAST(SUM(COALESCE(waiver.waived_total, 0)) AS CHAR(40)) AS waived_amount
-        FROM enrollments AS enrollment
-        INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id AND annual.intake_status <> 'legacy'
-        INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
-        LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
-        LEFT JOIN (SELECT due.enrollment_id, SUM(due.amount_due) AS amount_due
-          FROM v_finance_assessed_charge_due AS due GROUP BY due.enrollment_id) AS balance
-          ON balance.enrollment_id = enrollment.id
-        LEFT JOIN (SELECT charge.enrollment_id, SUM(charge.waived_amount) AS waived_total
-          FROM assessed_charges AS charge GROUP BY charge.enrollment_id) AS waiver
-          ON waiver.enrollment_id = enrollment.id
-        WHERE enrollment.term_scope_status = 'applicable'
-        GROUP BY annual.school_year, annual.grade_level, enrollment.academic_term_id, term.term, enrollment.annual_term_number, section.name, section.strand, annual.voucher_code
-        ORDER BY annual.school_year DESC, enrollment.annual_term_number, annual.grade_level, section.name, section.strand, annual.voucher_code`);
+          WHERE payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive`, queryPhase, failureMessage);
+        report.allocationContexts = [
+          ...(allocationContexts.recordset || []),
+          {
+            school_year: 'Legacy / unknown term', annual_term_number: null, section_name: 'Legacy account',
+            strand: null, voucher_code: null, fee_category: 'opening liability',
+            distinct_payers: openingAllocation.recordset?.[0]?.distinct_payers || 0,
+            allocated_amount: openingAllocation.recordset?.[0]?.allocated_amount ?? null,
+            target_type: 'opening liability'
+          }
+        ];
+      }
+      if (view === 'term-balances' || view === 'all') {
+        queryPhase = 'term_progress_summary';
+        const termProgress = await runReportQuery(transaction.request(), `SELECT annual.school_year, annual.grade_level,
+            enrollment.academic_term_id, term.term, enrollment.annual_term_number, section.id AS section_id,
+            section.name AS section_name, section.strand, annual.voucher_code,
+            COUNT(DISTINCT CASE WHEN enrollment.enrollment_status IN ('enrolled', 'pending_payment') THEN annual.student_id END) AS applicable_enrollments,
+            COUNT(DISTINCT CASE WHEN enrollment.enrollment_status = 'enrolled' THEN annual.student_id END) AS enrolled_students,
+            COUNT(DISTINCT CASE WHEN enrollment.enrollment_status = 'enrolled' AND COALESCE(balance.amount_due, 0) <= 0 THEN annual.student_id END) AS paid_or_waived_students,
+            COUNT(DISTINCT CASE WHEN enrollment.enrollment_status = 'enrolled' AND COALESCE(balance.amount_due, 0) <= 0
+              AND COALESCE(waiver.waived_total, 0) > 0 THEN annual.student_id END) AS waived_students,
+            CAST(SUM(CASE WHEN COALESCE(balance.amount_due, 0) > 0 THEN balance.amount_due ELSE 0 END) AS CHAR(40)) AS outstanding_amount,
+            CAST(SUM(COALESCE(waiver.waived_total, 0)) AS CHAR(40)) AS waived_amount
+          FROM enrollments AS enrollment
+          INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id AND annual.intake_status <> 'legacy'
+          INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
+          LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
+          LEFT JOIN (SELECT due.enrollment_id, SUM(due.amount_due) AS amount_due
+            FROM v_finance_assessed_charge_due AS due GROUP BY due.enrollment_id) AS balance
+            ON balance.enrollment_id = enrollment.id
+          LEFT JOIN (SELECT charge.enrollment_id, SUM(charge.waived_amount) AS waived_total
+            FROM assessed_charges AS charge GROUP BY charge.enrollment_id) AS waiver
+            ON waiver.enrollment_id = enrollment.id
+          WHERE enrollment.term_scope_status = 'applicable'
+          GROUP BY annual.school_year, annual.grade_level, enrollment.academic_term_id, term.term,
+            enrollment.annual_term_number, section.id, section.name, section.strand, annual.voucher_code
+          ORDER BY annual.school_year DESC, enrollment.annual_term_number, annual.grade_level,
+            section.name, section.strand, annual.voucher_code, enrollment.academic_term_id, term.term, section.id`,
+        queryPhase, failureMessage);
+        report.termProgress = termProgress.recordset || [];
+      }
+      queryPhase = 'transaction_commit';
       await transaction.commit();
       started = false;
-      return {
-        fromDate,
-        toDate,
-        dailyCollections: daily.recordset || [],
-        collectionSummary: collectionSummary.recordset?.[0] || {},
-        reversals: reversals.recordset || [],
-        reversalSummary: reversalSummary.recordset?.[0] || {},
-        allocationSummary: allocationSummary.recordset?.[0] || {},
-        allocationContexts: allocationContexts.recordset || [],
-        termProgress: termProgress.recordset || []
-      };
+      return report;
     } catch (error) {
       if (started) {
         try { await transaction.rollback(); } catch { /* preserve original */ }
       }
       if (error instanceof FinanceReportsError) throw error;
-      throw new FinanceReportsError('Finance reports could not be loaded.', 503);
+      throw new FinanceReportsError(failureMessage, 503, { cause: error, queryPhase });
     }
   }
 
@@ -156,8 +226,10 @@ function createAnnualFinanceReportsService({ getPool = defaultGetPool, sql = def
     if (!['collections', 'allocations', 'corrections'].includes(kind)) throw new FinanceReportsError('Choose a report detail view.');
     const range = dateRange(filters);
     const rawPage = typeof filters.page === 'string' ? filters.page : '1';
-    const requestedPage = /^\d{1,6}$/.test(rawPage) ? Number(rawPage) : 1;
-    const transaction = await authorizedReportTransaction(actorInput);
+    const requestedPage = /^\d{1,6}$/.test(rawPage) ? Math.max(1, Number(rawPage)) : 1;
+    const failureMessage = 'Finance report details could not be loaded.';
+    const transaction = await authorizedReportTransaction(actorInput, failureMessage);
+    let queryPhase = 'details_count';
     try {
       const bind = (request) => request.input('fromDate', sql.Date, range.fromDate)
         .input('toExclusive', sql.Date, range.toExclusive);
@@ -204,13 +276,21 @@ function createAnnualFinanceReportsService({ getPool = defaultGetPool, sql = def
           WHERE payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive AND allocation.net_amount > 0
           ORDER BY payment.payment_date DESC, payment.id DESC, allocation.allocation_id DESC LIMIT @pageSize OFFSET @offset`;
       }
-      const count = await (kind === 'corrections' ? bindCorrections(transaction.request()) : bind(transaction.request())).query(countStatement);
+      const count = await runReportQuery(
+        kind === 'corrections' ? bindCorrections(transaction.request()) : bind(transaction.request()),
+        countStatement, queryPhase, failureMessage
+      );
       const totalRecords = Number(count.recordset?.[0]?.total_records || 0);
       const pageSize = 20;
       const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
       const page = Math.min(requestedPage, totalPages);
-      const rows = await (kind === 'corrections' ? bindCorrections(transaction.request()) : bind(transaction.request())).input('pageSize', sql.Int, pageSize)
-        .input('offset', sql.Int, (page - 1) * pageSize).query(dataStatement);
+      queryPhase = 'details_data';
+      const rows = await runReportQuery(
+        (kind === 'corrections' ? bindCorrections(transaction.request()) : bind(transaction.request())).input('pageSize', sql.Int, pageSize)
+          .input('offset', sql.Int, (page - 1) * pageSize),
+        dataStatement, queryPhase, failureMessage
+      );
+      queryPhase = 'transaction_commit';
       await transaction.commit();
       return { kind, ...range, rows: rows.recordset || [], pagination: {
         page, pageSize, totalPages, totalRecords,
@@ -220,11 +300,11 @@ function createAnnualFinanceReportsService({ getPool = defaultGetPool, sql = def
     } catch (error) {
       await transaction.rollback().catch(() => {});
       if (error instanceof FinanceReportsError) throw error;
-      throw new FinanceReportsError('Finance report details could not be loaded.', 503);
+      throw new FinanceReportsError(failureMessage, 503, { cause: error, queryPhase });
     }
   }
 
   return { reports, reportDetails };
 }
 
-module.exports = { FinanceReportsError, createAnnualFinanceReportsService };
+module.exports = { FinanceReportsError, FINANCE_REPORT_QUERY_PHASES, createAnnualFinanceReportsService };

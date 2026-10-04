@@ -71,7 +71,7 @@ The former local Tesseract/Poppler service remains inactive legacy code only. It
 - Do not expose raw database errors in production.
 
 ## Database baseline and migrations
-- Active prototype setup uses the MariaDB baseline in `database/mariadb/schema.sql` (`v2.001`) and numbered forward-only migrations in `database/mariadb/migrations/` through `v2.011`. Hostinger creates the database and user in hPanel; setup connects to that existing database and does not create or drop databases.
+- Active prototype setup uses the MariaDB baseline in `database/mariadb/schema.sql` (`v2.001`) and numbered forward-only migrations in `database/mariadb/migrations/` through `v2.013`. Hostinger creates the database and user in hPanel; setup connects to that existing database and does not create or drop databases.
 - `database/schema.sql`, `database/v2/schema.sql`, and the existing SQL Server migration files are historical archive material. Do not apply them to MariaDB or rewrite them as part of the port.
 - Apply later schema changes through new, numbered, forward-only MariaDB migrations. Do not edit or rerun the baseline to update an initialized database, and do not rewrite migrations that have already been applied. Keep Form 137 restricted to authorized staff and its own workflow.
 

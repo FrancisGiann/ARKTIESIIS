@@ -5,6 +5,7 @@ const { readFileSync } = require('node:fs');
 const ejs = require('ejs');
 const { createFinanceRouter } = require('../src/routes/finance');
 const { AnnualFinanceError, createAnnualFinanceService } = require('../src/services/annualFinanceService');
+const { FinanceReportsError } = require('../src/services/annualFinanceReportsService');
 const { formatMoney } = require('../src/utils/formatMoney');
 
 const viewsDirectory = path.join(__dirname, '../views/finance');
@@ -37,6 +38,11 @@ function readSnapshotFactory(events = []) {
 
 test('finance account and reports load failures return support references without logging raw errors or student identifiers', async () => {
   const diagnostics = [];
+  const reportFailureCause = new Error('sensitive report SQL detail for payment 102');
+  reportFailureCause.code = 'ER_INVALID_GROUP_FUNC_USE'; reportFailureCause.errno = 1111; reportFailureCause.sqlState = 'HY000';
+  let reportFailure = new FinanceReportsError('Finance reports could not be loaded.', 503, {
+    cause: reportFailureCause, queryPhase: 'allocation_contexts'
+  });
   const router = createFinanceRouter({
     getPool: async () => { throw new Error('Unexpected database access in route test'); },
     annualFinanceService: {
@@ -55,7 +61,12 @@ test('finance account and reports load failures return support references withou
       async getStudentCases() { return { exemptions: [], specialSubjects: [], departures: [] }; }
     },
     financeReportsService: {
-      async reports() { const error = new Error('sensitive report SQL detail'); error.code = 'ER_QUERY_FAILURE'; throw error; }
+      async reports() { throw reportFailure; },
+      async reportDetails() {
+        const cause = new Error('sensitive report detail SQL');
+        cause.code = 'ER_QUERY_FAILURE';
+        throw new FinanceReportsError('Finance report details could not be loaded.', 503, { cause, queryPhase: 'details_data' });
+      }
     },
     logger: { error(...args) { diagnostics.push(args); } }
   });
@@ -70,11 +81,31 @@ test('finance account and reports load failures return support references withou
   assert.equal(diagnostics[0][1].errorCode, 'ER_QUERY_FAILURE');
 
   const reportsResponse = responseRecorder();
-  await routeHandler('/reports')({ query: {}, authUser: { id: 7 } }, reportsResponse);
+  const reportsRoute = routeHandler('/reports');
+  await reportsRoute({ query: { view: 'allocations', fromDate: '2026-10-04', toDate: '2026-10-04' }, authUser: { id: 7 } }, reportsResponse);
   assert.equal(reportsResponse.statusCode, 503);
-  assert.match(reportsResponse.locals.message, /Finance reports could not be loaded\. Support reference: [a-f0-9-]+/i);
+  assert.equal(reportsResponse.view, 'finance/reports');
+  assert.match(reportsResponse.locals.error, /Finance reports could not be loaded\. Support reference: [a-f0-9-]+/i);
+  assert.equal(reportsResponse.locals.filters.view, 'allocations');
+  assert.equal(reportsResponse.locals.filters.fromDate, '2026-10-04');
+  assert.equal(reportsResponse.locals.filters.toDate, '2026-10-04');
   assert.equal(diagnostics[1][1].operation, 'finance.reports.load');
-  assert.equal(diagnostics[1][1].errorCode, 'ER_QUERY_FAILURE');
+  assert.equal(diagnostics[1][1].queryPhase, 'allocation_contexts');
+  assert.equal(diagnostics[1][1].errorCode, 'ER_INVALID_GROUP_FUNC_USE');
+  assert.equal(diagnostics[1][1].errorNumber, 1111);
+
+  reportFailure = new FinanceReportsError('Choose a valid start date.', 400);
+  const invalidDateResponse = responseRecorder();
+  await reportsRoute({ query: { view: 'allocations', fromDate: 'bad', toDate: '2026-10-04' }, authUser: { id: 7 } }, invalidDateResponse);
+  assert.equal(invalidDateResponse.statusCode, 400);
+  assert.equal(invalidDateResponse.locals.filters.view, 'allocations');
+  assert.equal(diagnostics.length, 2, 'routine date validation does not create a support diagnostic');
+
+  reportFailure = new FinanceReportsError('Your finance access is no longer active. Sign in again.', 403);
+  const revokedResponse = responseRecorder();
+  await reportsRoute({ query: { view: 'allocations', fromDate: '2026-10-04', toDate: '2026-10-04' }, authUser: { id: 7 } }, revokedResponse);
+  assert.equal(revokedResponse.statusCode, 403);
+  assert.equal(diagnostics.length, 2, 'expected active-role denials do not create a support diagnostic');
 
   const rosterResponse = responseRecorder();
   await routeHandler('/')({ query: {}, authUser: { id: 7 } }, rosterResponse);
@@ -86,7 +117,15 @@ test('finance account and reports load failures return support references withou
   assert.equal(diagnostics[2][1].errorNumber, 1111);
   assert.equal(diagnostics[2][1].sqlState, 'HY000');
 
-  const logged = JSON.stringify(diagnostics);
+  const reportDetailsResponse = responseRecorder();
+  await routeHandler('/reports/details')({ query: { kind: 'allocations' }, authUser: { id: 7 } }, reportDetailsResponse);
+  assert.equal(reportDetailsResponse.statusCode, 503);
+  assert.match(reportDetailsResponse.locals.message, /Finance report details could not be loaded\. Support reference: [a-f0-9-]+/i);
+  assert.equal(diagnostics[3][1].operation, 'finance.reports.details');
+  assert.equal(diagnostics[3][1].queryPhase, 'details_data');
+  assert.equal(diagnostics[3][1].errorCode, 'ER_QUERY_FAILURE');
+
+  const logged = JSON.stringify(diagnostics, (key, value) => key === 'supportReference' ? '[reference]' : value);
   assert.doesNotMatch(logged, /sensitive|102|studentId|raw sql|query detail/i);
   assert.doesNotMatch(logged, /finance-browse-layout\.test\.js|\/home\//i);
   assert.match(logged, /ER_QUERY_FAILURE/);

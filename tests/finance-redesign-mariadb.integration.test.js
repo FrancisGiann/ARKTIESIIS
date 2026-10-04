@@ -12,6 +12,7 @@ const { readSqlFile, readForwardMigrations } = require('../scripts/db-setup-v2')
 const { PoolFacade, sql } = require('../src/config/database');
 const { createAnnualFinanceService } = require('../src/services/annualFinanceService');
 const { createAnnualFinanceCasesService } = require('../src/services/annualFinanceCasesService');
+const { createAnnualFinanceReportsService } = require('../src/services/annualFinanceReportsService');
 const { createFinanceDashboardService } = require('../src/services/financeDashboardService');
 const { createFinanceReviewActionService } = require('../src/services/financeReviewActionService');
 const { createFinanceRouter } = require('../src/routes/finance');
@@ -23,6 +24,13 @@ const repoRoot = path.resolve(__dirname, '..');
 
 function safeDatabaseName() {
   return `arktiesiis_finance_redesign_${process.pid}_${crypto.randomBytes(5).toString('hex')}`;
+}
+
+function moneyCents(value) {
+  const match = /^(-?)(\d+)(?:\.(\d{1,2}))?$/.exec(String(value).trim());
+  assert.ok(match, `MariaDB monetary result is not a decimal string (type=${typeof value}, null=${value === null}, undefined=${value === undefined})`);
+  const cents = BigInt(match[2]) * 100n + BigInt((match[3] || '').padEnd(2, '0'));
+  return match[1] === '-' ? -cents : cents;
 }
 
 async function executeStatements(connection, statements) {
@@ -73,6 +81,8 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
   assert.match(databaseName, /^arktiesiis_finance_redesign_\d+_[a-f0-9]{10}$/);
   const adminPool = mysql.createPool({ socketPath, user: 'root', password: '', waitForConnections: true, connectionLimit: 2, queueLimit: 0 });
   let appPool;
+  let reportReadPool;
+  let normalReportPool;
   try {
     await adminPool.query(`CREATE DATABASE \`${databaseName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     appPool = mysql.createPool({
@@ -85,7 +95,8 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     try {
       const baseline = readSqlFile(path.join(repoRoot, 'database/mariadb/schema.sql'));
       await executeStatements(setupConnection, baseline);
-      for (const migration of readForwardMigrations()) {
+      const forwardMigrations = readForwardMigrations();
+      for (const migration of forwardMigrations.filter(({ version }) => version !== 'v2.013')) {
         await executeStatements(setupConnection, migration.statements);
         await setupConnection.execute('INSERT INTO schema_migrations (version) VALUES (?)', [migration.version]);
       }
@@ -256,12 +267,163 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
        VALUES (?, ?, 50.00, 'Matched existing legacy payment', ?, ?)`,
       [Number(legacyTransaction.insertId), legacyScenario.chargeIds.get('DP'), Number(legacyBatch.insertId), actorId]
     );
+    await appPool.execute(
+      `INSERT INTO finance_charge_adjustments (charge_id, amount, reason, idempotency_key, request_fingerprint, recorded_by)
+       VALUES (?, -25.00, 'Approved additional credit for due-view verification', ?, ?, ?)`,
+      [assessedScenarios.adjusted.chargeIds.get('DP'), crypto.randomUUID(), '9'.repeat(64), actorId]
+    );
 
     const pool = new PoolFacade(appPool);
     const getPool = async () => pool;
     const annual = createAnnualFinanceService({ getPool, sql });
     const cases = createAnnualFinanceCasesService({ getPool, sql });
     const dashboard = createFinanceDashboardService({ getPool, sql });
+    reportReadPool = mysql.createPool({
+      socketPath, user: 'root', password: '', database: databaseName,
+      waitForConnections: true, connectionLimit: 1, queueLimit: 0,
+      supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false,
+      dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'], multipleStatements: false
+    });
+    const strictReportSource = {
+      async getConnection() {
+        const connection = await reportReadPool.getConnection();
+        await connection.query("SET SESSION sql_mode = CONCAT(@@sql_mode, ',ONLY_FULL_GROUP_BY')");
+        return connection;
+      }
+    };
+    const reportPool = new PoolFacade(strictReportSource);
+    const financeReports = createAnnualFinanceReportsService({ getPool: async () => reportPool, sql });
+    normalReportPool = mysql.createPool({
+      socketPath, user: 'root', password: '', database: databaseName,
+      waitForConnections: true, connectionLimit: 1, queueLimit: 0,
+      supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false,
+      dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'], multipleStatements: false
+    });
+    const normalFinanceReports = createAnnualFinanceReportsService({
+      getPool: async () => new PoolFacade(normalReportPool), sql
+    });
+
+    const [baselineDueRows] = await appPool.execute(`SELECT charge.id AS charge_id, charge.annual_enrollment_id,
+        charge.enrollment_id, CAST(due.amount_due AS CHAR(40)) AS amount_due,
+        CAST(due.annual_allocated AS CHAR(40)) AS annual_allocated,
+        CAST(due.legacy_allocated AS CHAR(40)) AS legacy_allocated
+      FROM assessed_charges AS charge INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
+      ORDER BY charge.id`);
+    const negativeDue = baselineDueRows.find(({ charge_id }) => Number(charge_id) === assessedScenarios.adjusted.chargeIds.get('DP'));
+    assert.equal(negativeDue?.amount_due, '-25.00', 'the authoritative view retains signed net-credit dues');
+    assert.equal(negativeDue?.annual_allocated, '0.00');
+    assert.equal(negativeDue?.legacy_allocated, '0.00');
+    const dueViewMigration = readForwardMigrations().find(({ version }) => version === 'v2.013');
+    assert.ok(dueViewMigration, 'the forward due-view migration is available');
+    const migrationConnection = await appPool.getConnection();
+    try {
+      await executeStatements(migrationConnection, dueViewMigration.statements);
+      await migrationConnection.execute('INSERT INTO schema_migrations (version) VALUES (?)', [dueViewMigration.version]);
+    } finally {
+      migrationConnection.release();
+    }
+    const [migratedVersions] = await appPool.execute('SELECT version FROM schema_migrations ORDER BY version');
+    assert.equal(migratedVersions.at(-1)?.version, 'v2.013');
+    const [migratedDueRows] = await appPool.execute(`SELECT charge.id AS charge_id, charge.annual_enrollment_id,
+        charge.enrollment_id, CAST(due.amount_due AS CHAR(40)) AS amount_due,
+        CAST(due.annual_allocated AS CHAR(40)) AS annual_allocated,
+        CAST(due.legacy_allocated AS CHAR(40)) AS legacy_allocated
+      FROM assessed_charges AS charge INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
+      ORDER BY charge.id`);
+    assert.deepEqual(migratedDueRows, baselineDueRows,
+      'migration 013 preserves each charge, annual allocation, and legacy reconciliation balance');
+
+    const reportRange = { fromDate: '2026-10-01', toDate: '2026-10-01' };
+    const collectionsReport = await financeReports.reports(actorId, { ...reportRange, view: 'collections' });
+    const [expectedCollections] = await appPool.execute(`SELECT COUNT(DISTINCT payment.student_id) AS distinct_payers,
+      COUNT(*) AS payment_count, CAST(COALESCE(SUM(payment.amount), 0) AS CHAR(40)) AS amount
+      FROM finance_payments AS payment WHERE payment.is_reversed = 0
+        AND payment.payment_date >= ? AND payment.payment_date < DATE_ADD(?, INTERVAL 1 DAY)`, [reportRange.fromDate, reportRange.toDate]);
+    assert.equal(String(collectionsReport.collectionSummary.distinct_payers), String(expectedCollections[0].distinct_payers));
+    assert.equal(String(collectionsReport.collectionSummary.payment_count), String(expectedCollections[0].payment_count));
+    assert.equal(collectionsReport.collectionSummary.valid_collection_amount, String(expectedCollections[0].amount));
+
+    const allocationsReport = await financeReports.reports(actorId, { ...reportRange, view: 'allocations' });
+    const [expectedAllocations] = await appPool.execute(`SELECT COUNT(DISTINCT payment.student_id) AS distinct_payers,
+      CAST(COALESCE(SUM(allocation.net_amount), 0) AS CHAR(40)) AS amount
+      FROM v_finance_net_payment_allocations AS allocation
+      INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id AND payment.is_reversed = 0
+      WHERE payment.payment_date >= ? AND payment.payment_date < DATE_ADD(?, INTERVAL 1 DAY)`, [reportRange.fromDate, reportRange.toDate]);
+    assert.equal(String(allocationsReport.allocationSummary.distinct_payers), String(expectedAllocations[0].distinct_payers));
+    assert.equal(allocationsReport.allocationSummary.target_allocated_amount, String(expectedAllocations[0].amount));
+    const emptyOpeningContext = allocationsReport.allocationContexts.filter((row) => row.allocated_amount === null);
+    assert.equal(emptyOpeningContext.length, 1, 'the ungrouped opening-liability aggregate returns one empty zero-count row');
+    assert.ok(emptyOpeningContext.every((row) => row.target_type === 'opening liability' && Number(row.distinct_payers) === 0),
+      'the union’s empty opening-liability aggregate represents zero context and contributes no amount');
+    const assessedContexts = allocationsReport.allocationContexts.filter((row) => row.target_type === 'assessed charge');
+    assert.equal(assessedContexts.length, 1);
+    assert.equal(Number(assessedContexts[0].distinct_payers), 4,
+      'four students with non-reversed charge allocations are counted once despite seven payment rows');
+    assert.equal(moneyCents(assessedContexts[0].allocated_amount), 52500n,
+      'released allocations contribute zero net amount while reversed payments stay excluded');
+    const contextAllocationCents = allocationsReport.allocationContexts
+      .reduce((sum, row) => sum + (row.allocated_amount === null ? 0n : moneyCents(row.allocated_amount)), 0n);
+    assert.equal(contextAllocationCents, moneyCents(expectedAllocations[0].amount),
+      'academic-context groups reconcile exactly to the range total without floating-point money arithmetic');
+
+    const correctionsReport = await financeReports.reports(actorId, { ...reportRange, view: 'corrections' });
+    assert.ok(Array.isArray(correctionsReport.reversals));
+    const termProgressReport = await financeReports.reports(actorId, { ...reportRange, view: 'term-balances' });
+    assert.ok(termProgressReport.termProgress.length > 0);
+    assert.ok(termProgressReport.termProgress.every((row) => Object.hasOwn(row, 'section_id')));
+    const termProgressGroup = termProgressReport.termProgress.find((row) => row.school_year === '2026-2027');
+    assert.ok(termProgressGroup);
+    assert.equal(Number(termProgressGroup.applicable_enrollments), 11);
+    assert.equal(Number(termProgressGroup.enrolled_students), 11);
+    assert.equal(Number(termProgressGroup.paid_or_waived_students), 3);
+    assert.equal(Number(termProgressGroup.waived_students), 1);
+    assert.equal(moneyCents(termProgressGroup.outstanding_amount), 260000n,
+      'term progress retains due totals across whole-term, per-installment, reversed, released, adjusted, and reconciled charges');
+    assert.equal(moneyCents(termProgressGroup.waived_amount), 40000n);
+    const legacyCombinedReport = await financeReports.reports(actorId, reportRange);
+    assert.equal(legacyCombinedReport.collectionSummary.valid_collection_amount, collectionsReport.collectionSummary.valid_collection_amount);
+    assert.equal(legacyCombinedReport.allocationSummary.target_allocated_amount, allocationsReport.allocationSummary.target_allocated_amount);
+    assert.equal(legacyCombinedReport.termProgress.length, termProgressReport.termProgress.length);
+    const repeatedCombinedReport = await financeReports.reports(actorId, reportRange);
+    assert.deepEqual(repeatedCombinedReport.termProgress, legacyCombinedReport.termProgress,
+      'repeated mixed-view reads on the same strict pooled connection retain term totals');
+    const normalCombinedReport = await normalFinanceReports.reports(actorId, reportRange);
+    assert.deepEqual(normalCombinedReport.termProgress, legacyCombinedReport.termProgress,
+      'normal-mode and strict-mode default-all reports retain identical term totals');
+    for (const kind of ['collections', 'allocations', 'corrections']) {
+      const detail = await financeReports.reportDetails(actorId, { ...reportRange, kind, page: '1' });
+      assert.equal(detail.pagination.page, 1);
+    }
+
+    const [openingStudentInsert] = await appPool.execute(
+      "INSERT INTO students (student_no, lrn, first_name, last_name, status) VALUES ('FIN-REDESIGN-OPENING', ?, 'Opening', 'Account', 'active')",
+      [String(lrnSequence++)]
+    );
+    const openingStudentId = Number(openingStudentInsert.insertId);
+    await appPool.execute('INSERT INTO financial_accounts (student_id, balance) VALUES (?, 30.00)', [openingStudentId]);
+    const openingTransfer = await annual.transferLegacyOpeningLiability(actorId, openingStudentId, {
+      expectedAmount: '30.00', sourceLabel: 'Integration fixture', reason: 'Read-only report coverage.',
+      idempotencyKey: crypto.randomUUID()
+    });
+    const [openingPaymentInsert] = await appPool.execute(`INSERT INTO finance_payments
+        (student_id, amount, payment_date, reference_no, receipt_issued, idempotency_key, request_fingerprint, recorded_by, is_reversed)
+      VALUES (?, 12.00, '2026-10-01', 'OPENING-REPORT-TEST', 0, ?, ?, ?, 0)`,
+    [openingStudentId, crypto.randomUUID(), '1'.repeat(64), actorId]);
+    const openingPaymentId = Number(openingPaymentInsert.insertId);
+    const [openingBatchInsert] = await appPool.execute(`INSERT INTO finance_allocation_batches
+        (payment_id, student_id, idempotency_key, request_fingerprint, allocated_by)
+      VALUES (?, ?, ?, ?, ?)`, [openingPaymentId, openingStudentId, crypto.randomUUID(), '2'.repeat(64), actorId]);
+    await appPool.execute(`INSERT INTO finance_payment_allocations
+        (payment_id, charge_id, legacy_opening_charge_id, amount, allocation_batch_id, allocated_by)
+      VALUES (?, NULL, ?, 12.00, ?, ?)`, [openingPaymentId, openingTransfer.openingLiabilityId, Number(openingBatchInsert.insertId), actorId]);
+    const populatedOpeningReport = await financeReports.reports(actorId, { ...reportRange, view: 'allocations' });
+    const openingContext = populatedOpeningReport.allocationContexts.find((row) => row.target_type === 'opening liability');
+    assert.equal(Number(openingContext?.distinct_payers), 1);
+    assert.equal(moneyCents(openingContext?.allocated_amount), 1200n);
+    assert.equal(moneyCents(populatedOpeningReport.allocationSummary.target_allocated_amount), 53700n);
+    const populatedCombinedReport = await financeReports.reports(actorId, reportRange);
+    assert.equal(populatedCombinedReport.allocationSummary.target_allocated_amount, populatedOpeningReport.allocationSummary.target_allocated_amount);
+
     const reversedConfirmation = await annual.getAnnualPaymentConfirmation(actorId, assessedScenarios.reversed.studentId, reversedPayment.paymentId);
     assert.equal(String(reversedConfirmation.allocations[0]?.original_amount), '100.00');
     assert.equal(String(reversedConfirmation.allocations[0]?.current_net_amount), '0.00', 'reversed payments retain original allocations and show zero currently applied');
@@ -311,7 +473,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       ['FIN-REDESIGN-WAIVED', '0.00', 'no_payment_required'],
       ['FIN-REDESIGN-REVERSED', '400.00', 'unpaid'],
       ['FIN-REDESIGN-RELEASED', '400.00', 'unpaid'],
-      ['FIN-REDESIGN-ADJUSTED', '300.00', 'unpaid'],
+      ['FIN-REDESIGN-ADJUSTED', '275.00', 'unpaid'],
       ['FIN-REDESIGN-LEGACY', '350.00', 'partially_paid'],
       ['FIN-REDESIGN-01', '0.00', 'needs_review']
     ];
@@ -522,6 +684,8 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     await appPool.execute('UPDATE users SET is_active = 1 WHERE id = ?', [actorId]);
     for (const draft of pendingDrafts) await reviewActions.discard(actorId, draft.id);
   } finally {
+    if (normalReportPool) await normalReportPool.end();
+    if (reportReadPool) await reportReadPool.end();
     if (appPool) await appPool.end();
     await adminPool.query(`DROP DATABASE IF EXISTS \`${databaseName}\``);
     await adminPool.end();
