@@ -416,11 +416,111 @@ function schoolLocalDate() {
   return `${fields.year}-${fields.month}-${fields.day}`;
 }
 
+function confirmationMoneyCents(value) {
+  const match = /^(0|[1-9]\d{0,9})(?:\.(\d{1,2}))?$/.exec(String(value ?? '').trim());
+  if (!match) return null;
+  return BigInt(match[1]) * 100n + BigInt((match[2] || '').padEnd(2, '0') || '0');
+}
+
+async function loadAnnualConfirmation(actor, annualId, annualEnrollmentService, annualFinanceService) {
+  const rawAnnualId = typeof annualId === 'number' ? String(annualId) : annualId;
+  const normalizedAnnualId = typeof rawAnnualId === 'string' && /^\d{1,10}$/.test(rawAnnualId)
+    ? Number(rawAnnualId) : NaN;
+  if (!Number.isSafeInteger(normalizedAnnualId) || normalizedAnnualId < 1 || normalizedAnnualId > 2147483647) {
+    throw new AnnualEnrollmentError('Choose a valid annual enrollment.', 400);
+  }
+  if (!['registrar', 'database_admin'].includes(actor?.role)) {
+    throw new AnnualEnrollmentError('Registrar or database administrator access is required.', 403);
+  }
+  if (typeof annualEnrollmentService?.getAnnualManagementRecord !== 'function') {
+    throw new AnnualEnrollmentError('The enrollment confirmation is unavailable.', 503);
+  }
+  const record = await annualEnrollmentService.getAnnualManagementRecord(actor.id, normalizedAnnualId);
+  const parent = record?.parent;
+  if (!parent) throw new AnnualEnrollmentError('Annual enrollment not found.', 404);
+  if (!parent.registrar_confirmation_id) throw new AnnualEnrollmentError('This enrollment has not been confirmed.', 409);
+
+  const loadSnapshot = annualFinanceService?.annualConfirmationAssessmentSnapshotForStaff;
+  if (typeof loadSnapshot !== 'function') throw new AnnualFinanceError('The saved fee assessment is unavailable.', 503);
+  const preview = await loadSnapshot.call(annualFinanceService, actor.id, normalizedAnnualId);
+  const matchesSavedConfirmation = preview?.existingAssessment
+    && Number(preview.assessmentId) === Number(parent.registrar_assessment_id)
+    && Number(preview.scheduleId) === Number(parent.registrar_schedule_id)
+    && Number(preview.scheduleVersion) === Number(parent.registrar_schedule_version)
+    && String(preview.voucherCode) === String(parent.registrar_voucher_code_snapshot)
+    && confirmationMoneyCents(preview.total) !== null
+    && confirmationMoneyCents(preview.total) === confirmationMoneyCents(parent.registrar_payable_total);
+  if (!matchesSavedConfirmation) {
+    throw new AnnualFinanceError('The saved fee assessment does not match this confirmation. Contact the registrar administrator.', 409);
+  }
+
+  const entryTermNumber = Number(parent.entry_term_number);
+  const entryPlacement = (record.terms || []).find((term) => Number(term.annual_term_number) === entryTermNumber);
+  return {
+    record,
+    preview,
+    enrollment: {
+      annualEnrollmentId: Number(parent.annual_enrollment_id),
+      studentId: Number(parent.student_id),
+      studentNo: parent.student_no,
+      firstName: parent.first_name,
+      middleName: parent.middle_name,
+      lastName: parent.last_name,
+      suffix: parent.suffix,
+      schoolYear: parent.school_year,
+      gradeLevel: parent.grade_level,
+      voucherCode: parent.voucher_code,
+      intakeKind: parent.intake_kind,
+      entryTermNumber,
+      term: entryPlacement?.term || `Term ${entryTermNumber}`,
+      sectionName: entryPlacement?.section_name || null,
+      total: String(parent.registrar_payable_total)
+    }
+  };
+}
+
+function registerAnnualConfirmationGet(router, { annualEnrollmentService, annualFinanceService, logger }) {
+  router.get('/:annualId/confirmation', async (req, res) => {
+    try {
+      const summary = await loadAnnualConfirmation(req.authUser, req.params.annualId,
+        annualEnrollmentService, annualFinanceService);
+      return setPrivateHeaders(res).render('records/annual-intake-confirmed', {
+        title: 'Enrollment confirmation', currentUser: req.authUser, ...summary,
+        confirmationUrl: `${req.baseUrl}/${encodeURIComponent(req.params.annualId)}/confirmation`,
+        printedAt: new Date(), summaryUnavailable: false
+      });
+    } catch (error) {
+      if (error instanceof AnnualEnrollmentError || error instanceof AnnualFinanceError) {
+        return setPrivateHeaders(res).status(error.status).render('error', {
+          title: 'Enrollment confirmation unavailable', message: error.message
+        });
+      }
+      const incidentId = crypto.randomUUID();
+      try {
+        logger.error('Annual confirmation summary load failed', {
+          incidentId, operation: 'registrar.annual_confirmation.load', ...safeErrorDiagnostics(error)
+        });
+      } catch { /* The saved confirmation response remains available if logging fails. */ }
+      return setPrivateHeaders(res).status(503).render('error', {
+        title: 'Enrollment confirmation unavailable',
+        message: `The confirmed fee details could not be loaded. Support reference: ${incidentId}.`
+      });
+    }
+  });
+}
+
+function createAnnualConfirmationRouter({ annualEnrollmentService, annualFinanceService, logger = console } = {}) {
+  const router = express.Router();
+  registerAnnualConfirmationGet(router, { annualEnrollmentService, annualFinanceService, logger });
+  return router;
+}
+
 function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService, annualFinanceService, physicalChecklistService, logger = console } = {}) {
   const router = express.Router();
   const feeService = annualFinanceService || null;
   const checklistService = physicalChecklistService || (getPool ? createPhysicalChecklistService({ getPool, sql }) : null);
   const service = annualEnrollmentService || createAnnualEnrollmentService({ getPool, sql, physicalChecklistService: checklistService, annualFinanceService: feeService });
+  registerAnnualConfirmationGet(router, { annualEnrollmentService: service, annualFinanceService: feeService, logger });
 
   async function renderList(req, res, { status = 200, error = null, notice = null } = {}) {
     try {
@@ -598,8 +698,25 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     try {
       const enrollment = await service.confirmAnnualEnrollment(req.authUser.id, req.params.annualId, req.body || {});
+      let summary = null;
+      let summaryUnavailable = false;
+      try {
+        summary = await loadAnnualConfirmation(req.authUser, req.params.annualId, service, feeService);
+      } catch (summaryError) {
+        summaryUnavailable = true;
+        const incidentId = crypto.randomUUID();
+        try {
+          logger.error('Enrollment confirmed but confirmation summary load failed', {
+            incidentId, operation: 'registrar.annual_confirmation.post_load', ...safeErrorDiagnostics(summaryError)
+          });
+        } catch { /* Confirmation already succeeded; keep the recovery link visible. */ }
+      }
+      const confirmationUrl = `${req.baseUrl}/${encodeURIComponent(req.params.annualId)}/confirmation`;
       return setPrivateHeaders(res).render('records/annual-intake-confirmed', {
-        title: 'Enrollment confirmed', currentUser: req.authUser, enrollment
+        title: 'Enrollment confirmed', currentUser: req.authUser,
+        enrollment: { ...(summary?.enrollment || {}), ...enrollment },
+        record: summary?.record || null, preview: summary?.preview || null,
+        confirmationUrl, printedAt: new Date(), summaryUnavailable
       });
     } catch (error) {
       if (error instanceof AnnualEnrollmentError || error instanceof AnnualFinanceError) {
@@ -743,5 +860,6 @@ module.exports = {
   credentialsCsv,
   createStudentBulkAccountsRouter,
   createStudentIntakeRouter,
-  createAnnualStudentIntakeRouter
+  createAnnualStudentIntakeRouter,
+  createAnnualConfirmationRouter
 };

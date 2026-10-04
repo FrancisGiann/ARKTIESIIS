@@ -80,12 +80,13 @@
 
     <section class="admin-section" aria-labelledby="review-fees-title">
       <div class="admin-section__heading"><div><h2 id="review-fees-title">Fees, options, and discounts</h2><p>Schedule version <%= preview.scheduleVersion %> · Voucher <%= preview.voucherCode %><% if (preview.existingAssessment) { %> · Saved assessment<% } %></p></div><p class="fee-total-line"><span>Total payable</span><strong>₱<%= formatMoney(preview.total) %></strong></p></div>
+      <%- include('./partials/annual-tuition-breakdown', { preview, headingId: 'review-approved-tuition-title' }) %>
       <div class="table-scroll" tabindex="0" aria-label="Exact fee assessment and approved discounts">
         <table class="admin-table fee-assessment-table">
-          <thead><tr><th scope="col">Term</th><th scope="col">Fee</th><th scope="col">Installment</th><th scope="col">Amount</th><th scope="col">Approved discount</th><th scope="col">Payable</th></tr></thead>
+          <thead><tr><th scope="col">Term</th><th scope="col">Fee</th><th scope="col">Schedule label</th><th scope="col">Amount</th><th scope="col">Approved discount</th><th scope="col">Payable</th></tr></thead>
           <tbody><% if (preview.lines.length) { for (const line of preview.lines) { %><tr>
             <td data-label="Term">Term <%= line.termNumber %></td><td data-label="Fee"><%= line.lineName %><small><%= line.category.replaceAll('_', ' ') %><% if (line.isOptional) { %> · Optional<% } %></small></td>
-            <td data-label="Installment"><%= line.installment %></td><td data-label="Amount">₱<%= formatMoney(line.grossAmount) %></td>
+            <td data-label="Schedule label"><%= line.installment %></td><td data-label="Amount">₱<%= formatMoney(line.grossAmount) %></td>
             <td data-label="Approved discount"><%= line.waivedAmount === '0.00' ? '—' : `₱${formatMoney(line.waivedAmount)}` %></td><td data-label="Payable"><strong>₱<%= formatMoney(line.amount) %></strong></td>
           </tr><% } } else { %><tr><td colspan="6">No payable fee lines apply to this entry term and selection.</td></tr><% } %></tbody>
           <tfoot><tr><th scope="row" colspan="5">Total payable</th><td data-label="Total payable"><strong>₱<%= formatMoney(preview.total) %></strong></td></tr></tfoot>

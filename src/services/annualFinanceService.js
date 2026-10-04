@@ -105,19 +105,25 @@ function normalizeLineRows(input) {
 }
 
 function tuitionInstallmentBreakdown(lines, entryTermNumber = 1) {
-  return [1, 2, 3].map((termNumber) => ({
-    termNumber,
-    installments: TUITION_INSTALLMENTS.map((installment) => {
-      if (termNumber < Number(entryTermNumber || 1)) return { label: installment, configured: false, notApplicable: true, amount: null };
-      const matched = lines.filter((line) => Number(line.termNumber) === termNumber
-        && String(line.category || '').toLowerCase() === 'tuition'
-        && String(line.lineName || '').toLowerCase() === 'tuition'
-        && String(line.installment || '').toLowerCase() === installment.toLowerCase());
-      const configured = matched.length > 0;
+  return [1, 2, 3].map((termNumber) => {
+    const notApplicable = termNumber < Number(entryTermNumber || 1);
+    const tuitionLines = lines.filter((line) => Number(line.termNumber) === termNumber
+      && String(line.category || '').toLowerCase() === 'tuition');
+    const installments = TUITION_INSTALLMENTS.map((installment) => {
+      if (notApplicable) return { label: installment, configured: false, notApplicable: true, amount: null };
+      const matched = tuitionLines.filter((line) => String(line.lineName || '').trim().toLowerCase() === 'tuition'
+        && String(line.installment || '').trim().toLowerCase() === installment.toLowerCase());
+      const configured = matched.length === 1 && !flag(matched[0].isOptional);
       const cents = matched.reduce((sum, line) => sum + parseMoneyCents(String(line.amount || '0.00'), { allowZero: true }), 0n);
       return { label: installment, configured, amount: configured ? formatMoneyCents(cents) : null };
-    })
-  }));
+    });
+    const installmentLines = tuitionLines.filter((line) => String(line.lineName || '').trim().toLowerCase() === 'tuition'
+      && TUITION_INSTALLMENTS.some((installment) => String(line.installment || '').trim().toLowerCase() === installment.toLowerCase()));
+    const complete = notApplicable || (tuitionLines.length === TUITION_INSTALLMENTS.length
+      && installmentLines.length === TUITION_INSTALLMENTS.length
+      && installments.every(({ configured }) => configured));
+    return { termNumber, installments, complete };
+  });
 }
 
 function normalizeSelections(value) {
@@ -227,6 +233,10 @@ function tuitionTermTotals(lines, entryTermNumber) {
   });
 }
 
+function nonTuitionTermTotals(lines, entryTermNumber) {
+  return assessmentTermTotals(lines.filter((line) => String(line.category || '').toLowerCase() !== 'tuition'), entryTermNumber);
+}
+
 function canonicalAllocations(allocations) {
   return allocations.map((allocation) => ({
     chargeId: allocation.chargeId,
@@ -287,6 +297,16 @@ function createAnnualFinanceService({
         WHERE id = @actorId AND is_active = 1 AND role = 'registrar' FOR UPDATE`);
     const actor = result.recordset?.[0];
     if (!actor) throw new AnnualFinanceError('Your registrar access is no longer active. Sign in again.', 403);
+    return actor;
+  }
+
+  async function requireConfirmationStaffActor(request, actorInput) {
+    const actorId = id(actorInput, 'user');
+    const result = await request.input('actorId', sql.Int, actorId)
+      .query(`SELECT id, role FROM users
+        WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin') FOR UPDATE`);
+    const actor = result.recordset?.[0];
+    if (!actor) throw new AnnualFinanceError('Your registrar or database administrator access is no longer active. Sign in again.', 403);
     return actor;
   }
 
@@ -362,6 +382,16 @@ function createAnnualFinanceService({
     if (!['PUB', 'ESC', 'NV'].includes(voucherCode)) throw new AnnualFinanceError('Choose PUB, ESC, or NV.');
     const lines = normalizeLineRows(input.lines);
     const idempotencyKey = uuid(input.idempotencyKey, 'schedule submission');
+    let expectedPreviousSchedule = null;
+    if (input.expectedPreviousSchedule != null) {
+      if (typeof input.expectedPreviousSchedule !== 'object' || Array.isArray(input.expectedPreviousSchedule)) {
+        throw new AnnualFinanceError('The expected previous schedule is invalid.');
+      }
+      expectedPreviousSchedule = {
+        scheduleId: id(input.expectedPreviousSchedule.scheduleId, 'previous schedule'),
+        versionNo: id(input.expectedPreviousSchedule.versionNo, 'previous schedule version')
+      };
+    }
     const fingerprint = requestFingerprint({ schoolYear, gradeLevel, voucherCode, lines: lines.map(({ termNumber, category, lineName, installment, amount, isOptional }) => ({ termNumber, category, lineName, installment, amount, isOptional })) });
     return runTransaction(async (transaction) => {
       const actor = await requireFinanceActor(transaction.request(), actorInput);
@@ -372,23 +402,25 @@ function createAnnualFinanceService({
         if (prior.request_fingerprint !== fingerprint) throw new AnnualFinanceError('This submission token was already used for different schedule details.', 409);
         return { scheduleId: prior.id, versionNo: prior.version_no, alreadyRecorded: true };
       }
-      const previousResult = await transaction.request()
+      const contextResult = await transaction.request()
         .input('schoolYear', sql.NVarChar(20), schoolYear)
         .input('gradeLevel', sql.NVarChar(50), gradeLevel)
         .input('voucherCode', sql.NVarChar(10), voucherCode)
-        .query(`SELECT id, version_no FROM finance_schedules
+        .query(`SELECT id, version_no, status FROM finance_schedules
           WHERE school_year = @schoolYear AND grade_level = @gradeLevel AND voucher_code = @voucherCode
-            AND status = 'active'`);
-      const versionResult = await transaction.request()
-        .input('schoolYear', sql.NVarChar(20), schoolYear)
-        .input('gradeLevel', sql.NVarChar(50), gradeLevel)
-        .input('voucherCode', sql.NVarChar(10), voucherCode)
-        .query(`SELECT COALESCE(MAX(version_no), 0) AS latest_version FROM finance_schedules
-          WHERE school_year = @schoolYear AND grade_level = @gradeLevel AND voucher_code = @voucherCode`);
-      const versionNo = Number(versionResult.recordset?.[0]?.latest_version || 0) + 1;
+          ORDER BY version_no DESC FOR UPDATE`);
+      const contextSchedules = contextResult.recordset || [];
+      const previousSchedule = contextSchedules.find((row) => row.status === 'active');
+      const latestVersion = Number(contextSchedules[0]?.version_no || 0);
+      if (expectedPreviousSchedule && (Number(previousSchedule?.id) !== expectedPreviousSchedule.scheduleId
+        || Number(previousSchedule?.version_no) !== expectedPreviousSchedule.versionNo
+        || latestVersion !== expectedPreviousSchedule.versionNo)) {
+        throw new AnnualFinanceError('The active approved schedule changed while this update was prepared. Reload the schedule and review the latest version before saving.', 409);
+      }
+      const versionNo = latestVersion + 1;
       if (!Number.isSafeInteger(versionNo) || versionNo > 2147483647) throw new AnnualFinanceError('The schedule version limit has been reached.', 409);
-      if (previousResult.recordset?.[0]) {
-        await transaction.request().input('scheduleId', sql.Int, previousResult.recordset[0].id)
+      if (previousSchedule) {
+        await transaction.request().input('scheduleId', sql.Int, previousSchedule.id)
           .query('UPDATE finance_schedules SET status = N\'retired\' WHERE id = @scheduleId AND status = N\'active\'');
       }
       const inserted = await transaction.request()
@@ -467,12 +499,15 @@ function createAnnualFinanceService({
       });
       const snapshot = canonicalAssessmentSnapshot(lines);
       const totalCents = parseMoneyCents(snapshot.total, { allowZero: true });
+      const tuitionBreakdown = tuitionInstallmentBreakdown(lines, parent.entry_term_number);
       return { parent, scheduleId: Number(posted.schedule_id), scheduleVersion: Number(posted.schedule_version),
         voucherCode: posted.voucher_code_snapshot, assessmentId: Number(posted.id), existingAssessment: true,
         optionalLineIds: [...selected], lines, total: formatMoneyCents(totalCents), totalCents,
         optionalLines: [], termTotals: assessmentTermTotals(lines, parent.entry_term_number),
         tuitionTermTotals: tuitionTermTotals(lines, parent.entry_term_number),
-        tuitionBreakdown: tuitionInstallmentBreakdown(lines, parent.entry_term_number),
+        nonTuitionTermTotals: nonTuitionTermTotals(lines, parent.entry_term_number),
+        tuitionBreakdown,
+        tuitionBreakdownComplete: tuitionBreakdown.filter((term) => !term.installments[0].notApplicable).every((term) => term.complete),
         snapshotFingerprint: snapshot.fingerprint };
     }
 
@@ -539,16 +574,120 @@ function createAnnualFinanceService({
     lines = applyExemptionPreview(lines, exemptionRulesResult.recordset || []);
     const snapshot = canonicalAssessmentSnapshot(lines);
     const totalCents = parseMoneyCents(snapshot.total, { allowZero: true });
+    const tuitionBreakdown = tuitionInstallmentBreakdown(lines, entryTermNumber);
     return { parent, scheduleId: schedule.id, scheduleVersion: schedule.version_no, voucherCode: parent.voucher_code,
       assessmentId: null, existingAssessment: false, optionalLineIds: [...selectedOptionalLines], optionalLines, lines,
       total: formatMoneyCents(totalCents), totalCents, termTotals: assessmentTermTotals(lines, entryTermNumber),
       tuitionTermTotals: tuitionTermTotals(lines, entryTermNumber),
-      tuitionBreakdown: tuitionInstallmentBreakdown(lines, entryTermNumber),
+      nonTuitionTermTotals: nonTuitionTermTotals(lines, entryTermNumber),
+      tuitionBreakdown,
+      tuitionBreakdownComplete: tuitionBreakdown.filter((term) => !term.installments[0].notApplicable).every((term) => term.complete),
       snapshotFingerprint: snapshot.fingerprint };
   }
 
   async function annualAssessmentPreviewForRegistrar(actorInput, annualEnrollmentInput, optionalLineInputs = []) {
     return annualAssessmentPreview(actorInput, annualEnrollmentInput, optionalLineInputs, 'registrar');
+  }
+
+  async function annualConfirmationAssessmentSnapshotForStaff(actorInput, annualEnrollmentInput) {
+    const annualEnrollmentId = id(annualEnrollmentInput, 'annual enrollment');
+    const pool = await getPool();
+    await requireConfirmationStaffActor(pool.request(), actorInput);
+    const confirmationResult = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+      .query(`SELECT confirmation.id AS confirmation_id, confirmation.annual_enrollment_id,
+          confirmation.assessment_id, confirmation.schedule_id, confirmation.schedule_version,
+          confirmation.voucher_code_snapshot, CAST(confirmation.payable_total AS CHAR(40)) AS payable_total,
+          confirmation.selection_json, confirmation.assessment_snapshot_fingerprint, confirmation.confirmed_at,
+          annual.student_id, annual.school_year, annual.grade_level, annual.entry_term_number,
+          student.student_no, student.first_name, student.middle_name, student.last_name, student.suffix
+        FROM annual_registrar_confirmations AS confirmation
+        INNER JOIN annual_enrollments AS annual ON annual.id = confirmation.annual_enrollment_id
+        INNER JOIN students AS student ON student.id = confirmation.student_id
+        WHERE confirmation.annual_enrollment_id = @annualEnrollmentId AND annual.intake_status <> 'legacy'`);
+    const confirmation = confirmationResult.recordset?.[0];
+    if (!confirmation) throw new AnnualFinanceError('Enrollment confirmation not found.', 404);
+
+    let confirmationSelection = {};
+    let assessmentSelection = {};
+    try {
+      confirmationSelection = JSON.parse(confirmation.selection_json || '{}');
+    } catch { throw new AnnualFinanceError('The saved confirmation selection could not be verified.', 409); }
+    const assessmentResult = await pool.request()
+      .input('assessmentId', sql.Int, confirmation.assessment_id)
+      .input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+      .query(`SELECT selection_json FROM annual_assessments
+        WHERE id = @assessmentId AND annual_enrollment_id = @annualEnrollmentId`);
+    const savedAssessment = assessmentResult.recordset?.[0];
+    if (!savedAssessment) throw new AnnualFinanceError('The saved assessment for this confirmation was not found.', 409);
+    try {
+      assessmentSelection = JSON.parse(savedAssessment.selection_json || '{}');
+    } catch { throw new AnnualFinanceError('The saved assessment selection could not be verified.', 409); }
+    const optionalLineIds = [...normalizeSelections(confirmationSelection.optionalLineIds || [])].sort((left, right) => left - right);
+    const assessmentOptionalLineIds = [...normalizeSelections(assessmentSelection.optionalLineIds || [])].sort((left, right) => left - right);
+    if (JSON.stringify(optionalLineIds) !== JSON.stringify(assessmentOptionalLineIds)) {
+      throw new AnnualFinanceError('The saved assessment and confirmation selections do not match.', 409);
+    }
+
+    const chargesResult = await pool.request().input('assessmentId', sql.Int, confirmation.assessment_id)
+      .query(`SELECT enrollment.annual_term_number AS term_number, charge.fee_category, charge.line_name,
+          charge.installment, charge.schedule_line_id,
+          COALESCE(schedule_line.is_optional, CAST(0 AS UNSIGNED)) AS is_optional,
+          CAST(charge.amount AS CHAR(40)) AS original_gross_amount,
+          CAST(COALESCE((SELECT SUM(application.amount) FROM finance_exemption_applications AS application
+            WHERE application.charge_id = charge.id AND application.applied_at <= confirmation.confirmed_at), 0) AS CHAR(40)) AS confirmed_waived_amount
+        FROM assessed_charges AS charge
+        INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
+        INNER JOIN annual_registrar_confirmations AS confirmation
+          ON confirmation.assessment_id = charge.assessment_id
+          AND confirmation.annual_enrollment_id = charge.annual_enrollment_id
+        LEFT JOIN finance_schedule_lines AS schedule_line ON schedule_line.id = charge.schedule_line_id
+        WHERE charge.assessment_id = @assessmentId AND charge.created_at <= confirmation.confirmed_at
+        ORDER BY enrollment.annual_term_number, charge.id`);
+    const lines = (chargesResult.recordset || []).map((line) => {
+      const grossCents = parseMoneyCents(String(line.original_gross_amount), { allowZero: true });
+      const waivedCents = parseMoneyCents(String(line.confirmed_waived_amount || '0.00'), { allowZero: true });
+      if (waivedCents > grossCents) throw new AnnualFinanceError('The saved coverage exceeds its original charge amount.', 409);
+      return {
+        scheduleLineId: line.schedule_line_id == null ? null : Number(line.schedule_line_id),
+        termNumber: Number(line.term_number), category: line.fee_category, lineName: line.line_name,
+        installment: line.installment, grossAmount: formatMoneyCents(grossCents),
+        waivedAmount: formatMoneyCents(waivedCents), amount: formatMoneyCents(grossCents - waivedCents),
+        isOptional: flag(line.is_optional), alreadyPosted: true
+      };
+    });
+    const snapshot = canonicalAssessmentSnapshot(lines);
+    const payableCents = parseMoneyCents(String(confirmation.payable_total), { allowZero: true });
+    const payableTotal = formatMoneyCents(payableCents);
+    const compositeFingerprint = crypto.createHash('sha256').update(JSON.stringify({
+      assessmentId: Number(confirmation.assessment_id), scheduleId: Number(confirmation.schedule_id),
+      scheduleVersion: Number(confirmation.schedule_version), voucherCode: confirmation.voucher_code_snapshot,
+      payableTotal, optionalLineIds, postedComposition: snapshot.fingerprint
+    })).digest('hex');
+    if (snapshot.total !== payableTotal || compositeFingerprint !== String(confirmation.assessment_snapshot_fingerprint).toLowerCase()) {
+      throw new AnnualFinanceError('The original confirmed fee details could not be verified from the saved fee history.', 409);
+    }
+
+    const entryTermNumber = Number(confirmation.entry_term_number || 1);
+    const tuitionBreakdown = tuitionInstallmentBreakdown(lines, entryTermNumber);
+    return {
+      parent: {
+        student_id: Number(confirmation.student_id), student_no: confirmation.student_no,
+        first_name: confirmation.first_name, middle_name: confirmation.middle_name,
+        last_name: confirmation.last_name, suffix: confirmation.suffix,
+        school_year: confirmation.school_year, grade_level: confirmation.grade_level,
+        voucher_code: confirmation.voucher_code_snapshot, entry_term_number: entryTermNumber
+      },
+      scheduleId: Number(confirmation.schedule_id), scheduleVersion: Number(confirmation.schedule_version),
+      voucherCode: confirmation.voucher_code_snapshot, assessmentId: Number(confirmation.assessment_id),
+      existingAssessment: true, optionalLineIds, lines, total: snapshot.total,
+      totalCents: payableCents, optionalLines: [],
+      termTotals: assessmentTermTotals(lines, entryTermNumber),
+      tuitionTermTotals: tuitionTermTotals(lines, entryTermNumber),
+      nonTuitionTermTotals: nonTuitionTermTotals(lines, entryTermNumber),
+      tuitionBreakdown,
+      tuitionBreakdownComplete: tuitionBreakdown.filter((term) => !term.installments[0].notApplicable).every((term) => term.complete),
+      snapshotFingerprint: snapshot.fingerprint
+    };
   }
 
   async function confirmAnnualAssessment(actorInput, annualEnrollmentInput, optionalLineInputs = [], confirmation = {}) {
@@ -2314,6 +2453,7 @@ function createAnnualFinanceService({
 
   return {
     listSchedules, createSchedule, annualAssessmentPreview, annualAssessmentPreviewForRegistrar,
+    annualConfirmationAssessmentSnapshotForStaff,
     confirmAnnualAssessment, confirmAnnualAssessmentInTransaction, addSupplementaryCharge,
     recordPayment, updatePaymentMetadata, previewLegacyOpeningLiability, transferLegacyOpeningLiability,
     allocateExistingCredit, releasePaymentAllocation, releaseLegacyReconciliation,
@@ -2336,5 +2476,6 @@ module.exports = {
   canonicalAssessmentSnapshot,
   applyExemptionPreview,
   assessmentTermTotals,
-  tuitionTermTotals
+  tuitionTermTotals,
+  nonTuitionTermTotals
 };

@@ -1,24 +1,130 @@
 <%- include('../partials/head', { title }) %>
-<main class="page-shell dashboard-page admin-page records-page annual-confirmation-result" id="main-content">
-  <header class="dashboard-heading"><div><h1>Enrollment confirmed</h1><p>The voucher-based fee assessment was saved and the entry term is active. Finance manages approved schedules and records payments.</p></div></header>
-  <section class="admin-section" aria-labelledby="confirmed-student-title">
-    <div class="admin-section__heading"><div><h2 id="confirmed-student-title"><%= [enrollment.firstName, enrollment.middleName, enrollment.lastName, enrollment.suffix].filter(Boolean).join(' ') %></h2><p>Student number <%= enrollment.studentNo %></p></div></div>
-    <dl class="enrollment-summary-list">
-      <div><dt>School year and grade</dt><dd><%= enrollment.schoolYear %> · <%= enrollment.gradeLevel %></dd></div>
-      <div><dt>Entry term</dt><dd><%= enrollment.term %></dd></div>
-      <div><dt>Section</dt><dd><%= enrollment.sectionName %></dd></div>
-      <div><dt>Payable assessment</dt><dd>₱<%= formatMoney(enrollment.total) %></dd></div>
-    </dl>
-    <% if (enrollment.temporaryPassword) { %>
-      <section class="notice-panel" aria-labelledby="temporary-password-title"><h2 id="temporary-password-title">One-time temporary password</h2>
-        <p><strong><%= enrollment.temporaryPassword %></strong></p>
-        <p>Give this to the student privately. It cannot be recovered after leaving this page. The student must complete email verification and change it at sign-in.</p></section>
-    <% } %>
-    <div class="admin-form-actions">
-      <a class="button button--primary" href="/documents/students/<%= enrollment.studentId %>#physical-checklist-title">Open paper requirements checklist</a>
-      <a class="button button--secondary" href="/registrar/intake/<%= enrollment.annualEnrollmentId %>/manage">Open annual student record</a>
-      <a class="button button--secondary" href="/registrar/intake">Return to annual intake</a>
+<%
+  const parent = record?.parent || {};
+  const studentName = [parent.first_name || enrollment.firstName, parent.middle_name || enrollment.middleName,
+    parent.last_name || enrollment.lastName, parent.suffix || enrollment.suffix].filter(Boolean).join(' ');
+  const enrollmentKind = ({ new: 'New student', standard: 'Standard intake', returning: 'Returning student', transferee: 'Transferee' })[parent.intake_kind || enrollment.intakeKind] || 'Not recorded';
+  const confirmationDate = (value, dateOnly = false) => {
+    if (!value) return null;
+    let date;
+    if (dateOnly) {
+      const rawDate = value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) return null;
+      date = new Date(`${rawDate}T00:00:00+08:00`);
+    } else if (value instanceof Date) date = value;
+    else {
+      const rawDateTime = String(value).trim();
+      date = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(rawDateTime) ? rawDateTime : `${rawDateTime.replace(' ', 'T')}Z`);
+    }
+    if (Number.isNaN(date.getTime())) return null;
+    return new Intl.DateTimeFormat('en-PH', {
+      timeZone: 'Asia/Manila', dateStyle: dateOnly ? 'long' : 'medium', ...(dateOnly ? {} : { timeStyle: 'short' })
+    }).format(date);
+  };
+  const confirmationTerms = record?.terms || [];
+  const placementLabel = (term) => term.term_scope_status === 'not_applicable'
+    ? 'Not applicable'
+    : ({ pending_payment: 'Pending payment', enrolled: 'Enrolled', completed: 'Completed', withdrawn: 'Withdrawn' })[term.enrollment_status]
+      || String(term.enrollment_status || 'Status not recorded').replaceAll('_', ' ');
+%>
+<main class="page-shell dashboard-page admin-page records-page annual-confirmation-document" id="main-content">
+  <header class="confirmation-document-header">
+    <img src="/images/arktiesiis-school-seal.png" alt="ARKTIESIIS school seal">
+    <div>
+      <p>Ark Technological Institute Education System Incorporated</p>
+      <p>Lucena Branch</p>
     </div>
+    <div class="confirmation-document-header__title">
+      <h1>Enrollment confirmed</h1>
+      <% if (parent.registrar_confirmation_id) { %><p>Confirmation ID <strong><%= parent.registrar_confirmation_id %></strong></p><% } %>
+      <p>Printed <%= confirmationDate(printedAt) %> Philippine time</p>
+    </div>
+  </header>
+
+  <% if (summaryUnavailable) { %>
+    <p class="form-alert confirmation-summary-alert" role="status">Enrollment was confirmed, but its saved detail summary could not be loaded. Use the saved confirmation link below to retry.</p>
+  <% } %>
+
+  <section class="admin-section confirmation-section" aria-labelledby="confirmation-student-title">
+    <div class="admin-section__heading"><div><h2 id="confirmation-student-title"><%= studentName || enrollment.studentNo %></h2>
+      <p>Student number <%= parent.student_no || enrollment.studentNo %></p></div></div>
+    <dl class="enrollment-summary-list confirmation-identity-list">
+      <div><dt>Learner reference number</dt><dd><%= parent.lrn || 'Not recorded' %></dd></div>
+      <div><dt>School year and grade</dt><dd><%= parent.school_year || enrollment.schoolYear %> · <%= parent.grade_level || enrollment.gradeLevel %></dd></div>
+      <div><dt>Voucher</dt><dd><%= preview?.voucherCode || parent.registrar_voucher_code_snapshot || enrollment.voucherCode || 'Not recorded' %></dd></div>
+      <div><dt>Intake type</dt><dd><%= enrollmentKind %></dd></div>
+      <div><dt>Entry term</dt><dd><%= enrollment.term || `Term ${parent.entry_term_number || enrollment.entryTermNumber || ''}` %></dd></div>
+      <div><dt>Enrollment start date</dt><dd><%= confirmationDate(parent.enrollment_start_date, true) || 'Not recorded' %></dd></div>
+      <div><dt>Entry section</dt><dd><%= enrollment.sectionName || 'Not recorded' %></dd></div>
+      <% if (parent.student_email) { %><div><dt>Student email</dt><dd><%= parent.student_email %></dd></div><% } %>
+      <% if (parent.phone) { %><div><dt>Contact phone</dt><dd><%= parent.phone %></dd></div><% } %>
+      <% if (parent.registrar_confirmed_at) { %><div><dt>Confirmed</dt><dd><%= confirmationDate(parent.registrar_confirmed_at) %> Philippine time</dd></div><% } %>
+    </dl>
   </section>
+
+  <% if (record && preview) { %>
+    <section class="admin-section confirmation-section" aria-labelledby="confirmation-placements-title">
+      <div class="admin-section__heading"><div><h2 id="confirmation-placements-title">Current term placements</h2>
+        <p>Current section placements and enrollment status.</p></div></div>
+      <div class="table-scroll confirmation-table-scroll" tabindex="0" aria-label="Confirmed term placements">
+        <table class="admin-table confirmation-table">
+          <thead><tr><th scope="col">Term</th><th scope="col">Section</th><th scope="col">Placement</th></tr></thead>
+          <tbody><% for (const term of confirmationTerms) { %>
+            <tr>
+              <th scope="row"><%= term.term || `Term ${term.annual_term_number}` %><%= Number(term.annual_term_number) === Number(parent.entry_term_number) ? ' · Entry term' : '' %></th>
+              <td data-label="Section"><%= term.section_name || 'Not assigned' %></td>
+              <td data-label="Placement"><%= placementLabel(term) %></td>
+            </tr>
+          <% } %></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="admin-section confirmation-section confirmation-fees" aria-labelledby="confirmation-fees-title">
+      <div class="admin-section__heading"><div><h2 id="confirmation-fees-title">Approved fee assessment</h2>
+        <p>Voucher <%= preview.voucherCode %> · Schedule version <%= preview.scheduleVersion %> · Saved assessment</p></div>
+        <p class="fee-total-line"><span>Student payable assessment</span><strong>₱<%= formatMoney(preview.total) %></strong></p>
+      </div>
+      <p class="muted-copy">This is the fee assessment confirmed at enrollment, including approved coverage. It is not a payment receipt or payment history; Finance records payments separately.</p>
+      <%- include('./partials/annual-tuition-breakdown', { preview, headingId: 'confirmation-approved-tuition-title' }) %>
+      <details class="fee-breakdown confirmation-itemized-fees" open>
+        <summary>Itemized assessment and approved coverage</summary>
+        <div class="table-scroll confirmation-table-scroll" tabindex="0" aria-label="Saved itemized assessment charges">
+          <table class="admin-table fee-assessment-table confirmation-table">
+            <thead><tr><th scope="col">Term</th><th scope="col">Fee</th><th scope="col">Schedule label</th><th scope="col">Amount</th><th scope="col">Approved coverage</th><th scope="col">Payable</th></tr></thead>
+            <tbody>
+              <% if (preview.lines.length) { for (const line of preview.lines) { %>
+                <tr>
+                  <td data-label="Term">Term <%= line.termNumber %></td>
+                  <td data-label="Fee"><%= line.lineName %><small><%= line.category.replaceAll('_', ' ') %><% if (line.isOptional) { %> · Optional<% } %></small></td>
+                  <td data-label="Schedule label"><%= line.installment || '—' %></td>
+                  <td data-label="Amount">₱<%= formatMoney(line.grossAmount) %></td>
+                  <td data-label="Approved coverage"><%= line.waivedAmount === '0.00' ? '—' : `₱${formatMoney(line.waivedAmount)}` %></td>
+                  <td data-label="Payable"><strong>₱<%= formatMoney(line.amount) %></strong></td>
+                </tr>
+              <% } } else { %><tr><td colspan="6">No payable fee lines apply to this entry term and selection.</td></tr><% } %>
+            </tbody>
+            <tfoot><tr><th scope="row" colspan="5">Total payable assessment</th><td data-label="Total payable"><strong>₱<%= formatMoney(preview.total) %></strong></td></tr></tfoot>
+          </table>
+        </div>
+      </details>
+    </section>
+  <% } %>
+
+  <% if (enrollment.temporaryPassword) { %>
+    <section class="notice-panel confirmation-secret" aria-labelledby="temporary-password-title">
+      <h2 id="temporary-password-title">One-time temporary password</h2>
+      <p><strong><%= enrollment.temporaryPassword %></strong></p>
+    <p>Give this to the student privately. It is shown only on this response and is omitted from the print copy. The student must complete email verification and change it at sign-in.</p>
+    </section>
+  <% } %>
+
+  <div class="admin-form-actions confirmation-actions" aria-label="Confirmation actions">
+    <% if (enrollment.temporaryPassword || summaryUnavailable) { %><a class="button button--primary" href="<%= confirmationUrl %>">Print / save as PDF</a><% } else { %><button class="button button--primary" type="button" data-print-page>Print / save as PDF</button><% } %>
+    <a class="button button--secondary" href="<%= confirmationUrl %>">View / print saved confirmation</a>
+    <% if (enrollment.studentId) { %><a class="button button--secondary" href="/documents/students/<%= enrollment.studentId %>#physical-checklist-title">Open paper requirements checklist</a><% } %>
+    <% if (enrollment.annualEnrollmentId) { %><a class="button button--secondary" href="/registrar/intake/<%= enrollment.annualEnrollmentId %>/manage">Open annual student record</a><% } %>
+    <a class="button button--secondary" href="/registrar/intake">Return to annual intake</a>
+  </div>
 </main>
 <%- include('../partials/foot') %>

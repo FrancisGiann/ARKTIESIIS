@@ -1,0 +1,52 @@
+<%
+  const tuitionLines = preview.lines.filter((line) => String(line.category || '').toLowerCase() === 'tuition');
+  const applicableTuitionTerms = (preview.tuitionBreakdown || []).filter((term) => !term.installments[0]?.notApplicable);
+  const tuitionTotalsByTerm = new Map((preview.tuitionTermTotals || []).map((term) => [Number(term.termNumber), term.amount]));
+  const otherTotalsByTerm = new Map((preview.nonTuitionTermTotals || []).map((term) => [Number(term.termNumber), term.amount]));
+  const payableTotalsByTerm = new Map((preview.termTotals || []).map((term) => [Number(term.termNumber), term.amount]));
+%>
+<div class="fee-approved-tuition" aria-labelledby="<%= headingId %>">
+  <div>
+    <h3 id="<%= headingId %>">Approved tuition <%= preview.tuitionBreakdownComplete ? 'by installment' : 'by term' %></h3>
+    <p class="muted-copy">Amounts reflect the reviewed assessment after selected optional charges and approved coverage.</p>
+  </div>
+  <% if (!tuitionLines.length) { %>
+    <p class="muted-copy">No separate tuition line is included in this assessment.</p>
+  <% } else if (preview.tuitionBreakdownComplete) { %>
+    <div class="table-scroll" tabindex="0" aria-label="Approved tuition installments and other payable fees by term">
+      <table class="admin-table">
+        <thead><tr>
+          <th scope="col">Term</th><th scope="col">Downpayment</th><th scope="col">Prelim</th>
+          <th scope="col">Midterm</th><th scope="col">Finals</th><th scope="col">Tuition total</th>
+          <th scope="col">Other payable fees</th><th scope="col">Term payable</th>
+        </tr></thead>
+        <tbody><% for (const term of applicableTuitionTerms) { %>
+          <tr>
+            <th scope="row">Term <%= term.termNumber %></th>
+            <% for (const installment of term.installments) { %><td data-label="<%= installment.label === 'DP' ? 'Downpayment' : installment.label %>"><strong>₱<%= formatMoney(installment.amount) %></strong></td><% } %>
+            <td data-label="Tuition total"><strong>₱<%= formatMoney(tuitionTotalsByTerm.get(Number(term.termNumber)) || '0.00') %></strong></td>
+            <td data-label="Other payable fees">₱<%= formatMoney(otherTotalsByTerm.get(Number(term.termNumber)) || '0.00') %></td>
+            <td data-label="Term payable"><strong>₱<%= formatMoney(payableTotalsByTerm.get(Number(term.termNumber)) || '0.00') %></strong></td>
+          </tr>
+        <% } %></tbody>
+      </table>
+    </div>
+  <% } else { %>
+    <p class="muted-copy"><%= preview.existingAssessment
+      ? 'This saved assessment preserves its original fee details and does not provide one Downpayment, Prelim, Midterm, and Finals amount for every applicable term. Tuition is shown as its original term total; no installment split is estimated.'
+      : 'The approved schedule does not provide one Downpayment, Prelim, Midterm, and Finals amount for every applicable term. Tuition is shown as its approved term total; no installment split is estimated.' %></p>
+    <div class="table-scroll" tabindex="0" aria-label="Approved tuition and other payable fees by term">
+      <table class="admin-table">
+        <thead><tr><th scope="col">Term</th><th scope="col">Tuition payable</th><th scope="col">Other payable fees</th><th scope="col">Term payable</th></tr></thead>
+        <tbody><% for (const term of preview.tuitionTermTotals || []) { %>
+          <tr>
+            <th scope="row">Term <%= term.termNumber %></th>
+            <td data-label="Tuition payable"><strong>₱<%= formatMoney(term.amount) %></strong></td>
+            <td data-label="Other payable fees">₱<%= formatMoney(otherTotalsByTerm.get(Number(term.termNumber)) || '0.00') %></td>
+            <td data-label="Term payable"><strong>₱<%= formatMoney(payableTotalsByTerm.get(Number(term.termNumber)) || '0.00') %></strong></td>
+          </tr>
+        <% } %></tbody>
+      </table>
+    </div>
+  <% } %>
+</div>

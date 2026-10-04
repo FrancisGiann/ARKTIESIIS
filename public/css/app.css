@@ -513,7 +513,36 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); outline
   .finance-statement thead { display: table-header-group; }
   .finance-statement tr { break-inside: avoid; page-break-inside: avoid; }
   .finance-statement a { color: #000; text-decoration: none; }
+  .annual-confirmation-document { width: 100% !important; max-width: none !important; padding: 0 !important; margin: 0 !important; color: #000; background: #fff; font-size: 9pt; }
+  .annual-confirmation-document .confirmation-actions,
+  .annual-confirmation-document .confirmation-secret { display: none !important; }
+  .annual-confirmation-document .confirmation-document-header { padding: 0 0 0.55rem; margin-bottom: 0.65rem; border-bottom: 1.5pt solid #000; }
+  .annual-confirmation-document .confirmation-document-header img { width: 0.55in; height: 0.55in; }
+  .annual-confirmation-document .admin-section { padding: 0.45rem 0; margin: 0 0 0.45rem; border: 0; border-bottom: 0.6pt solid #aaa; border-radius: 0; box-shadow: none; break-inside: auto; }
+  .annual-confirmation-document .confirmation-section > .admin-section__heading,
+  .annual-confirmation-document .confirmation-fees > .admin-section__heading { break-after: avoid; }
+  .annual-confirmation-document .table-scroll { width: 100%; overflow: visible !important; border: 0; }
+  .annual-confirmation-document .admin-table { display: table !important; width: 100%; min-width: 0; table-layout: auto; border-collapse: collapse; font-size: 7.5pt; }
+  .annual-confirmation-document th, .annual-confirmation-document td { padding: 0.16rem 0.2rem; color: #000; border-bottom: 0.4pt solid #bbb; overflow-wrap: anywhere; vertical-align: top; }
+  .annual-confirmation-document .admin-table thead { position: static !important; display: table-header-group !important; width: auto !important; height: auto !important; overflow: visible !important; clip: auto !important; clip-path: none !important; }
+  .annual-confirmation-document .admin-table tbody { display: table-row-group !important; width: auto !important; }
+  .annual-confirmation-document .admin-table tfoot { display: table-footer-group !important; }
+  .annual-confirmation-document .admin-table tr { display: table-row !important; width: auto !important; padding: 0 !important; break-inside: avoid; page-break-inside: avoid; }
+  .annual-confirmation-document .admin-table td { display: table-cell !important; grid-template-columns: none !important; gap: 0 !important; }
+  .annual-confirmation-document .admin-table td::before { display: none !important; content: none !important; }
+  .annual-confirmation-document .fee-approved-tuition .admin-table td:nth-child(n+2) { text-align: right; font-variant-numeric: tabular-nums; }
+  .annual-confirmation-document .confirmation-itemized-fees .admin-table td:nth-child(n+4) { text-align: right; font-variant-numeric: tabular-nums; }
+  .annual-confirmation-document .confirmation-identity-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.25rem 0.65rem; }
+  .annual-confirmation-document .confirmation-identity-list dt { color: #333; font-size: 7pt; }
+  .annual-confirmation-document .confirmation-identity-list dd { overflow-wrap: anywhere; font-size: 8pt; }
+  .annual-confirmation-document .fee-approved-tuition { padding-top: 0.35rem; margin-top: 0.2rem; }
+  .annual-confirmation-document .fee-breakdown { margin-top: 0.35rem; }
+  .annual-confirmation-document .fee-breakdown > summary { display: none; }
+  .annual-confirmation-document .fee-breakdown > .table-scroll { margin-top: 0; }
+  .annual-confirmation-document .muted-copy { color: #222; }
 }
+
+@page annual-confirmation-sheet { size: A4; margin: 13mm; }
 
 .registrar-overview, .finance-overview {
   padding: 1.15rem;
@@ -712,6 +741,21 @@ label { font-size: 0.84rem; }
 
 /* Guided registrar intake and fee confirmation */
 .registrar-intake, .annual-confirmation-result { max-width: 68rem; }
+.annual-confirmation-document { page: annual-confirmation-sheet; max-width: 68rem; }
+.confirmation-document-header { display: flex; align-items: center; gap: 0.85rem; padding: 0.8rem 0 1rem; margin: 0 0 1rem; border-bottom: 2px solid var(--accent); }
+.confirmation-document-header > img { flex: 0 0 auto; width: 3.6rem; height: 3.6rem; object-fit: contain; }
+.confirmation-document-header > div:nth-child(2) { min-width: 0; }
+.confirmation-document-header p { margin: 0.1rem 0; font-size: 0.82rem; }
+.confirmation-document-header__title { margin-left: auto; text-align: right; }
+.confirmation-document-header__title h1 { margin: 0 0 0.2rem; font-size: clamp(1.45rem, 2.4vw, 2rem); }
+.confirmation-document-header__title p { color: var(--muted); font-size: 0.75rem; }
+.confirmation-section { margin-bottom: 0.8rem; }
+.confirmation-section .admin-section__heading { align-items: flex-start; }
+.confirmation-identity-list { margin-bottom: 0; }
+.confirmation-summary-alert { margin-bottom: 0.8rem; }
+.confirmation-itemized-fees[open] > summary { margin-bottom: 0.35rem; }
+.confirmation-actions { flex-wrap: wrap; }
+.confirmation-secret { margin: 1rem 0; }
 .annual-fee-review { max-width: none; }
 .intake-steps { display: flex; align-items: stretch; gap: 0.3rem; padding: 0; margin: 0 0 1rem; border-bottom: 1px solid var(--line-strong); list-style: none; }
 .intake-steps li { flex: 1 1 0; min-width: 0; padding: 0.65rem 0.7rem 0.75rem; color: var(--muted); border-bottom: 3px solid transparent; font-size: 0.83rem; font-weight: 650; text-align: center; }
@@ -1479,6 +1523,10 @@ label { font-size: 0.84rem; }
   .paper-checklist-row__fields, .paper-counts { grid-template-columns: minmax(0, 1fr); }
   .paper-note { grid-column: auto; }
   .enrollment-summary-list { grid-template-columns: minmax(0, 1fr); }
+  .confirmation-document-header { align-items: flex-start; flex-wrap: wrap; }
+  .confirmation-document-header__title { width: 100%; margin-left: 0; text-align: left; }
+  .confirmation-actions { align-items: stretch; flex-direction: column; }
+  .confirmation-actions .button { width: 100%; }
   .fee-review-actions, .fee-confirmation__form { align-items: stretch; flex-direction: column; }
   .fee-review-actions .button, .fee-confirmation__form .button { width: 100%; }
   .finance-schedule-create-body .admin-section__heading [data-add-finance-line] { flex: 0 0 auto; width: auto; white-space: nowrap; }

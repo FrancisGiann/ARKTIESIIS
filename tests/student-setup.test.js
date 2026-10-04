@@ -9,7 +9,8 @@ const {
   normalizeBulkRows,
   createStudentSetupService
 } = require('../src/services/studentSetupService');
-const { createStudentBulkAccountsRouter, createStudentIntakeRouter, createAnnualStudentIntakeRouter } = require('../src/routes/studentSetup');
+const { createStudentBulkAccountsRouter, createStudentIntakeRouter, createAnnualStudentIntakeRouter,
+  createAnnualConfirmationRouter } = require('../src/routes/studentSetup');
 const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
 const { latestBirthDate } = require('../src/services/studentRecordsService');
 const { validateTransaction, createFinanceService } = require('../src/services/financeService');
@@ -245,6 +246,7 @@ test('registrar intake rejects missing or invalid term years before creating rec
 test('registrar intake opens the guided annual form and links the roster to fee confirmation and paper records', async () => {
   const app = express();
   let confirmationCall = null;
+  let hasConfirmed = false;
   const session = {};
   app.set('views', path.join(__dirname, '..', 'views'));
   app.set('view engine', 'ejs');
@@ -270,7 +272,14 @@ test('registrar intake opens the guided annual form and links the roster to fee 
           first_name: 'Synthetic', middle_name: 'Casey', last_name: 'Learner', suffix: '', birth_date: '2008-04-21',
           sex: 'Female', address: '25 Mabini Street', phone: '09171234567', student_email: 'learner@example.edu',
           school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB', intake_kind: 'standard',
-          entry_term_number: 1, enrollment_start_date: '2026-10-03', intake_status: 'pending', registrar_confirmation_id: null }
+          entry_term_number: 1, enrollment_start_date: '2026-10-03', intake_status: 'pending',
+          registrar_confirmation_id: hasConfirmed ? 101 : null,
+          registrar_confirmed_at: hasConfirmed ? '2026-10-04 00:00:00' : null,
+          registrar_assessment_id: hasConfirmed ? 201 : null,
+          registrar_schedule_id: hasConfirmed ? 9 : null,
+          registrar_schedule_version: hasConfirmed ? 2 : null,
+          registrar_voucher_code_snapshot: hasConfirmed ? 'PUB' : null,
+          registrar_payable_total: hasConfirmed ? '1334.50' : null }
         , terms: [1, 2, 3].map((number) => ({ annual_term_number: number, term: number === 2 ? 'Second term' : `Term ${number}`, grade_level: 'Grade 11',
           section_name: 'Mabini', cluster: 'Academic', strand: 'STEM', modality: 'face_to_face', section_id: number + 7,
           term_scope_status: 'applicable', enrollment_status: 'pending_payment' }))
@@ -278,7 +287,8 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     },
     async confirmAnnualEnrollment(actorId, annualId, input) {
       confirmationCall = { actorId, annualId, input };
-      return { annualEnrollmentId: 71, studentId: 41, studentNo: 'SHS-2026-0321', firstName: 'Synthetic', lastName: 'Learner', schoolYear: '2026-2027', gradeLevel: 'Grade 11', term: 'Term 1', sectionName: 'Mabini', total: '1234.50', temporaryPassword: null };
+      hasConfirmed = true;
+      return { annualEnrollmentId: 71, studentId: 41, studentNo: 'SHS-2026-0321', firstName: 'Synthetic', lastName: 'Learner', schoolYear: '2026-2027', gradeLevel: 'Grade 11', term: 'Term 1', sectionName: 'Mabini', total: '1334.50', temporaryPassword: 'synthetic-one-time-credential' };
     }
   };
   const feePreview = {
@@ -287,6 +297,14 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     total: '1234.50', totalCents: 123450, optionalLineIds: [],
     optionalLines: [{ id: 90, termNumber: 1, lineName: 'Tour', installment: 'Once', amount: '100.00', selected: false }],
     termTotals: [{ termNumber: 1, amount: '1234.50' }, { termNumber: 2, amount: '0.00' }, { termNumber: 3, amount: '0.00' }],
+    tuitionTermTotals: [{ termNumber: 1, amount: '1234.50' }, { termNumber: 2, amount: '0.00' }, { termNumber: 3, amount: '0.00' }],
+    nonTuitionTermTotals: [{ termNumber: 1, amount: '0.00' }, { termNumber: 2, amount: '0.00' }, { termNumber: 3, amount: '0.00' }],
+    tuitionBreakdownComplete: false,
+    tuitionBreakdown: [1, 2, 3].map((termNumber) => ({
+      termNumber, complete: false, installments: ['DP', 'Prelim', 'Midterm', 'Finals'].map((label) => ({
+        label, configured: false, amount: null
+      }))
+    })),
     lines: [{ termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Prelim', grossAmount: '1234.50', waivedAmount: '0.00', amount: '1234.50', isOptional: false }],
     snapshotFingerprint: 'a'.repeat(64)
   };
@@ -310,6 +328,13 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.equal(String(annualId), '71');
     const selected = (Array.isArray(selectedInput) ? selectedInput : [selectedInput]).filter(Boolean).map(Number);
     feePreviewCalls.push(selected);
+    if (hasConfirmed) return {
+      ...feePreview,
+      scheduleId: 9, scheduleVersion: 2, assessmentId: 201, existingAssessment: true,
+      optionalLineIds: [90], total: '1334.50', totalCents: 133450,
+      termTotals: [{ termNumber: 1, amount: '1334.50' }, { termNumber: 2, amount: '0.00' }, { termNumber: 3, amount: '0.00' }],
+      lines: [...feePreview.lines, { termNumber: 1, lineName: 'Tour', category: 'activity', installment: 'Once', grossAmount: '100.00', waivedAmount: '0.00', amount: '100.00', isOptional: true }]
+    };
     const includeTour = selected.includes(90);
     return {
       ...feePreview,
@@ -321,6 +346,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
       }] : feePreview.lines,
       total: includeTour ? '1334.50' : '1234.50',
       totalCents: includeTour ? 133450 : 123450,
+      nonTuitionTermTotals: [{ termNumber: 1, amount: includeTour ? '100.00' : '0.00' }, { termNumber: 2, amount: '0.00' }, { termNumber: 3, amount: '0.00' }],
       termTotals: [{ termNumber: 1, amount: includeTour ? '1334.50' : '1234.50' }, { termNumber: 2, amount: '0.00' }, { termNumber: 3, amount: '0.00' }]
     };
   };
@@ -345,7 +371,14 @@ test('registrar intake opens the guided annual form and links the roster to fee 
         return checklistFixture;
       }
     },
-    annualFinanceService: { annualAssessmentPreviewForRegistrar: previewFees }
+    annualFinanceService: {
+      annualAssessmentPreviewForRegistrar: previewFees,
+      async annualConfirmationAssessmentSnapshotForStaff(actorId, annualId) {
+        assert.equal(actorId, registrar.id);
+        assert.equal(String(annualId), '71');
+        return previewFees(actorId, annualId);
+      }
+    }
   }));
   await withServer(app, async (baseUrl) => {
     const response = await fetch(`${baseUrl}/registrar/intake/new`);
@@ -484,6 +517,10 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.doesNotMatch(reviewHtml, /pending_payment|not_applicable/);
     assert.match(reviewHtml, /Included · ₱100\.00/);
     assert.match(reviewHtml, /₱1,334\.50/);
+    assert.match(reviewHtml, /Approved tuition by term/);
+    assert.match(reviewHtml, /Other payable fees/);
+    assert.match(reviewHtml, /Term payable/);
+    assert.match(reviewHtml, /The approved schedule does not provide one Downpayment/);
     assert.match(reviewHtml, /name="snapshotFingerprint" value="a{64}"/);
     assert.match(reviewHtml, /name="scheduleVersion" value="2"/);
     assert.match(reviewHtml, /name="optionalLineIds" value="90"/);
@@ -498,13 +535,223 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.equal(confirmResponse.status, 200);
     assert.match(confirmResponse.headers.get('cache-control'), /no-store/);
     assert.match(confirmedHtml, /Enrollment confirmed/);
-    assert.match(confirmedHtml, /Finance manages approved schedules and records payments/);
-    assert.match(confirmedHtml, /₱1,234\.50/);
+    assert.match(confirmedHtml, /Finance records payments separately/);
+    assert.match(confirmedHtml, /₱1,334\.50/);
+    assert.match(confirmedHtml, /Confirmation ID <strong>101/);
+    assert.match(confirmedHtml, /Itemized assessment and approved coverage/);
+    assert.match(confirmedHtml, /Tour/);
+    assert.match(confirmedHtml, /synthetic-one-time-credential/);
+    assert.match(confirmedHtml, /Print \/ save as PDF/);
+    assert.doesNotMatch(confirmedHtml, /data-print-page/);
+    assert.match(confirmedHtml, /\/registrar\/intake\/71\/confirmation/);
     assert.match(confirmedHtml, /Open paper requirements checklist/);
     assert.deepEqual(confirmationCall, { actorId: registrar.id, annualId: '71', input: {
       _csrf: csrfToken, idempotencyKey, scheduleId: '9',
       scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64), optionalLineIds: '90'
     } });
+
+    const reopened = await fetch(`${baseUrl}/registrar/intake/71/confirmation`);
+    const reopenedHtml = await reopened.text();
+    assert.equal(reopened.status, 200);
+    assert.match(reopened.headers.get('cache-control'), /no-store/);
+    assert.match(reopenedHtml, /Enrollment confirmed/);
+    assert.match(reopenedHtml, /Downpayment/);
+    assert.match(reopenedHtml, /Approved coverage/);
+    assert.match(reopenedHtml, /Confirmation ID <strong>101/);
+    assert.match(reopenedHtml, /Current term placements/);
+    assert.doesNotMatch(reopenedHtml, /synthetic-one-time-credential|One-time temporary password/);
+    assert.match(reopenedHtml, /data-print-page/);
+    assert.equal(confirmationCall?.annualId, '71');
+    const confirmationCss = fs.readFileSync(path.join(__dirname, '..', 'public/css/app.css'), 'utf8');
+    assert.match(confirmationCss, /\.annual-confirmation-document \.confirmation-secret \{ display: none !important; \}/);
+    assert.match(confirmationCss, /\.annual-confirmation-document \.admin-table thead \{ position: static !important; display: table-header-group !important;/,
+      'the shared tuition installment table is reset from the narrow-screen clipped header rules when printed');
+    assert.match(confirmationCss, /\.annual-confirmation-document \.admin-table td::before \{ display: none !important;/);
+    assert.match(confirmationCss, /\.fee-approved-tuition \.admin-table td:nth-child\(n\+2\) \{ text-align: right;/);
+  });
+});
+
+test('credential-free confirmation GET uses the saved assessment, entry-term scope, and role-specific read-only access', async () => {
+  const app = express();
+  const reads = { record: 0, registrarSnapshot: 0, confirmationWrites: 0 };
+  let mismatchSnapshot = false;
+  const parent = {
+    annual_enrollment_id: 71, student_id: 41, student_no: 'SHS-2026-0321', lrn: '123456789012',
+    first_name: 'Synthetic', middle_name: 'Casey', last_name: 'Learner', suffix: '',
+    phone: '09170000000', student_email: 'learner@example.edu', school_year: '2026-2027',
+    grade_level: 'Grade 11', voucher_code: 'ESC', intake_kind: 'transferee', entry_term_number: 2,
+    enrollment_start_date: '2026-10-03', intake_status: 'confirmed', registrar_confirmation_id: 303,
+    registrar_confirmed_at: '2026-10-04 00:00:00', registrar_assessment_id: 404,
+    registrar_schedule_id: 9, registrar_schedule_version: 1, registrar_voucher_code_snapshot: 'NV',
+    registrar_payable_total: '2175.00'
+  };
+  const record = {
+    parent,
+    terms: [
+      { annual_term_number: 1, term: 'First term', section_name: null, term_scope_status: 'not_applicable', enrollment_status: 'not_applicable' },
+      { annual_term_number: 2, term: 'Second term', section_name: 'Mabini', term_scope_status: 'applicable', enrollment_status: 'pending_payment' },
+      { annual_term_number: 3, term: 'Third term', section_name: 'Rizal', term_scope_status: 'applicable', enrollment_status: 'pending_payment' }
+    ]
+  };
+  const installmentRows = (termNumber, amounts) => ['DP', 'Prelim', 'Midterm', 'Finals'].map((installment, index) => ({
+    termNumber, lineName: 'Tuition', category: 'tuition', installment, grossAmount: amounts[index],
+    waivedAmount: '0.00', amount: amounts[index], isOptional: false
+  }));
+  const savedPreview = {
+    parent: { first_name: 'Synthetic', last_name: 'Learner', student_no: 'SHS-2026-0321', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'NV', entry_term_number: 2 },
+    scheduleId: 9, scheduleVersion: 1, assessmentId: 404, existingAssessment: true, voucherCode: 'NV',
+    total: '2175.00', optionalLineIds: [901],
+    tuitionBreakdownComplete: true,
+    tuitionBreakdown: [
+      { termNumber: 1, complete: true, installments: ['DP', 'Prelim', 'Midterm', 'Finals'].map((label) => ({ label, notApplicable: true, amount: null })) },
+      { termNumber: 2, complete: true, installments: ['DP', 'Prelim', 'Midterm', 'Finals'].map((label, index) => ({ label, configured: true, amount: ['0.00', '200.00', '300.00', '400.00'][index] })) },
+      { termNumber: 3, complete: true, installments: ['DP', 'Prelim', 'Midterm', 'Finals'].map((label, index) => ({ label, configured: true, amount: ['100.00', '200.00', '300.00', '400.00'][index] })) }
+    ],
+    tuitionTermTotals: [{ termNumber: 2, amount: '900.00' }, { termNumber: 3, amount: '1000.00' }],
+    nonTuitionTermTotals: [{ termNumber: 2, amount: '75.00' }, { termNumber: 3, amount: '200.00' }],
+    termTotals: [{ termNumber: 2, amount: '975.00' }, { termNumber: 3, amount: '1200.00' }],
+    lines: [
+      ...installmentRows(2, ['0.00', '200.00', '300.00', '400.00']),
+      { termNumber: 2, lineName: 'Modules', category: 'materials', installment: 'Once', grossAmount: '100.00', waivedAmount: '50.00', amount: '50.00', isOptional: false },
+      { termNumber: 2, lineName: 'Tour', category: 'activity', installment: 'Once', grossAmount: '25.00', waivedAmount: '0.00', amount: '25.00', isOptional: true },
+      ...installmentRows(3, ['100.00', '200.00', '300.00', '400.00']),
+      { termNumber: 3, lineName: 'Laboratory materials', category: 'materials', installment: 'Once', grossAmount: '200.00', waivedAmount: '0.00', amount: '200.00', isOptional: false }
+    ]
+  };
+  app.set('views', path.join(__dirname, '..', 'views'));
+  app.set('view engine', 'ejs');
+  app.locals.formatMoney = require('../src/utils/formatMoney').formatMoney;
+  app.use((req, _res, next) => {
+    const role = req.header('x-test-role') || 'registrar';
+    req.authUser = role === 'database_admin' ? admin : role === 'registrar' ? registrar : { id: 6, role };
+    next();
+  });
+  app.use('/registrar/intake', createAnnualConfirmationRouter({
+    annualEnrollmentService: {
+      async getAnnualManagementRecord(actorId, annualId) {
+        reads.record += 1;
+        assert.ok([registrar.id, admin.id].includes(actorId));
+        assert.ok(['71', '72', '999'].includes(String(annualId)));
+        if (String(annualId) === '999') return null;
+        return { ...record, parent: { ...parent, registrar_confirmation_id: String(annualId) === '72' ? null : parent.registrar_confirmation_id } };
+      },
+      async confirmAnnualEnrollment() { reads.confirmationWrites += 1; throw new Error('GET must not confirm'); }
+    },
+    annualFinanceService: {
+      async annualConfirmationAssessmentSnapshotForStaff(actorId, annualId) {
+        reads.registrarSnapshot += 1;
+        assert.ok([registrar.id, admin.id].includes(actorId));
+        assert.equal(String(annualId), '71');
+        return mismatchSnapshot ? { ...savedPreview, assessmentId: 999 } : savedPreview;
+      }
+    }
+  }));
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/registrar/intake/71/confirmation`);
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('cache-control'), /no-store/);
+    assert.match(html, /Confirmation ID <strong>303/);
+    assert.match(html, /Voucher<\/dt><dd>NV/);
+    assert.match(html, /Intake type<\/dt><dd>Transferee/);
+    assert.match(html, /Second term · Entry term/);
+    assert.match(html, /₱0\.00/);
+    assert.match(html, /Approved coverage/);
+    assert.match(html, /₱50\.00/);
+    assert.match(html, /Term payable/);
+    assert.match(html, /₱2,175\.00/);
+    assert.match(html, /schedule version 1/i);
+    assert.match(html, /Finance records payments separately/);
+    assert.doesNotMatch(html, /Voucher<\/dt><dd>ESC/);
+    assert.doesNotMatch(html, /Temporary password|payment history rows|receipt number/i);
+    assert.equal(reads.registrarSnapshot, 1);
+    assert.equal(reads.confirmationWrites, 0);
+
+    const repeated = await fetch(`${baseUrl}/registrar/intake/71/confirmation`);
+    assert.equal(repeated.status, 200);
+    assert.equal(reads.confirmationWrites, 0, 'reopening the confirmation is read-only');
+    assert.equal(reads.registrarSnapshot, 2);
+
+    const databaseAdminCopy = await fetch(`${baseUrl}/registrar/intake/71/confirmation`, { headers: { 'x-test-role': 'database_admin' } });
+    assert.equal(databaseAdminCopy.status, 200);
+    assert.equal(reads.registrarSnapshot, 3);
+
+    for (const role of ['teacher', 'finance', 'student']) {
+      const denied = await fetch(`${baseUrl}/registrar/intake/71/confirmation`, { headers: { 'x-test-role': role } });
+      assert.equal(denied.status, 403, `${role} cannot view registrar confirmations`);
+    }
+    assert.equal(reads.record, 3, 'unauthorized access is rejected before student data is loaded');
+
+    const malformed = await fetch(`${baseUrl}/registrar/intake/not-a-number/confirmation`);
+    assert.equal(malformed.status, 400);
+    assert.equal(reads.record, 3, 'malformed IDs do not reach student data queries');
+
+    const unknown = await fetch(`${baseUrl}/registrar/intake/999/confirmation`);
+    const unknownHtml = await unknown.text();
+    assert.equal(unknown.status, 404);
+    assert.doesNotMatch(unknownHtml, /Synthetic|SHS-2026|2175\.00|Modules/);
+    assert.equal(reads.registrarSnapshot, 3, 'unknown enrollments do not load fee details');
+
+    mismatchSnapshot = true;
+    const mismatched = await fetch(`${baseUrl}/registrar/intake/71/confirmation`);
+    const mismatchHtml = await mismatched.text();
+    assert.equal(mismatched.status, 409);
+    assert.doesNotMatch(mismatchHtml, /Synthetic|SHS-2026|2175\.00|Modules/);
+    assert.equal(reads.confirmationWrites, 0, 'failed snapshot verification remains read-only');
+    mismatchSnapshot = false;
+
+    const unconfirmed = await fetch(`${baseUrl}/registrar/intake/72/confirmation`);
+    assert.equal(unconfirmed.status, 409);
+    assert.match(await unconfirmed.text(), /has not been confirmed/);
+    assert.equal(reads.registrarSnapshot, 4, 'an unconfirmed intake does not load any fee schedule or assessment');
+  });
+  const managementTemplate = fs.readFileSync(path.join(__dirname, '..', 'views/records/annual-management.ejs'), 'utf8');
+  assert.match(managementTemplate, /if \(record\.parent\.registrar_confirmation_id\)[\s\S]*?\/confirmation/,
+    'staff can reopen the credential-free confirmation after leaving the initial response');
+});
+
+test('a post-confirmation summary read failure still renders confirmed status and a retry link', async () => {
+  const app = express();
+  let confirmed = false;
+  const errors = [];
+  app.set('views', path.join(__dirname, '..', 'views'));
+  app.set('view engine', 'ejs');
+  app.locals.formatMoney = require('../src/utils/formatMoney').formatMoney;
+  app.use(express.urlencoded({ extended: false }));
+  app.use((req, _res, next) => {
+    req.authUser = registrar;
+    req.session = { csrfToken: 'a'.repeat(64) };
+    next();
+  });
+  app.use('/registrar/intake', createAnnualStudentIntakeRouter({
+    annualEnrollmentService: {
+      async confirmAnnualEnrollment() {
+        confirmed = true;
+        return { annualEnrollmentId: 71, studentId: 41, studentNo: 'SHS-2026-0321', firstName: 'Synthetic',
+          lastName: 'Learner', schoolYear: '2026-2027', gradeLevel: 'Grade 11', total: '500.00',
+          temporaryPassword: 'synthetic-one-time-credential' };
+      },
+      async getAnnualManagementRecord() { throw new Error('SQL detail and private@example.test'); }
+    },
+    annualFinanceService: { async annualAssessmentPreviewForRegistrar() { throw new Error('must not be reached'); } },
+    logger: { error(...args) { errors.push(args); } }
+  }));
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/registrar/intake/71/confirm`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: 'a'.repeat(64) })
+    });
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.equal(confirmed, true);
+    assert.match(html, /Enrollment confirmed/);
+    assert.match(html, /Enrollment was confirmed, but its saved detail summary could not be loaded/);
+    assert.match(html, /\/registrar\/intake\/71\/confirmation/);
+    assert.doesNotMatch(html, /annual enrollment was not confirmed|SQL detail|private@example\.test/);
+    assert.equal(errors.length, 1);
+    assert.doesNotMatch(JSON.stringify(errors), /SQL detail|private@example\.test/);
   });
 });
 

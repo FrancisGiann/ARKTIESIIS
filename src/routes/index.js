@@ -22,7 +22,8 @@ const { createAcademicRecordsRouter } = require('./academicRecords');
 const { createFinanceRouter } = require('./finance');
 const { createTeacherGradeSubmissionRouter, createRegistrarGradeSubmissionRouter } = require('./teacherGradeSubmissions');
 const { createDocumentsRouter } = require('./documents');
-const { createStudentBulkAccountsRouter, createStudentIntakeRouter, createAnnualStudentIntakeRouter } = require('./studentSetup');
+const { createStudentBulkAccountsRouter, createStudentIntakeRouter, createAnnualStudentIntakeRouter,
+  createAnnualConfirmationRouter } = require('./studentSetup');
 const { createStudentPortalRouter } = require('./studentPortal');
 const { createClassSchedulesRouter } = require('./classSchedules');
 const { createStudentRecordsService } = require('../services/studentRecordsService');
@@ -185,6 +186,9 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   };
 
   router.use('/admin/student-accounts', requireAuth, requireRole('database_admin'), createStudentBulkAccountsRouter({ getPool, sql, studentSetupService: studentSetup }));
+  router.use('/registrar/intake', requireAuth, requireRole('registrar', 'database_admin'), createAnnualConfirmationRouter({
+    getPool, sql, annualEnrollmentService: annualEnrollmentsService, annualFinanceService: annualFinancesService
+  }));
   router.use('/registrar/intake', requireAuth, requireRole('registrar'), createAnnualStudentIntakeRouter({
     getPool, sql, annualEnrollmentService: annualEnrollmentsService,
     annualFinanceService: annualFinancesService, physicalChecklistService: physicalChecklistsService

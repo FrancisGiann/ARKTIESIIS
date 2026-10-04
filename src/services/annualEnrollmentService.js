@@ -326,7 +326,12 @@ function createAnnualEnrollmentService({
           student.first_name, student.middle_name, student.last_name, student.suffix, student.birth_date,
           student.sex, student.address, student.phone, student.status AS student_status,
           student_account.email AS student_email,
-          confirmation.id AS registrar_confirmation_id
+          confirmation.id AS registrar_confirmation_id, confirmation.confirmed_at AS registrar_confirmed_at,
+          confirmation.assessment_id AS registrar_assessment_id,
+          confirmation.schedule_id AS registrar_schedule_id,
+          confirmation.schedule_version AS registrar_schedule_version,
+          confirmation.voucher_code_snapshot AS registrar_voucher_code_snapshot,
+          confirmation.payable_total AS registrar_payable_total
         FROM annual_enrollments AS annual INNER JOIN students AS student ON student.id = annual.student_id
         LEFT JOIN users AS student_account ON student_account.id = student.user_id
         LEFT JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = annual.id

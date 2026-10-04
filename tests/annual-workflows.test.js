@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const { AnnualEnrollmentError, createAnnualEnrollmentService, normalizeAnnualInput, normalizeAnnualAdministrationDetails, applySameSectionDefaults } = require('../src/services/annualEnrollmentService');
 const {
   AnnualFinanceError, createAnnualFinanceService, normalizeLineRows, normalizeAllocations, parsePaymentDate, applyExemptionPreview, canonicalAssessmentSnapshot,
-  tuitionInstallmentBreakdown
+  tuitionInstallmentBreakdown, nonTuitionTermTotals
 } = require('../src/services/annualFinanceService');
 const { PhysicalChecklistError, createPhysicalChecklistService, normalizeIntakeChecklistUpdates } = require('../src/services/physicalChecklistService');
 const { currentManilaDate, validateStudent } = require('../src/services/studentRecordsService');
@@ -95,6 +95,94 @@ test('registrar preview selects the shared active schedule by PUB, ESC, or NV an
   assert.deepEqual(savedPreview.tuitionTermTotals[0], { termNumber: 1, amount: '80.00' });
   assert.equal(queryCalls.some(({ statement }) => statement.includes('FROM finance_schedules')), false,
     'the saved fee snapshot remains authoritative after Finance publishes a newer schedule');
+
+});
+
+test('confirmation snapshot reader excludes later charges and waivers and verifies the original gross amount fingerprint', async () => {
+  const originalLine = {
+    scheduleLineId: 11, termNumber: 2, category: 'tuition', lineName: 'Tuition', installment: 'Prelim',
+    grossAmount: '100.00', waivedAmount: '15.00'
+  };
+  const snapshot = canonicalAssessmentSnapshot([originalLine]);
+  const confirmation = {
+    confirmation_id: 303, annual_enrollment_id: 71, assessment_id: 404, schedule_id: 9, schedule_version: 1,
+    voucher_code_snapshot: 'PUB', payable_total: '85.00', selection_json: '{"optionalLineIds":[]}',
+    assessment_snapshot_fingerprint: crypto.createHash('sha256').update(JSON.stringify({
+      assessmentId: 404, scheduleId: 9, scheduleVersion: 1, voucherCode: 'PUB', payableTotal: '85.00',
+      optionalLineIds: [], postedComposition: snapshot.fingerprint
+    })).digest('hex'),
+    confirmed_at: '2026-09-01 12:00:00', student_id: 171, school_year: '2026-2027',
+    grade_level: 'Grade 11', entry_term_number: 2, student_no: 'S-71', first_name: 'Synthetic', last_name: 'Learner'
+  };
+  const chargeRows = [
+    { id: 11, created_at: '2026-08-30 10:00:00', enrollment_id: 712, annual_term_number: 2,
+      fee_category: 'tuition', line_name: 'Tuition', installment: 'Prelim', schedule_line_id: 11,
+      is_optional: 0, amount: '100.00', gross_amount: '900.00', current_waived_amount: '35.00' },
+    { id: 12, created_at: '2026-09-01 12:00:01', enrollment_id: 712, annual_term_number: 2,
+      fee_category: 'activity', line_name: 'Later activity', installment: 'Once', schedule_line_id: null,
+      is_optional: 0, amount: '25.00', gross_amount: '25.00', current_waived_amount: '0.00' }
+  ];
+  const applications = [
+    { chargeId: 11, appliedAt: '2026-08-31 08:00:00', amount: '15.00' },
+    { chargeId: 11, appliedAt: '2026-09-02 08:00:00', amount: '20.00' }
+  ];
+  const queryCalls = [];
+  let actorRole = 'registrar';
+  let includeFutureWaiver = false;
+  const sql = { Int: 'INT', NVarChar: (length) => `VARCHAR(${length})` };
+  const getPool = async () => ({
+    request() {
+      const inputs = {};
+      return {
+        input(name, _type, value) { inputs[name] = value; return this; },
+        async query(statement) {
+          const normalized = statement.replace(/\s+/g, ' ').trim();
+          queryCalls.push({ statement: normalized, inputs: { ...inputs } });
+          if (normalized.includes('FROM users')) return { recordset: [{ id: Number(inputs.actorId), role: actorRole }] };
+          if (normalized.includes('FROM annual_registrar_confirmations AS confirmation')) return { recordset: [confirmation] };
+          if (normalized.includes('FROM annual_assessments')) return { recordset: [{ selection_json: '{"optionalLineIds":[]}' }] };
+          if (normalized.includes('FROM assessed_charges AS charge')) {
+            const cutoff = Date.parse(confirmation.confirmed_at.replace(' ', 'T') + 'Z');
+            return { recordset: chargeRows.filter((row) => Date.parse(row.created_at.replace(' ', 'T') + 'Z') <= cutoff).map((row) => ({
+              term_number: row.annual_term_number, fee_category: row.fee_category, line_name: row.line_name,
+              installment: row.installment, schedule_line_id: row.schedule_line_id, is_optional: row.is_optional,
+              original_gross_amount: row.amount,
+              confirmed_waived_amount: applications.filter((application) => application.chargeId === row.id
+                && (includeFutureWaiver || Date.parse(application.appliedAt.replace(' ', 'T') + 'Z') <= cutoff))
+                .reduce((sum, application) => sum + Number(application.amount), 0).toFixed(2)
+            })) };
+          }
+          throw new Error(`Unexpected confirmation snapshot query: ${normalized}`);
+        }
+      };
+    }
+  });
+  const service = createAnnualFinanceService({ getPool, sql });
+  const savedSnapshot = await service.annualConfirmationAssessmentSnapshotForStaff(2, 71);
+  assert.equal(savedSnapshot.total, '85.00');
+  assert.equal(savedSnapshot.scheduleVersion, 1);
+  assert.equal(savedSnapshot.voucherCode, 'PUB');
+  assert.equal(savedSnapshot.lines.length, 1, 'a supplementary charge added after confirmation is excluded');
+  assert.equal(savedSnapshot.lines[0].grossAmount, '100.00', 'the confirmation fingerprint uses the original charge.amount, not a later gross_amount value');
+  assert.equal(savedSnapshot.lines[0].waivedAmount, '15.00', 'post-confirmation waiver applications do not change the printed snapshot');
+  assert.equal(queryCalls.some(({ statement }) => statement.includes('FROM finance_schedules')), false);
+  const chargeQuery = queryCalls.find(({ statement }) => statement.includes('FROM assessed_charges AS charge'))?.statement || '';
+  assert.match(chargeQuery, /charge\.created_at <= confirmation\.confirmed_at/);
+  assert.match(chargeQuery, /application\.applied_at <= confirmation\.confirmed_at/);
+  assert.match(chargeQuery, /CAST\(charge\.amount AS CHAR\(40\)\) AS original_gross_amount/);
+
+  actorRole = 'database_admin';
+  const administratorCopy = await service.annualConfirmationAssessmentSnapshotForStaff(3, 71);
+  assert.equal(administratorCopy.total, '85.00');
+  assert.ok(queryCalls.some(({ statement }) => /role IN \('registrar', 'database_admin'\)/.test(statement)));
+
+  includeFutureWaiver = true;
+  await assert.rejects(service.annualConfirmationAssessmentSnapshotForStaff(3, 71), (error) => {
+    assert.ok(error instanceof AnnualFinanceError);
+    assert.equal(error.status, 409);
+    assert.match(error.message, /could not be verified/);
+    return true;
+  }, 'the stored confirmation fingerprint rejects later coverage if an unfiltered amount slips into the read');
 });
 
 test('annual intake accepts explicit midyear entry with an optional future placement', () => {
@@ -344,6 +432,80 @@ test('finance schedule and allocation input stays cent-exact and ignores blank o
   ] }), AnnualFinanceError);
   assert.equal(parsePaymentDate('2026-09-30'), '2026-09-30');
   assert.throws(() => parsePaymentDate('2026-02-30'), AnnualFinanceError);
+});
+
+test('tuition breakdown requires exactly four configured nonoptional installments and respects entry term', () => {
+  const labels = ['DP', 'Prelim', 'Midterm', 'Finals'];
+  const lines = [1, 2, 3].flatMap((termNumber) => labels.map((installment, index) => ({
+    termNumber, category: 'tuition', lineName: 'Tuition', installment,
+    amount: termNumber === 2 && index === 0 ? '0.01' : termNumber === 2 && index === 1 ? '0.02' : '0.00',
+    isOptional: false
+  })));
+  lines.push({ termNumber: 2, category: 'miscellaneous', lineName: 'Demo miscellaneous fee', installment: 'Term 2', amount: '4.75' });
+
+  const breakdown = tuitionInstallmentBreakdown(lines, 2);
+  assert.equal(breakdown[0].complete, true, 'pre-entry terms are not applicable');
+  assert.equal(breakdown[1].complete, true);
+  assert.deepEqual(breakdown[1].installments.map(({ label, configured, amount }) => [label, configured, amount]), [
+    ['DP', true, '0.01'], ['Prelim', true, '0.02'], ['Midterm', true, '0.00'], ['Finals', true, '0.00']
+  ]);
+  assert.deepEqual(nonTuitionTermTotals(lines, 2), [
+    { termNumber: 2, amount: '4.75' }, { termNumber: 3, amount: '0.00' }
+  ]);
+
+  assert.equal(tuitionInstallmentBreakdown(lines.filter((line) => !(line.termNumber === 2 && line.installment === 'Finals')), 2)[1].complete, false,
+    'a missing zero-valued installment is still incomplete');
+  assert.equal(tuitionInstallmentBreakdown([...lines, { ...lines[4], amount: '1.00' }], 2)[1].complete, false,
+    'duplicate canonical tuition rows are ambiguous');
+  assert.equal(tuitionInstallmentBreakdown(lines.map((line) => line.termNumber === 2 && line.installment === 'Midterm'
+    ? { ...line, isOptional: true } : line), 2)[1].complete, false,
+  'an optional tuition line cannot stand in for the required schedule');
+  assert.equal(tuitionInstallmentBreakdown(lines.map((line) => line.termNumber === 2 && line.installment === 'Prelim'
+    ? { ...line, installment: 'Term 2' } : line), 2)[1].complete, false,
+  'a legacy term label is not treated as an installment');
+});
+
+test('schedule version service rejects a changed predecessor inside its serializable transaction', async () => {
+  const queries = [];
+  let rolledBack = false;
+  const sql = {
+    Int: 'INT', TinyInt: 'TINYINT', UniqueIdentifier: 'UUID',
+    NVarChar: (length) => `VARCHAR(${length})`,
+    ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' }
+  };
+  const transaction = {
+    async begin(level) { assert.equal(level, sql.ISOLATION_LEVEL.SERIALIZABLE); },
+    async commit() { assert.fail('stale predecessor must not commit'); },
+    async rollback() { rolledBack = true; },
+    request() {
+      const values = {};
+      return {
+        input(name, _type, value) { values[name] = value; return this; },
+        async query(statement) {
+          queries.push({ statement, values: { ...values } });
+          if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 14, role: 'finance' }] };
+          if (statement.includes('SELECT id, version_no, request_fingerprint')) return { recordset: [] };
+          if (statement.includes('SELECT id, version_no, status FROM finance_schedules')) {
+            return { recordset: [{ id: 92, version_no: 2, status: 'active' }] };
+          }
+          throw new Error(`Unexpected query in predecessor guard test: ${statement}`);
+        }
+      };
+    }
+  };
+  const service = createAnnualFinanceService({ getPool: async () => ({}), sql, transactionFactory: () => transaction });
+  const lines = [1, 2, 3].flatMap((termNumber) => ['DP', 'Prelim', 'Midterm', 'Finals'].map((installment) => ({
+    termNumber: String(termNumber), feeCategory: 'tuition', lineName: 'Tuition', installment, amount: '0.00'
+  })));
+
+  await assert.rejects(service.createSchedule(14, {
+    schoolYear: '2026-2027', gradeLevel: 'Grade 11', voucherCode: 'PUB', lines,
+    idempotencyKey: uuid, expectedPreviousSchedule: { scheduleId: 91, versionNo: 1 }
+  }), (error) => error instanceof AnnualFinanceError && error.status === 409 && /changed while this update was prepared/i.test(error.message));
+
+  assert.match(queries.find(({ statement }) => statement.includes('SELECT id, version_no, status FROM finance_schedules')).statement, /ORDER BY version_no DESC FOR UPDATE/);
+  assert.equal(queries.some(({ statement }) => statement.includes('INSERT INTO finance_schedules')), false);
+  assert.equal(rolledBack, true);
 });
 
 test('one approved capped discount is consumed across matching lines and matches the snapshot total', () => {

@@ -296,6 +296,13 @@ test('registrar fee preview shows meaningful approved installment labels and pay
       scheduleVersion: 2, existingAssessment: false, optionalLines: [], optionalLineIds: [],
       termTotals: [{ termNumber: 1, amount: '25.00' }, { termNumber: 2, amount: '0.00' }],
       tuitionTermTotals: [{ termNumber: 1, amount: '25.00' }, { termNumber: 2, amount: '0.00' }],
+      nonTuitionTermTotals: [{ termNumber: 1, amount: '0.00' }, { termNumber: 2, amount: '0.00' }],
+      tuitionBreakdownComplete: true,
+      tuitionBreakdown: [1, 2].map((termNumber) => ({
+        termNumber, complete: true, installments: ['DP', 'Prelim', 'Midterm', 'Finals'].map((label) => ({
+          label, configured: true, amount: termNumber === 1 && label === 'Prelim' ? '25.00' : '0.00'
+        }))
+      })),
       lines: [
         { termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'DP', amount: '0.00', grossAmount: '0.00', waivedAmount: '0.00', isOptional: false },
         { termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Prelim', amount: '25.00', grossAmount: '25.00', waivedAmount: '0.00', isOptional: false }
@@ -305,6 +312,7 @@ test('registrar fee preview shows meaningful approved installment labels and pay
   });
   assert.match(html, /Approved tuition by installment/);
   assert.match(html, /Payable by term/);
+  assert.match(html, /Downpayment/);
   assert.match(html, /DP/);
   assert.match(html, /₱0\.00/);
   assert.match(html, />Prelim</);
@@ -312,6 +320,55 @@ test('registrar fee preview shows meaningful approved installment labels and pay
   assert.doesNotMatch(html, /Not configured|Not applicable/);
   assert.match(html, /<details class="fee-breakdown">/);
   assert.doesNotMatch(html, /<details class="fee-breakdown" open>/);
+  assert.equal((html.match(/data-fee-submit/g) || []).length, 1);
+});
+
+test('registrar installment matrix starts at the entry term and reconciles tuition, other fees, and term payable', async () => {
+  const termTwoInstallmentAmounts = { DP: '0.00', Prelim: '433.34', Midterm: '433.33', Finals: '433.33' };
+  const tuitionBreakdown = [1, 2, 3].map((termNumber) => termNumber === 1
+    ? { termNumber, complete: true, installments: ['DP', 'Prelim', 'Midterm', 'Finals'].map((label) => ({
+      label, configured: false, notApplicable: true, amount: null
+    })) }
+    : { termNumber, complete: true, installments: ['DP', 'Prelim', 'Midterm', 'Finals'].map((label) => ({
+      label, configured: true, amount: termNumber === 2 ? termTwoInstallmentAmounts[label] : '350.00'
+    })) });
+  const termTwoLines = ['DP', 'Prelim', 'Midterm', 'Finals'].map((installment) => ({
+    termNumber: 2, lineName: 'Tuition', category: 'tuition', installment, amount: termTwoInstallmentAmounts[installment],
+    grossAmount: termTwoInstallmentAmounts[installment], waivedAmount: '0.00', isOptional: false
+  }));
+  const termThreeLines = ['DP', 'Prelim', 'Midterm', 'Finals'].map((installment) => ({
+    termNumber: 3, lineName: 'Tuition', category: 'tuition', installment, amount: '350.00',
+    grossAmount: '350.00', waivedAmount: '0.00', isOptional: false
+  }));
+  const html = await ejs.renderFile(path.join(__dirname, '../views/records/annual-intake-fees.ejs'), {
+    title: 'Midyear fee preview test', formatMoney, annualId: 43, csrfToken: 'test-csrf',
+    values: { idempotencyKey: '41111111-1111-4111-8111-111111111113' }, successNotice: null, error: null,
+    preview: {
+      parent: { first_name: 'Synthetic', last_name: 'Learner', student_no: 'S-3', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB', entry_term_number: 2 },
+      scheduleVersion: 2, existingAssessment: false, optionalLines: [], optionalLineIds: [],
+      termTotals: [{ termNumber: 2, amount: '1775.00' }, { termNumber: 3, amount: '1900.00' }],
+      tuitionTermTotals: [{ termNumber: 2, amount: '1300.00' }, { termNumber: 3, amount: '1400.00' }],
+      nonTuitionTermTotals: [{ termNumber: 2, amount: '475.00' }, { termNumber: 3, amount: '500.00' }],
+      tuitionBreakdownComplete: true, tuitionBreakdown,
+      lines: [
+        ...termTwoLines,
+        { termNumber: 2, lineName: 'Miscellaneous', category: 'miscellaneous', installment: 'Term 2', amount: '475.00', grossAmount: '475.00', waivedAmount: '0.00', isOptional: false },
+        ...termThreeLines,
+        { termNumber: 3, lineName: 'Miscellaneous', category: 'miscellaneous', installment: 'Term 3', amount: '500.00', grossAmount: '500.00', waivedAmount: '0.00', isOptional: false }
+      ],
+      total: '3675.00', scheduleId: 5, assessmentId: null, voucherCode: 'PUB', snapshotFingerprint: 'c'.repeat(64)
+    }
+  });
+  const summary = html.match(/<div class="fee-approved-tuition"[\s\S]*?<\/div>\s*<div class="fee-review-actions"/)?.[0];
+  assert.ok(summary);
+  assert.match(summary, /Approved tuition by installment/);
+  assert.match(summary, /<th scope="row">Term 2<\/th>[\s\S]*?₱0\.00[\s\S]*?₱1,300\.00[\s\S]*?₱475\.00[\s\S]*?₱1,775\.00/);
+  assert.match(summary, /<th scope="row">Term 3<\/th>[\s\S]*?₱350\.00[\s\S]*?₱1,400\.00[\s\S]*?₱500\.00[\s\S]*?₱1,900\.00/);
+  assert.doesNotMatch(summary, /Term 1/);
+  assert.match(html, /Downpayment/);
+  assert.match(html, /Schedule label/);
+  assert.match(html, /Term 2<\/td>\s*<td data-label="Fee">Miscellaneous/);
+  assert.match(html, /Term 3<\/td>\s*<td data-label="Fee">Miscellaneous/);
   assert.equal((html.match(/data-fee-submit/g) || []).length, 1);
 });
 
@@ -324,6 +381,13 @@ test('legacy tuition schedules show approved term totals and hide unhelpful inst
       scheduleVersion: 1, existingAssessment: false, optionalLines: [], optionalLineIds: [],
       termTotals: [{ termNumber: 1, amount: '25.00' }, { termNumber: 2, amount: '0.00' }],
       tuitionTermTotals: [{ termNumber: 1, amount: '25.00' }, { termNumber: 2, amount: '0.00' }],
+      nonTuitionTermTotals: [{ termNumber: 1, amount: '0.00' }, { termNumber: 2, amount: '0.00' }],
+      tuitionBreakdownComplete: false,
+      tuitionBreakdown: [1, 2].map((termNumber) => ({
+        termNumber, complete: false, installments: ['DP', 'Prelim', 'Midterm', 'Finals'].map((label) => ({
+          label, configured: false, amount: null
+        }))
+      })),
       lines: [
         { termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Other', amount: '0.00', grossAmount: '0.00', waivedAmount: '0.00', isOptional: false },
         { termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Other', amount: '25.00', grossAmount: '25.00', waivedAmount: '0.00', isOptional: false }
@@ -338,8 +402,25 @@ test('legacy tuition schedules show approved term totals and hide unhelpful inst
   assert.match(tuitionSummary, /₱25\.00/);
   assert.match(tuitionSummary, /Term 2/);
   assert.match(tuitionSummary, /₱0\.00/);
-  assert.doesNotMatch(tuitionSummary, /Other|Installment/);
+  assert.match(tuitionSummary, /The approved schedule does not provide one Downpayment/);
+  assert.match(tuitionSummary, /no installment split is estimated/i);
+  assert.doesNotMatch(tuitionSummary, /<th[^>]*>Other<\/th>/);
   assert.match(html, /<details class="fee-breakdown">[\s\S]*?Other/);
   assert.doesNotMatch(html, /Not configured|Not applicable/);
   assert.equal((html.match(/data-fee-submit/g) || []).length, 1);
+
+  const savedAssessmentSummary = await ejs.renderFile(path.join(__dirname, '../views/records/partials/annual-tuition-breakdown.ejs'), {
+    formatMoney, headingId: 'saved-assessment-tuition-title',
+    preview: {
+      existingAssessment: true, tuitionBreakdownComplete: false,
+      lines: [{ category: 'tuition', termNumber: 1, lineName: 'Tuition', installment: 'Other' }],
+      tuitionBreakdown: [{ termNumber: 1, installments: [{ notApplicable: false }] }],
+      tuitionTermTotals: [{ termNumber: 1, amount: '25.00' }],
+      nonTuitionTermTotals: [{ termNumber: 1, amount: '0.00' }],
+      termTotals: [{ termNumber: 1, amount: '25.00' }]
+    }
+  });
+  assert.match(savedAssessmentSummary, /This saved assessment preserves its original fee details/);
+  assert.match(savedAssessmentSummary, /original term total/);
+  assert.doesNotMatch(savedAssessmentSummary, /confirmed enrollment/i);
 });
