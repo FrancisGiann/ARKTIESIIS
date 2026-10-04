@@ -17,6 +17,61 @@ const FINANCE_ROSTER_QUERY_PHASES = Object.freeze([
   'assessed_charge_balances', 'legacy_account_balances', 'opening_liability_balances',
   'options_year', 'options_term', 'options_section'
 ]);
+const STUDENT_LEDGER_SUMMARY_SQL = `SELECT
+    CAST(COALESCE(legacy.total, 0) AS CHAR(40)) AS unattributed_legacy_balance,
+    CAST(COALESCE(opening.total, 0) AS CHAR(40)) AS opening_liability_due,
+    CAST(COALESCE(charges.total, 0) AS CHAR(40)) AS assessed_charges,
+    CAST(COALESCE(adjustments.total, 0) AS CHAR(40)) AS adjustments,
+    CAST(COALESCE(payments.total, 0) AS CHAR(40)) AS annual_payments,
+    CAST(COALESCE(reconciliations.total, 0) AS CHAR(40)) AS legacy_reconciled_amount,
+    CAST(COALESCE(credits.total, 0) AS CHAR(40)) AS available_credit
+  FROM students AS student
+  LEFT JOIN (
+    SELECT balance.student_id, SUM(balance.remaining_legacy_balance) AS total
+    FROM v_finance_legacy_account_balance AS balance
+    WHERE balance.student_id = @studentId GROUP BY balance.student_id
+  ) AS legacy ON legacy.student_id = student.id
+  LEFT JOIN (
+    SELECT due.student_id, SUM(due.amount_due) AS total
+    FROM v_finance_opening_liability_due AS due
+    WHERE due.student_id = @studentId GROUP BY due.student_id
+  ) AS opening ON opening.student_id = student.id
+  LEFT JOIN (
+    SELECT annual.student_id, SUM(charge.amount) AS total
+    FROM assessed_charges AS charge
+    INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
+    WHERE annual.student_id = @studentId
+    GROUP BY annual.student_id
+  ) AS charges ON charges.student_id = student.id
+  LEFT JOIN (
+    SELECT annual.student_id, SUM(adjustment.amount) AS total
+    FROM finance_charge_adjustments AS adjustment
+    INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id
+    INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
+    WHERE annual.student_id = @studentId
+    GROUP BY annual.student_id
+  ) AS adjustments ON adjustments.student_id = student.id
+  LEFT JOIN (
+    SELECT payment.student_id, SUM(allocation.net_amount) AS total
+    FROM v_finance_net_payment_allocations AS allocation
+    INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
+    WHERE payment.student_id = @studentId AND payment.is_reversed = 0 AND allocation.charge_id IS NOT NULL
+    GROUP BY payment.student_id
+  ) AS payments ON payments.student_id = student.id
+  LEFT JOIN (
+    SELECT account.student_id, SUM(reconciliation.net_amount) AS total
+    FROM v_finance_net_legacy_reconciliations AS reconciliation
+    INNER JOIN financial_transactions AS legacy ON legacy.id = reconciliation.transaction_id
+    INNER JOIN financial_accounts AS account ON account.id = legacy.financial_account_id
+    WHERE account.student_id = @studentId
+    GROUP BY account.student_id
+  ) AS reconciliations ON reconciliations.student_id = student.id
+  LEFT JOIN (
+    SELECT credit.student_id, SUM(credit.available_credit) AS total
+    FROM v_finance_payment_credit AS credit
+    WHERE credit.student_id = @studentId AND credit.is_reversed = 0 GROUP BY credit.student_id
+  ) AS credits ON credits.student_id = student.id
+  WHERE student.id = @studentId`;
 
 async function runFinanceRosterQuery(request, phase, statement) {
   try {
@@ -1857,39 +1912,23 @@ function createAnnualFinanceService({
     }
     const eventsRequest = transaction.request().input('studentId', sql.Int, studentId).input('isStudent', sql.Bit, access === 'student');
     const studentResult = await transaction.request().input('studentId', sql.Int, studentId).query(`SELECT id, student_no, first_name, middle_name, last_name, suffix FROM students WHERE id = @studentId`);
-    const summaryResult = await transaction.request().input('studentId', sql.Int, studentId).query(`
-        SELECT CAST(COALESCE((SELECT SUM(remaining_legacy_balance)
-              FROM v_finance_legacy_account_balance WHERE student_id = @studentId), 0) AS CHAR(40)) AS unattributed_legacy_balance,
-          CAST(COALESCE((SELECT SUM(amount_due) FROM v_finance_opening_liability_due WHERE student_id = @studentId), 0) AS CHAR(40)) AS opening_liability_due,
-          CAST(COALESCE((SELECT SUM(charge.amount) FROM assessed_charges AS charge
-              INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id WHERE annual.student_id = @studentId), 0) AS CHAR(40)) AS assessed_charges,
-          CAST(COALESCE((SELECT SUM(adjustment.amount) FROM finance_charge_adjustments AS adjustment
-              INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id
-              INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id WHERE annual.student_id = @studentId), 0) AS CHAR(40)) AS adjustments,
-          CAST(COALESCE((SELECT SUM(allocation.net_amount) FROM v_finance_net_payment_allocations AS allocation
-              INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
-              WHERE payment.student_id = @studentId AND payment.is_reversed = 0 AND allocation.charge_id IS NOT NULL), 0) AS CHAR(40)) AS annual_payments,
-          CAST(COALESCE((SELECT SUM(reconciliation.net_amount) FROM v_finance_net_legacy_reconciliations AS reconciliation
-              INNER JOIN financial_transactions AS legacy ON legacy.id = reconciliation.transaction_id
-              INNER JOIN financial_accounts AS legacy_account ON legacy_account.id = legacy.financial_account_id
-              WHERE legacy_account.student_id = @studentId), 0) AS CHAR(40)) AS legacy_reconciled_amount,
-          CAST(COALESCE((SELECT SUM(available_credit) FROM v_finance_payment_credit
-              WHERE student_id = @studentId AND is_reversed = 0), 0) AS CHAR(40)) AS available_credit`);
+    const summaryResult = await transaction.request().input('studentId', sql.Int, studentId)
+      .query(STUDENT_LEDGER_SUMMARY_SQL);
     const chargesResult = await transaction.request().input('studentId', sql.Int, studentId).query(`SELECT charge.id AS charge_id, charge.enrollment_id,
           annual.school_year, annual.grade_level, annual.voucher_code, enrollment.annual_term_number, term.term,
           section.name AS section_name, charge.fee_category, charge.line_name, charge.installment,
           CAST(charge.gross_amount AS CHAR(40)) AS amount,
           CAST(charge.waived_amount AS CHAR(40)) AS waived_amount,
           CAST(COALESCE((SELECT SUM(adjustment.amount) FROM finance_charge_adjustments AS adjustment WHERE adjustment.charge_id = charge.id), 0) AS CHAR(40)) AS adjustments,
-          CAST(COALESCE((SELECT SUM(due.annual_allocated + due.legacy_allocated)
-            FROM v_finance_assessed_charge_due AS due WHERE due.charge_id = charge.id), 0) AS CHAR(40)) AS allocated,
-          CAST(COALESCE((SELECT due.amount_due FROM v_finance_assessed_charge_due AS due WHERE due.charge_id = charge.id), charge.amount) AS CHAR(40)) AS remaining_due,
+          CAST(COALESCE(due.annual_allocated + due.legacy_allocated, 0) AS CHAR(40)) AS allocated,
+          CAST(COALESCE(due.amount_due, charge.amount) AS CHAR(40)) AS remaining_due,
           CAST(CASE WHEN term.is_current = 1 THEN 1 ELSE 0 END AS UNSIGNED) AS is_current_term
         FROM assessed_charges AS charge
         INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
         INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
         LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
+        LEFT JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
         WHERE annual.student_id = @studentId ORDER BY annual.school_year, enrollment.annual_term_number, charge.id`);
     const eventsResult = await eventsRequest.query(`
         SELECT event_date, event_type, amount, reference_no, details, sort_key, source_id
@@ -1995,8 +2034,7 @@ function createAnnualFinanceService({
           assessment.id AS assessment_id, assessment.schedule_version,
           enrollment.annual_term_number, enrollment.term_scope_status, enrollment.enrollment_status, term.term, term.is_current,
           section.name AS section_name, section.cluster, section.strand, section.adviser, section.modality, section.modular_subtype,
-          CAST(COALESCE((SELECT SUM(due.amount_due) FROM v_finance_assessed_charge_due AS due
-              WHERE due.enrollment_id = enrollment.id), 0) AS CHAR(40)) AS outstanding,
+          CAST(COALESCE(due_by_enrollment.total, 0) AS CHAR(40)) AS outstanding,
           confirmation.id AS registrar_confirmation_id,
           assessment.voucher_code_snapshot AS assessed_voucher_code, assessment.schedule_version AS assessed_schedule_version,
           CASE WHEN voucher_event.event_type = 'voucher_review_flagged' THEN CAST(1 AS UNSIGNED) ELSE CAST(0 AS UNSIGNED) END AS voucher_review_required,
@@ -2007,6 +2045,12 @@ function createAnnualFinanceService({
         INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
         LEFT JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.id
         LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
+        LEFT JOIN (
+          SELECT due.enrollment_id, SUM(due.amount_due) AS total
+          FROM v_finance_assessed_charge_due AS due
+          INNER JOIN annual_enrollments AS due_annual ON due_annual.id = due.annual_enrollment_id
+          WHERE due_annual.student_id = @studentId GROUP BY due.enrollment_id
+        ) AS due_by_enrollment ON due_by_enrollment.enrollment_id = enrollment.id
         LEFT JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = annual.id
         LEFT JOIN latest_voucher_event AS voucher_event ON voucher_event.annual_enrollment_id = annual.id
           AND voucher_event.event_rank = 1
@@ -2759,6 +2803,7 @@ module.exports = {
   AnnualFinanceError,
   FINANCE_ROSTER_QUERY_PHASES,
   TUITION_INSTALLMENTS,
+  STUDENT_LEDGER_SUMMARY_SQL,
   createAnnualFinanceService,
   normalizeLineRows,
   tuitionInstallmentBreakdown,

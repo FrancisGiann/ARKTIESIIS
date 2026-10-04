@@ -10,7 +10,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { readSqlFile, readForwardMigrations } = require('../scripts/db-setup-v2');
 const { PoolFacade, sql } = require('../src/config/database');
-const { createAnnualFinanceService } = require('../src/services/annualFinanceService');
+const { STUDENT_LEDGER_SUMMARY_SQL, createAnnualFinanceService } = require('../src/services/annualFinanceService');
 const { createAnnualFinanceCasesService } = require('../src/services/annualFinanceCasesService');
 const { createAnnualFinanceReportsService } = require('../src/services/annualFinanceReportsService');
 const { createFinanceDashboardService } = require('../src/services/financeDashboardService');
@@ -96,7 +96,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       const baseline = readSqlFile(path.join(repoRoot, 'database/mariadb/schema.sql'));
       await executeStatements(setupConnection, baseline);
       const forwardMigrations = readForwardMigrations();
-      for (const migration of forwardMigrations.filter(({ version }) => version !== 'v2.013')) {
+      for (const migration of forwardMigrations.filter(({ version }) => !['v2.013', 'v2.014'].includes(version))) {
         await executeStatements(setupConnection, migration.statements);
         await setupConnection.execute('INSERT INTO schema_migrations (version) VALUES (?)', [migration.version]);
       }
@@ -262,7 +262,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       'INSERT INTO finance_legacy_reconciliation_batches (transaction_id, idempotency_key, request_fingerprint, recorded_by) VALUES (?, ?, ?, ?)',
       [Number(legacyTransaction.insertId), crypto.randomUUID(), 'c'.repeat(64), actorId]
     );
-    await appPool.execute(
+    const [legacyReconciliationInsert] = await appPool.execute(
       `INSERT INTO finance_legacy_reconciliations (transaction_id, charge_id, amount, reason, batch_id, recorded_by)
        VALUES (?, ?, 50.00, 'Matched existing legacy payment', ?, ?)`,
       [Number(legacyTransaction.insertId), legacyScenario.chargeIds.get('DP'), Number(legacyBatch.insertId), actorId]
@@ -293,6 +293,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     };
     const reportPool = new PoolFacade(strictReportSource);
     const financeReports = createAnnualFinanceReportsService({ getPool: async () => reportPool, sql });
+    const strictAnnual = createAnnualFinanceService({ getPool: async () => reportPool, sql });
     normalReportPool = mysql.createPool({
       socketPath, user: 'root', password: '', database: databaseName,
       waitForConnections: true, connectionLimit: 1, queueLimit: 0,
@@ -313,6 +314,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     assert.equal(negativeDue?.amount_due, '-25.00', 'the authoritative view retains signed net-credit dues');
     assert.equal(negativeDue?.annual_allocated, '0.00');
     assert.equal(negativeDue?.legacy_allocated, '0.00');
+    const baselineLedger = await strictAnnual.getStudentLedger(actorId, assessedScenarios.partial.studentId);
     const dueViewMigration = readForwardMigrations().find(({ version }) => version === 'v2.013');
     assert.ok(dueViewMigration, 'the forward due-view migration is available');
     const migrationConnection = await appPool.getConnection();
@@ -332,7 +334,6 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       ORDER BY charge.id`);
     assert.deepEqual(migratedDueRows, baselineDueRows,
       'migration 013 preserves each charge, annual allocation, and legacy reconciliation balance');
-
     const reportRange = { fromDate: '2026-10-01', toDate: '2026-10-01' };
     const collectionsReport = await financeReports.reports(actorId, { ...reportRange, view: 'collections' });
     const [expectedCollections] = await appPool.execute(`SELECT COUNT(DISTINCT payment.student_id) AS distinct_payers,
@@ -416,13 +417,189 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     await appPool.execute(`INSERT INTO finance_payment_allocations
         (payment_id, charge_id, legacy_opening_charge_id, amount, allocation_batch_id, allocated_by)
       VALUES (?, NULL, ?, 12.00, ?, ?)`, [openingPaymentId, openingTransfer.openingLiabilityId, Number(openingBatchInsert.insertId), actorId]);
+    const [openingAllocationIdRows] = await appPool.execute(
+      'SELECT id FROM finance_payment_allocations WHERE payment_id = ? AND legacy_opening_charge_id = ?',
+      [openingPaymentId, openingTransfer.openingLiabilityId]
+    );
+    const openingAllocationId = Number(openingAllocationIdRows[0].id);
+    await appPool.execute(`INSERT INTO finance_payment_allocation_releases
+        (allocation_id, amount, reason, idempotency_key, request_fingerprint, recorded_by)
+      VALUES (?, 2.00, 'Test partial opening allocation release', ?, ?, ?)`,
+    [openingAllocationId, crypto.randomUUID(), '3'.repeat(64), actorId]);
+    const [reversedOpeningPaymentInsert] = await appPool.execute(`INSERT INTO finance_payments
+        (student_id, amount, payment_date, reference_no, receipt_issued, idempotency_key, request_fingerprint, recorded_by, is_reversed)
+      VALUES (?, 5.00, '2026-10-01', 'OPENING-REVERSED-TEST', 0, ?, ?, ?, 1)`,
+    [openingStudentId, crypto.randomUUID(), '4'.repeat(64), actorId]);
+    const reversedOpeningPaymentId = Number(reversedOpeningPaymentInsert.insertId);
+    const [reversedOpeningBatchInsert] = await appPool.execute(`INSERT INTO finance_allocation_batches
+        (payment_id, student_id, idempotency_key, request_fingerprint, allocated_by)
+      VALUES (?, ?, ?, ?, ?)`, [reversedOpeningPaymentId, openingStudentId, crypto.randomUUID(), '5'.repeat(64), actorId]);
+    await appPool.execute(`INSERT INTO finance_payment_allocations
+        (payment_id, charge_id, legacy_opening_charge_id, amount, allocation_batch_id, allocated_by)
+      VALUES (?, NULL, ?, 5.00, ?, ?)`, [reversedOpeningPaymentId, openingTransfer.openingLiabilityId, Number(reversedOpeningBatchInsert.insertId), actorId]);
+    const [openingFinalPaymentInsert] = await appPool.execute(`INSERT INTO finance_payments
+        (student_id, amount, payment_date, reference_no, receipt_issued, idempotency_key, request_fingerprint, recorded_by, is_reversed)
+      VALUES (?, 20.00, '2026-10-01', 'OPENING-FINAL-TEST', 0, ?, ?, ?, 0)`,
+    [openingStudentId, crypto.randomUUID(), '6'.repeat(64), actorId]);
+    const openingFinalPaymentId = Number(openingFinalPaymentInsert.insertId);
+    const [openingFinalBatchInsert] = await appPool.execute(`INSERT INTO finance_allocation_batches
+        (payment_id, student_id, idempotency_key, request_fingerprint, allocated_by)
+      VALUES (?, ?, ?, ?, ?)`, [openingFinalPaymentId, openingStudentId, crypto.randomUUID(), '7'.repeat(64), actorId]);
+    await appPool.execute(`INSERT INTO finance_payment_allocations
+        (payment_id, charge_id, legacy_opening_charge_id, amount, allocation_batch_id, allocated_by)
+      VALUES (?, NULL, ?, 20.00, ?, ?)`, [openingFinalPaymentId, openingTransfer.openingLiabilityId, Number(openingFinalBatchInsert.insertId), actorId]);
+    const [openingBefore014] = await appPool.execute(`SELECT CAST(amount_due AS CHAR(40)) AS amount_due,
+        CAST(allocated AS CHAR(40)) AS allocated FROM v_finance_opening_liability_due WHERE opening_charge_id = ?`,
+    [openingTransfer.openingLiabilityId]);
+    assert.deepEqual(openingBefore014[0], { amount_due: '0.00', allocated: '30.00' },
+      'opening balances net partial releases, ignore reversed payments, and preserve a zero residual');
     const populatedOpeningReport = await financeReports.reports(actorId, { ...reportRange, view: 'allocations' });
     const openingContext = populatedOpeningReport.allocationContexts.find((row) => row.target_type === 'opening liability');
     assert.equal(Number(openingContext?.distinct_payers), 1);
-    assert.equal(moneyCents(openingContext?.allocated_amount), 1200n);
-    assert.equal(moneyCents(populatedOpeningReport.allocationSummary.target_allocated_amount), 53700n);
+    assert.equal(moneyCents(openingContext?.allocated_amount), 3000n);
+    assert.equal(moneyCents(populatedOpeningReport.allocationSummary.target_allocated_amount), 55500n);
     const populatedCombinedReport = await financeReports.reports(actorId, reportRange);
     assert.equal(populatedCombinedReport.allocationSummary.target_allocated_amount, populatedOpeningReport.allocationSummary.target_allocated_amount);
+
+    const [secondLegacyTransaction] = await appPool.execute(
+      `INSERT INTO financial_transactions (financial_account_id, transaction_type, amount, reference_no, recorded_by, is_legacy_unattributed)
+       VALUES (?, 'payment', 30.00, 'LEGACY-TEST-SECOND', ?, 1)`,
+      [Number(legacyAccount.insertId), actorId]
+    );
+    const [secondLegacyBatch] = await appPool.execute(
+      'INSERT INTO finance_legacy_reconciliation_batches (transaction_id, idempotency_key, request_fingerprint, recorded_by) VALUES (?, ?, ?, ?)',
+      [Number(secondLegacyTransaction.insertId), crypto.randomUUID(), '8'.repeat(64), actorId]
+    );
+    const [secondLegacyReconciliation] = await appPool.execute(
+      `INSERT INTO finance_legacy_reconciliations (transaction_id, charge_id, amount, reason, batch_id, recorded_by)
+       VALUES (?, ?, 30.00, 'Second legacy reconciliation regression fixture', ?, ?)`,
+      [Number(secondLegacyTransaction.insertId), legacyScenario.chargeIds.get('DP'), Number(secondLegacyBatch.insertId), actorId]
+    );
+    await appPool.execute(
+      `INSERT INTO finance_legacy_reconciliation_releases
+         (reconciliation_id, amount, reason, idempotency_key, request_fingerprint, recorded_by)
+       VALUES (?, 10.00, 'Test partial reconciliation release', ?, ?, ?)`,
+      [Number(secondLegacyReconciliation.insertId), crypto.randomUUID(), '9'.repeat(64), actorId]
+    );
+    await appPool.execute(
+      `INSERT INTO finance_legacy_opening_charges
+         (financial_account_id, student_id, amount, source_label, reason, idempotency_key, request_fingerprint, recorded_by)
+       VALUES (?, ?, 80.00, 'Integration fixture', 'Signed legacy-balance regression fixture.', ?, ?, ?)`,
+      [Number(legacyAccount.insertId), legacyScenario.studentId, crypto.randomUUID(), 'a'.repeat(64), actorId]
+    );
+    const legacyBalanceStudentId = legacyScenario.studentId;
+
+    const legacyBalanceViewSql = `SELECT balance.financial_account_id, balance.student_id,
+        CAST(balance.remaining_legacy_balance AS CHAR(40)) AS remaining_legacy_balance
+      FROM v_finance_legacy_account_balance AS balance ORDER BY balance.financial_account_id`;
+    const openingDueViewSql = `SELECT due.opening_charge_id, due.student_id,
+        CAST(due.amount_due AS CHAR(40)) AS amount_due, CAST(due.allocated AS CHAR(40)) AS allocated
+      FROM v_finance_opening_liability_due AS due ORDER BY due.opening_charge_id`;
+    const [legacyBalancesBefore014] = await appPool.query(legacyBalanceViewSql);
+    const [openingDuesBefore014] = await appPool.query(openingDueViewSql);
+    let unchangedLedgerBefore014 = null;
+    let ledgerBefore014ErrorCode = null;
+    try {
+      unchangedLedgerBefore014 = await strictAnnual.getStudentLedger(actorId, legacyScenario.studentId);
+    } catch (error) {
+      ledgerBefore014ErrorCode = String(error?.code || '');
+      assert.ok(['ER_INVALID_GROUP_FUNC_USE', 'ER_MIX_OF_GROUP_FUNC_AND_FIELDS'].includes(ledgerBefore014ErrorCode),
+        'a pre-migration grouped-view failure is limited to MariaDB aggregate errors 1111 or 1140');
+    }
+    const legacyBalanceMigration = readForwardMigrations().find(({ version }) => version === 'v2.014');
+    assert.ok(legacyBalanceMigration, 'the forward legacy-balance migration is available');
+    const migration014Connection = await appPool.getConnection();
+    try {
+      await executeStatements(migration014Connection, legacyBalanceMigration.statements);
+      await migration014Connection.execute('INSERT INTO schema_migrations (version) VALUES (?)', [legacyBalanceMigration.version]);
+    } finally {
+      migration014Connection.release();
+    }
+    const [migratedVersions014] = await appPool.execute('SELECT version FROM schema_migrations ORDER BY version');
+    assert.equal(migratedVersions014.at(-1)?.version, 'v2.014');
+    await reportReadPool.end();
+    reportReadPool = mysql.createPool({
+      socketPath, user: 'root', password: '', database: databaseName,
+      waitForConnections: true, connectionLimit: 1, queueLimit: 0,
+      supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false,
+      dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'], multipleStatements: false
+    });
+    const [legacyBalancesAfter014] = await appPool.query(legacyBalanceViewSql);
+    const [openingDuesAfter014] = await appPool.query(openingDueViewSql);
+    const [balanceViewMetadata] = await appPool.execute(`SELECT table_name, algorithm FROM information_schema.views
+      WHERE table_schema = DATABASE() AND table_name IN ('v_finance_legacy_account_balance', 'v_finance_opening_liability_due')
+      ORDER BY table_name`);
+    assert.deepEqual(balanceViewMetadata.map(({ algorithm }) => String(algorithm)), ['TEMPTABLE', 'TEMPTABLE']);
+    assert.deepEqual(legacyBalancesAfter014, legacyBalancesBefore014,
+      'migration 014 preserves every signed legacy-account balance after grouping reconciliations and opening charges');
+    assert.deepEqual(openingDuesAfter014, openingDuesBefore014,
+      'migration 014 preserves every opening-liability due and allocation total after grouping net allocations');
+    assert.equal(legacyBalancesAfter014.find(({ student_id: id }) => Number(id) === legacyBalanceStudentId)?.remaining_legacy_balance, '-10.00');
+    assert.equal(legacyBalancesAfter014.find(({ student_id: id }) => Number(id) === openingStudentId)?.remaining_legacy_balance, '0.00');
+    const summaryComponentQueries = [
+      ['legacy balance', `SELECT CAST(COALESCE(SUM(remaining_legacy_balance), 0) AS CHAR(40)) AS value
+        FROM v_finance_legacy_account_balance WHERE student_id = ?`],
+      ['opening liability', `SELECT SUM(amount_due) AS value FROM v_finance_opening_liability_due WHERE student_id = ?`],
+      ['annual payments', `SELECT SUM(allocation.net_amount) AS value FROM v_finance_net_payment_allocations AS allocation
+        INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
+        WHERE payment.student_id = ? AND payment.is_reversed = 0 AND allocation.charge_id IS NOT NULL`],
+      ['legacy reconciliations', `SELECT SUM(reconciliation.net_amount) AS value FROM v_finance_net_legacy_reconciliations AS reconciliation
+        INNER JOIN financial_transactions AS legacy ON legacy.id = reconciliation.transaction_id
+        INNER JOIN financial_accounts AS legacy_account ON legacy_account.id = legacy.financial_account_id
+        WHERE legacy_account.student_id = ?`],
+      ['payment credit', `SELECT SUM(available_credit) AS value FROM v_finance_payment_credit WHERE student_id = ? AND is_reversed = 0`]
+    ];
+    for (let repeat = 0; repeat < 3; repeat += 1) {
+      for (const [componentName, componentSql] of summaryComponentQueries) {
+        try {
+          const [preparedRows] = await reportReadPool.execute(componentSql, [legacyBalanceStudentId]);
+          const [textRows] = await reportReadPool.query(componentSql, [legacyBalanceStudentId]);
+          assert.deepEqual(preparedRows, textRows, `prepared and text ${componentName} reads match`);
+          if (componentName === 'legacy balance') assert.equal(preparedRows[0]?.value, '-10.00');
+        } catch (error) {
+          if (error?.code) assert.fail(`Post-migration ${componentName} summary read failed with ${String(error.code)}.`);
+          throw error;
+        }
+      }
+    }
+    const positionalSummarySql = STUDENT_LEDGER_SUMMARY_SQL.replaceAll('@studentId', '?');
+    const summaryBindingsFor = (studentId) => Array((positionalSummarySql.match(/\?/g) || []).length).fill(studentId);
+    for (const studentIdForProtocol of [legacyBalanceStudentId, openingStudentId, legacyBalanceStudentId, openingStudentId,
+      legacyBalanceStudentId, openingStudentId]) {
+      const summaryBindings = summaryBindingsFor(studentIdForProtocol);
+      const [preparedSummary] = await reportReadPool.execute(positionalSummarySql, summaryBindings);
+      const [textSummary] = await reportReadPool.query(positionalSummarySql, summaryBindings);
+      assert.deepEqual(preparedSummary, textSummary,
+        'the exact grouped ledger-summary statement returns the same totals through prepared and text protocols');
+    }
+    const unchangedLedgerAfter014 = await strictAnnual.getStudentLedger(actorId, legacyScenario.studentId);
+    if (unchangedLedgerBefore014) {
+      assert.deepEqual(unchangedLedgerAfter014, unchangedLedgerBefore014,
+        'migration 014 preserves the complete annual ledger for unchanged student and finance rows');
+    }
+    const migratedLedger = await strictAnnual.getStudentLedger(actorId, assessedScenarios.partial.studentId);
+    assert.deepEqual(migratedLedger, baselineLedger,
+      'migrations 013-014 preserve the complete annual ledger under strict grouping');
+    assert.equal(migratedLedger.charges.length, 4);
+    assert.equal(migratedLedger.charges[0].allocated, '25.00');
+    assert.equal(migratedLedger.charges[0].remaining_due, '75.00');
+
+    const alternatingStudentIds = [legacyBalanceStudentId, assessedScenarios.partial.studentId, openingStudentId,
+      assessedScenarios.partial.studentId, legacyBalanceStudentId, assessedScenarios.partial.studentId,
+      openingStudentId, assessedScenarios.partial.studentId];
+    for (const studentIdForLedger of alternatingStudentIds) {
+      const ledger = await strictAnnual.getStudentLedger(actorId, studentIdForLedger);
+      if (studentIdForLedger === legacyBalanceStudentId) {
+        assert.equal(ledger.summary.unattributedLegacyBalance, '-10.00');
+        assert.equal(ledger.summary.openingLiabilityDue, '80.00');
+      } else if (studentIdForLedger === assessedScenarios.partial.studentId) {
+        assert.deepEqual(ledger, baselineLedger,
+          'alternating prepared full-ledger reads preserve the populated annual ledger exactly');
+      } else {
+        assert.equal(ledger.summary.unattributedLegacyBalance, '0.00');
+        assert.equal(ledger.summary.openingLiabilityDue, '0.00');
+      }
+    }
 
     const reversedConfirmation = await annual.getAnnualPaymentConfirmation(actorId, assessedScenarios.reversed.studentId, reversedPayment.paymentId);
     assert.equal(String(reversedConfirmation.allocations[0]?.original_amount), '100.00');
@@ -474,7 +651,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       ['FIN-REDESIGN-REVERSED', '400.00', 'unpaid'],
       ['FIN-REDESIGN-RELEASED', '400.00', 'unpaid'],
       ['FIN-REDESIGN-ADJUSTED', '275.00', 'unpaid'],
-      ['FIN-REDESIGN-LEGACY', '350.00', 'partially_paid'],
+      ['FIN-REDESIGN-LEGACY', '330.00', 'partially_paid'],
       ['FIN-REDESIGN-01', '0.00', 'needs_review']
     ];
     for (const [studentNo, expectedBalance, expectedStatus] of expectedRosterBalances) {
@@ -486,7 +663,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       assert.equal(row.placements[0]?.finance_status, expectedStatus, `${studentNo} classification remains shared with the dashboard`);
     }
     const legacyRoster = await annual.listRosterPage(actorId, { schoolYear: '2026-2027', search: 'FIN-REDESIGN-LEGACY' });
-    assert.equal(legacyRoster.rows[0]?.unattributed_legacy_balance, '50.00', 'legacy account view retains signed account balance');
+    assert.equal(legacyRoster.rows[0]?.unattributed_legacy_balance, '-10.00', 'legacy account view retains signed account balance after opening-liability subtraction');
     const statusFilteredRoster = await annual.listRosterPage(actorId, {
       schoolYear: '2026-2027', search: 'FIN-REDESIGN-FULL', financeStatus: 'partially_paid'
     });
@@ -533,6 +710,15 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     assert.equal(accountResponse.view, 'finance/annual-student');
     assert.match(accountResponse.html, /Annual student account/);
     assert.match(accountResponse.html, /backInstallment=whole/);
+    for (const view of ['overview', 'payments', 'charges', 'clearance', 'history']) {
+      const tabResponse = responseCapture();
+      await directGetHandler(router, '/students/:id/annual')(
+        requestFor({ view }, { id: String(legacyScenario.studentId) }), tabResponse
+      );
+      assert.equal(tabResponse.statusCode, 200, `${view} tab reload renders from the grouped Finance views`);
+      assert.equal(tabResponse.view, 'finance/annual-student');
+      assert.equal(tabResponse.locals.accountView, view);
+    }
 
     const reviewActions = createFinanceReviewActionService({ getPool, sql });
     const sessionBinding = crypto.createHash('sha256').update('finance-redesign-draft-test-session').digest('hex');

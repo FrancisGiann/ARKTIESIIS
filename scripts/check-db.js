@@ -42,7 +42,7 @@ const REQUIRED_COLUMNS = Object.freeze({
   student_document_requests: ['expected_claim_date', 'handover_reference', 'current_claim_slip_id'],
   student_document_request_events: ['handover_reference_before', 'handover_reference_after', 'handover_reference']
 });
-const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 13 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 14 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 function bindInList(request, values, prefix) {
   return values.map((value, index) => {
@@ -116,7 +116,7 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
       process.exitCode = 1;
       return;
     }
-    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.013.`);
+    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.014.`);
   } catch {
     logger.error('MariaDB database check failed. Confirm DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD, then run npm run db:setup.');
     process.exitCode = 1;
