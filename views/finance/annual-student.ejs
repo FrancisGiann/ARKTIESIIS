@@ -17,19 +17,32 @@
     ...ledger.charges.map((charge, index) => ({ value: `charge:${charge.charge_id}`, label: `${charge.school_year} · Term ${charge.annual_term_number} · ${charge.line_name} · ${charge.installment}`, balance: charge.remaining_amount, order: ledger.openingLiabilities.length + index }))
   ]; %>
 
+  <% const currentTermPlacement = ledger.terms.find((term) => term.is_current === true || term.is_current === 1 || term.is_current === '1'); %>
   <section class="finance-panel" aria-labelledby="annual-balance-heading" data-finance-view="overview payments charges clearance history">
-    <div class="admin-section__heading"><div><h2 id="annual-balance-heading">Balance summary</h2><p>Verified opening liabilities, unattributed legacy balances, annual charges, and available credits are shown separately.</p></div></div>
-    <dl class="finance-balance-summary">
-      <div><dt><%= ledger.summary.annualBalanceSchoolYear ? `Annual balance · ${ledger.summary.annualBalanceSchoolYear}` : 'Current annual balance' %></dt><dd>₱<%= formatMoney(ledger.summary.annualBalance) %></dd></div>
-      <div><dt>All annual years</dt><dd>₱<%= formatMoney(ledger.summary.allYearsAnnualBalance) %></dd></div>
-      <div><dt>Total waived</dt><dd>₱<%= formatMoney(ledger.summary.annualWaivedAmount) %></dd></div>
-      <div><dt>Unattributed legacy balance</dt><dd>₱<%= formatMoney(ledger.summary.unattributedLegacyBalance) %></dd></div>
-      <div><dt>Verified opening liability</dt><dd>₱<%= formatMoney(ledger.summary.openingLiabilityDue) %></dd></div>
-      <div><dt>Combined balance</dt><dd>₱<%= formatMoney(ledger.summary.totalBalance) %></dd></div>
-      <div><dt>Current term due</dt><dd>₱<%= formatMoney(ledger.summary.currentTermOutstanding) %></dd></div>
-      <div><dt>Prior term/year debt</dt><dd>₱<%= formatMoney(ledger.summary.priorTermYearDebt) %></dd></div>
-      <div><dt>Available annual payment credit</dt><dd>₱<%= formatMoney(ledger.summary.availableCredit) %></dd></div>
+    <div class="admin-section__heading"><div><h2 id="annual-balance-heading">Balance summary</h2><p>All recorded school years and previous balances.</p></div></div>
+    <dl class="finance-account-balance-summary">
+      <div class="finance-account-balance-summary__total"><dt>Account balance</dt><dd>₱<strong><%= formatMoney(ledger.summary.totalBalance) %></strong></dd></div>
+      <% if (currentTermPlacement) { %>
+        <div><dt>Current term balance<small><%= [currentTermPlacement.term, currentTermPlacement.school_year].filter(Boolean).join(' · ') %></small></dt><dd>₱<%= formatMoney(ledger.summary.currentTermOutstanding) %></dd></div>
+      <% } %>
+      <% if (Number(ledger.summary.priorTermYearDebt) > 0) { %>
+        <div><dt>Previous term/year balance</dt><dd>₱<%= formatMoney(ledger.summary.priorTermYearDebt) %></dd></div>
+      <% } %>
+      <% if (Number(ledger.summary.availableCredit) > 0) { %>
+        <div><dt>Payment credit</dt><dd>₱<%= formatMoney(ledger.summary.availableCredit) %></dd></div>
+      <% } %>
     </dl>
+    <details class="finance-balance-summary-details">
+      <summary>Balance details</summary>
+      <p class="finance-balance-summary-details__explanation">Later-term charges may be included. Term balances are context within the account balance. Unallocated annual payment credit stays separate until allocated.</p>
+      <dl class="finance-balance-summary-details__list">
+        <div><dt><%= ledger.summary.annualBalanceSchoolYear ? `Annual balance · ${ledger.summary.annualBalanceSchoolYear}` : 'Annual balance' %></dt><dd>₱<%= formatMoney(ledger.summary.annualBalance) %></dd></div>
+        <div><dt>All school years</dt><dd>₱<%= formatMoney(ledger.summary.allYearsAnnualBalance) %></dd></div>
+        <div><dt>Total waived</dt><dd>₱<%= formatMoney(ledger.summary.annualWaivedAmount) %></dd></div>
+        <div><dt>Legacy balance not assigned to a school year</dt><dd>₱<%= formatMoney(ledger.summary.unattributedLegacyBalance) %></dd></div>
+        <div><dt>Verified opening balance</dt><dd>₱<%= formatMoney(ledger.summary.openingLiabilityDue) %></dd></div>
+      </dl>
+    </details>
   </section>
 
   <% if (preview) { %>

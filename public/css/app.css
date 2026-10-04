@@ -976,6 +976,23 @@ label { font-size: 0.84rem; }
 .finance-detail-page .finance-balance-summary dd { margin: 0; }
 .finance-detail-page .finance-balance-summary__amount dd { display: flex; align-items: baseline; gap: 0.2rem; color: var(--ink); font-size: 1.45rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .finance-detail-page .finance-balance-summary__amount strong { font-weight: 750; }
+.finance-detail-page .finance-account-balance-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 1.25rem; min-width: 0; margin: 0; }
+.finance-detail-page .finance-account-balance-summary > div { min-width: 0; padding: 0.75rem 0; border-top: 1px solid var(--line); }
+.finance-detail-page .finance-account-balance-summary dt { margin-bottom: 0.2rem; color: var(--muted); font-size: 0.84rem; }
+.finance-detail-page .finance-account-balance-summary dd { margin: 0; color: var(--ink); font-size: 1.05rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.finance-detail-page .finance-account-balance-summary > .finance-account-balance-summary__total { display: flex; grid-column: 1 / -1; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.5rem 1rem; padding-top: 0; border-top: 0; }
+.finance-detail-page .finance-account-balance-summary__total dt { margin: 0; color: var(--ink); font-size: 1rem; font-weight: 700; }
+.finance-detail-page .finance-account-balance-summary__total dd { max-width: 100%; font-size: 1.6rem; font-weight: 750; overflow-wrap: anywhere; }
+.finance-detail-page .finance-account-balance-summary__total dd strong { font-weight: inherit; }
+.finance-detail-page .finance-account-balance-summary dt small { display: block; margin-top: 0.15rem; color: var(--muted); font-size: 0.76rem; font-weight: 500; }
+.finance-detail-page .finance-balance-summary-details { padding-top: 0.65rem; margin-top: 0.75rem; border-top: 1px solid var(--line); }
+.finance-detail-page .finance-balance-summary-details > summary { width: fit-content; color: var(--accent); cursor: pointer; font-size: 0.85rem; font-weight: 700; }
+.finance-detail-page .finance-balance-summary-details > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 0.2rem; }
+.finance-detail-page .finance-balance-summary-details__explanation { max-width: 72ch; margin: 0.5rem 0 0.25rem; color: var(--muted); font-size: 0.82rem; }
+.finance-detail-page .finance-balance-summary-details__list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1.25rem; margin: 0.45rem 0 0; }
+.finance-detail-page .finance-balance-summary-details__list > div { display: flex; justify-content: space-between; gap: 1rem; min-width: 0; padding: 0.6rem 0; border-top: 1px solid #e8eded; }
+.finance-detail-page .finance-balance-summary-details__list dt { color: var(--muted); font-size: 0.82rem; overflow-wrap: anywhere; }
+.finance-detail-page .finance-balance-summary-details__list dd { flex: 0 0 auto; margin: 0; color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
 .finance-detail-page .finance-balance-summary__status { min-width: 5.5rem; }
 .finance-detail-page .finance-account-status { padding: 0.3rem 0.55rem; }
 .finance-detail-page .finance-account-status--due, .finance-detail-page .finance-clearance-status--pending { color: var(--warning); background: var(--warning-soft); }
@@ -2047,5 +2064,8 @@ label { font-size: 0.84rem; }
   .finance-account-tabs, .finance-report-tabs { margin-inline: -0.25rem; padding-inline: 0.25rem; }
   .finance-account-tabs a, .finance-report-tab { min-height: 2.7rem; padding-inline: 0.65rem; font-size: 0.8rem; }
   .finance-detail-page .finance-balance-summary { grid-template-columns: minmax(0, 1fr); }
+  .finance-detail-page .finance-account-balance-summary { grid-template-columns: minmax(0, 1fr); }
+  .finance-detail-page .finance-account-balance-summary__total dd { font-size: 1.4rem; }
+  .finance-detail-page .finance-balance-summary-details__list { grid-template-columns: minmax(0, 1fr); }
   .finance-review-term-editor[open], .finance-review-fee-line { grid-template-columns: minmax(0, 1fr); }
 }

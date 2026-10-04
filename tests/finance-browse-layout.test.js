@@ -408,17 +408,17 @@ test('finance annual roster separates page data, classification, and balances in
       annual_enrollment_id: 10, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC',
       voucher_category: 'A', intake_status: 'active', assessment_id: null, schedule_version: 2,
       term: 'Term 1', annual_term_number: 1, enrollment_id: 81, enrollment_status: 'enrolled',
-      term_scope_status: 'applicable', outstanding: '0.00', signed_clearance_status: null,
+      term_scope_status: 'applicable', outstanding: '30.00', signed_clearance_status: null, is_current: '1',
       voucher_review_required: false, section_name: 'Grade 11 ABM A'
     }]
   };
-  const accountHtml = await renderFinanceView('annual-student', {
+  const accountLocals = {
     ledger: {
       student: { id: 22, first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null, student_no: 'S-22', status: 'active' },
       summary: {
-        annualBalanceSchoolYear: '2026-2027', annualBalance: '0.00', allYearsAnnualBalance: '0.00',
-        annualWaivedAmount: '0.00', unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00',
-        totalBalance: '0.00', currentTermOutstanding: '0.00', priorTermYearDebt: '0.00', availableCredit: '0.00'
+        annualBalanceSchoolYear: '2026-2027', annualBalance: '40.00', allYearsAnnualBalance: '125.00',
+        annualWaivedAmount: '10.00', unattributedLegacyBalance: '15.00', openingLiabilityDue: '20.00',
+        totalBalance: '160.00', currentTermOutstanding: '30.00', priorTermYearDebt: '25.00', availableCredit: '50.00'
       },
       terms: legacyAnnualRecord.terms, openingLiabilities: [], charges: [], availablePayments: [],
       legacyCredits: [], payments: [], adjustments: [], events: [], privateClearances: [],
@@ -433,10 +433,40 @@ test('finance annual roster separates page data, classification, and balances in
     ],
     backHref: '/finance?schoolYear=2026-2027&termId=1',
     schedules: [], tokens: { payment: 'test-payment-token', assessment: 'test-assessment-token' },
-    csrfToken: 'test-csrf-token', notice: null, error: null, preview: null
-  });
+    csrfToken: 'test-csrf-token', notice: null, error: null, preview: null, openingPreview: null
+  };
+  const accountHtml = await renderFinanceView('annual-student', accountLocals);
   assert.match(accountHtml, /Grade 11 · Voucher type ESC/);
   assert.doesNotMatch(accountHtml, /Category A|voucher category/i);
+  const balancePanel = accountHtml.match(/<section class="finance-panel" aria-labelledby="annual-balance-heading"[\s\S]*?<\/section>/)?.[0] || '';
+  const visibleBalance = balancePanel.split('<details class="finance-balance-summary-details"')[0];
+  assert.match(visibleBalance, /Account balance[\s\S]*?₱<strong>160\.00<\/strong>/);
+  assert.match(visibleBalance, /Current term balance[\s\S]*?Term 1 · 2026-2027[\s\S]*?₱30\.00/);
+  assert.match(visibleBalance, /Previous term\/year balance[\s\S]*?₱25\.00/);
+  assert.match(visibleBalance, /Payment credit[\s\S]*?₱50\.00/);
+  assert.match(balancePanel, /<summary>Balance details<\/summary>[\s\S]*?All school years[\s\S]*?₱125\.00[\s\S]*?Total waived[\s\S]*?₱10\.00[\s\S]*?Legacy balance not assigned to a school year[\s\S]*?₱15\.00[\s\S]*?Verified opening balance[\s\S]*?₱20\.00/);
+
+  const zeroLocals = structuredClone(accountLocals);
+  zeroLocals.ledger.summary = {
+    annualBalanceSchoolYear: '2026-2027', annualBalance: '0.00', allYearsAnnualBalance: '0.00',
+    annualWaivedAmount: '0.00', unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00',
+    totalBalance: '0.00', currentTermOutstanding: '0.00', priorTermYearDebt: '0.00', availableCredit: '0.00'
+  };
+  const zeroAccountHtml = await renderFinanceView('annual-student', zeroLocals);
+  const zeroPanel = zeroAccountHtml.match(/<section class="finance-panel" aria-labelledby="annual-balance-heading"[\s\S]*?<\/section>/)?.[0] || '';
+  const visibleZeroBalance = zeroPanel.split('<details class="finance-balance-summary-details"')[0];
+  assert.match(visibleZeroBalance, /Account balance[\s\S]*?₱<strong>0\.00<\/strong>/);
+  assert.match(visibleZeroBalance, /Current term balance[\s\S]*?₱0\.00/);
+  assert.doesNotMatch(visibleZeroBalance, /Previous term\/year balance|Payment credit/);
+  assert.doesNotMatch(zeroPanel, /<details class="finance-balance-summary-details" open/);
+
+  const noCurrentTermLocals = structuredClone(zeroLocals);
+  noCurrentTermLocals.ledger.terms[0].is_current = '0';
+  const noCurrentTermHtml = await renderFinanceView('annual-student', noCurrentTermLocals);
+  const noCurrentTermPanel = noCurrentTermHtml.match(/<section class="finance-panel" aria-labelledby="annual-balance-heading"[\s\S]*?<\/section>/)?.[0] || '';
+  const visibleNoCurrentTermBalance = noCurrentTermPanel.split('<details class="finance-balance-summary-details"')[0];
+  assert.doesNotMatch(visibleNoCurrentTermBalance, /Current term balance/);
+
   const paymentDetails = accountHtml.match(/<section class="finance-payment-wizard__panel" data-payment-step="details"[\s\S]*?<\/section>/)?.[0] || '';
   const paymentAllocations = accountHtml.match(/<section class="finance-payment-wizard__panel" data-payment-step="allocations"[\s\S]*?<\/section>/)?.[0] || '';
   assert.match(accountHtml, /data-payment-step="details"[\s\S]*?<\/section>\s*<section class="finance-payment-wizard__panel" data-payment-step="allocations"/);
