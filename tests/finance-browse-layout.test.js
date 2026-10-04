@@ -26,6 +26,15 @@ function responseRecorder() {
   };
 }
 
+function readSnapshotFactory(events = []) {
+  return (pool) => ({
+    request() { return pool.request(); },
+    async begin(isolation) { events.push({ action: 'begin', isolation }); },
+    async commit() { events.push({ action: 'commit' }); },
+    async rollback() { events.push({ action: 'rollback' }); }
+  });
+}
+
 test('finance account and reports load failures return support references without logging raw errors or student identifiers', async () => {
   const diagnostics = [];
   const router = createFinanceRouter({
@@ -88,6 +97,7 @@ test('annual roster tags the default count query phase and omits an unused finan
     code: 'ER_INVALID_GROUP_FUNC_USE', errno: 1111, sqlState: 'HY000'
   });
   const statements = [];
+  const snapshotEvents = [];
   const getPool = async () => ({
     request() {
       return {
@@ -102,7 +112,8 @@ test('annual roster tags the default count query phase and omits an unused finan
   });
   const service = createAnnualFinanceService({
     getPool,
-    sql: { Int: 'INT', NVarChar: () => 'VARCHAR' }
+    sql: { Int: 'INT', NVarChar: () => 'VARCHAR', ISOLATION_LEVEL: { REPEATABLE_READ: 'REPEATABLE READ' } },
+    transactionFactory: readSnapshotFactory(snapshotEvents)
   });
 
   await assert.rejects(service.listRosterPage(7, {}), (error) => {
@@ -113,10 +124,109 @@ test('annual roster tags the default count query phase and omits an unused finan
   assert.equal(statements.length, 2);
   assert.match(statements[1], /SELECT COUNT\(DISTINCT annual\.id\) AS total_records/);
   assert.doesNotMatch(statements[1], /FinanceChargeTotals|FinanceTermClassification/);
+  assert.doesNotMatch(statements[0], /FOR UPDATE/);
+  assert.deepEqual(snapshotEvents, [
+    { action: 'begin', isolation: 'REPEATABLE READ' },
+    { action: 'rollback' }
+  ]);
 });
 
-test('finance annual roster pages annual records and groups term placements under each summary', async () => {
+test('annual roster reuses a supplied read transaction and handles an empty page without detail queries', async () => {
+  const statements = [];
+  const transaction = {
+    request() {
+      return {
+        input() { return this; },
+        async query(statement) {
+          statements.push(statement);
+          if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'finance' }] };
+          if (statement.includes('COUNT(DISTINCT annual.id)')) return { recordset: [{ total_records: 0 }] };
+          if (statement.includes('SELECT DISTINCT annual.id AS annual_enrollment_id')) return { recordset: [] };
+          if (statement.includes('SELECT DISTINCT school_year')) return { recordset: [] };
+          if (statement.includes('SELECT DISTINCT term.id')) return { recordset: [] };
+          if (statement.includes('SELECT DISTINCT section.id')) return { recordset: [] };
+          throw new Error('Unexpected roster query for an empty page');
+        }
+      };
+    }
+  };
+  const service = createAnnualFinanceService({
+    getPool: async () => { throw new Error('a supplied transaction must not acquire a new pool connection'); },
+    sql: { Int: 'INT', NVarChar: () => 'VARCHAR' },
+    transaction,
+    transactionFactory: () => { throw new Error('a supplied transaction must not be nested'); }
+  });
+
+  const result = await service.listRosterPage(7, {});
+  assert.equal(result.pagination.totalRecords, 0);
+  assert.deepEqual(result.rows, []);
+  assert.equal(statements.some((statement) => statement.includes('SUM(') || statement.includes('FinanceTermClassification')), false);
+  assert.doesNotMatch(statements[0], /FOR UPDATE/);
+});
+
+test('annual roster preserves signed legacy credit and sums opening liabilities without Number arithmetic', async () => {
+  const getPool = async () => ({
+    request() {
+      return {
+        input() { return this; },
+        async query(statement) {
+          if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'finance' }] };
+          if (statement.includes('COUNT(DISTINCT annual.id)')) return { recordset: [{ total_records: 1 }] };
+          if (statement.includes('SELECT DISTINCT annual.id AS annual_enrollment_id')) {
+            return { recordset: [{ annual_enrollment_id: 55, school_year: '2026-2027', last_name: 'Sample', first_name: 'Zero' }] };
+          }
+          if (statement.includes('voucher_review_required') && statement.includes('FROM annual_enrollments AS annual')) {
+            return { recordset: [{
+              annual_enrollment_id: 55, student_id: 77, school_year: '2026-2027', grade_level: 'Grade 11',
+              voucher_code: 'PUB', voucher_category: null, intake_status: 'active', student_no: 'S-77',
+              first_name: 'Zero', middle_name: null, last_name: 'Sample', suffix: null,
+              enrollment_id: 88, annual_term_number: 1, enrollment_status: 'enrolled', term_scope_status: 'applicable',
+              term_id: 2, term: 'Term 1', section_id: null, section_name: null, cluster: null, strand: null,
+              adviser: null, modality: null, modular_subtype: null, registrar_confirmation_id: null,
+              assessed_voucher_code: null, assessed_schedule_version: null, voucher_review_required: 0,
+              voucher_review_reason: null, signed_clearance_status: null
+            }] };
+          }
+          if (statement.includes('FROM FinanceTermClassification AS classification')
+              && statement.includes('classification.annual_enrollment_id IN')) {
+            return { recordset: [{
+              enrollment_id: 88, whole_status: 'needs_review', required_amount: '0.00', applied_amount: '0.00',
+              amount_due: '0.00', whole_tracking_available: 0
+            }] };
+          }
+          if (statement.includes('FROM assessed_charges AS charge')) return { recordset: [] };
+          if (statement.includes('FROM v_finance_legacy_account_balance')) {
+            return { recordset: [{ student_id: 77, remaining_legacy_balance: '-25.50' }] };
+          }
+          if (statement.includes('FROM v_finance_opening_liability_due')) {
+            return { recordset: [
+              { student_id: 77, amount_due: '3.25' },
+              { student_id: 77, amount_due: '4.75' }
+            ] };
+          }
+          if (statement.includes('SELECT DISTINCT school_year') || statement.includes('SELECT DISTINCT term.id')
+              || statement.includes('SELECT DISTINCT section.id')) return { recordset: [] };
+          throw new Error('Unexpected roster query for zero assessed charges');
+        }
+      };
+    }
+  });
+  const service = createAnnualFinanceService({
+    getPool,
+    sql: { Int: 'INT', NVarChar: () => 'VARCHAR', ISOLATION_LEVEL: { REPEATABLE_READ: 'REPEATABLE READ' } },
+    transactionFactory: readSnapshotFactory()
+  });
+
+  const result = await service.listRosterPage(7, {});
+  assert.equal(result.rows[0].annual_balance, '0.00');
+  assert.equal(result.rows[0].placements[0].current_term_due, '0.00');
+  assert.equal(result.rows[0].unattributed_legacy_balance, '-25.50');
+  assert.equal(result.rows[0].opening_liability_due, '8.00');
+});
+
+test('finance annual roster separates page data, classification, and balances inside one snapshot', async () => {
   const observed = [];
+  const snapshotEvents = [];
   const annualRows = [
     {
       annual_enrollment_id: 10, student_id: 22, school_year: '2026-2027', grade_level: 'Grade 11',
@@ -142,7 +252,7 @@ test('finance annual roster pages annual records and groups term placements unde
     }
   ];
   const getPool = async () => ({
-    request() {
+      request() {
       const values = {};
       return {
         input(name, _type, value) { values[name] = value; return this; },
@@ -150,20 +260,38 @@ test('finance annual roster pages annual records and groups term placements unde
           observed.push({ statement, values: { ...values } });
           if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'finance' }] };
           if (statement.includes('COUNT(DISTINCT annual.id)')) return { recordset: [{ total_records: 41 }] };
-          if (statement.includes('MatchingPlacements AS')) return { recordset: annualRows };
-          return { recordsets: [
-            [{ school_year: '2026-2027' }],
-            [{ term_id: 1, term_label: '2026-2027 · Term 1' }],
-            [{ section_id: 3, section_name: 'Grade 11 ABM A', cluster: 'ABM', strand: 'ABM' }]
-          ] };
+          if (statement.includes('SELECT DISTINCT annual.id AS annual_enrollment_id')) {
+            return { recordset: [{ annual_enrollment_id: 10, school_year: '2026-2027', last_name: 'Kim', first_name: 'Ari' }] };
+          }
+          if (statement.includes('FROM FinanceTermClassification AS classification')
+              && statement.includes('classification.annual_enrollment_id IN')) {
+            return { recordset: [
+              { enrollment_id: 81, whole_status: 'needs_attention', required_amount: '3000.00', applied_amount: '499.99', amount_due: '2500.01', whole_tracking_available: 1 },
+              { enrollment_id: 82, whole_status: 'current', required_amount: '2000.00', applied_amount: '750.00', amount_due: '1250.00', whole_tracking_available: 1 }
+            ] };
+          }
+          if (statement.includes('voucher_review_required') && statement.includes('FROM annual_enrollments AS annual')) return { recordset: annualRows };
+          if (statement.includes('FROM assessed_charges AS charge')) {
+            return { recordset: [
+              { annual_enrollment_id: 10, enrollment_id: 81, amount_due: '2500.01' },
+              { annual_enrollment_id: 10, enrollment_id: 82, amount_due: '1250.00' },
+              { annual_enrollment_id: 10, enrollment_id: 83, amount_due: '8595.66' }
+            ] };
+          }
+          if (statement.includes('FROM v_finance_legacy_account_balance')) return { recordset: [] };
+          if (statement.includes('FROM v_finance_opening_liability_due')) return { recordset: [] };
+          if (statement.includes('SELECT DISTINCT school_year')) return { recordset: [{ school_year: '2026-2027' }] };
+          if (statement.includes('SELECT DISTINCT term.id')) return { recordset: [{ term_id: 1, term_label: '2026-2027 · Term 1' }] };
+          if (statement.includes('SELECT DISTINCT section.id')) return { recordset: [{ section_id: 3, section_name: 'Grade 11 ABM A', cluster: 'ABM', strand: 'ABM' }] };
+          throw new Error('Unexpected roster query in test fixture');
         }
       };
     }
   });
   const sql = { Int: 'Int', NVarChar: (length) => 'NVarChar(' + length + ')' };
-  const service = createAnnualFinanceService({ getPool, sql });
+  const service = createAnnualFinanceService({ getPool, sql: { ...sql, ISOLATION_LEVEL: { REPEATABLE_READ: 'REPEATABLE READ' } }, transactionFactory: readSnapshotFactory(snapshotEvents) });
   const result = await service.listRosterPage(7, {
-    search: 'Ari', schoolYear: '2026-2027', termId: '1', page: '99', status: 'pending_payment'
+    search: 'Ari', schoolYear: '2026-2027', page: '99'
   });
 
   assert.equal(result.pagination.page, 3);
@@ -175,21 +303,39 @@ test('finance annual roster pages annual records and groups term placements unde
   assert.equal(result.rows[0].placements.length, 2);
   assert.equal(result.rows[0].annual_balance, '12345.67');
   assert.equal(result.rows[0].placements[0].current_term_due, '2500.01');
-  const dataQuery = observed.find(({ statement }) => statement.includes('MatchingPlacements AS'));
+  assert.equal(result.rows[0].placements[1].finance_status, 'current');
+  assert.equal(result.rows[0].unattributed_legacy_balance, '0.00');
+  assert.equal(result.rows[0].opening_liability_due, '0.00');
+  const dataQuery = observed.find(({ statement }) => statement.includes('voucher_review_required') && statement.includes('FROM annual_enrollments AS annual'));
   const countQuery = observed.find(({ statement }) => statement.includes('COUNT(DISTINCT annual.id) AS total_records'));
+  const pageIdsQuery = observed.find(({ statement }) => statement.includes('SELECT DISTINCT annual.id AS annual_enrollment_id'));
+  const classificationQuery = observed.find(({ statement }) => statement.includes('classification.annual_enrollment_id IN'));
+  const balanceQuery = observed.find(({ statement }) => statement.includes('FROM assessed_charges AS charge'));
   assert.ok(countQuery, 'the default roster count query is preserved');
+  assert.ok(pageIdsQuery, 'default pages select annual IDs before loading detail rows');
+  assert.ok(classificationQuery, 'finance classification is hydrated separately');
+  assert.ok(balanceQuery, 'assessed-charge due is hydrated separately');
   assert.doesNotMatch(countQuery.statement, /FinanceChargeTotals|FinanceTermClassification/);
-  assert.match(dataQuery.statement, /LIMIT @pageSize OFFSET @offset/);
-  assert.match(dataQuery.statement, /ORDER BY annual\.school_year DESC, student\.last_name, student\.first_name, annual\.id, enrollment\.annual_term_number/);
-  assert.equal(dataQuery.values.offset, 40);
-  assert.equal(dataQuery.values.pageSize, 20);
+  assert.match(pageIdsQuery.statement, /LIMIT @pageSize OFFSET @offset/);
+  assert.match(pageIdsQuery.statement, /ORDER BY annual\.school_year DESC, student\.last_name, student\.first_name, annual\.id/);
+  assert.match(dataQuery.statement, /ORDER BY annual\.school_year DESC,\s*student\.last_name,\s*student\.first_name,\s*annual\.id,\s*enrollment\.annual_term_number/);
+  assert.doesNotMatch(dataQuery.statement, /FinanceTermClassification|SUM\(|GROUP BY|v_finance_/);
+  assert.equal(pageIdsQuery.values.offset, 40);
+  assert.equal(pageIdsQuery.values.pageSize, 20);
+  assert.equal(dataQuery.values.pageAnnualId0, 10);
   assert.equal(dataQuery.values.searchPattern, '%Ari%');
   assert.equal(dataQuery.values.schoolYear, '2026-2027');
-  assert.equal(dataQuery.values.termId, 1);
-  assert.equal(dataQuery.values.placementStatus, 'pending_payment');
+  assert.equal(dataQuery.values.termId, null);
+  assert.equal(dataQuery.values.placementStatus, null);
+  assert.equal(pageIdsQuery.values.searchPattern, '%Ari%');
+  assert.equal(pageIdsQuery.values.schoolYear, '2026-2027');
+  assert.deepEqual(snapshotEvents, [
+    { action: 'begin', isolation: 'REPEATABLE READ' },
+    { action: 'commit' }
+  ]);
 
   await service.listRosterPage(7, { page: 'not-a-page' });
-  assert.equal(observed.filter(({ statement }) => statement.includes('MatchingPlacements AS')).at(-1).values.offset, 0);
+  assert.equal(observed.filter(({ statement }) => statement.includes('SELECT DISTINCT annual.id AS annual_enrollment_id')).at(-1).values.offset, 0);
   await assert.rejects(service.listRosterPage(7, { voucherCode: 'INVALID' }), AnnualFinanceError);
 
   const html = await renderFinanceView('annual-roster', {

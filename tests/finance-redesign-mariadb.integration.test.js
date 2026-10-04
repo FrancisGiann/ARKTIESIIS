@@ -304,6 +304,33 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       }
     }
 
+    const expectedRosterBalances = [
+      ['FIN-REDESIGN-PARTIAL', '375.00', 'partially_paid'],
+      ['FIN-REDESIGN-FULL', '300.00', 'partially_paid'],
+      ['FIN-REDESIGN-SETTLED', '0.00', 'fully_paid'],
+      ['FIN-REDESIGN-WAIVED', '0.00', 'no_payment_required'],
+      ['FIN-REDESIGN-REVERSED', '400.00', 'unpaid'],
+      ['FIN-REDESIGN-RELEASED', '400.00', 'unpaid'],
+      ['FIN-REDESIGN-ADJUSTED', '300.00', 'unpaid'],
+      ['FIN-REDESIGN-LEGACY', '350.00', 'partially_paid'],
+      ['FIN-REDESIGN-01', '0.00', 'needs_review']
+    ];
+    for (const [studentNo, expectedBalance, expectedStatus] of expectedRosterBalances) {
+      const roster = await annual.listRosterPage(actorId, { schoolYear: '2026-2027', search: studentNo });
+      const row = roster.rows.find((candidate) => candidate.student_no === studentNo);
+      assert.ok(row, `${studentNo} appears in the default roster page`);
+      assert.equal(row.annual_balance, expectedBalance, `${studentNo} assessed charges retain authoritative due semantics`);
+      assert.equal(row.placements[0]?.current_term_due, expectedBalance, `${studentNo} term due remains scoped to its only placement`);
+      assert.equal(row.placements[0]?.finance_status, expectedStatus, `${studentNo} classification remains shared with the dashboard`);
+    }
+    const legacyRoster = await annual.listRosterPage(actorId, { schoolYear: '2026-2027', search: 'FIN-REDESIGN-LEGACY' });
+    assert.equal(legacyRoster.rows[0]?.unattributed_legacy_balance, '50.00', 'legacy account view retains signed account balance');
+    const statusFilteredRoster = await annual.listRosterPage(actorId, {
+      schoolYear: '2026-2027', search: 'FIN-REDESIGN-FULL', financeStatus: 'partially_paid'
+    });
+    assert.equal(statusFilteredRoster.rows[0]?.annual_balance, null, 'status-filtered rosters continue to omit financial balances');
+    assert.equal(statusFilteredRoster.rows[0]?.placements[0]?.current_term_due, null);
+
     const defaultOverview = await dashboard.getOverview(actorId, {});
     assert.equal(defaultOverview.selectedTermId, String(termId));
     const overviewResponse = responseCapture();

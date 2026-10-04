@@ -13,7 +13,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const MAX_CENTS = 999999999999n;
 const TUITION_INSTALLMENTS = ['DP', 'Prelim', 'Midterm', 'Finals'];
 const FINANCE_ROSTER_QUERY_PHASES = Object.freeze([
-  'count', 'status_count', 'status_page', 'classification', 'page_data',
+  'count', 'status_count', 'status_page', 'page_ids', 'page_data', 'classification',
+  'assessed_charge_balances', 'legacy_account_balances', 'opening_liability_balances',
   'options_year', 'options_term', 'options_section'
 ]);
 
@@ -298,11 +299,37 @@ function createAnnualFinanceService({
     }
   }
 
+  async function withRosterReadSnapshot(pool, callback) {
+    if (transaction) return callback(transaction);
+    const snapshot = transactionFactory(pool);
+    let started = false;
+    try {
+      await snapshot.begin(sql.ISOLATION_LEVEL.REPEATABLE_READ);
+      started = true;
+      const result = await callback(snapshot);
+      await snapshot.commit();
+      return result;
+    } catch (error) {
+      if (started) await snapshot.rollback().catch(() => {});
+      throw error;
+    }
+  }
+
   async function requireFinanceActor(request, actorInput) {
     const actorId = id(actorInput, 'user');
     const result = await request.input('actorId', sql.Int, actorId)
       .query(`SELECT id, role FROM users
         WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin') FOR UPDATE`);
+    const actor = result.recordset?.[0];
+    if (!actor) throw new AnnualFinanceError('Your finance access is no longer active. Sign in again.', 403);
+    return actor;
+  }
+
+  async function requireFinanceActorForRoster(request, actorInput) {
+    const actorId = id(actorInput, 'user');
+    const result = await request.input('actorId', sql.Int, actorId)
+      .query(`SELECT id, role FROM users
+        WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin')`);
     const actor = result.recordset?.[0];
     if (!actor) throw new AnnualFinanceError('Your finance access is no longer active. Sign in again.', 403);
     return actor;
@@ -2381,14 +2408,18 @@ function createAnnualFinanceService({
       && Number.isSafeInteger(Number(filters.page)) && Number(filters.page) > 0
       ? Number(filters.page)
       : 1;
-    const pool = await getPool();
-    await requireFinanceActor(pool.request(), actorInput);
-    const matchingFromWhere = `FROM annual_enrollments AS annual
+    const pool = transaction ? null : await getPool();
+
+    return withRosterReadSnapshot(pool, async (snapshot) => {
+      const request = () => snapshot.request();
+      await requireFinanceActorForRoster(request(), actorInput);
+
+      const matchingFrom = `FROM annual_enrollments AS annual
         INNER JOIN students AS student ON student.id = annual.student_id
         LEFT JOIN enrollments AS enrollment ON enrollment.annual_enrollment_id = annual.id
         LEFT JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
-        LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
-        WHERE annual.intake_status <> 'legacy'
+        LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id`;
+      const matchingWhere = `annual.intake_status <> 'legacy'
           AND (@searchPattern IS NULL OR student.student_no LIKE @searchPattern ESCAPE '~'
             OR CONCAT_WS(' ', student.first_name, NULLIF(student.middle_name, ''), student.last_name, NULLIF(student.suffix, '')) LIKE @searchPattern ESCAPE '~')
           AND (@schoolYear IS NULL OR annual.school_year = @schoolYear)
@@ -2399,24 +2430,45 @@ function createAnnualFinanceService({
           AND (@cluster IS NULL OR section.cluster = @cluster)
           AND (@strand IS NULL OR section.strand = @strand)
           AND (@placementStatus IS NULL OR enrollment.enrollment_status = @placementStatus)`;
-    function bindRosterFilters(request) {
-      return request
-        .input('searchPattern', sql.NVarChar(204), searchTerm ? `%${searchTerm.replace(/[~%_[\]]/g, (character) => `~${character}`)}%` : null)
-        .input('schoolYear', sql.NVarChar(20), schoolYear)
-        .input('gradeLevel', sql.NVarChar(50), gradeLevel)
-        .input('voucherCode', sql.NVarChar(10), voucherCode)
-        .input('termId', sql.Int, termId)
-        .input('sectionId', sql.Int, sectionId)
-        .input('cluster', sql.NVarChar(100), cluster)
-        .input('strand', sql.NVarChar(100), strand)
-        .input('placementStatus', sql.NVarChar(30), status)
-        .input('financeStatus', sql.NVarChar(30), financeStatus);
-    }
-    let matchingFinanceAnnualIds = null;
-    const financeClassificationByEnrollmentId = new Map();
-    let totalRecords = 0;
-    if (financeStatus) {
-      const statusFilters = `(@schoolYear IS NULL OR classification.school_year = @schoolYear)
+      const matchingFromWhere = matchingFrom + '\nWHERE ' + matchingWhere;
+
+      function bindRosterFilters(targetRequest) {
+        return targetRequest
+          .input('searchPattern', sql.NVarChar(204), searchTerm ? `%${searchTerm.replace(/[~%_[\]]/g, (character) => `~${character}`)}%` : null)
+          .input('schoolYear', sql.NVarChar(20), schoolYear)
+          .input('gradeLevel', sql.NVarChar(50), gradeLevel)
+          .input('voucherCode', sql.NVarChar(10), voucherCode)
+          .input('termId', sql.Int, termId)
+          .input('sectionId', sql.Int, sectionId)
+          .input('cluster', sql.NVarChar(100), cluster)
+          .input('strand', sql.NVarChar(100), strand)
+          .input('placementStatus', sql.NVarChar(30), status)
+          .input('financeStatus', sql.NVarChar(30), financeStatus);
+      }
+
+      function bindAnnualIds(targetRequest, annualIds, prefix) {
+        return annualIds.map((annualId, index) => {
+          const name = `${prefix}${index}`;
+          targetRequest.input(name, sql.Int, annualId);
+          return `@${name}`;
+        });
+      }
+
+      function formatMoneyTotals(recordset, keyField, valueField) {
+        const totals = new Map();
+        for (const row of recordset || []) {
+          const key = Number(row[keyField]);
+          if (!Number.isSafeInteger(key) || key <= 0) continue;
+          const cents = parseMoneyCents(String(row[valueField] ?? '0.00'), { allowNegative: true, allowZero: true });
+          totals.set(key, (totals.get(key) || 0n) + cents);
+        }
+        return new Map([...totals].map(([key, cents]) => [key, formatMoneyCents(cents)]));
+      }
+
+      let totalRecords = 0;
+      let matchingFinanceAnnualIds = null;
+      if (financeStatus) {
+        const statusFilters = `(@schoolYear IS NULL OR classification.school_year = @schoolYear)
           AND (@gradeLevel IS NULL OR classification.grade_level = @gradeLevel)
           AND (@voucherCode IS NULL OR classification.voucher_code = @voucherCode)
           AND (@termId IS NULL OR classification.academic_term_id = @termId)
@@ -2431,23 +2483,23 @@ function createAnnualFinanceService({
           AND classification.${statusColumn} = @financeStatus
           AND (@searchPattern IS NULL OR student.student_no LIKE @searchPattern ESCAPE '~'
             OR CONCAT_WS(' ', student.first_name, NULLIF(student.middle_name, ''), student.last_name, NULLIF(student.suffix, '')) LIKE @searchPattern ESCAPE '~')`;
-      const statusCount = await runFinanceRosterQuery(bindRosterFilters(pool.request()), 'status_count', `SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
-        WITH ${FINANCE_TERM_CLASSIFICATION_CTES}
-        SELECT COUNT(*) AS total_records
-        FROM FinanceTermClassification AS classification
-        INNER JOIN students AS student ON student.id = classification.student_id
-        LEFT JOIN sections AS section ON section.id = classification.section_id
-          AND section.academic_term_id = classification.academic_term_id
-        WHERE ${statusFilters}`);
-      totalRecords = Math.max(0, Number(statusCount.recordset?.[0]?.total_records || 0));
-      const effectivePage = Math.min(requestedPage, Math.max(1, Math.ceil(totalRecords / pageSize)));
-      const statusPageRequest = bindRosterFilters(pool.request())
-        .input('offset', sql.Int, (effectivePage - 1) * pageSize)
-        .input('pageSize', sql.Int, pageSize);
-      const statusPage = await runFinanceRosterQuery(statusPageRequest, 'status_page', `SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
+        const statusCount = await runFinanceRosterQuery(bindRosterFilters(request()), 'status_count', `SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
           WITH ${FINANCE_TERM_CLASSIFICATION_CTES}
-          SELECT classification.annual_enrollment_id, classification.enrollment_id,
-            classification.school_year, student.last_name, student.first_name
+          SELECT COUNT(*) AS total_records
+          FROM FinanceTermClassification AS classification
+          INNER JOIN students AS student ON student.id = classification.student_id
+          LEFT JOIN sections AS section ON section.id = classification.section_id
+            AND section.academic_term_id = classification.academic_term_id
+          WHERE ${statusFilters}`);
+        totalRecords = Math.max(0, Number(statusCount.recordset?.[0]?.total_records || 0));
+        const effectivePage = Math.min(requestedPage, Math.max(1, Math.ceil(totalRecords / pageSize)));
+        const statusPageRequest = bindRosterFilters(request())
+          .input('offset', sql.Int, (effectivePage - 1) * pageSize)
+          .input('pageSize', sql.Int, pageSize);
+        const statusPage = await runFinanceRosterQuery(statusPageRequest, 'status_page', `SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
+          WITH ${FINANCE_TERM_CLASSIFICATION_CTES}
+          SELECT classification.annual_enrollment_id, classification.school_year,
+            student.last_name, student.first_name
           FROM FinanceTermClassification AS classification
           INNER JOIN students AS student ON student.id = classification.student_id
           LEFT JOIN sections AS section ON section.id = classification.section_id
@@ -2456,16 +2508,84 @@ function createAnnualFinanceService({
           ORDER BY classification.school_year DESC, student.last_name, student.first_name,
             classification.annual_enrollment_id
           LIMIT @pageSize OFFSET @offset`);
-      matchingFinanceAnnualIds = [...new Set((statusPage.recordset || [])
-        .map((row) => Number(row.annual_enrollment_id))
-        .filter((id) => Number.isSafeInteger(id) && id > 0))];
-      if (matchingFinanceAnnualIds.length) {
-        const classificationRequest = pool.request();
-        const annualPlaceholders = matchingFinanceAnnualIds.map((annualId, index) => {
-          const name = `classificationAnnualId${index}`;
-          classificationRequest.input(name, sql.Int, annualId);
-          return `@${name}`;
-        });
+        matchingFinanceAnnualIds = [...new Set((statusPage.recordset || [])
+          .map((row) => Number(row.annual_enrollment_id))
+          .filter((annualId) => Number.isSafeInteger(annualId) && annualId > 0))];
+      } else {
+        const countResult = await runFinanceRosterQuery(bindRosterFilters(request()), 'count',
+          'SELECT COUNT(DISTINCT annual.id) AS total_records ' + matchingFromWhere);
+        totalRecords = Math.max(0, Number(countResult.recordset?.[0]?.total_records || 0));
+      }
+
+      const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
+      const page = Math.min(requestedPage, totalPages);
+      const offset = (page - 1) * pageSize;
+      if (!financeStatus) {
+        const pageIdRequest = bindRosterFilters(request())
+          .input('offset', sql.Int, offset)
+          .input('pageSize', sql.Int, pageSize);
+        const pageIds = await runFinanceRosterQuery(pageIdRequest, 'page_ids', `SELECT DISTINCT annual.id AS annual_enrollment_id,
+            annual.school_year, student.last_name, student.first_name
+          ${matchingFromWhere}
+          ORDER BY annual.school_year DESC, student.last_name, student.first_name, annual.id
+          LIMIT @pageSize OFFSET @offset`);
+        matchingFinanceAnnualIds = [...new Set((pageIds.recordset || [])
+          .map((row) => Number(row.annual_enrollment_id))
+          .filter((annualId) => Number.isSafeInteger(annualId) && annualId > 0))];
+      }
+
+      const annualIds = matchingFinanceAnnualIds || [];
+      const annualRows = new Map();
+      const financeClassificationByEnrollmentId = new Map();
+      const annualBalanceById = new Map();
+      const termDueByEnrollmentId = new Map();
+      const legacyBalanceByStudentId = new Map();
+      const openingDueByStudentId = new Map();
+      let pageDataRows = [];
+      if (annualIds.length) {
+        const pageDataRequest = bindRosterFilters(request());
+        const pageIdPlaceholders = bindAnnualIds(pageDataRequest, annualIds, 'pageAnnualId');
+        const pageDataRowsResult = await runFinanceRosterQuery(pageDataRequest, 'page_data', `SELECT annual.id AS annual_enrollment_id,
+            annual.student_id, annual.school_year, annual.grade_level,
+            annual.voucher_code, annual.voucher_category, annual.intake_status, student.student_no,
+            student.first_name, student.middle_name, student.last_name, student.suffix,
+            enrollment.id AS enrollment_id, enrollment.annual_term_number,
+            enrollment.enrollment_status, enrollment.term_scope_status,
+            term.id AS term_id, term.term, section.id AS section_id, section.name AS section_name,
+            section.cluster, section.strand, section.adviser, section.modality, section.modular_subtype,
+            confirmation.id AS registrar_confirmation_id,
+            assessment.voucher_code_snapshot AS assessed_voucher_code,
+            assessment.schedule_version AS assessed_schedule_version,
+            CASE WHEN voucher_event.event_type = 'voucher_review_flagged'
+              THEN CAST(1 AS UNSIGNED) ELSE CAST(0 AS UNSIGNED) END AS voucher_review_required,
+            voucher_event.reason AS voucher_review_reason,
+            clearance.event_type AS signed_clearance_status
+          FROM annual_enrollments AS annual
+          INNER JOIN students AS student ON student.id = annual.student_id
+          LEFT JOIN enrollments AS enrollment ON enrollment.annual_enrollment_id = annual.id
+          LEFT JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
+          LEFT JOIN sections AS section ON section.id = enrollment.section_id
+            AND section.academic_term_id = enrollment.academic_term_id
+          LEFT JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = annual.id
+          LEFT JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.id
+          LEFT JOIN (SELECT annual_event.annual_enrollment_id, annual_event.event_type, annual_event.reason
+            FROM (SELECT annual_enrollment_id, event_type, reason,
+                ROW_NUMBER() OVER (PARTITION BY annual_enrollment_id ORDER BY created_at DESC, id DESC) AS event_rank
+              FROM annual_enrollment_events
+              WHERE event_type IN ('voucher_review_flagged', 'voucher_review_resolved')) AS annual_event
+            WHERE annual_event.event_rank = 1) AS voucher_event ON voucher_event.annual_enrollment_id = annual.id
+          LEFT JOIN (SELECT clearance_event.enrollment_id, clearance_event.event_type
+            FROM (SELECT enrollment_id, event_type,
+                ROW_NUMBER() OVER (PARTITION BY enrollment_id ORDER BY created_at DESC, id DESC) AS event_rank
+              FROM term_clearance_events) AS clearance_event
+            WHERE clearance_event.event_rank = 1) AS clearance ON clearance.enrollment_id = enrollment.id
+          WHERE ${matchingWhere} AND annual.id IN (${pageIdPlaceholders.join(', ')})
+          ORDER BY annual.school_year DESC, student.last_name, student.first_name,
+            annual.id, enrollment.annual_term_number`);
+        pageDataRows = pageDataRowsResult.recordset || [];
+
+        const classificationRequest = request();
+        const classificationIds = bindAnnualIds(classificationRequest, annualIds, 'classificationAnnualId');
         const classifications = await runFinanceRosterQuery(classificationRequest, 'classification', `SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
           WITH ${FINANCE_TERM_CLASSIFICATION_CTES}
           SELECT classification.*,
@@ -2473,201 +2593,153 @@ function createAnnualFinanceService({
             CAST(classification.${amountColumns.applied} AS CHAR(40)) AS classified_applied,
             CAST(classification.${amountColumns.due} AS CHAR(40)) AS classified_due
           FROM FinanceTermClassification AS classification
-          WHERE classification.annual_enrollment_id IN (${annualPlaceholders.join(', ')})`);
+          WHERE classification.annual_enrollment_id IN (${classificationIds.join(', ')})`);
         for (const row of classifications.recordset || []) {
           financeClassificationByEnrollmentId.set(Number(row.enrollment_id), row);
         }
+
+        if (!financeStatus) {
+          const annualBalanceRequest = request();
+          const annualBalanceIds = bindAnnualIds(annualBalanceRequest, annualIds, 'assessedAnnualId');
+          const assessedCharges = await runFinanceRosterQuery(annualBalanceRequest, 'assessed_charge_balances', `SELECT charge.annual_enrollment_id,
+              charge.enrollment_id, CAST(due.amount_due AS CHAR(40)) AS amount_due
+            FROM assessed_charges AS charge
+            INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
+            WHERE charge.annual_enrollment_id IN (${annualBalanceIds.join(', ')})`);
+          for (const row of assessedCharges.recordset || []) {
+            const annualId = Number(row.annual_enrollment_id);
+            const enrollmentId = Number(row.enrollment_id);
+            const cents = parseMoneyCents(String(row.amount_due ?? '0.00'), { allowNegative: true, allowZero: true });
+            if (Number.isSafeInteger(annualId) && annualId > 0) {
+              annualBalanceById.set(annualId, (annualBalanceById.get(annualId) || 0n) + cents);
+            }
+            if (Number.isSafeInteger(enrollmentId) && enrollmentId > 0) {
+              termDueByEnrollmentId.set(enrollmentId, (termDueByEnrollmentId.get(enrollmentId) || 0n) + cents);
+            }
+          }
+          for (const [annualId, cents] of annualBalanceById) annualBalanceById.set(annualId, formatMoneyCents(cents));
+          for (const [enrollmentId, cents] of termDueByEnrollmentId) termDueByEnrollmentId.set(enrollmentId, formatMoneyCents(cents));
+
+          const studentIds = [...new Set(pageDataRows.map((row) => Number(row.student_id))
+            .filter((studentId) => Number.isSafeInteger(studentId) && studentId > 0))];
+          if (studentIds.length) {
+            const legacyRequest = request();
+            const legacyIds = bindAnnualIds(legacyRequest, studentIds, 'legacyStudentId');
+            const legacyBalances = await runFinanceRosterQuery(legacyRequest, 'legacy_account_balances', `SELECT student_id,
+                CAST(remaining_legacy_balance AS CHAR(40)) AS remaining_legacy_balance
+              FROM v_finance_legacy_account_balance
+              WHERE student_id IN (${legacyIds.join(', ')})`);
+            const legacyTotals = formatMoneyTotals(legacyBalances.recordset, 'student_id', 'remaining_legacy_balance');
+            for (const [studentId, value] of legacyTotals) legacyBalanceByStudentId.set(studentId, value);
+
+            const openingRequest = request();
+            const openingIds = bindAnnualIds(openingRequest, studentIds, 'openingStudentId');
+            const openingLiabilities = await runFinanceRosterQuery(openingRequest, 'opening_liability_balances', `SELECT student_id,
+                CAST(amount_due AS CHAR(40)) AS amount_due
+              FROM v_finance_opening_liability_due
+              WHERE student_id IN (${openingIds.join(', ')})`);
+            const openingTotals = formatMoneyTotals(openingLiabilities.recordset, 'student_id', 'amount_due');
+            for (const [studentId, value] of openingTotals) openingDueByStudentId.set(studentId, value);
+          }
+        }
       }
-    } else {
-      const countResult = await runFinanceRosterQuery(bindRosterFilters(pool.request()), 'count', `SELECT COUNT(DISTINCT annual.id) AS total_records ${matchingFromWhere}`);
-      totalRecords = Math.max(0, Number(countResult.recordset?.[0]?.total_records || 0));
-    }
-    const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
-    const page = Math.min(requestedPage, totalPages);
-    const offset = (page - 1) * pageSize;
-    const pageAnnualIds = matchingFinanceAnnualIds || null;
-    const pageIdParameters = pageAnnualIds?.map((annualId, index) => ({ name: `financeAnnualId${index}`, annualId })) || [];
-    const pageCtes = pageAnnualIds
-      ? ''
-      : `MatchingAnnualEnrollments AS (
-          SELECT annual_enrollment_id, MAX(school_year) AS school_year,
-              MAX(last_name) AS last_name, MAX(first_name) AS first_name
-          FROM MatchingPlacements
-          GROUP BY annual_enrollment_id
-        ), PageAnnualEnrollments AS (
-          SELECT annual_enrollment_id, school_year, last_name, first_name FROM MatchingAnnualEnrollments
-          ORDER BY school_year DESC, last_name, first_name, annual_enrollment_id
-          LIMIT @pageSize OFFSET @offset
-        )`;
-    const pageRequest = bindRosterFilters(pool.request()).input('offset', sql.Int, offset).input('pageSize', sql.Int, pageSize);
-    for (const { name, annualId } of pageIdParameters) pageRequest.input(name, sql.Int, annualId);
-    const pageSelection = pageAnnualIds
-      ? `FROM MatchingPlacements AS matching
-        INNER JOIN annual_enrollments AS annual ON annual.id = matching.annual_enrollment_id`
-      : `FROM PageAnnualEnrollments AS page
-        INNER JOIN MatchingPlacements AS matching ON matching.annual_enrollment_id = page.annual_enrollment_id
-        INNER JOIN annual_enrollments AS annual ON annual.id = page.annual_enrollment_id`;
-    const pageWhere = pageAnnualIds
-      ? `WHERE ${pageIdParameters.length ? `annual.id IN (${pageIdParameters.map(({ name }) => `@${name}`).join(', ')})` : '1 = 0'}`
-      : '';
-    const classificationCte = financeStatus ? '' : `${FINANCE_TERM_CLASSIFICATION_CTES}, `;
-    const classificationJoin = financeStatus
-      ? ''
-      : 'LEFT JOIN FinanceTermClassification AS classification ON classification.enrollment_id = enrollment.id';
-    const classificationFields = financeStatus
-      ? 'NULL AS finance_status, NULL AS classified_required, NULL AS classified_applied, NULL AS classified_due, NULL AS tracking_available'
-      : `classification.${statusColumn} AS finance_status,
-          CAST(classification.${amountColumns.required} AS CHAR(40)) AS classified_required,
-          CAST(classification.${amountColumns.applied} AS CHAR(40)) AS classified_applied,
-          CAST(classification.${amountColumns.due} AS CHAR(40)) AS classified_due,
-          classification.${availabilityColumn} AS tracking_available`;
-    const balanceProjection = financeStatus
-      ? 'NULL AS annual_balance, NULL AS current_term_due, NULL AS unattributed_legacy_balance, NULL AS opening_liability_due'
-      : `CAST(COALESCE(annual_due.amount_due, 0) AS CHAR(40)) AS annual_balance,
-          CAST(COALESCE(term_due.amount_due, 0) AS CHAR(40)) AS current_term_due,
-          CAST(COALESCE(legacy_balance.remaining_legacy_balance, 0) AS CHAR(40)) AS unattributed_legacy_balance,
-          CAST(COALESCE(opening_due.amount_due, 0) AS CHAR(40)) AS opening_liability_due`;
-    const balanceJoins = financeStatus ? '' : `
-        LEFT JOIN (SELECT charge.annual_enrollment_id, SUM(due.amount_due) AS amount_due
-          FROM assessed_charges AS charge INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
-          GROUP BY charge.annual_enrollment_id) AS annual_due ON annual_due.annual_enrollment_id = annual.id
-        LEFT JOIN (SELECT charge.enrollment_id, SUM(due.amount_due) AS amount_due
-          FROM assessed_charges AS charge INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
-          GROUP BY charge.enrollment_id) AS term_due ON term_due.enrollment_id = enrollment.id
-        LEFT JOIN v_finance_legacy_account_balance AS legacy_balance ON legacy_balance.student_id = annual.student_id
-        LEFT JOIN (SELECT due.student_id, SUM(due.amount_due) AS amount_due
-          FROM v_finance_opening_liability_due AS due GROUP BY due.student_id) AS opening_due
-          ON opening_due.student_id = annual.student_id`;
-    const [result, filterOptions] = await Promise.all([
-      runFinanceRosterQuery(pageRequest, 'page_data', `SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
-        WITH ${classificationCte}MatchingPlacements AS (
-          SELECT annual.id AS annual_enrollment_id, enrollment.id AS enrollment_id,
-              annual.school_year, student.last_name, student.first_name
-          ${matchingFromWhere}
-        )${pageCtes ? `, ${pageCtes}` : ''}
-        SELECT annual.id AS annual_enrollment_id, annual.student_id, annual.school_year, annual.grade_level,
-          annual.voucher_code, annual.voucher_category, annual.intake_status, student.student_no,
-          student.first_name, student.middle_name, student.last_name, student.suffix,
-          enrollment.id AS enrollment_id, enrollment.annual_term_number, enrollment.enrollment_status, enrollment.term_scope_status,
-          term.id AS term_id, term.term, section.id AS section_id, section.name AS section_name, section.cluster, section.strand,
-          section.adviser, section.modality, section.modular_subtype,
-          confirmation.id AS registrar_confirmation_id,
-          assessment.voucher_code_snapshot AS assessed_voucher_code, assessment.schedule_version AS assessed_schedule_version,
-          CASE WHEN voucher_event.event_type = 'voucher_review_flagged' THEN CAST(1 AS UNSIGNED) ELSE CAST(0 AS UNSIGNED) END AS voucher_review_required,
-          voucher_event.reason AS voucher_review_reason, clearance.event_type AS signed_clearance_status,
-          ${balanceProjection},
-          ${classificationFields}
-        ${pageSelection}
-        INNER JOIN students AS student ON student.id = annual.student_id
-        LEFT JOIN enrollments AS enrollment ON enrollment.id = matching.enrollment_id
-        LEFT JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
-        LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
-        ${classificationJoin}
-        LEFT JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = annual.id
-        LEFT JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.id
-        ${balanceJoins}
-        LEFT JOIN (SELECT annual_event.annual_enrollment_id, annual_event.event_type, annual_event.reason
-          FROM (SELECT annual_enrollment_id, event_type, reason,
-              ROW_NUMBER() OVER (PARTITION BY annual_enrollment_id ORDER BY created_at DESC, id DESC) AS event_rank
-            FROM annual_enrollment_events
-            WHERE event_type IN ('voucher_review_flagged', 'voucher_review_resolved')) AS annual_event
-          WHERE annual_event.event_rank = 1) AS voucher_event ON voucher_event.annual_enrollment_id = annual.id
-        LEFT JOIN (SELECT clearance_event.enrollment_id, clearance_event.event_type
-          FROM (SELECT enrollment_id, event_type,
-              ROW_NUMBER() OVER (PARTITION BY enrollment_id ORDER BY created_at DESC, id DESC) AS event_rank
-            FROM term_clearance_events) AS clearance_event
-          WHERE clearance_event.event_rank = 1) AS clearance ON clearance.enrollment_id = enrollment.id
-        ${pageWhere}
-        ORDER BY annual.school_year DESC, student.last_name, student.first_name, annual.id, enrollment.annual_term_number;`),
-      Promise.all([
-        runFinanceRosterQuery(pool.request(), 'options_year', `SELECT DISTINCT school_year FROM annual_enrollments WHERE intake_status <> 'legacy' ORDER BY school_year DESC`),
-        runFinanceRosterQuery(pool.request(), 'options_term', `SELECT DISTINCT term.id AS term_id, CONCAT(term.school_year, ' · ', term.term) AS term_label
+
+      for (const row of pageDataRows) {
+        const annualId = Number(row.annual_enrollment_id);
+        const studentId = Number(row.student_id);
+        let annual = annualRows.get(annualId);
+        if (!annual) {
+          annual = {
+            annual_enrollment_id: row.annual_enrollment_id,
+            student_id: row.student_id,
+            school_year: row.school_year,
+            grade_level: row.grade_level,
+            voucher_code: row.voucher_code,
+            voucher_category: row.voucher_category,
+            intake_status: row.intake_status,
+            student_no: row.student_no,
+            first_name: row.first_name,
+            middle_name: row.middle_name,
+            last_name: row.last_name,
+            suffix: row.suffix,
+            registrar_confirmation_id: row.registrar_confirmation_id,
+            assessed_voucher_code: row.assessed_voucher_code,
+            assessed_schedule_version: row.assessed_schedule_version,
+            voucher_review_required: row.voucher_review_required,
+            voucher_review_reason: row.voucher_review_reason,
+            annual_balance: financeStatus ? null : annualBalanceById.get(annualId) || '0.00',
+            unattributed_legacy_balance: financeStatus ? null : legacyBalanceByStudentId.get(studentId) || '0.00',
+            opening_liability_due: financeStatus ? null : openingDueByStudentId.get(studentId) || '0.00',
+            placements: []
+          };
+          annualRows.set(annualId, annual);
+        }
+        if (row.enrollment_id != null) {
+          const classified = financeClassificationByEnrollmentId.get(Number(row.enrollment_id)) || null;
+          annual.placements.push({
+            enrollment_id: row.enrollment_id,
+            annual_term_number: row.annual_term_number,
+            enrollment_status: row.enrollment_status,
+            term_scope_status: row.term_scope_status,
+            term_id: row.term_id,
+            term: row.term,
+            section_id: row.section_id,
+            section_name: row.section_name,
+            cluster: row.cluster,
+            strand: row.strand,
+            adviser: row.adviser,
+            modality: row.modality,
+            modular_subtype: row.modular_subtype,
+            finance_status: classified?.[statusColumn] ?? null,
+            classified_required: classified?.[amountColumns.required] ?? classified?.classified_required ?? null,
+            classified_applied: classified?.[amountColumns.applied] ?? classified?.classified_applied ?? null,
+            classified_due: classified?.[amountColumns.due] ?? classified?.classified_due ?? null,
+            tracking_available: classified?.[availabilityColumn] ?? null,
+            current_term_due: financeStatus ? null : termDueByEnrollmentId.get(Number(row.enrollment_id)) || '0.00',
+            registrar_confirmation_id: row.registrar_confirmation_id,
+            signed_clearance_status: row.signed_clearance_status
+          });
+        }
+      }
+
+      const optionQueries = [
+        ['options_year', `SELECT DISTINCT school_year
+          FROM annual_enrollments
+          WHERE intake_status <> 'legacy'
+          ORDER BY school_year DESC`],
+        ['options_term', `SELECT DISTINCT term.id AS term_id, CONCAT(term.school_year, ' · ', term.term) AS term_label
           FROM academic_terms AS term INNER JOIN enrollments AS enrollment ON enrollment.academic_term_id = term.id
           INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
-          WHERE annual.intake_status <> 'legacy' ORDER BY term.id`),
-        runFinanceRosterQuery(pool.request(), 'options_section', `SELECT DISTINCT section.id AS section_id, section.name AS section_name, section.cluster, section.strand
+          WHERE annual.intake_status <> 'legacy' ORDER BY term.id`],
+        ['options_section', `SELECT DISTINCT section.id AS section_id, section.name AS section_name, section.cluster, section.strand
           FROM sections AS section INNER JOIN enrollments AS enrollment ON enrollment.section_id = section.id
           INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
-          WHERE annual.intake_status <> 'legacy' ORDER BY section.name, section.id`)
-      ])
-    ]);
-    const annualRows = new Map();
-    for (const row of result.recordset || []) {
-      let annual = annualRows.get(Number(row.annual_enrollment_id));
-      if (!annual) {
-        annual = {
-          annual_enrollment_id: row.annual_enrollment_id,
-          student_id: row.student_id,
-          school_year: row.school_year,
-          grade_level: row.grade_level,
-          voucher_code: row.voucher_code,
-          voucher_category: row.voucher_category,
-          intake_status: row.intake_status,
-          student_no: row.student_no,
-          first_name: row.first_name,
-          middle_name: row.middle_name,
-          last_name: row.last_name,
-          suffix: row.suffix,
-          registrar_confirmation_id: row.registrar_confirmation_id,
-          assessed_voucher_code: row.assessed_voucher_code,
-          assessed_schedule_version: row.assessed_schedule_version,
-          voucher_review_required: row.voucher_review_required,
-          voucher_review_reason: row.voucher_review_reason,
-          annual_balance: row.annual_balance,
-          unattributed_legacy_balance: row.unattributed_legacy_balance,
-          opening_liability_due: row.opening_liability_due,
-          placements: []
-        };
-        annualRows.set(Number(row.annual_enrollment_id), annual);
+          WHERE annual.intake_status <> 'legacy' ORDER BY section.name, section.id`]
+      ];
+      const filterOptions = [];
+      for (const [phase, statement] of optionQueries) {
+        filterOptions.push(await runFinanceRosterQuery(request(), phase, statement));
       }
-      if (row.enrollment_id != null) {
-        const classified = financeStatus
-          ? financeClassificationByEnrollmentId.get(Number(row.enrollment_id)) || null
-          : row;
-        annual.placements.push({
-          enrollment_id: row.enrollment_id,
-          annual_term_number: row.annual_term_number,
-          enrollment_status: row.enrollment_status,
-          term_scope_status: row.term_scope_status,
-          term_id: row.term_id,
-          term: row.term,
-          section_id: row.section_id,
-          section_name: row.section_name,
-          cluster: row.cluster,
-          strand: row.strand,
-          adviser: row.adviser,
-          modality: row.modality,
-          modular_subtype: row.modular_subtype,
-          finance_status: classified?.[statusColumn] ?? classified?.finance_status ?? row.finance_status ?? null,
-          classified_required: classified?.[amountColumns.required] ?? classified?.classified_required ?? null,
-          classified_applied: classified?.[amountColumns.applied] ?? classified?.classified_applied ?? null,
-          classified_due: classified?.[amountColumns.due] ?? classified?.classified_due ?? null,
-          tracking_available: classified?.[availabilityColumn] ?? classified?.tracking_available ?? row.tracking_available ?? null,
-          current_term_due: row.current_term_due,
-          registrar_confirmation_id: row.registrar_confirmation_id,
-          signed_clearance_status: row.signed_clearance_status
-        });
-      }
-    }
-    const rows = [...annualRows.values()];
-    const optionRows = filterOptions.map((result) => result.recordset || []);
-    return {
-      searchTerm,
-      rows,
-      options: {
-        schoolYears: (optionRows[0] || []).map((row) => row.school_year),
-        terms: (optionRows[1] || []).map((row) => ({ id: row.term_id, label: row.term_label })),
-        sections: (optionRows[2] || []).map((row) => ({ id: row.section_id, label: row.section_name, cluster: row.cluster, strand: row.strand }))
-      },
-      pagination: {
-        page,
-        pageSize,
-        totalRecords,
-        totalPages,
-        from: rows.length ? offset + 1 : 0,
-        to: rows.length ? offset + rows.length : 0
-      }
-    };
+      const optionRows = filterOptions.map((result) => result.recordset || []);
+      const rows = [...annualRows.values()];
+      return {
+        searchTerm,
+        rows,
+        options: {
+          schoolYears: (optionRows[0] || []).map((row) => row.school_year),
+          terms: (optionRows[1] || []).map((row) => ({ id: row.term_id, label: row.term_label })),
+          sections: (optionRows[2] || []).map((row) => ({ id: row.section_id, label: row.section_name, cluster: row.cluster, strand: row.strand }))
+        },
+        pagination: {
+          page,
+          pageSize,
+          totalRecords,
+          totalPages,
+          from: rows.length ? offset + 1 : 0,
+          to: rows.length ? offset + rows.length : 0
+        }
+      };
+    });
   }
 
   return {
