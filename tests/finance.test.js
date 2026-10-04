@@ -3,6 +3,9 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const bcrypt = require('bcrypt');
 const { createApp } = require('../src/app');
+const { ACTION_WRITERS, SAFE_ACTIONS, actionByPath, createFinanceReviewActionService, normalizeActionInput } = require('../src/services/financeReviewActionService');
+const { AnnualFinanceError } = require('../src/services/annualFinanceService');
+const { FinanceReviewDraftError } = require('../src/services/financeReviewDraftService');
 const {
   FinanceServiceError,
   createFinanceService,
@@ -10,6 +13,22 @@ const {
   formatMoneyCents,
   validateTransaction
 } = require('../src/services/financeService');
+
+function createReviewRouteProbe() {
+  const registry = createFinanceReviewActionService({ getPool: async () => { throw new Error('review probe must not read the database'); } });
+  const starts = [];
+  return {
+    starts,
+    matchesMutation: registry.matchesMutation,
+    isReadOnlyPost: registry.isReadOnlyPost,
+    actionLabel: registry.actionLabel,
+    afterCommitPath: registry.afterCommitPath,
+    async startDraft(actorId, binding, pathname, input) {
+      starts.push({ actorId, pathname, input });
+      return { id: '41111111-1111-4111-8111-111111111111' };
+    }
+  };
+}
 
 function fakeSql() {
   return {
@@ -91,6 +110,198 @@ function transactionFixture({ actorRole = 'finance', balance = '10.00', duplicat
   }, debtRevisionService);
   return { service, log, getBalance: () => stateBalance };
 }
+
+test('all registered finance writes have one route parser and one reviewed writer mapping', async () => {
+  const cases = [
+    ['document_clearance_decision', '/document-clearance/41111111-1111-4111-8111-111111111111/decision', 'documentClearance', 'decideClearance'],
+    ['schedule_create', '/schedules', 'annual', 'createSchedule'],
+    ['annual_assessment', '/annual/12/assessment', 'annual', 'confirmAnnualAssessment'],
+    ['annual_payment', '/students/22/annual/payments', 'annual', 'recordPayment'],
+    ['annual_credit_allocation', '/students/22/annual/credits/103/allocate', 'annual', 'allocateExistingCredit'],
+    ['annual_adjustment', '/students/22/annual/charges/104/adjustments', 'annual', 'recordChargeAdjustment'],
+    ['annual_handbook_reference', '/students/22/annual/12/handbook-number', 'annual', 'updateFinanceHandbookNumber'],
+    ['annual_fee_comment', '/students/22/annual/charges/104/comments', 'annual', 'addFeeComment'],
+    ['annual_supplementary_charge', '/students/22/annual/terms/14/supplementary-charges', 'annual', 'addSupplementaryCharge'],
+    ['annual_special_subject_charge', '/students/22/annual/special-subjects/15/bill', 'cases', 'billSpecialSubject'],
+    ['annual_exemption', '/students/22/annual/12/exemptions', 'cases', 'approveExemptionCase'],
+    ['departure_review', '/departure-cases/16/review', 'cases', 'reviewDepartureCase'],
+    ['annual_payment_reversal', '/students/22/annual/payments/103/reverse', 'annual', 'reversePayment'],
+    ['annual_adjustment_reversal', '/students/22/annual/adjustments/104/reverse', 'annual', 'reverseAdjustment'],
+    ['legacy_payment_reconciliation', '/students/22/annual/legacy-payments/105/reconcile', 'annual', 'reconcileLegacyPayment'],
+    ['annual_allocation_release', '/students/22/annual/allocations/106/release', 'annual', 'releasePaymentAllocation'],
+    ['legacy_reconciliation_release', '/students/22/annual/legacy-reconciliations/107/release', 'annual', 'releaseLegacyReconciliation'],
+    ['annual_payment_metadata', '/students/22/annual/payments/103/metadata', 'annual', 'updatePaymentMetadata'],
+    ['legacy_opening_transfer', '/students/22/annual/legacy-opening/transfer', 'annual', 'transferLegacyOpeningLiability'],
+    ['term_finance_approval', '/annual/terms/14/approval', 'annual', 'approveTerm'],
+    ['voucher_review_resolution', '/annual/12/voucher-review-resolution', 'annual', 'resolveVoucherReview'],
+    ['term_clearance', '/annual/terms/14/clearance', 'annual', 'signTermClearance'],
+    ['legacy_account_create', '/students/22/account', 'finance', 'createAccount'],
+    ['legacy_transaction', '/students/22/transactions', 'finance', 'recordTransaction'],
+    ['legacy_enrollment_clearance', '/students/22/enrollment-clearance', 'finance', 'clearEnrollmentWithExistingPayment']
+  ];
+  assert.equal(SAFE_ACTIONS.length, 25);
+  assert.deepEqual(Object.keys(ACTION_WRITERS).sort(), cases.map(([type]) => type).sort(), 'every supported action has a writer callback');
+  const writerCalls = [];
+  const services = Object.fromEntries(['annual', 'cases', 'finance', 'documentClearance'].map((serviceName) => [serviceName,
+    new Proxy({}, { get(_target, method) { return async (...args) => { writerCalls.push([serviceName, method, args]); return method === 'createAccount' ? 61 : { saved: true }; }; } })
+  ]));
+  for (const [type, pathname, expectedService, expectedMethod] of cases) {
+    const parsed = actionByPath(pathname);
+    assert.equal(parsed?.type, type, `${pathname} parses to ${type}`);
+    await ACTION_WRITERS[type]({ services, actorId: 7, studentId: 22, context: { ...parsed.context, studentId: 22 }, input: {
+      optionalLineId: ['41'], enrollmentId: '14', paymentTransactionId: '105', confirmEnrollmentClearance: true
+    } });
+    assert.equal(writerCalls.at(-1)[0], expectedService, `${type} routes to its service`);
+    assert.equal(writerCalls.at(-1)[1], expectedMethod, `${type} routes to ${expectedMethod}`);
+  }
+});
+
+test('all 25 reviewed writers receive action-specific normalized raw form values and exact target arguments', async () => {
+  const form = (values = {}) => ({ _csrf: 'transport-only', ...values });
+  const cases = [
+    { type: 'document_clearance_decision', path: '/document-clearance/41111111-1111-4111-8111-111111111111/decision', service: 'documentClearance', method: 'decideClearance', body: form({ decision: 'approve', reason: 'Reviewed', arrangement: 'Pay in two parts' }) },
+    { type: 'schedule_create', path: '/schedules', service: 'annual', method: 'createSchedule', body: form({ schoolYear: '2027-2028', gradeLevel: 'Grade 11', voucherCode: 'ESC', termNumber: ['1', '1'], feeCategory: ['tuition', 'other'], lineName: ['Tuition', 'Laboratory'], installment: ['DP', 'As incurred'], lineAmount: ['125.50', '20.00'], optionalIndex: ['1'] }) },
+    { type: 'annual_assessment', path: '/annual/12/assessment', service: 'annual', method: 'confirmAnnualAssessment', body: form({ optionalLineId: ['41', '42'] }) },
+    { type: 'annual_payment', path: '/students/22/annual/payments', service: 'annual', method: 'recordPayment', body: form({ amount: '20.00', paymentDate: '2026-10-01', referenceNo: 'R-1', allocationTarget: ['charge:41', 'opening:42'], allocationAmount: ['12.00', '8.00'] }) },
+    { type: 'annual_credit_allocation', path: '/students/22/annual/credits/103/allocate', service: 'annual', method: 'allocateExistingCredit', body: form({ allocationTarget: ['charge:41'], allocationAmount: ['12.00'] }) },
+    { type: 'annual_adjustment', path: '/students/22/annual/charges/104/adjustments', service: 'annual', method: 'recordChargeAdjustment', body: form({ amount: '-2.00', reason: 'Correction' }) },
+    { type: 'annual_handbook_reference', path: '/students/22/annual/12/handbook-number', service: 'annual', method: 'updateFinanceHandbookNumber', body: form({ financeHandbookNumber: 'FH-2027-11' }) },
+    { type: 'annual_fee_comment', path: '/students/22/annual/charges/104/comments', service: 'annual', method: 'addFeeComment', body: form({ comment: 'Staff-only comment' }) },
+    { type: 'annual_supplementary_charge', path: '/students/22/annual/terms/14/supplementary-charges', service: 'annual', method: 'addSupplementaryCharge', body: form({ lineName: 'Retake', feeCategory: 'retake', amount: '30.00', installment: 'As incurred', reason: 'Approved' }) },
+    { type: 'annual_special_subject_charge', path: '/students/22/annual/special-subjects/15/bill', service: 'cases', method: 'billSpecialSubject', body: form({ amount: '50.00', installment: 'As incurred', reason: 'Approved' }) },
+    { type: 'annual_exemption', path: '/students/22/annual/12/exemptions', service: 'cases', method: 'approveExemptionCase', body: form({ reason: 'Approved', ruleTerm: ['1', '2'], ruleCategory: ['tuition', 'activity'], ruleLineName: ['', 'Field trip'], ruleAmount: ['', '15.00'], fullCoverageIndex: ['0'] }) },
+    { type: 'departure_review', path: '/departure-cases/16/review', service: 'cases', method: 'reviewDepartureCase', body: form({ decision: 'reviewed', reason: 'Checked', departureChargeId: ['51', '', '52'], departureAdjustmentAmount: ['-10.00', '', '5.00'], departureAdjustmentReason: ['Correction A', '', 'Correction B'] }) },
+    { type: 'annual_payment_reversal', path: '/students/22/annual/payments/103/reverse', service: 'annual', method: 'reversePayment', body: form({ reason: 'Duplicate entry' }) },
+    { type: 'annual_adjustment_reversal', path: '/students/22/annual/adjustments/104/reverse', service: 'annual', method: 'reverseAdjustment', body: form({ reason: 'Correction' }) },
+    { type: 'legacy_payment_reconciliation', path: '/students/22/annual/legacy-payments/105/reconcile', service: 'annual', method: 'reconcileLegacyPayment', body: form({ reason: 'Matched', allocationTarget: ['charge:41', 'opening:42'], allocationAmount: ['5.00', '2.00'] }) },
+    { type: 'annual_allocation_release', path: '/students/22/annual/allocations/106/release', service: 'annual', method: 'releasePaymentAllocation', body: form({ amount: '2.00', reason: 'Correction' }) },
+    { type: 'legacy_reconciliation_release', path: '/students/22/annual/legacy-reconciliations/107/release', service: 'annual', method: 'releaseLegacyReconciliation', body: form({ amount: '2.00', reason: 'Correction' }) },
+    { type: 'annual_payment_metadata', path: '/students/22/annual/payments/103/metadata', service: 'annual', method: 'updatePaymentMetadata', body: form({ eventType: 'receipt_reference_updated', referenceNo: 'R-103' }) },
+    { type: 'legacy_opening_transfer', path: '/students/22/annual/legacy-opening/transfer', service: 'annual', method: 'transferLegacyOpeningLiability', body: form({ expectedAmount: '100.00', sourceLabel: 'Reviewed statement', reason: 'Verified' }) },
+    { type: 'term_finance_approval', path: '/annual/terms/14/approval', service: 'annual', method: 'approveTerm', body: form({ decision: 'approved', reason: 'Reviewed' }) },
+    { type: 'voucher_review_resolution', path: '/annual/12/voucher-review-resolution', service: 'annual', method: 'resolveVoucherReview', body: form({ resolution: 'assessment_stands', reason: 'Reviewed' }) },
+    { type: 'term_clearance', path: '/annual/terms/14/clearance', service: 'annual', method: 'signTermClearance', body: form({ reason: 'Reviewed', arrangement: 'Payment plan' }) },
+    { type: 'legacy_account_create', path: '/students/22/account', service: 'finance', method: 'createAccount', body: form() },
+    { type: 'legacy_transaction', path: '/students/22/transactions', service: 'finance', method: 'recordTransaction', body: form({ transactionType: 'payment', amount: '20.00', description: 'Payment', referenceNo: 'LEG-1' }) },
+    { type: 'legacy_enrollment_clearance', path: '/students/22/enrollment-clearance', service: 'finance', method: 'clearEnrollmentWithExistingPayment', body: form({ enrollmentId: '14', paymentTransactionId: '105', confirmEnrollmentClearance: '1' }) }
+  ];
+  assert.equal(cases.length, 25);
+  const calls = [];
+  const services = Object.fromEntries(['annual', 'cases', 'finance', 'documentClearance'].map((serviceName) => [serviceName,
+    new Proxy({}, { get(_target, method) { return async (...args) => { calls.push({ service: serviceName, method, args }); return method === 'createAccount' ? 61 : { saved: true }; }; } })
+  ]));
+  for (const item of cases) {
+    const parsed = actionByPath(item.path);
+    assert.equal(parsed?.type, item.type);
+    const input = normalizeActionInput(item.type, item.body);
+    assert.equal(Object.hasOwn(input, '_csrf'), false, `${item.type} excludes CSRF transport input`);
+    const expectedInput = { ...item.body };
+    delete expectedInput._csrf;
+    if (item.type === 'schedule_create') {
+      expectedInput.lines = [
+        { termNumber: '1', feeCategory: 'tuition', lineName: 'Tuition', installment: 'DP', amount: '125.50', isOptional: false },
+        { termNumber: '1', feeCategory: 'other', lineName: 'Laboratory', installment: 'As incurred', amount: '20.00', isOptional: true }
+      ];
+      for (const key of ['termNumber', 'feeCategory', 'lineName', 'installment', 'lineAmount', 'optionalIndex']) delete expectedInput[key];
+    }
+    if (['annual_payment', 'annual_credit_allocation', 'legacy_payment_reconciliation'].includes(item.type)) {
+      const targets = item.body.allocationTarget;
+      const amounts = item.body.allocationAmount;
+      expectedInput.allocations = targets.map((target, index) => {
+        const match = /^(charge|opening):(\d+)$/.exec(target);
+        return { chargeId: match?.[1] === 'charge' ? match[2] : null,
+          openingLiabilityId: match?.[1] === 'opening' ? match[2] : null, amount: amounts[index] };
+      });
+      for (const key of ['allocationTarget', 'allocationAmount', 'chargeId']) delete expectedInput[key];
+    }
+    if (item.type === 'annual_exemption') {
+      expectedInput.rules = [
+        { termNumber: '1', feeCategory: 'tuition', lineName: '', isFullCoverage: true, approvedAmount: '0.00' },
+        { termNumber: '2', feeCategory: 'activity', lineName: 'Field trip', isFullCoverage: false, approvedAmount: '15.00' }
+      ];
+      for (const key of ['ruleTerm', 'ruleCategory', 'ruleLineName', 'ruleAmount', 'fullCoverageIndex']) delete expectedInput[key];
+    }
+    if (item.type === 'departure_review') {
+      expectedInput.adjustments = [
+        { chargeId: '51', amount: '-10.00', reason: 'Correction A' },
+        { chargeId: '52', amount: '5.00', reason: 'Correction B' }
+      ];
+      for (const key of ['departureChargeId', 'departureAdjustmentAmount', 'departureAdjustmentReason']) delete expectedInput[key];
+    }
+    assert.deepEqual(input, expectedInput, `${item.type} normalized raw form matches its canonical reviewed values`);
+    const studentId = 22;
+    const context = { ...parsed.context, studentId };
+    await ACTION_WRITERS[item.type]({ services, actorId: 7, studentId, context, input });
+    const call = calls.at(-1);
+    assert.equal(call.service, item.service, `${item.type} service`);
+    assert.equal(call.method, item.method, `${item.type} writer method`);
+    const inputWithExpectedOwner = {
+      ...input,
+      ...(item.type === 'annual_assessment' ? { studentId } : {}),
+      ...(['annual_handbook_reference', 'annual_exemption'].includes(item.type) ? { expectedStudentId: studentId } : {})
+    };
+    const expectedArgs = {
+      document_clearance_decision: [7, parsed.context.requestId, input],
+      schedule_create: [7, input],
+      annual_assessment: [7, parsed.context.annualId, input.optionalLineId, inputWithExpectedOwner],
+      annual_payment: [7, studentId, input],
+      annual_credit_allocation: [7, studentId, parsed.context.paymentId, input],
+      annual_adjustment: [7, studentId, parsed.context.chargeId, input],
+      annual_handbook_reference: [7, parsed.context.annualId, inputWithExpectedOwner],
+      annual_fee_comment: [7, studentId, parsed.context.chargeId, input],
+      annual_supplementary_charge: [7, studentId, parsed.context.enrollmentId, input],
+      annual_special_subject_charge: [7, studentId, parsed.context.specialSubjectId, input],
+      annual_exemption: [7, parsed.context.annualId, inputWithExpectedOwner],
+      departure_review: [7, parsed.context.caseId, input],
+      annual_payment_reversal: [7, studentId, parsed.context.paymentId, input],
+      annual_adjustment_reversal: [7, studentId, parsed.context.adjustmentId, input],
+      legacy_payment_reconciliation: [7, studentId, parsed.context.transactionId, input],
+      annual_allocation_release: [7, studentId, parsed.context.allocationId, input],
+      legacy_reconciliation_release: [7, studentId, parsed.context.reconciliationId, input],
+      annual_payment_metadata: [7, studentId, parsed.context.paymentId, input],
+      legacy_opening_transfer: [7, studentId, input],
+      term_finance_approval: [7, parsed.context.enrollmentId, input],
+      voucher_review_resolution: [7, parsed.context.annualId, input],
+      term_clearance: [7, parsed.context.enrollmentId, input],
+      legacy_account_create: [7, studentId],
+      legacy_transaction: [7, studentId, input],
+      legacy_enrollment_clearance: [7, studentId, input.enrollmentId, input.paymentTransactionId, input.confirmEnrollmentClearance]
+    }[item.type];
+    assert.deepEqual(call.args, expectedArgs, `${item.type} receives complete authorized context and normalized input`);
+  }
+  const schedule = normalizeActionInput('schedule_create', cases.find((item) => item.type === 'schedule_create').body);
+  assert.deepEqual(schedule.lines, [
+    { termNumber: '1', feeCategory: 'tuition', lineName: 'Tuition', installment: 'DP', amount: '125.50', isOptional: false },
+    { termNumber: '1', feeCategory: 'other', lineName: 'Laboratory', installment: 'As incurred', amount: '20.00', isOptional: true }
+  ]);
+  const payment = normalizeActionInput('annual_payment', cases.find((item) => item.type === 'annual_payment').body);
+  assert.deepEqual(payment.allocations, [
+    { chargeId: '41', openingLiabilityId: null, amount: '12.00' },
+    { chargeId: null, openingLiabilityId: '42', amount: '8.00' }
+  ]);
+  const exemption = normalizeActionInput('annual_exemption', cases.find((item) => item.type === 'annual_exemption').body);
+  assert.deepEqual(exemption.rules, [
+    { termNumber: '1', feeCategory: 'tuition', lineName: '', isFullCoverage: true, approvedAmount: '0.00' },
+    { termNumber: '2', feeCategory: 'activity', lineName: 'Field trip', isFullCoverage: false, approvedAmount: '15.00' }
+  ]);
+  const departure = normalizeActionInput('departure_review', cases.find((item) => item.type === 'departure_review').body);
+  assert.deepEqual(departure.adjustments, [
+    { chargeId: '51', amount: '-10.00', reason: 'Correction A' },
+    { chargeId: '52', amount: '5.00', reason: 'Correction B' }
+  ]);
+});
+
+test('saved reversal and allocation-release drafts return to account history', () => {
+  const actions = createFinanceReviewActionService({ getPool: async () => { throw new Error('redirect mapping must not query'); } });
+  for (const actionType of ['annual_payment_reversal', 'annual_adjustment_reversal', 'annual_allocation_release', 'legacy_reconciliation_release']) {
+    assert.equal(actions.afterCommitPath({ actionType, entityContext: { studentId: 22 }, committedResult: {} }),
+      '/finance/students/22/annual?view=history&notice=reviewSaved');
+  }
+  for (const actionType of ['annual_credit_allocation', 'annual_payment_metadata']) {
+    assert.equal(actions.afterCommitPath({ actionType, entityContext: { studentId: 22 }, committedResult: {} }),
+      '/finance/students/22/annual?view=payments&notice=reviewSaved');
+  }
+});
 
 test('money parsing and financial transaction fields enforce DECIMAL(12,2) limits and signs', () => {
   assert.equal(parseMoneyCents('9999999999.99'), 999999999999n);
@@ -503,7 +714,8 @@ test('annual finance correction routes stay student-bound, CSRF-protected, and r
       return {
         student: { id: studentId, student_no: 'SYNTH-22', first_name: 'Synthetic', middle_name: null, last_name: 'Student', suffix: null, status: 'active' },
         summary: { annualBalanceSchoolYear: null, annualBalance: '0.00', allYearsAnnualBalance: '0.00', annualWaivedAmount: '0.00', unattributedLegacyBalance: '100.00', openingLiabilityDue: '0.00', totalBalance: '100.00', currentTermOutstanding: '0.00', priorTermYearDebt: '0.00', availableCredit: '0.00' },
-        terms: [], events: [], charges: [], availablePayments: [], openingLiabilities: [], allocationHistory: [],
+        terms: [], events: [{ event_type: 'payment', source_id: 104, event_date: new Date('2026-10-01T05:00:00Z'), amount: '20.00', reference_no: 'RECOVER-104' }],
+        charges: [], availablePayments: [], openingLiabilities: [], allocationHistory: [],
         legacyReconciliationHistory: [], payments: [], legacyCredits: [], privateClearances: [], adjustments: []
       };
     },
@@ -530,7 +742,8 @@ test('annual finance correction routes stay student-bound, CSRF-protected, and r
     }
   };
   const idempotencyKey = '41111111-1111-4111-8111-111111111111';
-  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService, annualFinanceService, financeCasesService }), async (baseUrl) => {
+  const reviewProbe = createReviewRouteProbe();
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService, annualFinanceService, financeCasesService, financeReviewActionService: reviewProbe }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
     const account = await fetch(`${baseUrl}/finance/students/${studentId}/annual`, { headers: { cookie } });
     const accountHtml = await account.text();
@@ -542,33 +755,112 @@ test('annual finance correction routes stay student-bound, CSRF-protected, and r
       method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ _csrf: csrfToken, ...fields })
     });
-    assert.equal((await post(`/finance/students/${studentId}/annual/allocations/101/release`, { amount: '5.00', reason: 'Correction', idempotencyKey })).status, 303);
-    assert.equal((await post(`/finance/students/${studentId}/annual/legacy-reconciliations/102/release`, { amount: '5.00', reason: 'Correction', idempotencyKey })).status, 303);
-    assert.equal((await post(`/finance/students/${studentId}/annual/payments/103/metadata`, { eventType: 'receipt_reference_updated', referenceNo: 'DELAYED-103', idempotencyKey })).status, 303);
-    assert.equal((await post(`/finance/students/${studentId}/annual/payments`, {
+    const reviewed = async (path, fields) => {
+      const response = await post(path, fields);
+      assert.equal(response.status, 303);
+      assert.equal(response.headers.get('location'), '/finance/review-drafts/41111111-1111-4111-8111-111111111111');
+    };
+    await reviewed(`/finance/students/${studentId}/annual/allocations/101/release`, { amount: '5.00', reason: 'Correction', idempotencyKey });
+    await reviewed(`/finance/students/${studentId}/annual/legacy-reconciliations/102/release`, { amount: '5.00', reason: 'Correction', idempotencyKey });
+    await reviewed(`/finance/students/${studentId}/annual/payments/103/metadata`, { eventType: 'receipt_reference_updated', referenceNo: 'DELAYED-103', idempotencyKey });
+    await reviewed(`/finance/students/${studentId}/annual/payments`, {
       amount: '20.00', paymentDate: '2026-10-01', referenceNo: 'RECEIPT-104', transmittalReference: 'TRANSMIT-104',
       privateRemarks: 'Finance-only starting note.', receiptIssued: '0', idempotencyKey
-    })).status, 303);
+    });
     const preview = await post(`/finance/students/${studentId}/annual/legacy-opening/preview`, {});
     assert.equal(preview.status, 200);
     const previewHtml = await preview.text();
     assert.match(previewHtml, /Confirm reviewed opening liability/);
     assert.match(previewHtml, /name="expectedAmount" value="100\.00"/);
-    assert.equal((await post(`/finance/students/${studentId}/annual/legacy-opening/transfer`, { expectedAmount: '100.00', sourceLabel: 'Reviewed account', reason: 'Reviewed statement', idempotencyKey })).status, 303);
-    assert.equal((await post(`/finance/students/${studentId}/annual/23/exemptions`, { reason: 'Approved', idempotencyKey, ruleTerm: '1', ruleCategory: 'tuition', ruleAmount: '50.00' })).status, 303);
+    await reviewed(`/finance/students/${studentId}/annual/legacy-opening/transfer`, { expectedAmount: '100.00', sourceLabel: 'Reviewed account', reason: 'Reviewed statement', idempotencyKey });
+    await reviewed(`/finance/students/${studentId}/annual/23/exemptions`, { reason: 'Approved', idempotencyKey, ruleTerm: '1', ruleCategory: 'tuition', ruleAmount: '50.00' });
     const csrfDenied = await fetch(`${baseUrl}/finance/students/${studentId}/annual/allocations/101/release`, {
       method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: 'amount=5.00'
     });
     assert.equal(csrfDenied.status, 403);
   });
-  assert.deepEqual(calls.map(([name]) => name), [
-    'releaseAllocation', 'releaseLegacyReconciliation', 'paymentMetadata', 'recordPayment', 'openingPreview', 'openingTransfer', 'approveExemption'
-  ]);
-  assert.equal(calls.find(([name]) => name === 'releaseAllocation')[2], studentId);
-  assert.equal(calls.find(([name]) => name === 'openingTransfer')[2], studentId);
-  const paymentInput = calls.find(([name]) => name === 'recordPayment')[3];
-  assert.equal(paymentInput.transmittalReference, 'TRANSMIT-104');
-  assert.equal(paymentInput.privateRemarks, 'Finance-only starting note.');
+  assert.deepEqual(calls.map(([name]) => name), ['openingPreview'], 'only the registered read-only preview bypasses reviewed writes');
+  assert.equal(reviewProbe.starts.length, 6);
+  assert.ok(reviewProbe.starts.every((entry) => entry.actorId === 7));
+  assert.ok(reviewProbe.starts.some((entry) => entry.pathname === `/students/${studentId}/annual/payments`));
+  assert.equal(reviewProbe.starts.find((entry) => entry.pathname.endsWith('/payments')).input.transmittalReference, 'TRANSMIT-104');
+
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService, annualFinanceService, financeCasesService, financeReviewActionService: reviewProbe }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'finance');
+    const account = await fetch(`${baseUrl}/finance/students/${studentId}/annual`, { headers: { cookie } });
+    const accountHtml = await account.text();
+    const csrfToken = csrfFrom(accountHtml);
+    reviewProbe.startDraft = async () => { throw new AnnualFinanceError('Enter a valid amount before review.'); };
+    const payment = await fetch(`${baseUrl}/finance/students/${studentId}/annual/payments`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, amount: '20.00', paymentDate: '2026-10-01', referenceNo: 'RECOVER-104',
+        transmittalReference: 'TRANSMIT-KEEP', privateRemarks: 'Keep this staff note.', receiptIssued: '1',
+        allocationTarget: 'charge:91', allocationAmount: '15.00' })
+    });
+    const paymentHtml = await payment.text();
+    assert.equal(payment.status, 400);
+    assert.match(paymentHtml, /data-account-view="payments"/);
+    assert.match(paymentHtml, /name="amount"[^>]*value="20\.00"/);
+    assert.match(paymentHtml, /value="RECOVER-104"/);
+    assert.match(paymentHtml, /value="TRANSMIT-KEEP"/);
+    assert.match(paymentHtml, /Keep this staff note\./);
+    assert.match(paymentHtml, /value="15\.00"/);
+
+    reviewProbe.startDraft = async () => { throw new FinanceReviewDraftError('Five saved finance reviews are already open.', 409); };
+    const scheduleFields = new URLSearchParams({ _csrf: csrfToken, schoolYear: '2027-2028', gradeLevel: 'Grade 11', voucherCode: 'ESC',
+      idempotencyKey, termNumber: '1', feeCategory: 'tuition', lineName: 'Tuition', installment: 'DP', lineAmount: '125.50' });
+    const schedule = await fetch(`${baseUrl}/finance/schedules`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: scheduleFields
+    });
+    const scheduleHtml = await schedule.text();
+    assert.equal(schedule.status, 409);
+    assert.match(scheduleHtml, /Five saved finance reviews are already open\./);
+    assert.match(scheduleHtml, /name="schoolYear" value="2027-2028"/);
+    assert.match(scheduleHtml, /name="gradeLevel" value="Grade 11"/);
+    assert.match(scheduleHtml, /name="voucherCode" value="ESC"/);
+    assert.match(scheduleHtml, /name="lineAmount"[^>]*value="125\.50"/);
+
+    reviewProbe.startDraft = async () => { throw new AnnualFinanceError('Enter a reversal reason.'); };
+    const reversal = await fetch(`${baseUrl}/finance/students/${studentId}/annual/payments/104/reverse`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, reason: 'Duplicate entry' })
+    });
+    const reversalHtml = await reversal.text();
+    assert.equal(reversal.status, 400);
+    assert.match(reversalHtml, /data-account-view="history"/);
+    assert.match(reversalHtml, /class="physical-requirements-item" open><summary>.*Payment #104/);
+    assert.match(reversalHtml, /name="reason"[^>]*>Duplicate entry<\/textarea>/);
+    assert.match(reversalHtml, /action="\/finance\/students\/22\/annual\/payments\/104\/reverse"/);
+  });
+});
+
+test('a pending review stays editable and discardable when current-target validation fails', async () => {
+  const draftId = '41111111-1111-4111-8111-111111111111';
+  const draft = {
+    id: draftId, actionType: 'annual_payment', status: 'pending', revision: 3,
+    dependencyFingerprint: 'a'.repeat(64), sessionBindingHmac: 'b'.repeat(64),
+    entityContext: { studentId: 22 }, input: { amount: '20.00', paymentDate: '2026-10-04', allocations: [{ chargeId: '7', amount: '20.00' }] },
+    preview: { student: { name: 'Synthetic Student', studentNumber: 'SYNTH-22' }, fields: [{ name: 'amount', value: '20.00' }],
+      cashAmount: '20.00', appliedAmount: '20.00', unallocatedCredit: '0.00', allocationRows: [], targetDetails: [] }
+  };
+  const reviewActions = {
+    matchesMutation: () => false, isReadOnlyPost: () => false,
+    actionLabel: () => 'Record payment and allocations', afterCommitPath: () => '/finance',
+    async freshReview() { throw new AnnualFinanceError('A selected balance is no longer available. Edit the allocation.', 409); },
+    async getDraft(actorId, requestedDraftId) { assert.equal(actorId, 7); assert.equal(requestedDraftId, draftId); return structuredClone(draft); }
+  };
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeReviewActionService: reviewActions }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'finance');
+    const response = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
+    const html = await response.text();
+    assert.equal(response.status, 409);
+    assert.match(html, /The pending draft is retained/);
+    assert.match(html, /Edit saved details/);
+    assert.match(html, /Discard draft/);
+    assert.match(html, /name="item_allocations_0_amount" value="20\.00"/);
+    assert.match(html, /<button[^>]*disabled[^>]*>Review complete · Save update<\/button>/);
+    assert.doesNotMatch(html, /Service Unavailable/);
+  });
 });
 
 test('finance routes permit finance staff and database administrators and protect all writes with CSRF', async () => {
@@ -601,7 +893,8 @@ test('finance routes permit finance staff and database administrators and protec
       calls.push(['clear', actorId, studentId, enrollmentId, paymentId, confirmed]); return {};
     }
   };
-  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService, annualFinanceService }), async (baseUrl) => {
+  const reviewProbe = createReviewRouteProbe();
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService, annualFinanceService, financeReviewActionService: reviewProbe }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
     const redirect = await fetch(`${baseUrl}/dashboard`, { headers: { cookie }, redirect: 'manual' });
     assert.equal(redirect.headers.get('location'), '/finance/overview');
@@ -646,15 +939,16 @@ test('finance routes permit finance staff and database administrators and protec
       body: new URLSearchParams({ _csrf: csrfFrom(accountHtml), enrollmentId: '51', paymentTransactionId: '91', confirmEnrollmentClearance: '1' })
     });
     assert.equal(clearance.status, 303);
-    assert.equal(clearance.headers.get('location'), '/finance/students/22?notice=existingPaymentCleared');
-    assert.deepEqual(calls.find(([name]) => name === 'clear'), ['clear', 7, 22, '51', '91', '1']);
+    assert.equal(clearance.headers.get('location'), '/finance/review-drafts/41111111-1111-4111-8111-111111111111');
+    assert.equal(calls.some(([name]) => name === 'clear'), false);
 
     const createResponse = await fetch(`${baseUrl}/finance/students/22/account`, {
       method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ _csrf: csrfFrom(accountHtml) })
     });
     assert.equal(createResponse.status, 303);
-    assert.equal(createResponse.headers.get('location'), '/finance/students/22?notice=accountCreated');
+    assert.equal(createResponse.headers.get('location'), '/finance/review-drafts/41111111-1111-4111-8111-111111111111');
+    assert.equal(calls.some(([name]) => name === 'create'), false);
   });
 
   const serviceCallsBeforeDeniedRequests = calls.length;
@@ -670,7 +964,8 @@ test('finance routes permit finance staff and database administrators and protec
       assert.equal(write.status, 403, `${role} must be denied finance writes`);
     });
   }
-  await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, financeService, annualFinanceService }), async (baseUrl) => {
+  const adminReviewProbe = createReviewRouteProbe();
+  await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, financeService, annualFinanceService, financeReviewActionService: adminReviewProbe }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'database_admin');
     const accountPage = await fetch(`${baseUrl}/finance/students/22`, { headers: { cookie } });
     const html = await accountPage.text();
@@ -681,7 +976,8 @@ test('finance routes permit finance staff and database administrators and protec
       body: new URLSearchParams({ _csrf: csrfFrom(html) })
     });
     assert.equal(response.status, 303);
-    assert.ok(calls.some((call) => call[0] === 'create' && call[1] === 7));
+    assert.equal(response.headers.get('location'), '/finance/review-drafts/41111111-1111-4111-8111-111111111111');
+    assert.equal(calls.some((call) => call[0] === 'create' && call[1] === 7), false);
   });
   assert.ok(calls.length > serviceCallsBeforeDeniedRequests, 'database administrator finance request should reach the service');
 });
@@ -705,6 +1001,7 @@ test('archived finance records stay readable without write controls and retain t
     const cookie = await signIn(baseUrl, 'finance');
     const workspace = await fetch(`${baseUrl}/finance/legacy?search=Alex%20Kim`, { headers: { cookie } });
     const workspaceHtml = await workspace.text();
+    assert.match(workspaceHtml, /<form class="finance-search" method="get" action="\/finance\/legacy">/);
     assert.match(workspaceHtml, /href="\/finance\/students\/22\?search=Alex%20Kim"/);
     assert.doesNotMatch(workspaceHtml, /Recently updated accounts/);
 

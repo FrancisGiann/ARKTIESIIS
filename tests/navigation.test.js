@@ -205,10 +205,10 @@ test('finance navigation marks one destination for workspace, account, and annua
 
 test('authenticated navigation only exposes destinations available to each role', async () => {
   const cases = [
-    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Audit activity', 'Documents', 'Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Legacy account history'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/legacy'], forbidden: [] },
+    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Audit activity', 'Documents', 'Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews', 'Legacy account history'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts', '/finance/legacy'], forbidden: [] },
     { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollment intake', 'Document review', 'Grade review', 'Class schedules', 'Subject catalog', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
     { role: 'teacher', path: '/teacher', labels: ['My classes', 'Submit grades'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/admin'] },
-    { role: 'finance', path: '/finance', labels: ['Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Legacy account history'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/legacy'], forbidden: ['/registrar/records', '/documents', '/admin'] },
+    { role: 'finance', path: '/finance', labels: ['Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews', 'Legacy account history'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts', '/finance/legacy'], forbidden: ['/registrar/records', '/documents', '/admin'] },
     { role: 'student', path: '/student', labels: ['Home', 'Schedule', 'Grades', 'Finance', 'My records', 'Documents'], forbidden: ['/registrar/records', '/finance', '/admin'] }
   ];
 

@@ -1,0 +1,193 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page finance-review-page" id="main-content">
+  <a class="context-back" href="/finance/review-drafts">Back to saved reviews</a>
+  <header class="dashboard-heading">
+    <div><p class="eyebrow">Finance · Review before saving</p><h1><%= actionLabel %></h1><p>Check the complete update below. Saving applies it once and records the reviewed result together.</p></div>
+  </header>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <% if (previewUnavailable) { %>
+    <p class="form-alert" role="status">The current record could not be validated against this saved review. The pending draft is retained; edit its values and review again, or discard it.</p>
+  <% } else if (status === 409 || draft.requiresReview) { %>
+    <p class="form-alert" role="status">The session or current Finance records changed. Read the updated details before saving.</p>
+  <% } %>
+
+  <section class="finance-review-summary finance-panel" aria-labelledby="review-summary-title">
+    <div class="finance-review-summary__heading">
+      <div><h2 id="review-summary-title">Review details</h2><p>Current status: ready for review. Check the student, amounts, and destinations before saving.</p></div>
+      <% if (draft.preview.student) { %>
+        <div class="finance-review-student"><strong><%= draft.preview.student.name %></strong><span><%= draft.preview.student.studentNumber || 'Student number unavailable' %></span></div>
+      <% } %>
+    </div>
+
+    <% if (draft.preview.schoolYear || draft.preview.gradeLevel || draft.preview.voucherCode) { %>
+      <p class="finance-review-context"><%= [draft.preview.schoolYear, draft.preview.gradeLevel, draft.preview.voucherCode].filter(Boolean).join(' · ') %></p>
+    <% } %>
+    <% if (draft.preview.activeSchedule) { %>
+      <p class="finance-review-context">Active schedule version at review: <strong><%= draft.preview.activeSchedule.version %></strong></p>
+    <% } %>
+    <% if (draft.preview.targetDetails?.length) { %>
+      <dl class="finance-review-fields finance-review-targets" aria-label="Current record being updated">
+        <% for (const target of draft.preview.targetDetails) { %><div><dt><%= target.label %></dt><dd><%= target.value %></dd></div><% } %>
+      </dl>
+    <% } %>
+
+  <% if (draft.preview.cashAmount) { %>
+      <ol class="finance-payment-wizard__steps finance-payment-wizard__steps--review" aria-label="Payment steps"><li>1. Details</li><li>2. Allocations</li><li aria-current="step">3. Review</li><li>4. Saved</li></ol>
+      <dl class="finance-review-totals">
+        <div><dt>Cash recorded</dt><dd>₱<%= draft.preview.cashAmount %></dd></div>
+        <div><dt>Applied to balances</dt><dd>₱<%= draft.preview.appliedAmount || '0.00' %></dd></div>
+        <div><dt>Unallocated credit remaining</dt><dd>₱<%= draft.preview.unallocatedCredit || '0.00' %></dd></div>
+      </dl>
+    <% } %>
+
+    <% if (draft.preview.allocationRows?.length) { %>
+      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Reviewed payment allocations">
+        <table class="admin-table"><caption>Payment allocation destinations</caption><thead><tr><th>Destination</th><th>Fee context</th><th>Applied</th><th>Due after</th></tr></thead>
+          <tbody><% for (const row of draft.preview.allocationRows) { %><tr><td data-label="Destination"><%= row.targetReference %></td><td data-label="Fee context"><%= row.feeContext %></td><td data-label="Applied">₱<%= row.amount %></td><td data-label="Due after">₱<%= row.dueAfter %></td></tr><% } %></tbody>
+        </table>
+      </div>
+    <% } else if (draft.actionType === 'annual_payment') { %>
+      <p class="dashboard-empty">No allocation is currently selected. Any unallocated amount remains payment credit.</p>
+    <% } %>
+
+    <% if (draft.preview.schedule?.lines?.length) { %>
+      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Fee lines in the active schedule">
+        <table class="admin-table"><caption>Current approved schedule · Version <%= draft.preview.schedule.version %></caption><thead><tr><th>Term</th><th>Fee</th><th>Installment</th><th>Amount</th><th>Included</th></tr></thead>
+          <tbody><% for (const line of draft.preview.schedule.lines) { %><tr><td data-label="Term">Term <%= line.term %></td><td data-label="Fee"><%= line.fee %></td><td data-label="Installment"><%= line.installment %></td><td data-label="Amount">₱<%= line.amount %></td><td data-label="Included"><%= line.selected ? 'Yes' : 'No' %></td></tr><% } %></tbody>
+        </table>
+      </div>
+    <% } %>
+
+    <% if (draft.preview.scheduleLines?.length) { %>
+      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Fee schedule version being created">
+        <table class="admin-table"><caption>Student-payable amounts in this new version</caption><thead><tr><th>Term</th><th>Fee</th><th>Installment</th><th>Amount</th><th>Optional</th></tr></thead>
+          <tbody><% for (const line of draft.preview.scheduleLines) { %><tr><td data-label="Term">Term <%= line.term %></td><td data-label="Fee"><%= line.fee %></td><td data-label="Installment"><%= line.installment %></td><td data-label="Amount">₱<%= line.amount %></td><td data-label="Optional"><%= line.optional ? 'Yes' : 'No' %></td></tr><% } %></tbody>
+        </table>
+      </div>
+    <% } %>
+
+    <% if (draft.preview.exemptionRules?.length) { %>
+      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Reviewed exemption coverage rules">
+        <table class="admin-table"><caption>Exemption coverage</caption><thead><tr><th>Term</th><th>Coverage</th><th>Approved amount</th></tr></thead>
+          <tbody><% for (const rule of draft.preview.exemptionRules) { %><tr><td data-label="Term">Term <%= rule.term %></td><td data-label="Coverage"><%= rule.coverage %></td><td data-label="Approved amount"><%= rule.amount === 'Full coverage' ? rule.amount : `₱${rule.amount}` %></td></tr><% } %></tbody>
+        </table>
+      </div>
+    <% } %>
+
+    <% if (draft.preview.departureAdjustments?.length) { %>
+      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Reviewed departure charge corrections">
+        <table class="admin-table"><caption>Charge corrections</caption><thead><tr><th>Charge</th><th>Amount</th><th>Reason</th></tr></thead>
+          <tbody><% for (const item of draft.preview.departureAdjustments) { %><tr><td data-label="Charge"><%= item.charge %></td><td data-label="Amount">₱<%= item.amount %></td><td data-label="Reason"><%= item.reason %></td></tr><% } %></tbody>
+        </table>
+      </div>
+    <% } %>
+
+    <% if (previewFields.length) { %>
+      <dl class="finance-review-fields"><% for (const field of previewFields) { %><div><dt><%= field.name %></dt><dd><%= Array.isArray(field.value) ? field.value.join(', ') : field.value %></dd></div><% } %></dl>
+    <% } %>
+  </section>
+
+  <details class="finance-review-edit finance-panel">
+    <summary>Edit saved details</summary>
+    <div class="finance-review-edit__body">
+      <p>Changing a value saves an updated draft. Review the summary again before saving.</p>
+      <form class="form-stack" method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/update">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <% for (const field of editorFields) { %>
+          <% if (field.kind === 'select') { %>
+            <label class="field"><span><%= field.label %></span><select name="field_<%= field.name %>" required>
+              <option value="">Choose <%= field.label.toLowerCase() %></option>
+              <% for (const option of field.options || []) { %><option value="<%= option.value %>" <%= String(option.value) === String(field.value) ? 'selected' : '' %>><%= option.label %></option><% } %>
+            </select></label>
+          <% } else if (field.kind === 'scalar') { %>
+            <label class="field"><span><%= field.label %></span>
+              <% if (field.boolean) { %>
+                <select name="field_<%= field.name %>"><option value="1" <%= field.value ? 'selected' : '' %>>Yes</option><option value="0" <%= field.value ? '' : 'selected' %>>No</option></select>
+              <% } else if (field.multiline) { %>
+                <textarea name="field_<%= field.name %>" rows="3" maxlength="2000"><%= field.value ?? '' %></textarea>
+              <% } else { %>
+                <input name="field_<%= field.name %>" value="<%= field.value ?? '' %>" maxlength="1000">
+              <% } %>
+            </label>
+          <% } else if (field.kind === 'schedule') { %>
+            <fieldset class="finance-review-row-editor finance-review-schedule-editor"><legend><%= field.label %></legend>
+              <p>Update tuition one term at a time. The school year, grade, and voucher stay with this saved review.</p>
+              <% for (const termNumber of [1, 2, 3]) { const termLines = field.lines.filter((line) => Number(line.termNumber) === termNumber); %>
+                <details class="finance-review-term-editor" <%= termNumber === 1 ? 'open' : '' %>><summary>Term <%= termNumber %> · <%= termLines.length %> fee line<%= termLines.length === 1 ? '' : 's' %></summary>
+                  <% for (const line of termLines) { const tuition = String(line.feeCategory).toLowerCase() === 'tuition' && String(line.lineName).trim().toLowerCase() === 'tuition' && ['dp','prelim','midterm','finals'].includes(String(line.installment).trim().toLowerCase()); %>
+                    <% if (tuition) { %>
+                      <label class="field"><span><%= line.installment %> tuition · PHP</span><input name="item_lines_<%= line.index %>_amount" value="<%= line.amount ?? '' %>" inputmode="decimal" maxlength="14" required></label>
+                    <% } else { %>
+                      <div class="finance-review-fee-line"><strong><%= line.lineName || 'Additional fee' %></strong><label class="field"><span>Category</span><select name="item_lines_<%= line.index %>_feeCategory"><% for (const category of ['tuition','miscellaneous','uniform','id','activity','retake','other']) { %><option value="<%= category %>" <%= line.feeCategory === category ? 'selected' : '' %>><%= category %></option><% } %></select></label>
+                        <label class="field"><span>Fee name</span><input name="item_lines_<%= line.index %>_lineName" value="<%= line.lineName ?? '' %>" maxlength="120" required></label>
+                        <label class="field"><span>Installment</span><input name="item_lines_<%= line.index %>_installment" value="<%= line.installment ?? '' %>" maxlength="40" required></label>
+                        <label class="field"><span>Amount (PHP)</span><input name="item_lines_<%= line.index %>_amount" value="<%= line.amount ?? '' %>" inputmode="decimal" maxlength="14" required></label>
+                        <label class="field"><span>Selection</span><select name="item_lines_<%= line.index %>_isOptional"><option value="0" <%= line.isOptional ? '' : 'selected' %>>Required</option><option value="1" <%= line.isOptional ? 'selected' : '' %>>Optional</option></select></label>
+                      </div>
+                    <% } %>
+                  <% } %>
+                </details>
+              <% } %>
+              <details class="finance-review-term-editor"><summary>Add an additional fee</summary>
+                <% const index = field.lines.length; %>
+                <label class="field"><span>Term</span><select name="item_lines_<%= index %>_termNumber"><option value="1">Term 1</option><option value="2">Term 2</option><option value="3">Term 3</option></select></label>
+                <label class="field"><span>Category</span><select name="item_lines_<%= index %>_feeCategory"><option value="">Choose category</option><% for (const category of ['tuition','miscellaneous','uniform','id','activity','retake','other']) { %><option value="<%= category %>"><%= category %></option><% } %></select></label>
+                <label class="field"><span>Fee name</span><input name="item_lines_<%= index %>_lineName" maxlength="120"></label>
+                <label class="field"><span>Installment</span><input name="item_lines_<%= index %>_installment" maxlength="40"></label>
+                <label class="field"><span>Amount (PHP)</span><input name="item_lines_<%= index %>_amount" inputmode="decimal" maxlength="14"></label>
+                <label class="field"><span>Selection</span><select name="item_lines_<%= index %>_isOptional"><option value="0" selected>Required</option><option value="1">Optional</option></select></label>
+              </details>
+            </fieldset>
+          <% } else if (field.kind === 'rows') { %>
+            <fieldset class="finance-review-row-editor"><legend><%= field.label %></legend>
+              <div class="finance-review-row-editor__grid">
+                <% for (let index = 0; index <= field.rows.length; index += 1) { const row = field.rows[index] || {}; %>
+                  <div class="finance-review-row-editor__row"><h3><%= field.label %> <%= index + 1 %><% if (index === field.rows.length) { %> · Add row<% } %></h3>
+                    <% for (const property of field.properties) { %>
+                      <label class="field"><span><%= property.label %></span>
+                        <% if (property.options) { %>
+                          <select name="item_<%= field.name %>_<%= index %>_<%= property.key %>"><option value="">Choose a balance or charge</option><% for (const option of property.options) { %><option value="<%= option.value %>" <%= String(row[property.key] || '') === String(option.value) ? 'selected' : '' %>><%= option.label %> · due ₱<%= option.balance %></option><% } %></select>
+                        <% } else if (typeof row[property.key] === 'boolean' || ['isOptional', 'isFullCoverage'].includes(property.key)) { %>
+                          <select name="item_<%= field.name %>_<%= index %>_<%= property.key %>"><option value="1" <%= row[property.key] ? 'selected' : '' %>>Yes</option><option value="0" <%= row[property.key] ? '' : 'selected' %>>No</option></select>
+                        <% } else if (/reason/i.test(property.key)) { %>
+                          <textarea name="item_<%= field.name %>_<%= index %>_<%= property.key %>" rows="2" maxlength="1000"><%= row[property.key] ?? '' %></textarea>
+                        <% } else { %>
+                          <input name="item_<%= field.name %>_<%= index %>_<%= property.key %>" value="<%= row[property.key] ?? '' %>" maxlength="500">
+                        <% } %>
+                      </label>
+                    <% } %>
+                  </div>
+                <% } %>
+              </div>
+            </fieldset>
+          <% } else if (field.options) { %>
+            <label class="field"><span><%= field.label %></span><select name="field_<%= field.name %>" multiple size="<%= Math.min(6, Math.max(2, field.options.length)) %>">
+              <% for (const option of field.options) { const values = (Array.isArray(field.values) ? field.values : [field.values]).map(String); %><option value="<%= option.value %>" <%= values.includes(String(option.value)) ? 'selected' : '' %>><%= option.label %></option><% } %>
+            </select></label>
+          <% } else { %>
+            <fieldset class="finance-review-row-editor"><legend><%= field.label %></legend>
+              <% for (let index = 0; index <= field.values.length; index += 1) { %>
+                <label class="field"><span><%= field.label %> <%= index + 1 %></span><input name="item_<%= field.name %>_<%= index %>" value="<%= field.values[index] ?? '' %>" maxlength="100"></label>
+              <% } %>
+            </fieldset>
+          <% } %>
+        <% } %>
+        <button class="button button--secondary" type="submit">Save draft changes</button>
+      </form>
+    </div>
+  </details>
+
+  <div class="finance-review-actions">
+    <form method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/commit">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <input type="hidden" name="revision" value="<%= draft.revision %>">
+      <input type="hidden" name="dependencyFingerprint" value="<%= draft.dependencyFingerprint %>">
+      <button class="button button--primary" type="submit" <%= previewUnavailable ? 'disabled' : '' %>>Review complete · Save update</button>
+    </form>
+    <form method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/discard">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <button class="button button--secondary" type="submit">Discard draft</button>
+    </form>
+  </div>
+</main>
+<%- include('../partials/foot') %>

@@ -97,35 +97,37 @@ test('registrar dashboard data is restricted to an active registrar actor', asyn
 test('finance overview applies configured-year and grade filters with reversal-aware term charge semantics', async () => {
   const database = queryPool(({ statement }) => {
     if (statement.includes('FROM users')) return { recordset: [{ id: 9 }] };
-    if (statement.includes('WITH configured_terms AS')) return { recordset: [
-      { term_number: 1, academic_term_id: 61, term: 'First Term', students_with_allocated_payment: 3, settled_term_balance: 2, no_payment_required: 1 },
-      { term_number: 2, academic_term_id: 62, term: 'Second Term', students_with_allocated_payment: 1, settled_term_balance: 1, no_payment_required: 0 },
-      { term_number: 3, academic_term_id: 63, term: 'Third Term', students_with_allocated_payment: 2, settled_term_balance: 1, no_payment_required: 0 }
+    if (statement.includes('FROM student_document_requests AS request')) return { recordset: [{ document_clearance_count: 2, departure_review_count: 1, saved_review_count: 3 }] };
+    if (statement.includes('FROM FinanceTermClassification')) return { recordset: [
+      { finance_status: 'unpaid', student_count: 3 },
+      { finance_status: 'partially_paid', student_count: 1 },
+      { finance_status: 'no_payment_required', student_count: 2 }
     ] };
     if (statement.includes('school_year_term_order AS configured')) return { recordset: terms };
-    if (statement.includes('SELECT DISTINCT annual.grade_level')) return { recordset: [{ grade_level: 'Grade 11' }, { grade_level: 'Grade 12' }] };
+    if (statement.includes('SELECT DISTINCT grade_level')) return { recordset: [{ grade_level: 'Grade 11' }, { grade_level: 'Grade 12' }] };
+    if (statement.includes('SELECT DISTINCT section.id AS section_id')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   const service = createFinanceDashboardService({ getPool: database.getPool, sql: fakeSql() });
   const result = await service.getOverview(9, { schoolYear: '2026-2027', gradeLevel: 'Grade 11' });
-  const counts = database.calls.find((call) => call.statement.includes('WITH configured_terms AS'));
+  const counts = database.calls.find((call) => call.statement.includes('FROM FinanceTermClassification'));
 
   assert.equal(result.selectedSchoolYear, '2026-2027');
   assert.equal(result.selectedGrade, 'Grade 11');
+  assert.deepEqual(result.queueCounts, { documentClearance: 2, departureReview: 1, savedReviews: 3 });
   assert.equal(counts.values.schoolYear, '2026-2027');
   assert.equal(counts.values.gradeLevel, 'Grade 11');
-  assert.equal(result.terms.length, 3);
-  assert.deepEqual(result.terms.map((term) => term.studentsWithAllocatedPayment), [3, 1, 2]);
-  assert.match(counts.statement, /COUNT\(DISTINCT CASE WHEN per_student_term\.net_allocated > 0/);
-  assert.match(counts.statement, /v_finance_net_payment_allocations/);
-  assert.match(counts.statement, /payment\.is_reversed = 0/);
-  assert.match(counts.statement, /annual\.intake_status NOT IN \('legacy', 'cancelled', 'dropped', 'transferred'\)/);
+  assert.equal(result.totalEligible, 6);
+  assert.deepEqual(result.statusCounts.map((item) => item.count), [3, 1, 0, 2, 0]);
+  assert.match(counts.statement, /FROM FinanceTermClassification/);
+  assert.match(counts.statement, /GROUP BY whole_status/);
+  assert.match(counts.statement, /term_scope_status = 'applicable'/);
+  assert.match(counts.statement, /enrollment_status IN \('enrolled', 'pending_payment'\)/);
+  assert.match(counts.statement, /intake_status NOT IN \('legacy', 'cancelled', 'dropped', 'transferred'\)/);
   assert.match(counts.statement, /JOIN annual_assessments AS assessment/);
   assert.match(counts.statement, /JOIN annual_registrar_confirmations AS confirmation/);
-  assert.match(counts.statement, /assessed_term_count > 0 AND per_student_term\.amount_due <= 0/);
-  assert.match(counts.statement, /assessed_term_count > 0 AND per_student_term\.amount_required <= 0/);
-  assert.match(counts.statement, /charge\.amount \+ COALESCE\(adjustments\.amount, 0\)/);
-  assert.doesNotMatch(counts.statement, /payment_date|v_finance_assessed_charge_due|v_finance_net_legacy_reconciliations/);
+  assert.match(counts.statement, /v_finance_assessed_charge_due/);
+  assert.doesNotMatch(counts.statement, /payment_date/);
 });
 
 test('finance overview authorization excludes other active roles before loading finance records', async () => {
@@ -152,6 +154,7 @@ test('dashboards ask staff to choose a school year when no configured current te
 
   const financeDatabase = queryPool(({ statement }) => {
     if (statement.includes('FROM users')) return { recordset: [{ id: 9 }] };
+    if (statement.includes('FROM student_document_requests AS request')) return { recordset: [{ document_clearance_count: 0, departure_review_count: 0, saved_review_count: 0 }] };
     if (statement.includes('school_year_term_order AS configured')) return { recordset: terms.map((term) => ({ ...term, is_current: 0 })) };
     throw new Error(`Unexpected query: ${statement}`);
   });
@@ -159,6 +162,7 @@ test('dashboards ask staff to choose a school year when no configured current te
   const financeResult = await finance.getOverview(9);
   assert.equal(financeResult.selectedSchoolYear, '');
   assert.equal(financeResult.needsSchoolYearSelection, true);
-  assert.deepEqual(financeResult.terms, []);
-  assert.equal(financeDatabase.calls.length, 2, 'finance does not query grade or finance data before year selection');
+  assert.equal(financeResult.totalEligible, 0);
+  assert.ok(financeResult.statusCounts.every((item) => item.count === 0));
+  assert.equal(financeDatabase.calls.length, 3, 'finance loads saved-work queues but not year-specific data before selection');
 });

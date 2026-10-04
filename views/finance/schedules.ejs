@@ -1,26 +1,51 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page" id="main-content">
   <a class="context-back" href="/finance">Back to annual finance roster</a>
-  <header class="dashboard-heading"><div><h1>Versioned fee schedules</h1><p>Enter student-payable amounts by school year, grade, voucher, term, fee category, and installment. Optional lines are charged only when selected in an annual assessment.</p></div></header>
+  <header class="dashboard-heading"><div><p class="eyebrow">Finance · Approved student-payable rates</p><h1>Fee schedules</h1><p>Choose the school year, grade, and voucher context. Existing active rates are filled in as a starting point for a new version.</p></div></header>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <section class="finance-panel finance-schedule-context" aria-labelledby="schedule-context-title">
+    <div class="admin-section__heading"><div><h2 id="schedule-context-title">1. Schedule context</h2><p>Schedule versions are separate for each voucher type.</p></div></div>
+    <form class="admin-form-grid" method="get" action="/finance/schedules">
+      <input type="hidden" name="voucherCode" value="<%= scheduleContext.voucherCode %>">
+      <label class="field"><span>School year</span><input name="schoolYear" value="<%= scheduleContext.schoolYear %>" maxlength="20" placeholder="2026-2027"></label>
+      <label class="field"><span>Grade</span><select name="gradeLevel"><option value="">Choose grade</option><% for (const grade of ['Grade 11','Grade 12']) { %><option value="<%= grade %>" <%= scheduleContext.gradeLevel === grade ? 'selected' : '' %>><%= grade %></option><% } %></select></label>
+      <button class="button button--secondary" type="submit">Load schedule context</button>
+    </form>
+    <nav class="finance-schedule-voucher-tabs" aria-label="Voucher schedule tabs">
+      <% for (const voucher of scheduleContext.voucherCodes) { const params = new URLSearchParams({ voucherCode: voucher }); if (scheduleContext.schoolYear) params.set('schoolYear', scheduleContext.schoolYear); if (scheduleContext.gradeLevel) params.set('gradeLevel', scheduleContext.gradeLevel); %>
+        <a href="/finance/schedules?<%= params.toString() %>"<%= scheduleContext.voucherCode === voucher ? ' aria-current="page"' : '' %>><%= voucher %><span><%= scheduleContext.voucherCounts[voucher] %> version groups</span></a>
+      <% } %>
+    </nav>
+  </section>
+  <section class="finance-panel" aria-labelledby="active-schedule-title">
+    <div class="admin-section__heading"><div><h2 id="active-schedule-title">2. Current approved amounts</h2><p><%= [scheduleContext.schoolYear, scheduleContext.gradeLevel, scheduleContext.voucherCode].filter(Boolean).join(' · ') %></p></div></div>
+    <% if (scheduleContext.activeSchedule) { %>
+      <p><strong>Active version <%= scheduleContext.activeSchedule.version_no %></strong><% if (scheduleContext.activeSchedule.created_at) { %> · saved <%= new Date(scheduleContext.activeSchedule.created_at).toLocaleDateString() %><% } %></p>
+      <% if (scheduleForm.legacyWholeTermTuition) { %><p class="muted-copy">This schedule contains whole-term tuition totals. They remain visible above for reference. Enter approved installment amounts below; none are estimated from the old totals.</p><% } %>
+      <div class="table-scroll" tabindex="0" aria-label="Active fee schedule amounts"><table class="admin-table"><thead><tr><th>Term</th><th>Fee</th><th>Installment</th><th>Amount</th><th>Selection</th></tr></thead><tbody>
+        <% for (const line of scheduleContext.activeSchedule.lines) { %><tr><td data-label="Term">Term <%= line.term_number %></td><td data-label="Fee"><%= line.line_name %></td><td data-label="Installment"><%= line.installment %></td><td data-label="Amount">₱<%= formatMoney(line.amount) %></td><td data-label="Selection"><%= line.is_optional ? 'Optional' : 'Included' %></td></tr><% } %>
+      </tbody></table></div>
+    <% } else { %><p class="empty-state">No active schedule exists for this context. Start with staff-approved amounts for all 12 tuition lines.</p><% } %>
+  </section>
   <section class="finance-panel" aria-labelledby="schedule-create-title">
     <details class="finance-schedule-create" <%= error ? 'open' : '' %>>
-      <summary id="schedule-create-title">Create a schedule version</summary>
+      <summary id="schedule-create-title">Create or revise this schedule</summary>
       <div class="finance-schedule-create-body">
-        <p>Saving creates a new version and retires the previous active version for the same year, grade, and voucher. Posted assessments keep their snapshot.</p>
+        <p><strong>3. Enter fees</strong> · Review creates a private saved draft. The previous schedule stays active until the reviewed version is saved. Posted assessments keep their snapshot.</p>
+        <% if (!scheduleContext.schoolYear || !scheduleContext.gradeLevel) { %>
+          <p class="empty-state">Choose a school year and grade above to load this fee schedule.</p>
+        <% } else { %>
     <form class="form-stack" method="post" action="/finance/schedules" data-finance-schedule-form>
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <input type="hidden" name="idempotencyKey" value="<%= idempotencyKey %>">
-      <div class="admin-form-grid">
-        <div class="field"><label for="schedule-year">School year</label><input id="schedule-year" name="schoolYear" type="text" maxlength="20" placeholder="2026-2027" value="<%= scheduleForm.schoolYear %>" required></div>
-        <div class="field"><label for="schedule-grade">Grade</label><select id="schedule-grade" name="gradeLevel" required><option value="" <%= !scheduleForm.gradeLevel ? 'selected' : '' %>>Choose grade</option><% if (scheduleForm.gradeLevel && !['Grade 11', 'Grade 12'].includes(scheduleForm.gradeLevel)) { %><option value="<%= scheduleForm.gradeLevel %>" selected>Previous selection: <%= scheduleForm.gradeLevel %></option><% } %><option value="Grade 11" <%= scheduleForm.gradeLevel === 'Grade 11' ? 'selected' : '' %>>Grade 11</option><option value="Grade 12" <%= scheduleForm.gradeLevel === 'Grade 12' ? 'selected' : '' %>>Grade 12</option></select></div>
-        <div class="field"><label for="schedule-voucher">Voucher</label><select id="schedule-voucher" name="voucherCode" required><option value="" <%= !scheduleForm.voucherCode ? 'selected' : '' %>>Choose voucher</option><% if (scheduleForm.voucherCode && !['PUB', 'ESC', 'NV'].includes(scheduleForm.voucherCode)) { %><option value="<%= scheduleForm.voucherCode %>" selected>Previous selection: <%= scheduleForm.voucherCode %></option><% } %><option value="PUB" <%= scheduleForm.voucherCode === 'PUB' ? 'selected' : '' %>>PUB</option><option value="ESC" <%= scheduleForm.voucherCode === 'ESC' ? 'selected' : '' %>>ESC</option><option value="NV" <%= scheduleForm.voucherCode === 'NV' ? 'selected' : '' %>>NV</option></select></div>
-      </div>
+      <input type="hidden" name="schoolYear" value="<%= scheduleContext.schoolYear %>">
+      <input type="hidden" name="gradeLevel" value="<%= scheduleContext.gradeLevel %>">
+      <input type="hidden" name="voucherCode" value="<%= scheduleContext.voucherCode %>">
       <section class="finance-schedule-tuition" aria-labelledby="schedule-tuition-title">
         <div class="finance-schedule-tuition-heading"><h3 id="schedule-tuition-title">Tuition by term</h3><p>Enter staff-approved amounts for DP, Prelim, Midterm, and Finals. Use 0.00 when no tuition is payable. Voucher and workbook data do not set amounts.</p></div>
         <% for (const termNumber of [1, 2, 3]) { const termLines = scheduleForm.lines.filter((line) => line.isRequiredTuition && Number(line.termNumber) === termNumber); %>
-          <details class="finance-schedule-term" data-schedule-term="<%= termNumber %>" <%= termNumber === 1 ? 'open' : '' %>>
+          <details class="finance-schedule-term" name="schedule-term-fees" data-schedule-term="<%= termNumber %>" open>
             <summary><strong>Term <%= termNumber %></strong><span>4 tuition amounts</span></summary>
             <div class="finance-schedule-term-fields">
               <% for (const formLine of termLines) { const index = scheduleForm.lines.indexOf(formLine); %>
@@ -69,16 +94,17 @@
           <td><button class="button button--secondary" type="button" data-remove-finance-line>Remove</button></td>
         </tr>
       </template>
-      <button class="button button--primary" type="submit">Save new schedule version</button>
+      <button class="button button--primary" type="submit">Review new schedule version</button>
     </form>
+        <% } %>
       </div>
     </details>
   </section>
 
   <section class="finance-panel" aria-labelledby="schedule-history-title">
-    <div class="admin-section__heading"><div><h2 id="schedule-history-title">Schedule versions</h2><p>Amounts below are configured student-payable amounts.</p></div></div>
-    <% const scheduleGroups = new Map(); for (const row of schedules) { if (!scheduleGroups.has(row.id)) scheduleGroups.set(row.id, { ...row, lines: [] }); if (row.line_id) scheduleGroups.get(row.id).lines.push(row); } %>
-    <% if (!scheduleGroups.size) { %><p class="empty-state">No schedules have been configured.</p><% } else { %>
+    <div class="admin-section__heading"><div><h2 id="schedule-history-title">Previous versions · <%= scheduleContext.schoolYear %> · <%= scheduleContext.gradeLevel %> · <%= scheduleContext.voucherCode %></h2><p>Earlier versions are kept for history. New rates are saved as a separate reviewed version.</p></div></div>
+    <% const scheduleGroups = new Map(); for (const row of schedules.filter((item) => item.voucher_code === scheduleContext.voucherCode && String(item.school_year) === String(scheduleContext.schoolYear) && item.grade_level === scheduleContext.gradeLevel && item.status !== 'active')) { if (!scheduleGroups.has(row.id)) scheduleGroups.set(row.id, { ...row, lines: [] }); if (row.line_id) scheduleGroups.get(row.id).lines.push(row); } %>
+    <% if (!scheduleGroups.size) { %><p class="empty-state">No previous versions are available for this schedule context.</p><% } else { %>
       <div class="finance-schedule-version-list">
         <% for (const schedule of scheduleGroups.values()) { %>
           <details class="finance-schedule-version">

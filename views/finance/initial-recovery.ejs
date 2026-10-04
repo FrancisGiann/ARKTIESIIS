@@ -1,0 +1,14 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page" id="main-content">
+  <a class="context-back" href="<%= returnHref %>">Return to the finance task</a>
+  <header class="dashboard-heading"><div><p class="eyebrow">Finance · <%= actionLabel %></p><h1>Keep these details while you correct the form</h1><p>No review was saved. Your submitted values are shown below so you can refer to them when you reopen the task.</p></div></header>
+  <p class="form-alert" role="alert"><%= error %></p>
+  <% if (preservedValues.length) { %>
+    <section class="finance-panel" aria-labelledby="previous-values-title">
+      <h2 id="previous-values-title">Values from your submission</h2>
+      <dl class="finance-review-fields"><% for (const field of preservedValues) { %><div><dt><%= field.name %></dt><dd><%= field.value %></dd></div><% } %></dl>
+    </section>
+  <% } else { %><p class="empty-state">There were no form values to recover.</p><% } %>
+  <a class="button button--primary" href="<%= returnHref %>">Open the finance task again</a>
+</main>
+<%- include('../partials/foot') %>

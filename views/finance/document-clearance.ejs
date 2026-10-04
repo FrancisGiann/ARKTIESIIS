@@ -34,6 +34,7 @@
           <% const fullName = [row.first_name, row.middle_name, row.last_name, row.suffix].filter(Boolean).join(' '); %>
           <% const requestedDate = row.requested_on instanceof Date ? row.requested_on.toISOString().slice(0, 10) : String(row.requested_on || '').slice(0, 10); %>
           <% const hasOutstanding = /[1-9]/.test(String(row.outstanding || '0.00')); %>
+          <% const rowActionPath = `/document-clearance/${row.id}/decision`; const failedForRow = failedAction?.path === rowActionPath ? failedAction.input : {}; %>
           <article class="finance-roster-record">
             <div class="finance-roster-record__header">
               <div><h3><%= fullName %> <span class="record-status"><%= row.clearanceStatus.replaceAll('_', ' ') %></span></h3>
@@ -48,7 +49,7 @@
             <% if (row.payment_arrangement) { %><p><strong>Payment arrangement:</strong> <%= row.payment_arrangement %></p><% } %>
             <% if (row.finance_note) { %><p><strong>Private finance note:</strong> <%= row.finance_note %></p><% } %>
             <% if (row.request_status !== 'released' && row.request_status !== 'cancelled') { %>
-              <details class="finance-clearance-actions"><summary>Record finance decision</summary>
+              <details class="finance-clearance-actions" <%= failedForRow.decision ? 'open' : '' %>><summary>Record finance decision</summary>
                 <div class="admin-form-grid">
                   <% if (row.ledgerComplete) { %>
                     <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision">
@@ -56,26 +57,26 @@
                       <input type="hidden" name="decision" value="approve"><input type="hidden" name="expectedRevision" value="<%= row.currentRevision %>"><input type="hidden" name="expectedOutstanding" value="<%= row.outstanding %>">
                       <input type="hidden" name="search" value="<%= queue.filters.search %>"><input type="hidden" name="status" value="<%= queue.filters.status %>"><input type="hidden" name="page" value="<%= queue.filters.page %>">
                       <% if (hasOutstanding) { %>
-                        <div class="field"><label for="clearance-reason-<%= row.id %>">Approval reason</label><textarea id="clearance-reason-<%= row.id %>" name="reason" maxlength="1000" required></textarea></div>
-                        <div class="field"><label for="clearance-arrangement-<%= row.id %>">Payment arrangement</label><textarea id="clearance-arrangement-<%= row.id %>" name="paymentArrangement" maxlength="1000" required></textarea></div>
+                        <div class="field"><label for="clearance-reason-<%= row.id %>">Approval reason</label><textarea id="clearance-reason-<%= row.id %>" name="reason" maxlength="1000" required><%= failedForRow.decision === 'approve' ? failedForRow.reason || '' : '' %></textarea></div>
+                        <div class="field"><label for="clearance-arrangement-<%= row.id %>">Payment arrangement</label><textarea id="clearance-arrangement-<%= row.id %>" name="paymentArrangement" maxlength="1000" required><%= failedForRow.decision === 'approve' ? failedForRow.paymentArrangement || '' : '' %></textarea></div>
                       <% } %>
-                      <div class="field"><label for="clearance-note-<%= row.id %>">Private finance note (finance staff only, optional)</label><textarea id="clearance-note-<%= row.id %>" name="financeNote" maxlength="1000"></textarea></div>
-                      <label class="check-row"><input type="checkbox" name="ledgerReviewConfirmed" value="1" required> I reviewed the complete all-years annual and legacy balance shown above.</label>
+                      <div class="field"><label for="clearance-note-<%= row.id %>">Private finance note (finance staff only, optional)</label><textarea id="clearance-note-<%= row.id %>" name="financeNote" maxlength="1000"><%= failedForRow.decision === 'approve' ? failedForRow.financeNote || '' : '' %></textarea></div>
+                      <label class="check-row"><input type="checkbox" name="ledgerReviewConfirmed" value="1" <%= failedForRow.decision === 'approve' && (failedForRow.ledgerReviewConfirmed === '1' || failedForRow.ledgerReviewConfirmed === true) ? 'checked' : '' %> required> I reviewed the complete all-years annual and legacy balance shown above.</label>
                       <button class="button button--primary" type="submit">Approve clearance</button>
                     </form>
                   <% } %>
                   <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision">
                     <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= row.decisionKeys.hold %>"><input type="hidden" name="decision" value="hold">
                     <input type="hidden" name="search" value="<%= queue.filters.search %>"><input type="hidden" name="status" value="<%= queue.filters.status %>"><input type="hidden" name="page" value="<%= queue.filters.page %>">
-                    <div class="field"><label for="hold-reason-<%= row.id %>">Reason to place on hold</label><textarea id="hold-reason-<%= row.id %>" name="reason" maxlength="1000" minlength="5" required></textarea></div>
-                    <div class="field"><label for="hold-note-<%= row.id %>">Private finance note (optional)</label><textarea id="hold-note-<%= row.id %>" name="financeNote" maxlength="1000"></textarea></div>
+                    <div class="field"><label for="hold-reason-<%= row.id %>">Reason to place on hold</label><textarea id="hold-reason-<%= row.id %>" name="reason" maxlength="1000" minlength="5" required><%= failedForRow.decision === 'hold' ? failedForRow.reason || '' : '' %></textarea></div>
+                    <div class="field"><label for="hold-note-<%= row.id %>">Private finance note (optional)</label><textarea id="hold-note-<%= row.id %>" name="financeNote" maxlength="1000"><%= failedForRow.decision === 'hold' ? failedForRow.financeNote || '' : '' %></textarea></div>
                     <button class="button button--secondary" type="submit">Place on hold</button>
                   </form>
                   <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision">
                     <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= row.decisionKeys.withdraw %>"><input type="hidden" name="decision" value="withdraw">
                     <input type="hidden" name="search" value="<%= queue.filters.search %>"><input type="hidden" name="status" value="<%= queue.filters.status %>"><input type="hidden" name="page" value="<%= queue.filters.page %>">
-                    <div class="field"><label for="withdraw-reason-<%= row.id %>">Reason to withdraw clearance</label><textarea id="withdraw-reason-<%= row.id %>" name="reason" maxlength="1000" minlength="5" required></textarea></div>
-                    <div class="field"><label for="withdraw-note-<%= row.id %>">Private finance note (optional)</label><textarea id="withdraw-note-<%= row.id %>" name="financeNote" maxlength="1000"></textarea></div>
+                    <div class="field"><label for="withdraw-reason-<%= row.id %>">Reason to withdraw clearance</label><textarea id="withdraw-reason-<%= row.id %>" name="reason" maxlength="1000" minlength="5" required><%= failedForRow.decision === 'withdraw' ? failedForRow.reason || '' : '' %></textarea></div>
+                    <div class="field"><label for="withdraw-note-<%= row.id %>">Private finance note (optional)</label><textarea id="withdraw-note-<%= row.id %>" name="financeNote" maxlength="1000"><%= failedForRow.decision === 'withdraw' ? failedForRow.financeNote || '' : '' %></textarea></div>
                     <button class="button button--secondary" type="submit">Withdraw clearance</button>
                   </form>
                 </div>

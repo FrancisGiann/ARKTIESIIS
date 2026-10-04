@@ -9,7 +9,10 @@ const { formatMoney } = require('../src/utils/formatMoney');
 const viewsDirectory = path.join(__dirname, '../views/finance');
 
 async function renderFinanceView(name, locals) {
-  return ejs.renderFile(path.join(viewsDirectory, name + '.ejs'), { title: 'Finance test', formatMoney, ...locals });
+  return ejs.renderFile(path.join(viewsDirectory, name + '.ejs'), {
+    title: 'Finance test', formatMoney, failedAction: null, preservedValues: [], paymentValues: null,
+    clearanceValues: {}, transactionValues: {}, formValues: {}, ...locals
+  });
 }
 
 test('finance annual roster pages annual records and groups term placements under each summary', async () => {
@@ -47,7 +50,7 @@ test('finance annual roster pages annual records and groups term placements unde
           observed.push({ statement, values: { ...values } });
           if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'finance' }] };
           if (statement.includes('COUNT(DISTINCT annual.id)')) return { recordset: [{ total_records: 41 }] };
-          if (statement.includes('WITH MatchingPlacements AS')) return { recordset: annualRows };
+          if (statement.includes('MatchingPlacements AS')) return { recordset: annualRows };
           return { recordsets: [
             [{ school_year: '2026-2027' }],
             [{ term_id: 1, term_label: '2026-2027 · Term 1' }],
@@ -72,9 +75,9 @@ test('finance annual roster pages annual records and groups term placements unde
   assert.equal(result.rows[0].placements.length, 2);
   assert.equal(result.rows[0].annual_balance, '12345.67');
   assert.equal(result.rows[0].placements[0].current_term_due, '2500.01');
-  const dataQuery = observed.find(({ statement }) => statement.includes('WITH MatchingPlacements AS'));
+  const dataQuery = observed.find(({ statement }) => statement.includes('MatchingPlacements AS'));
   assert.match(dataQuery.statement, /LIMIT @pageSize OFFSET @offset/);
-  assert.match(dataQuery.statement, /ORDER BY page\.school_year DESC, page\.last_name, page\.first_name, page\.annual_enrollment_id, enrollment\.annual_term_number/);
+  assert.match(dataQuery.statement, /ORDER BY annual\.school_year DESC, student\.last_name, student\.first_name, annual\.id, enrollment\.annual_term_number/);
   assert.equal(dataQuery.values.offset, 40);
   assert.equal(dataQuery.values.pageSize, 20);
   assert.equal(dataQuery.values.searchPattern, '%Ari%');
@@ -83,7 +86,7 @@ test('finance annual roster pages annual records and groups term placements unde
   assert.equal(dataQuery.values.placementStatus, 'pending_payment');
 
   await service.listRosterPage(7, { page: 'not-a-page' });
-  assert.equal(observed.filter(({ statement }) => statement.includes('WITH MatchingPlacements AS')).at(-1).values.offset, 0);
+  assert.equal(observed.filter(({ statement }) => statement.includes('MatchingPlacements AS')).at(-1).values.offset, 0);
   await assert.rejects(service.listRosterPage(7, { voucherCode: 'INVALID' }), AnnualFinanceError);
 
   const html = await renderFinanceView('annual-roster', {
@@ -134,18 +137,34 @@ test('finance annual roster pages annual records and groups term placements unde
       allocationHistory: [], legacyReconciliationHistory: [], feeComments: [], financeHandbookNumbers: [], financeHandbookHistory: []
     },
     financeCases: { exemptions: [], specialSubjects: [], departures: [] },
+    accountView: 'overview',
+    accountTabs: [
+      { view: 'overview', label: 'Overview' }, { view: 'payments', label: 'Payments' },
+      { view: 'charges', label: 'Charges & coverage' }, { view: 'clearance', label: 'Clearance & reviews' },
+      { view: 'history', label: 'History' }
+    ],
+    backHref: '/finance?schoolYear=2026-2027&termId=1',
     schedules: [], tokens: { payment: 'test-payment-token', assessment: 'test-assessment-token' },
     csrfToken: 'test-csrf-token', notice: null, error: null, preview: null
   });
   assert.match(accountHtml, /Grade 11 · Voucher type ESC/);
   assert.doesNotMatch(accountHtml, /Category A|voucher category/i);
+  const paymentDetails = accountHtml.match(/<section class="finance-payment-wizard__panel" data-payment-step="details"[\s\S]*?<\/section>/)?.[0] || '';
+  const paymentAllocations = accountHtml.match(/<section class="finance-payment-wizard__panel" data-payment-step="allocations"[\s\S]*?<\/section>/)?.[0] || '';
+  assert.match(accountHtml, /data-payment-step="details"[\s\S]*?<\/section>\s*<section class="finance-payment-wizard__panel" data-payment-step="allocations"/);
+  assert.match(paymentDetails, /name="amount"[^>]*required/);
+  assert.match(paymentAllocations, /Suggest oldest balances/);
+  assert.match(paymentAllocations, /name="allocationMode" value="credit">Keep all as unallocated credit/);
+  assert.doesNotMatch(paymentDetails + paymentAllocations, /\shidden(?:\s|>)/, 'both steps stay available without JavaScript');
+  assert.match(accountHtml, /src="\/js\/finance-payment-wizard\.js"/);
 });
 
 test('finance disclosures keep report, schedule, and zero-charge departure details available', async () => {
   const reportHtml = await renderFinanceView('reports', {
     currentUser: null,
     error: null,
-    filters: { fromDate: '2026-10-01', toDate: '2026-10-31' },
+    filters: { view: 'term-balances', fromDate: '2026-10-01', toDate: '2026-10-31' },
+    today: '2026-10-04', weekStart: '2026-09-28', monthStart: '2026-10-01',
     report: {
       fromDate: '2026-10-01', toDate: '2026-10-31',
       collectionSummary: { distinct_payers: 0, valid_collection_amount: '0.00', payment_count: 0 },
@@ -181,15 +200,22 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
       schoolYear: '2026-2027', gradeLevel: 'Grade 11', voucherCode: 'ESC',
       lines: scheduleTuitionLines
     },
+    scheduleContext: {
+      schoolYear: '2026-2027', gradeLevel: 'Grade 11', voucherCode: 'ESC',
+      voucherCodes: ['PUB', 'ESC', 'NV'], voucherCounts: { PUB: 1, ESC: 2, NV: 0 },
+      schoolYears: ['2026-2027'], grades: ['Grade 11', 'Grade 12'],
+      activeSchedule: { id: 2, version_no: 2, lines: [{ term_number: 2, line_name: 'Current fee', installment: 'Prelim', amount: '20.00', is_optional: 0 }] }
+    },
     schedules: [
       { id: 1, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC', version_no: 1, status: 'retired', line_id: 1, term_number: 1, line_name: 'Old fee', installment: 'Finals', fee_category: 'tuition', amount: '10.00' },
       { id: 2, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC', version_no: 2, status: 'active', line_id: 2, term_number: 2, line_name: 'Current fee', installment: 'Prelim', fee_category: 'tuition', amount: '20.00' }
     ]
   });
   assert.doesNotMatch(scheduleHtml, /<details class="finance-schedule-create" open/);
-  assert.match(scheduleHtml, /finance-schedule-version-status--active/);
-  assert.match(scheduleHtml, /finance-schedule-version-status--retired/);
-  assert.match(scheduleHtml, /<summary[^>]*>[\s\S]*Create a schedule version/);
+  assert.match(scheduleHtml, /Current approved amounts/);
+  assert.match(scheduleHtml, /Active version 2/);
+  assert.match(scheduleHtml, /Previous versions · 2026-2027 · Grade 11 · ESC/);
+  assert.match(scheduleHtml, /<summary[^>]*>Create or revise this schedule/);
   assert.match(scheduleHtml, /Fee lines for 2026-2027 Grade 11 ESC version 1/);
   assert.equal((scheduleHtml.match(/data-schedule-term="[123]"/g) || []).length, 3);
   assert.match(scheduleHtml, /data-schedule-term="1" open/);
@@ -217,8 +243,8 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
       terms: [{ enrollment_id: 82, annual_term_number: 2, academic_activity_review_required: true, charges: [] }]
     }]
   });
-  const departureSummary = departureHtml.match(/<details class="finance-departure-case">\s*<summary>([\s\S]*?)<\/summary>/)?.[1] || '';
-  assert.match(departureSummary, /1 affected terms · 0 charges/);
+  const departureSummary = departureHtml.match(/<details class="finance-departure-case"\s*>\s*<summary>([\s\S]*?)<\/summary>/)?.[1] || '';
+  assert.match(departureSummary, /1 affected terms · 0 charges to review/);
   assert.doesNotMatch(departureSummary, /Registrar record reason/);
   assert.match(departureHtml, /No annual charges are linked to this placement/);
   assert.match(departureHtml, /Academic activity exists; verify grade and schedule history separately/);
@@ -249,7 +275,7 @@ test('schedule validation reopens the form with submitted fee lines and idempote
   assert.equal(typeof schedulePost, 'function');
   const req = {
     authUser: { id: 7 },
-    query: {},
+    query: { schoolYear: '2026-2027', gradeLevel: 'Grade 11', voucherCode: 'ESC' },
     session: { csrfToken: 'csrf-for-schedule-test' },
     body: {
       _csrf: 'csrf-for-schedule-test', idempotencyKey,

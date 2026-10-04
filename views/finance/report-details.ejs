@@ -1,0 +1,29 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page finance-report-details-page" id="main-content">
+  <% const reportTitle = ({collections:'Collection records',allocations:'Allocation records',corrections:'Payment corrections'})[detail.kind]; %>
+  <a class="context-back" href="/finance/reports?<%= new URLSearchParams({ view: detail.kind, fromDate: detail.fromDate, toDate: detail.toDate }).toString() %>">Back to <%= detail.kind %> report</a>
+  <header class="dashboard-heading"><div><h1><%= reportTitle %></h1><p><%= detail.fromDate %> through <%= detail.toDate %> · <%= detail.pagination.totalRecords %> matching record<%= detail.pagination.totalRecords === 1 ? '' : 's' %></p></div></header>
+  <% const pages = detail.pagination; const pageParams = new URLSearchParams({ kind: detail.kind, fromDate: detail.fromDate, toDate: detail.toDate }); const pageHref = (page) => { const params = new URLSearchParams(pageParams); params.set('page', String(page)); return `/finance/reports/details?${params.toString()}`; }; %>
+  <section class="finance-panel" aria-label="Report records">
+    <% if (!detail.rows.length) { %><p class="empty-state">No detailed records match this date range.</p><% } else { %>
+      <p>Showing <strong><%= pages.from %>–<%= pages.to %></strong> of <strong><%= pages.totalRecords %></strong> records.</p>
+      <div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Date</th><th>Student</th><th><%= detail.kind === 'allocations' ? 'Destination' : detail.kind === 'corrections' ? 'Correction' : 'Payment' %></th><th>Amount</th><th>Account</th></tr></thead><tbody>
+        <% for (const row of detail.rows) { %>
+          <tr>
+            <td data-label="Date"><%= row.event_date %></td>
+            <td data-label="Student"><strong><%= [row.first_name,row.middle_name,row.last_name,row.suffix].filter(Boolean).join(' ') %></strong><br><span class="muted-copy"><%= row.student_no %></span></td>
+            <td data-label="<%= detail.kind === 'allocations' ? 'Destination' : detail.kind === 'corrections' ? 'Correction' : 'Payment' %>">
+              <% if (detail.kind === 'allocations') { %><%= row.target_label || 'Unresolved allocation target' %><% if (row.payment_id) { %><br><span class="muted-copy">Payment #<%= row.payment_id %></span><% } %>
+              <% } else if (detail.kind === 'corrections') { %>Payment #<%= row.payment_id %><br><span class="muted-copy"><%= row.correction_reason %></span>
+              <% } else { %>Payment #<%= row.payment_id %><%= row.reference_no ? ` · ${row.reference_no}` : '' %><%= row.receipt_issued ? ' · receipt marked issued' : '' %><% } %>
+            </td>
+            <td data-label="Amount">₱<%= formatMoney(row.amount) %></td>
+            <td data-label="Account"><a href="/finance/students/<%= row.student_id %>/annual?view=payments">Open student account</a></td>
+          </tr>
+        <% } %>
+      </tbody></table></div>
+      <nav class="finance-roster-pagination" aria-label="Report record pages"><span>Page <%= pages.page %> of <%= pages.totalPages %></span><span><% if (pages.page > 1) { %><a class="button button--secondary" href="<%= pageHref(pages.page - 1) %>">Previous</a><% } %> <% if (pages.page < pages.totalPages) { %><a class="button button--secondary" href="<%= pageHref(pages.page + 1) %>">Next</a><% } %></span></nav>
+    <% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

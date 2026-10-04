@@ -5,6 +5,8 @@ const { createAcademicRecordsService } = require('../services/academicRecordsSer
 const { createFinanceService } = require('../services/financeService');
 const { createAnnualFinanceService } = require('../services/annualFinanceService');
 const { createClassScheduleService } = require('../services/classScheduleService');
+const { createStatementProjection } = require('../utils/financeStatementProjection');
+const { formatFinanceDateTime } = require('../utils/financeDateTime');
 
 const gradeLabelCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 const ordinalRanks = new Map([
@@ -148,12 +150,44 @@ function createStudentPortalRouter({ getPool, sql, studentRecordsService, academ
     try {
       const finance = await finances.getOwnStudentAccount(req.authUser.id);
       if (!finance.student) return res.status(404).render('error', { title: 'Statement unavailable', message: 'Your linked student record was not found.' });
-      const ledger = await annualFinances.getStudentLedger(req.authUser.id, finance.student.id, 'student');
+      const ledger = createStatementProjection(await annualFinances.getStudentLedger(req.authUser.id, finance.student.id, 'student'));
       return res.set('Cache-Control', 'private, no-store').render('finance/statement', {
-        title: 'Statement of Account', currentUser: req.authUser, ledger, printMode: true
+        title: 'Statement of Account', currentUser: req.authUser, ledger, printMode: true, formatFinanceDateTime
       });
     } catch {
       return res.status(503).render('error', { title: 'Statement unavailable', message: 'Your statement could not be loaded right now.' });
+    }
+  });
+
+  router.get('/finance/payments/:paymentId/confirmation', async (req, res) => {
+    try {
+      const finance = await finances.getOwnStudentAccount(req.authUser.id);
+      if (!finance.student) return res.status(404).render('error', { title: 'Payment confirmation', message: 'Your linked student record was not found.' });
+      const confirmation = await annualFinances.getAnnualPaymentConfirmation(req.authUser.id, finance.student.id, req.params.paymentId, 'student');
+      return res.set('Cache-Control', 'private, no-store').render('finance/payment-confirmation', {
+        title: 'Payment confirmation', currentUser: req.authUser, confirmation, kind: 'annual', formatFinanceDateTime
+      });
+    } catch (error) {
+      const status = Number.isInteger(error?.status) && error.status < 500 ? error.status : 503;
+      return res.status(status).set('Cache-Control', 'private, no-store').render('error', {
+        title: 'Payment confirmation', message: status < 500 ? error.message : 'The payment confirmation could not be loaded.'
+      });
+    }
+  });
+
+  router.get('/finance/legacy-payments/:paymentId/confirmation', async (req, res) => {
+    try {
+      const finance = await finances.getOwnStudentAccount(req.authUser.id);
+      if (!finance.student) return res.status(404).render('error', { title: 'Payment confirmation', message: 'Your linked student record was not found.' });
+      const confirmation = await annualFinances.getLegacyPaymentConfirmation(req.authUser.id, finance.student.id, req.params.paymentId, 'student');
+      return res.set('Cache-Control', 'private, no-store').render('finance/payment-confirmation', {
+        title: 'Legacy payment confirmation', currentUser: req.authUser, confirmation, kind: 'legacy', formatFinanceDateTime
+      });
+    } catch (error) {
+      const status = Number.isInteger(error?.status) && error.status < 500 ? error.status : 503;
+      return res.status(status).set('Cache-Control', 'private, no-store').render('error', {
+        title: 'Payment confirmation', message: status < 500 ? error.message : 'The payment confirmation could not be loaded.'
+      });
     }
   });
 

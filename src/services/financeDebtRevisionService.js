@@ -33,7 +33,8 @@ function ledgerCompletenessCondition(studentExpression) {
 function createFinanceDebtRevisionService({
   getPool = defaultGetPool,
   sql = defaultSql,
-  transactionFactory = (pool) => new sql.Transaction(pool)
+  transactionFactory = (pool) => new sql.Transaction(pool),
+  transaction: boundTransaction = null
 } = {}) {
   async function lockStudent(transaction, studentId) {
     const studentResult = await transaction.request().input('studentId', sql.Int, studentId)
@@ -94,6 +95,7 @@ function createFinanceDebtRevisionService({
   }
 
   async function getStudentSnapshot(studentId) {
+    if (boundTransaction) return readSnapshot(boundTransaction, studentId);
     const pool = await getPool();
     const transaction = transactionFactory(pool);
     await transaction.begin(sql.ISOLATION_LEVEL.REPEATABLE_READ);

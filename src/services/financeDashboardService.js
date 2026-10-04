@@ -1,4 +1,7 @@
+'use strict';
+
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
+const { FINANCE_STATUS, FINANCE_TERM_CLASSIFICATION_CTES, TRACKING_MODES } = require('./financeTermClassification');
 
 class FinanceDashboardError extends Error {
   constructor(message, status = 400) {
@@ -19,17 +22,37 @@ function filterString(value, maxLength) {
   return typeof value === 'string' && value.length <= maxLength ? value.trim() : '';
 }
 
+const STATUS_LABELS = Object.freeze([
+  { status: FINANCE_STATUS.UNPAID, label: 'Unpaid' },
+  { status: FINANCE_STATUS.PARTIAL, label: 'Partially paid' },
+  { status: FINANCE_STATUS.FULL, label: 'Fully paid' },
+  { status: FINANCE_STATUS.NO_PAYMENT_REQUIRED, label: 'No payment required' },
+  { status: FINANCE_STATUS.NEEDS_REVIEW, label: 'Needs review' }
+]);
+
 function createFinanceDashboardService({ getPool = defaultGetPool, sql = defaultSql } = {}) {
   async function getOverview(actorInput, filters = {}) {
     const actorId = normalizeActorId(actorInput);
     if (!actorId) throw new FinanceDashboardError('Finance or database administrator access is required.', 403);
     const pool = await getPool();
     const actor = await pool.request().input('actorId', sql.Int, actorId)
-      .query(`SELECT id FROM users
-        WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin')`);
-    if (!actor.recordset?.length) {
-      throw new FinanceDashboardError('Your finance access is no longer active. Sign in again.', 403);
-    }
+      .query(`SELECT id FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin')`);
+    if (!actor.recordset?.length) throw new FinanceDashboardError('Your finance access is no longer active. Sign in again.', 403);
+
+    const queueResult = await pool.request().input('actorId', sql.Int, actorId)
+      .query(`SELECT
+        (SELECT COUNT(*) FROM student_document_requests AS request
+          WHERE request.status IN ('requested', 'processing', 'ready')) AS document_clearance_count,
+        (SELECT COUNT(*) FROM finance_departure_cases AS departure
+          WHERE departure.finance_status = 'pending') AS departure_review_count,
+        (SELECT COUNT(*) FROM finance_review_drafts AS draft
+          WHERE draft.owner_user_id = @actorId AND draft.status = 'pending') AS saved_review_count`);
+    const queueRow = queueResult.recordset?.[0] || {};
+    const queueCounts = {
+      documentClearance: Number(queueRow.document_clearance_count || 0),
+      departureReview: Number(queueRow.departure_review_count || 0),
+      savedReviews: Number(queueRow.saved_review_count || 0)
+    };
 
     const configuredResult = await pool.request().query(`SELECT configured.school_year, configured.term_number,
         term.id AS academic_term_id, term.term, term.is_current
@@ -47,125 +70,83 @@ function createFinanceDashboardService({ getPool = defaultGetPool, sql = default
     const schoolYears = [...new Set(configuredTerms.map((term) => term.schoolYear))];
     const currentTerm = configuredTerms.find((term) => term.isCurrent) || null;
     const requestedYear = filterString(filters.schoolYear, 20);
-    if (requestedYear && !schoolYears.includes(requestedYear)) {
-      throw new FinanceDashboardError('Choose a configured school year.');
-    }
+    if (requestedYear && !schoolYears.includes(requestedYear)) throw new FinanceDashboardError('Choose a configured school year.');
     const selectedSchoolYear = requestedYear || currentTerm?.schoolYear || '';
-    const gradeLevelsResult = selectedSchoolYear
-      ? await pool.request().input('schoolYear', sql.NVarChar(20), selectedSchoolYear)
-        .query(`SELECT DISTINCT annual.grade_level
-          FROM annual_enrollments AS annual
-          WHERE annual.school_year = @schoolYear AND annual.intake_status <> 'legacy'
-            AND annual.grade_level IN ('Grade 11', 'Grade 12')
-          ORDER BY annual.grade_level`)
-      : { recordset: [] };
-    const gradeLevels = (gradeLevelsResult.recordset || []).map((row) => String(row.grade_level));
-    const requestedGrade = filterString(filters.gradeLevel, 50);
-    if (requestedGrade && !['Grade 11', 'Grade 12'].includes(requestedGrade)) {
-      throw new FinanceDashboardError('Choose Grade 11 or Grade 12.');
-    }
-    const selectedGrade = requestedGrade || '';
+    const availableTerms = configuredTerms.filter((term) => term.schoolYear === selectedSchoolYear);
+    const requestedTermId = filterString(filters.termId, 12);
+    const selectedTerm = requestedTermId
+      ? availableTerms.find((term) => String(term.academicTermId) === requestedTermId)
+      : availableTerms.find((term) => term.isCurrent) || availableTerms[0] || null;
+    if (requestedTermId && !selectedTerm) throw new FinanceDashboardError('Choose a configured term in the selected school year.');
+    const selectedGrade = filterString(filters.gradeLevel, 50);
+    if (selectedGrade && !['Grade 11', 'Grade 12'].includes(selectedGrade)) throw new FinanceDashboardError('Choose Grade 11 or Grade 12.');
+    const selectedVoucher = filterString(filters.voucherCode, 10);
+    if (selectedVoucher && !['PUB', 'ESC', 'NV'].includes(selectedVoucher)) throw new FinanceDashboardError('Choose PUB, ESC, or NV.');
+    const selectedInstallment = (filterString(filters.installment, 20) || 'whole').toLowerCase();
+    if (!TRACKING_MODES.includes(selectedInstallment)) throw new FinanceDashboardError('Choose whole-term or a canonical tuition installment.');
+    const statusColumn = `${selectedInstallment}_status`;
 
-    if (!selectedSchoolYear) {
-      return {
-        configuredTerms, schoolYears, gradeLevels: ['Grade 11', 'Grade 12'], selectedSchoolYear: '',
-        selectedGrade, terms: [], needsSchoolYearSelection: true
-      };
+    const gradeResult = selectedSchoolYear
+      ? await pool.request().input('schoolYear', sql.NVarChar(20), selectedSchoolYear)
+        .query(`SELECT DISTINCT grade_level FROM annual_enrollments
+          WHERE school_year = @schoolYear AND intake_status <> 'legacy' AND grade_level IN ('Grade 11', 'Grade 12') ORDER BY grade_level`)
+      : { recordset: [] };
+    const gradeLevels = (gradeResult.recordset || []).map((row) => String(row.grade_level));
+    const sectionResult = selectedSchoolYear && selectedTerm
+      ? await pool.request().input('schoolYear', sql.NVarChar(20), selectedSchoolYear)
+        .input('termId', sql.Int, selectedTerm.academicTermId)
+        .query(`SELECT DISTINCT section.id AS section_id, section.name AS section_name, section.cluster, section.strand
+          FROM sections AS section INNER JOIN enrollments AS enrollment ON enrollment.section_id = section.id
+          INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
+          WHERE annual.school_year = @schoolYear AND enrollment.academic_term_id = @termId
+            AND enrollment.term_scope_status = 'applicable' AND enrollment.enrollment_status IN ('enrolled', 'pending_payment')
+            AND annual.intake_status NOT IN ('legacy', 'cancelled', 'dropped', 'transferred')
+          ORDER BY section.name, section.id`)
+      : { recordset: [] };
+    const sections = (sectionResult.recordset || []).map((row) => ({ id: String(row.section_id), name: String(row.section_name), cluster: row.cluster, strand: row.strand }));
+    const requestedSection = filterString(filters.sectionId, 12);
+    if (requestedSection && (!/^\d{1,10}$/.test(requestedSection) || !sections.some((section) => section.id === requestedSection))) {
+      throw new FinanceDashboardError('Choose a section in the selected term.');
+    }
+    const selectedSectionId = requestedSection || '';
+    const voucherCodes = ['PUB', 'ESC', 'NV'];
+    if (!selectedSchoolYear || !selectedTerm) {
+      return { configuredTerms, schoolYears, availableTerms, gradeLevels, sections, voucherCodes,
+        selectedSchoolYear, selectedTermId: '', selectedTerm: null, selectedGrade, selectedVoucher, selectedSectionId, selectedInstallment,
+        statusCounts: STATUS_LABELS.map((item) => ({ ...item, count: 0 })), totalEligible: 0,
+        queueCounts,
+        needsSchoolYearSelection: !selectedSchoolYear, needsTermSelection: Boolean(selectedSchoolYear) };
     }
 
     const counts = await pool.request().input('schoolYear', sql.NVarChar(20), selectedSchoolYear)
+      .input('termId', sql.Int, selectedTerm.academicTermId)
       .input('gradeLevel', sql.NVarChar(50), selectedGrade || null)
-      .query(`WITH configured_terms AS (
-          SELECT configured.school_year, configured.term_number, term.id AS academic_term_id, term.term
-          FROM school_year_term_order AS configured
-          INNER JOIN academic_terms AS term ON term.id = configured.academic_term_id
-            AND term.school_year = configured.school_year
-          WHERE configured.school_year = @schoolYear
-            AND NOT EXISTS (SELECT 1 FROM school_year_term_order_reviews AS review
-              WHERE review.academic_term_id = term.id AND review.resolved_at IS NULL)
-        ), eligible_terms AS (
-          SELECT annual.id AS annual_enrollment_id, annual.student_id, annual.grade_level,
-            enrollment.id AS enrollment_id, enrollment.annual_term_number, configured.term
-          FROM configured_terms AS configured
-          INNER JOIN enrollments AS enrollment ON enrollment.academic_term_id = configured.academic_term_id
-            AND enrollment.annual_term_number = configured.term_number
-            AND enrollment.term_scope_status = 'applicable'
-            AND enrollment.enrollment_status IN ('enrolled', 'pending_payment')
-          INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
-            AND annual.school_year = configured.school_year AND annual.intake_status NOT IN ('legacy', 'cancelled', 'dropped', 'transferred')
-          INNER JOIN students AS student ON student.id = annual.student_id AND student.status = 'active'
-          INNER JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.id
-          INNER JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = annual.id
-            AND confirmation.assessment_id = assessment.id
-          WHERE @gradeLevel IS NULL OR annual.grade_level = @gradeLevel
-        ), allocations AS (
-          SELECT charge.enrollment_id, charge.annual_enrollment_id,
-            SUM(net.net_amount) AS net_allocated
-          FROM assessed_charges AS charge
-          INNER JOIN eligible_terms AS eligible ON eligible.enrollment_id = charge.enrollment_id
-            AND eligible.annual_enrollment_id = charge.annual_enrollment_id
-          INNER JOIN v_finance_net_payment_allocations AS net ON net.charge_id = charge.id
-            AND net.net_amount > 0
-          INNER JOIN finance_payments AS payment ON payment.id = net.payment_id
-            AND payment.student_id = eligible.student_id AND payment.is_reversed = 0
-          GROUP BY charge.enrollment_id, charge.annual_enrollment_id
-        ), charge_totals AS (
-          SELECT charge.enrollment_id, charge.annual_enrollment_id,
-            SUM(charge.amount + COALESCE(adjustments.amount, 0)) AS amount_required,
-            SUM(charge.amount + COALESCE(adjustments.amount, 0) - COALESCE(allocations.net_allocated, 0)) AS amount_due
-          FROM assessed_charges AS charge
-          INNER JOIN eligible_terms AS eligible ON eligible.enrollment_id = charge.enrollment_id
-            AND eligible.annual_enrollment_id = charge.annual_enrollment_id
-          LEFT JOIN (
-            SELECT adjustment.charge_id, SUM(adjustment.amount) AS amount
-            FROM finance_charge_adjustments AS adjustment GROUP BY adjustment.charge_id
-          ) AS adjustments ON adjustments.charge_id = charge.id
-          LEFT JOIN (
-            SELECT net.charge_id, payment.student_id, SUM(net.net_amount) AS net_allocated
-            FROM v_finance_net_payment_allocations AS net
-            INNER JOIN finance_payments AS payment ON payment.id = net.payment_id AND payment.is_reversed = 0
-            WHERE net.net_amount > 0 GROUP BY net.charge_id, payment.student_id
-          ) AS allocations ON allocations.charge_id = charge.id AND allocations.student_id = eligible.student_id
-          GROUP BY charge.enrollment_id, charge.annual_enrollment_id
-        ), per_student_term AS (
-          SELECT eligible.annual_enrollment_id, eligible.student_id, eligible.grade_level,
-            eligible.annual_term_number, eligible.term,
-            COALESCE(SUM(allocations.net_allocated), 0) AS net_allocated,
-            COALESCE(SUM(charge_totals.amount_due), 0) AS amount_due,
-            COALESCE(SUM(charge_totals.amount_required), 0) AS amount_required,
-            COUNT(charge_totals.enrollment_id) AS assessed_term_count
-          FROM eligible_terms AS eligible
-          LEFT JOIN allocations ON allocations.enrollment_id = eligible.enrollment_id
-            AND allocations.annual_enrollment_id = eligible.annual_enrollment_id
-          LEFT JOIN charge_totals ON charge_totals.enrollment_id = eligible.enrollment_id
-            AND charge_totals.annual_enrollment_id = eligible.annual_enrollment_id
-          GROUP BY eligible.annual_enrollment_id, eligible.student_id, eligible.grade_level,
-            eligible.annual_term_number, eligible.term
-        )
-        SELECT configured.term_number, configured.academic_term_id, configured.term,
-          COUNT(DISTINCT CASE WHEN per_student_term.net_allocated > 0 THEN per_student_term.student_id END) AS students_with_allocated_payment,
-          COUNT(DISTINCT CASE WHEN per_student_term.assessed_term_count > 0 AND per_student_term.amount_due <= 0
-            THEN per_student_term.student_id END) AS settled_term_balance,
-          COUNT(DISTINCT CASE WHEN per_student_term.assessed_term_count > 0 AND per_student_term.amount_required <= 0
-            THEN per_student_term.student_id END) AS no_payment_required
-        FROM configured_terms AS configured
-        LEFT JOIN per_student_term ON per_student_term.annual_term_number = configured.term_number
-        GROUP BY configured.term_number, configured.academic_term_id, configured.term
-        ORDER BY configured.term_number`);
+      .input('voucherCode', sql.NVarChar(10), selectedVoucher || null)
+      .input('sectionId', sql.Int, selectedSectionId ? Number(selectedSectionId) : null)
+      .query(`SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR WITH ${FINANCE_TERM_CLASSIFICATION_CTES}
+        SELECT ${statusColumn} AS finance_status, COUNT(DISTINCT student_id) AS student_count
+        FROM FinanceTermClassification
+        WHERE school_year = @schoolYear AND academic_term_id = @termId
+          AND term_scope_status = 'applicable' AND enrollment_status IN ('enrolled', 'pending_payment')
+          AND intake_status NOT IN ('legacy', 'cancelled', 'dropped', 'transferred') AND student_status = 'active'
+          AND (@gradeLevel IS NULL OR grade_level = @gradeLevel)
+          AND (@voucherCode IS NULL OR voucher_code = @voucherCode)
+          AND (@sectionId IS NULL OR section_id = @sectionId)
+        GROUP BY ${statusColumn}`);
+    const countByStatus = new Map((counts.recordset || []).map((row) => [String(row.finance_status), Number(row.student_count || 0)]));
+    const statusCounts = STATUS_LABELS.map((item) => ({ ...item, count: countByStatus.get(item.status) || 0 }));
     return {
-      configuredTerms, schoolYears, gradeLevels: gradeLevels.length ? gradeLevels : ['Grade 11', 'Grade 12'],
-      selectedSchoolYear, selectedGrade,
-      terms: (counts.recordset || []).map((row) => ({
-        termNumber: Number(row.term_number), academicTermId: Number(row.academic_term_id), term: String(row.term),
-        studentsWithAllocatedPayment: Number(row.students_with_allocated_payment || 0),
-        settledTermBalance: Number(row.settled_term_balance || 0),
-        noPaymentRequired: Number(row.no_payment_required || 0)
-      })),
-      needsSchoolYearSelection: false
+      configuredTerms, schoolYears, availableTerms,
+      gradeLevels: gradeLevels.length ? gradeLevels : ['Grade 11', 'Grade 12'], voucherCodes,
+      selectedSchoolYear, selectedTermId: String(selectedTerm.academicTermId), selectedTerm,
+      selectedGrade, selectedVoucher, selectedSectionId, selectedInstallment, sections, statusCounts,
+      queueCounts,
+      totalEligible: statusCounts.reduce((sum, item) => sum + item.count, 0),
+      needsSchoolYearSelection: false, needsTermSelection: false
     };
   }
 
   return { getOverview };
 }
 
-module.exports = { FinanceDashboardError, createFinanceDashboardService, normalizeActorId };
+module.exports = { FinanceDashboardError, createFinanceDashboardService, normalizeActorId, STATUS_LABELS };

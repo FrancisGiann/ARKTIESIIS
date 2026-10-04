@@ -22,7 +22,7 @@
           <h2 id="finance-search-heading"><%= searchTerm ? 'Student search results' : 'Find a student account' %></h2>
           <p><%= searchTerm ? 'Matches across active and archived student records.' : 'Search a student record to review or create its finance account.' %></p>
         </div>
-        <form class="finance-search" method="get" action="/finance">
+        <form class="finance-search" method="get" action="/finance/legacy">
           <label class="field">
             <span>Student name or number</span>
             <input type="search" name="search" maxlength="100" value="<%= searchTerm %>" autocomplete="off" placeholder="Enter a name or student number" required>
@@ -115,6 +115,7 @@
                 </div>
                 <span class="finance-status finance-clearance-status finance-clearance-status--<%= enrollment.clearance_status === 'cleared' ? 'cleared' : 'pending' %>"><%= enrollment.clearance_status === 'cleared' ? 'Cleared' : 'Pending' %></span>
                 <% if (enrollment.clearance_status !== 'cleared') { %>
+                  <% const failedClearance = failedAction?.type === 'legacy_enrollment_clearance' && failedAction.path === `/students/${student.student_id}/enrollment-clearance` && String(clearanceValues.enrollmentId || '') === String(enrollment.enrollment_id); %>
                   <form class="form-stack finance-clearance-followup" method="post" action="/finance/students/<%= student.student_id %>/enrollment-clearance<%= searchSuffix %>">
                     <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                     <input type="hidden" name="enrollmentId" value="<%= enrollment.enrollment_id %>">
@@ -122,13 +123,14 @@
                       <label class="field" for="payment-for-enrollment-<%= enrollment.enrollment_id %>">
                         <span>Unused recorded payment</span>
                         <select id="payment-for-enrollment-<%= enrollment.enrollment_id %>" name="paymentTransactionId" required>
-                          <option value="">Choose a payment</option>
+                          <option value="" <%= !failedClearance || !clearanceValues.paymentTransactionId ? 'selected' : '' %>>Choose a payment</option>
+                          <% if (failedClearance && clearanceValues.paymentTransactionId && !availableEnrollmentPayments.some((payment) => String(payment.transaction_id) === String(clearanceValues.paymentTransactionId))) { %><option value="<%= clearanceValues.paymentTransactionId %>" selected>Previously selected payment is no longer available</option><% } %>
                           <% for (const payment of availableEnrollmentPayments) { %>
-                            <option value="<%= payment.transaction_id %>">#<%= payment.transaction_id %> · ₱<%= formatMoney(payment.amount) %> · <%= payment.created_at ? new Date(payment.created_at).toLocaleString() : 'date unavailable' %><%= payment.reference_no ? ` · ${payment.reference_no}` : '' %></option>
+                            <option value="<%= payment.transaction_id %>" <%= failedClearance && String(clearanceValues.paymentTransactionId) === String(payment.transaction_id) ? 'selected' : '' %>>#<%= payment.transaction_id %> · ₱<%= formatMoney(payment.amount) %> · <%= payment.created_at ? formatFinanceDateTime(payment.created_at) : 'date unavailable' %><%= payment.reference_no ? ` · ${payment.reference_no}` : '' %></option>
                           <% } %>
                         </select>
                       </label>
-                      <label class="checkbox-field"><input type="checkbox" name="confirmEnrollmentClearance" value="1" required><span>I confirm this payment satisfies eligibility for this specific enrollment.</span></label>
+                      <label class="checkbox-field"><input type="checkbox" name="confirmEnrollmentClearance" value="1" <%= failedClearance && clearanceValues.confirmEnrollmentClearance === '1' ? 'checked' : '' %> required><span>I confirm this payment satisfies eligibility for this specific enrollment.</span></label>
                       <button class="button button--secondary" type="submit">Assign payment and clear enrollment</button>
                     <% } else { %>
                       <p>No unused recorded payments are available for this student's account.</p>
@@ -188,7 +190,7 @@
               <label class="field">
                 <span>Reference number <span class="field__optional">(optional)</span></span>
                 <input type="text" name="referenceNo" maxlength="100" value="<%= transactionValues.referenceNo %>">
-                <small>A reference may be used once per account. SQL Server collation determines case matching.</small>
+                <small>A reference may be used once per account. Existing reference matching follows the active MariaDB collation.</small>
               </label>
               <% const unclearedEnrollments = pendingEnrollments.filter((enrollment) => enrollment.clearance_status !== 'cleared'); %>
               <% if (unclearedEnrollments.length) { %>
@@ -228,10 +230,10 @@
                 <tbody>
                   <% transactions.forEach((entry) => { %>
                     <tr>
-                      <td data-label="Date"><%= entry.created_at ? new Date(entry.created_at).toLocaleString() : '' %></td>
+                      <td data-label="Date"><%= formatFinanceDateTime(entry.created_at) %></td>
                       <td data-label="Type"><%= entry.transaction_type ? entry.transaction_type.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Unknown' %></td>
                       <td data-label="Amount">₱<%= formatMoney(entry.amount) %></td>
-                      <td data-label="Description / reference"><%= [entry.description, entry.reference_no].filter(Boolean).join(' · ') || '—' %></td>
+                      <td data-label="Description / reference"><%= [entry.description, entry.reference_no].filter(Boolean).join(' · ') || '—' %><% if (entry.transaction_type === 'payment' && entry.id) { %><br><a class="table-action" href="/finance/students/<%= student.student_id %>/legacy/payments/<%= entry.id %>/confirmation">Open saved payment confirmation</a><% } %></td>
                       <td data-label="Recorded by"><%= entry.recorded_by_name %></td>
                     </tr>
                   <% }) %>

@@ -1,0 +1,38 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell finance-statement finance-payment-confirmation" id="main-content">
+  <% const payment = confirmation.payment; const studentName = [payment.first_name, payment.middle_name, payment.last_name, payment.suffix].filter(Boolean).join(' '); %>
+  <header class="statement-heading">
+    <div><p class="eyebrow"><%= kind === 'legacy' ? 'Legacy account payment' : 'Annual account payment' %></p><h1>Payment confirmation</h1>
+      <p><strong><%= studentName %></strong> · Student no. <%= payment.student_no %></p></div>
+    <div class="statement-actions">
+      <button class="button button--primary" type="button" data-print-statement>Print confirmation</button>
+      <a class="button button--secondary" href="<%= currentUser.role === 'student' ? '/student/finance/statement' : `/finance/students/${payment.student_id}/statement` %>">Back to statement</a>
+    </div>
+  </header>
+  <p class="muted-copy">This confirmation shows the payment record and its current receipt/reference status. References can be updated later; earlier reference values are not reconstructed. This page does not issue an official receipt.</p>
+  <section class="finance-panel" aria-labelledby="payment-confirmation-details">
+    <h2 id="payment-confirmation-details">Recorded payment details</h2>
+    <dl class="finance-balance-summary">
+      <div><dt>Payment type</dt><dd><%= kind === 'legacy' ? 'Existing legacy account payment' : 'Annual account payment' %></dd></div>
+      <% if (kind === 'annual') { %>
+        <div><dt>Payment date</dt><dd><%= String(payment.payment_date).slice(0, 10) %></dd></div>
+      <% } else { %>
+        <div><dt>Recorded date</dt><dd><%= formatFinanceDateTime(payment.created_at) %></dd></div>
+      <% } %>
+      <div><dt>Original recorded amount</dt><dd>₱<%= formatMoney(payment.amount) %></dd></div>
+      <div><dt>Current receipt/reference</dt><dd><%= payment.reference_no || 'No reference currently recorded' %></dd></div>
+      <% if (kind === 'annual') { %><div><dt>Current receipt status</dt><dd><%= payment.receipt_issued ? 'Marked issued' : 'Not marked issued' %></dd></div>
+        <div><dt>Current payment status</dt><dd><%= payment.is_reversed ? 'Reversed' : 'Recorded' %></dd></div><% } %>
+    </dl>
+  </section>
+  <section class="finance-panel" aria-labelledby="payment-confirmation-allocations">
+    <h2 id="payment-confirmation-allocations">Original applications and current balances</h2>
+    <% if (confirmation.allocations.length) { %>
+      <div class="table-scroll"><table class="admin-table"><thead><tr><th>Balance or fee</th><th>Originally applied</th><th>Currently applied</th></tr></thead><tbody>
+        <% for (const allocation of confirmation.allocations) { %><tr><td data-label="Balance or fee"><%= allocation.target_label %></td><td data-label="Originally applied">₱<%= formatMoney(allocation.original_amount) %></td><td data-label="Currently applied">₱<%= formatMoney(allocation.current_net_amount) %></td></tr><% } %>
+      </tbody></table></div>
+    <% } else { %><p class="empty-state">No application to an annual assessed fee is recorded for this payment. The amount remains in the original account history.</p><% } %>
+  </section>
+</main>
+<script src="/js/statement-print.js" defer></script>
+<%- include('../partials/foot') %>

@@ -4,6 +4,7 @@ const financeNavigationItems = [
   { id: 'finance-schedules', label: 'Fee schedules', href: '/finance/schedules', group: 'Finance' },
   { id: 'finance-reports', label: 'Reports', href: '/finance/reports', group: 'Finance' },
   { id: 'finance-departures', label: 'Departure review', href: '/finance/departures', group: 'Finance' },
+  { id: 'finance-review-drafts', label: 'Saved reviews', href: '/finance/review-drafts', group: 'Finance' },
   { id: 'finance-legacy', label: 'Legacy account history', href: '/finance/legacy', group: 'Finance' }
 ];
 
@@ -77,6 +78,7 @@ function buildNavigation(role, currentPath = '') {
     else if (item.id === 'finance-schedules') current = path.startsWith('/finance/schedules');
     else if (item.id === 'finance-reports') current = path.startsWith('/finance/reports');
     else if (item.id === 'finance-departures') current = path.startsWith('/finance/departures');
+    else if (item.id === 'finance-review-drafts') current = path.startsWith('/finance/review-drafts');
     else if (item.id === 'finance-legacy') current = path.startsWith('/finance/legacy') || legacyFinanceStudentPath;
     else if (item.id === 'documents') current = path === '/documents' || path.startsWith('/documents/');
     else if (item.id === 'home') current = path === '/student';

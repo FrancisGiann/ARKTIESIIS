@@ -97,10 +97,14 @@ const registrarOverview = {
 const financeOverview = {
   schoolYears: ['2026-2027'], gradeLevels: ['Grade 11', 'Grade 12'],
   selectedSchoolYear: '2026-2027', selectedGrade: '', needsSchoolYearSelection: false,
-  terms: [
-    { termNumber: 1, academicTermId: 61, term: 'Term 1', studentsWithAllocatedPayment: 7, settledTermBalance: 4, noPaymentRequired: 2 },
-    { termNumber: 2, academicTermId: 62, term: 'Term 2', studentsWithAllocatedPayment: 5, settledTermBalance: 3, noPaymentRequired: 1 },
-    { termNumber: 3, academicTermId: 63, term: 'Term 3', studentsWithAllocatedPayment: 1, settledTermBalance: 1, noPaymentRequired: 0 }
+  queueCounts: { documentClearance: 0, departureReview: 0, savedReviews: 0 },
+  availableTerms: [{ academicTermId: 62, term: 'Second Term' }], selectedTermId: '62',
+  selectedTerm: { term: 'Second Term' }, selectedInstallment: 'whole', selectedVoucher: '', selectedSectionId: '',
+  sections: [], voucherCodes: ['PUB', 'ESC', 'NV'], totalEligible: 3, needsTermSelection: false,
+  statusCounts: [
+    { status: 'unpaid', label: 'Unpaid', count: 1 }, { status: 'partially_paid', label: 'Partially paid', count: 1 },
+    { status: 'fully_paid', label: 'Fully paid', count: 0 }, { status: 'no_payment_required', label: 'No payment required', count: 0 },
+    { status: 'needs_review', label: 'Needs review', count: 1 }
   ]
 };
 
@@ -185,16 +189,12 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     const overviewHtml = await overviewResponse.text();
     assert.equal(overviewResponse.status, 200);
     assert.match(overviewHtml, /Finance overview/);
-    assert.match(overviewHtml, /Term account states/);
-    assert.match(overviewHtml, /Positive net payment allocated/);
-    assert.match(overviewHtml, /Settled term balance/);
-    assert.match(overviewHtml, /Waiver or zero-payable assessment/);
-    assert.match(overviewHtml, /payment date does not affect term attribution/i);
-    assert.match(overviewHtml, /<h4 class="dashboard-comparison__term">Term 1<\/h4>/);
-    assert.doesNotMatch(overviewHtml, /Term 1 · Term 1/);
-    assert.match(overviewHtml, /<ol class="dashboard-comparison dashboard-comparison--finance"/);
-    assert.match(overviewHtml, /dashboard-comparison__metric--waiver[\s\S]*?<strong>2<\/strong><span class="dashboard-chart__track" aria-hidden="true"><span style="width: 29%/);
-    assert.doesNotMatch(overviewHtml, /<table class="admin-table dashboard-chart__table/);
+    assert.match(overviewHtml, /Term payment status/);
+    assert.match(overviewHtml, /Unpaid/);
+    assert.match(overviewHtml, /Partially paid/);
+    assert.match(overviewHtml, /Needs review/);
+    assert.match(overviewHtml, /Tuition tracking/);
+    assert.match(overviewHtml, /Departure reviews/);
     assert.match(overviewHtml, /href="\/finance\/overview" aria-current="page"/);
     assert.deepEqual(calls.map(([name, actorId]) => [name, actorId]), [['finance', 7]]);
 

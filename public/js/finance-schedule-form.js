@@ -4,7 +4,10 @@
   const rows = form.querySelector('[data-finance-line-rows]');
   const template = form.querySelector('[data-finance-line-template]');
   const addButton = form.querySelector('[data-add-finance-line]');
+  const termPanels = [...form.querySelectorAll('[data-schedule-term]')];
+  termPanels.forEach((panel, index) => { panel.open = index === 0; });
   if (!rows || !template || !addButton) return;
+  form.noValidate = true;
   const requiredTuitionCount = form.querySelectorAll('[data-required-tuition-line]').length;
   const maximumScheduleLines = 120;
 
@@ -30,15 +33,21 @@
     });
   }
 
-  form.addEventListener('invalid', (event) => {
-    const field = event.target;
-    if (!(field instanceof HTMLElement)) return;
-    let disclosure = field.closest('details');
+  form.addEventListener('submit', (event) => {
+    const invalidField = [...form.elements].find((field) => field.willValidate && !field.validity.valid);
+    if (!invalidField) return;
+    event.preventDefault();
+    let disclosure = invalidField.closest('details');
+    if (disclosure?.matches('[data-schedule-term]')) {
+      termPanels.forEach((panel) => { panel.open = panel === disclosure; });
+    }
     while (disclosure) {
-      if (!disclosure.open) disclosure.open = true;
+      disclosure.open = true;
       disclosure = disclosure.parentElement?.closest('details') || null;
     }
-  }, true);
+    invalidField.focus();
+    invalidField.reportValidity();
+  });
 
   addButton.addEventListener('click', () => {
     if (requiredTuitionCount + rows.children.length >= maximumScheduleLines) return;

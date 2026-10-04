@@ -1,82 +1,58 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-overview-page" id="main-content">
   <header class="dashboard-heading">
-    <div>
-      <h1>Finance overview</h1>
-      <p>Review term payment and balance states for confirmed annual assessments.</p>
-    </div>
-    <div class="dashboard-heading__actions"><a class="button button--secondary" href="/finance/document-clearance">Document clearance queue</a><a class="button button--primary" href="/finance">Open roster</a></div>
+    <div><p class="eyebrow">Finance · Current work</p><h1>Finance overview</h1><p>Choose a term and payment view, then open a matching student list.</p></div>
+    <div class="dashboard-heading__actions"><a class="button button--primary" href="/finance">Open roster</a></div>
   </header>
+
+  <nav class="finance-queue-links" aria-label="Finance work queues">
+    <a class="finance-queue-link" href="/finance/departures"><span>Departure reviews</span><strong><%= Number(overview.queueCounts?.departureReview || 0).toLocaleString('en-US') %></strong><span>students awaiting a decision</span></a>
+    <a class="finance-queue-link" href="/finance/document-clearance"><span>Document clearance</span><strong><%= Number(overview.queueCounts?.documentClearance || 0).toLocaleString('en-US') %></strong><span>requests awaiting Finance</span></a>
+    <a class="finance-queue-link" href="/finance/review-drafts"><span>Saved reviews</span><strong><%= Number(overview.queueCounts?.savedReviews || 0).toLocaleString('en-US') %></strong><span>your unfinished changes</span></a>
+    <a class="finance-queue-link" href="/finance/legacy"><span>Legacy account history</span><strong aria-hidden="true">→</strong><span>open older account records</span></a>
+  </nav>
 
   <section class="finance-overview" aria-labelledby="finance-overview-heading">
     <div class="finance-overview__top">
-      <div>
-        <h2 id="finance-overview-heading">Term account states</h2>
-        <p>Counts use direct net payment allocations to charges in the selected school year.</p>
-      </div>
+      <div><h2 id="finance-overview-heading">Term payment status</h2><p>Each active placement appears once in the selected view. Legacy balances and unallocated credit stay separate.</p></div>
       <% if (overview.schoolYears.length) { %>
         <form class="dashboard-filter dashboard-filter--finance" method="get" action="/finance/overview">
-          <label class="field">
-            <span>School year</span>
-            <select name="schoolYear">
-              <option value="" <%= !overview.selectedSchoolYear ? 'selected' : '' %>>Select a school year</option>
-              <% overview.schoolYears.forEach((schoolYear) => { %><option value="<%= schoolYear %>" <%= overview.selectedSchoolYear === schoolYear ? 'selected' : '' %>><%= schoolYear %></option><% }); %>
-            </select>
-          </label>
-          <label class="field">
-            <span>Grade level</span>
-            <select name="gradeLevel">
-              <option value="">All grades</option>
-              <% overview.gradeLevels.forEach((gradeLevel) => { %><option value="<%= gradeLevel %>" <%= overview.selectedGrade === gradeLevel ? 'selected' : '' %>><%= gradeLevel %></option><% }); %>
-            </select>
-          </label>
+          <label class="field"><span>School year</span><select name="schoolYear" required><% for (const year of overview.schoolYears) { %><option value="<%= year %>" <%= overview.selectedSchoolYear === year ? 'selected' : '' %>><%= year %></option><% } %></select></label>
+          <label class="field"><span>Term</span><select name="termId" required><% for (const term of overview.availableTerms) { %><option value="<%= term.academicTermId %>" <%= String(overview.selectedTermId) === String(term.academicTermId) ? 'selected' : '' %>><%= term.term %></option><% } %></select></label>
+          <label class="field"><span>Tuition tracking</span><select name="installment"><% for (const [value, label] of [['whole','Whole term'],['dp','DP'],['prelim','Prelim'],['midterm','Midterm'],['finals','Finals']]) { %><option value="<%= value %>" <%= overview.selectedInstallment === value ? 'selected' : '' %>><%= label %></option><% } %></select></label>
+          <details class="finance-overview-secondary-filters" <%= overview.selectedGrade || overview.selectedVoucher ? 'open' : '' %>>
+            <summary>Grade and voucher filters</summary>
+            <div>
+              <label class="field"><span>Grade</span><select name="gradeLevel"><option value="">All grades</option><% for (const grade of overview.gradeLevels) { %><option value="<%= grade %>" <%= overview.selectedGrade === grade ? 'selected' : '' %>><%= grade %></option><% } %></select></label>
+              <label class="field"><span>Voucher</span><select name="voucherCode"><option value="">All vouchers</option><% for (const voucher of overview.voucherCodes) { %><option value="<%= voucher %>" <%= overview.selectedVoucher === voucher ? 'selected' : '' %>><%= voucher %></option><% } %></select></label>
+              <label class="field"><span>Section</span><select name="sectionId"><option value="">All sections</option><% for (const section of overview.sections) { %><option value="<%= section.id %>" <%= String(overview.selectedSectionId || '') === section.id ? 'selected' : '' %>><%= section.name %><%= section.cluster ? ` · ${section.cluster}` : '' %><%= section.strand ? ` · ${section.strand}` : '' %></option><% } %></select></label>
+            </div>
+          </details>
           <button class="button button--secondary" type="submit">Apply filters</button>
         </form>
       <% } %>
     </div>
 
-    <% if (overview.needsSchoolYearSelection && !overview.schoolYears.length) { %>
-      <p class="dashboard-empty" role="status">No school-year terms are configured. Configure the term order before reviewing annual finance counts.</p>
-    <% } else if (overview.needsSchoolYearSelection) { %>
-      <p class="dashboard-empty" role="status">No current school year is configured. Choose a school year to review annual finance counts.</p>
-    <% } else if (!overview.terms.length) { %>
+    <% if (overview.needsSchoolYearSelection) { %>
+      <p class="dashboard-empty" role="status">No configured school year is available yet. Set up a school year and terms before reviewing Finance status.</p>
+    <% } else if (overview.needsTermSelection) { %>
       <p class="dashboard-empty" role="status">No configured terms are available for <%= overview.selectedSchoolYear %>.</p>
+    <% } else if (!overview.totalEligible) { %>
+      <p class="dashboard-empty" role="status">No active applicable enrollments match this term and these filters.</p>
     <% } else { %>
-      <% const comparisonMaximum = Math.max(1, ...overview.terms.flatMap((term) => [term.studentsWithAllocatedPayment, term.settledTermBalance, term.noPaymentRequired])); %>
-      <figure class="dashboard-chart" aria-labelledby="finance-term-chart-title">
-        <figcaption>
-          <h3 id="finance-term-chart-title"><%= overview.selectedGrade || 'All configured grades' %> · <%= overview.selectedSchoolYear %></h3>
-          <p>Bars use one shared count scale. Each group counts distinct students by term; a student can appear in more than one group.</p>
-        </figcaption>
-        <ol class="dashboard-comparison dashboard-comparison--finance" aria-label="Finance account counts by configured term">
-          <% overview.terms.forEach((term) => { %>
-            <% const termName = typeof term.term === 'string' ? term.term.trim() : ''; %>
-            <% const termLabel = termName.toLocaleLowerCase() === `term ${term.termNumber}`.toLocaleLowerCase() ? `Term ${term.termNumber}` : [ `Term ${term.termNumber}`, termName ].filter(Boolean).join(' · '); %>
-            <li class="dashboard-comparison__row">
-              <h4 class="dashboard-comparison__term"><%= termLabel %></h4>
-              <dl class="dashboard-comparison__metrics dashboard-comparison__metrics--finance">
-                <div class="dashboard-comparison__metric">
-                  <dt>Positive net payment allocated</dt>
-                  <dd><strong><%= term.studentsWithAllocatedPayment.toLocaleString('en-US') %></strong><span class="dashboard-chart__track" aria-hidden="true"><span style="width: <%= Math.round(term.studentsWithAllocatedPayment / comparisonMaximum * 100) %>%"></span></span></dd>
-                </div>
-                <div class="dashboard-comparison__metric dashboard-comparison__metric--settled">
-                  <dt>Settled term balance</dt>
-                  <dd><strong><%= term.settledTermBalance.toLocaleString('en-US') %></strong><span class="dashboard-chart__track" aria-hidden="true"><span style="width: <%= Math.round(term.settledTermBalance / comparisonMaximum * 100) %>%"></span></span></dd>
-                </div>
-                <div class="dashboard-comparison__metric dashboard-comparison__metric--waiver">
-                  <dt>Waiver or zero-payable assessment</dt>
-                  <dd><strong><%= term.noPaymentRequired.toLocaleString('en-US') %></strong><span class="dashboard-chart__track" aria-hidden="true"><span style="width: <%= Math.round(term.noPaymentRequired / comparisonMaximum * 100) %>%"></span></span></dd>
-                </div>
-              </dl>
-            </li>
-          <% }); %>
-        </ol>
-      </figure>
-      <details class="finance-overview-method">
-        <summary>Counting methodology</summary>
-        <p>Payment date does not affect term attribution. Reversed payments, legacy transactions, unreconciled balances, and unattributed history are excluded. Settled balances may include a credit.</p>
-      </details>
+      <p class="finance-overview-context"><strong><%= overview.selectedTerm.term %></strong> · <%= overview.selectedSchoolYear %> · <%= ({whole:'Whole term',dp:'DP',prelim:'Prelim',midterm:'Midterm',finals:'Finals'})[overview.selectedInstallment] %><%= overview.selectedGrade ? ` · ${overview.selectedGrade}` : '' %><%= overview.selectedVoucher ? ` · ${overview.selectedVoucher}` : '' %><% const selectedSection = overview.sections.find((section) => section.id === String(overview.selectedSectionId)); %><%= selectedSection ? ` · ${selectedSection.name}` : '' %> · <%= overview.totalEligible.toLocaleString('en-US') %> students</p>
+      <nav class="finance-status-cards" aria-label="Filter roster by payment status">
+        <% for (const item of overview.statusCounts) { const params = new URLSearchParams({ schoolYear: overview.selectedSchoolYear, termId: overview.selectedTermId, installment: overview.selectedInstallment, financeStatus: item.status }); if (overview.selectedGrade) params.set('gradeLevel', overview.selectedGrade); if (overview.selectedVoucher) params.set('voucherCode', overview.selectedVoucher); if (overview.selectedSectionId) params.set('sectionId', overview.selectedSectionId); %>
+          <a class="finance-status-card finance-status-card--<%= item.status %>" href="/finance?<%= params.toString() %>">
+            <span><%= item.label %></span><strong><%= item.count.toLocaleString('en-US') %></strong><span class="finance-status-card__action">Open matching roster <span aria-hidden="true">→</span></span>
+          </a>
+        <% } %>
+      </nav>
     <% } %>
+    <details class="finance-overview-method">
+      <summary>How Finance status is assigned</summary>
+      <p>Term balances include recorded charges and adjustments after released allocations, reversals, and reconciliations. Whole-term view works with existing whole-term assessments. An installment view needs one assessed DP, Prelim, Midterm, and Finals tuition line; missing or ambiguous lines and missing staff confirmation need review. Unattributed legacy balances and unallocated credits are shown separately and are not assigned to a term.</p>
+    </details>
   </section>
 </main>
 <%- include('../partials/foot') %>

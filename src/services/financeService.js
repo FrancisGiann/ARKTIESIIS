@@ -117,11 +117,13 @@ function createFinanceService({
   getPool = defaultGetPool,
   sql = defaultSql,
   transactionFactory = (pool) => new sql.Transaction(pool),
-  debtRevisionService = null
+  debtRevisionService = null,
+  transaction = null
 } = {}) {
-  const debtRevisions = debtRevisionService || createFinanceDebtRevisionService({ getPool, sql, transactionFactory });
+  const debtRevisions = debtRevisionService || createFinanceDebtRevisionService({ getPool, sql, transactionFactory, transaction });
 
   async function runTransaction(callback) {
+    if (transaction) return callback(transaction);
     return runSerializableTransaction({ getPool, sql, transactionFactory }, callback);
   }
 

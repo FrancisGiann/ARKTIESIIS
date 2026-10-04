@@ -25,6 +25,7 @@ const REQUIRED_OBJECTS = Object.freeze([
   'student_document_requests', 'student_document_request_events', 'student_profile_revisions',
   'annual_registrar_confirmations', 'annual_enrollment_admin_revisions', 'finance_fee_comment_events',
   'finance_handbook_number_events', 'student_document_clearance_events', 'student_document_claim_slips',
+  'finance_review_drafts',
   'v_document_latest_review_event', 'v_document_latest_decision_event',
   'v_document_latest_validation', 'v_form137_latest_status_event', 'v_previous_school_report_card_latest_status_event'
 ]);
@@ -41,7 +42,7 @@ const REQUIRED_COLUMNS = Object.freeze({
   student_document_requests: ['expected_claim_date', 'handover_reference', 'current_claim_slip_id'],
   student_document_request_events: ['handover_reference_before', 'handover_reference_after', 'handover_reference']
 });
-const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 11 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 12 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 function bindInList(request, values, prefix) {
   return values.map((value, index) => {
@@ -115,7 +116,7 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
       process.exitCode = 1;
       return;
     }
-    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.011.`);
+    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.012.`);
   } catch {
     logger.error('MariaDB database check failed. Confirm DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD, then run npm run db:setup.');
     process.exitCode = 1;

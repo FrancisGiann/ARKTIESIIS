@@ -89,10 +89,12 @@ function createAnnualFinanceCasesService({
   getPool = defaultGetPool,
   sql = defaultSql,
   transactionFactory = (pool) => new sql.Transaction(pool),
-  debtRevisions = createFinanceDebtRevisionService({ getPool, sql, transactionFactory })
+  transaction: boundTransaction = null,
+  debtRevisions = createFinanceDebtRevisionService({ getPool, sql, transactionFactory, transaction: boundTransaction })
   } = {}) {
   async function transaction(callback) {
     try {
+      if (boundTransaction) return await callback(boundTransaction);
       return await runSerializableTransaction({ getPool, sql, transactionFactory }, callback);
     } catch (error) {
       if (isDuplicateKeyError(error)) throw new FinanceCasesError('This finance workflow was already recorded or conflicts with an existing record.', 409);

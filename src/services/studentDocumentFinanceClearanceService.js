@@ -74,9 +74,11 @@ function createStudentDocumentFinanceClearanceService({
   getPool = defaultGetPool,
   sql = defaultSql,
   transactionFactory = (pool) => new sql.Transaction(pool),
-  debtRevisionService = createFinanceDebtRevisionService({ getPool, sql, transactionFactory })
+  transaction = null,
+  debtRevisionService = createFinanceDebtRevisionService({ getPool, sql, transactionFactory, transaction })
 } = {}) {
   async function runTransaction(callback) {
+    if (transaction) return callback(transaction);
     return runSerializableTransaction({ getPool, sql, transactionFactory }, callback);
   }
 

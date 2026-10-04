@@ -1,5 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-roster-page" id="main-content">
+  <% const rosterQuery = new URLSearchParams(); for (const key of ['search', 'schoolYear', 'termId', 'gradeLevel', 'sectionId', 'cluster', 'strand', 'voucherCode', 'status', 'financeStatus', 'installment', 'page']) { if (typeof filters[key] === 'string' && filters[key].trim()) rosterQuery.set(key, filters[key]); } %>
   <header class="dashboard-heading"><div><h1>Annual finance roster</h1><p>Find an annual student account, then open its term details or account ledger.</p></div></header>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
@@ -13,7 +14,7 @@
         <div class="field"><label for="annual-roster-term">Term</label><select id="annual-roster-term" name="termId"><option value="">All terms</option><% for (const term of terms) { %><option value="<%= term.id %>" <%= String(filters.termId || '') === String(term.id) ? 'selected' : '' %>><%= term.label %></option><% } %></select></div>
         <button class="button button--primary" type="submit">Apply filters</button>
       </div>
-      <% const hasExtraRosterFilters = Boolean(filters.gradeLevel || filters.sectionId || filters.cluster || filters.strand || filters.voucherCode || filters.status); %>
+      <% const hasExtraRosterFilters = Boolean(filters.gradeLevel || filters.sectionId || filters.cluster || filters.strand || filters.voucherCode || filters.status || filters.financeStatus || filters.installment); %>
       <details class="finance-roster-more-filters" <%= hasExtraRosterFilters ? 'open' : '' %>>
         <summary>More filters</summary>
         <div class="finance-roster-filter-grid">
@@ -23,6 +24,8 @@
           <div class="field"><label for="annual-roster-strand">Strand</label><input id="annual-roster-strand" type="text" name="strand" maxlength="100" value="<%= filters.strand || '' %>"></div>
           <div class="field"><label for="annual-roster-voucher">Voucher type</label><select id="annual-roster-voucher" name="voucherCode"><option value="">All voucher types</option><% for (const voucher of ['PUB', 'ESC', 'NV']) { %><option value="<%= voucher %>" <%= String(filters.voucherCode || '') === voucher ? 'selected' : '' %>><%= voucher %></option><% } %></select></div>
           <div class="field"><label for="annual-roster-status">Placement status</label><select id="annual-roster-status" name="status"><option value="">All statuses</option><% for (const [value, label] of [['pending_payment','Pending activation'],['enrolled','Enrolled'],['cancelled','Cancelled'],['dropped','Dropped'],['transferred','Transferred']]) { %><option value="<%= value %>" <%= String(filters.status || '') === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
+          <div class="field"><label for="annual-roster-finance-status">Payment status</label><select id="annual-roster-finance-status" name="financeStatus"><option value="">All payment statuses</option><% for (const [value, label] of [['unpaid','Unpaid'],['partially_paid','Partially paid'],['fully_paid','Fully paid'],['no_payment_required','No payment required'],['needs_review','Needs review']]) { %><option value="<%= value %>" <%= String(filters.financeStatus || '') === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
+          <div class="field"><label for="annual-roster-installment">Tuition tracking</label><select id="annual-roster-installment" name="installment"><% for (const [value, label] of [['whole','Whole term'],['dp','DP'],['prelim','Prelim'],['midterm','Midterm'],['finals','Finals']]) { %><option value="<%= value %>" <%= String(filters.installment || 'whole') === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
         </div>
       </details>
       <div class="finance-roster-filter-actions"><a class="table-action" href="/finance">Clear filters</a></div>
@@ -34,10 +37,6 @@
     <% if (!rows.length) { %><p class="empty-state">No annual accounts match these filters.</p><% } else { %>
       <% if (pagination) { %>
         <%
-          const rosterQuery = new URLSearchParams();
-          for (const key of ['search', 'schoolYear', 'termId', 'gradeLevel', 'sectionId', 'cluster', 'strand', 'voucherCode', 'status']) {
-            if (typeof filters[key] === 'string' && filters[key].trim()) rosterQuery.set(key, filters[key]);
-          }
           const rosterPageHref = (pageNumber) => {
             const query = new URLSearchParams(rosterQuery);
             query.set('page', String(pageNumber));
@@ -63,15 +62,15 @@
             <summary>
               <span class="finance-roster-identity"><strong><%= [row.first_name, row.middle_name, row.last_name, row.suffix].filter(Boolean).join(' ') %></strong><span><%= row.student_no %></span></span>
               <span class="finance-roster-context"><strong><%= row.school_year %> · <%= row.grade_level %></strong><span>Voucher type <%= row.voucher_code %> · <%= placements.length %> term placement<%= placements.length === 1 ? '' : 's' %></span></span>
-              <span class="finance-roster-balance"><span>Annual balance</span><strong>₱<%= formatMoney(row.annual_balance) %></strong></span>
+              <span class="finance-roster-balance"><span>Annual balance</span><strong><%= row.annual_balance == null ? 'Unavailable in this filtered view' : `₱${formatMoney(row.annual_balance)}` %></strong></span>
               <% if (hasLegacyBalance || hasOpeningLiability) { %><span class="finance-roster-liabilities"><% if (hasLegacyBalance) { %><span>Legacy balance · ₱<%= formatMoney(row.unattributed_legacy_balance) %></span><% } %><% if (hasOpeningLiability) { %><span>Opening liability · ₱<%= formatMoney(row.opening_liability_due) %></span><% } %></span><% } %>
               <% if (voucherNeedsReview) { %><span class="finance-roster-voucher"><span>Voucher review</span><strong class="finance-review-flag">Required · assessed <%= row.assessed_voucher_code || 'voucher' %> / v<%= row.assessed_schedule_version || '?' %></strong></span><% } %>
             </summary>
             <div class="finance-roster-record-body">
               <dl class="finance-roster-record-financials">
-                <div><dt>Annual balance</dt><dd>₱<%= formatMoney(row.annual_balance) %></dd></div>
-                <div><dt>Legacy balance</dt><dd>₱<%= formatMoney(row.unattributed_legacy_balance) %></dd></div>
-                <div><dt>Opening liability</dt><dd>₱<%= formatMoney(row.opening_liability_due) %></dd></div>
+                <div><dt>Annual balance</dt><dd><%= row.annual_balance == null ? 'Unavailable in this filtered view' : `₱${formatMoney(row.annual_balance)}` %></dd></div>
+                <div><dt>Legacy balance</dt><dd><%= row.unattributed_legacy_balance == null ? 'Unavailable in this filtered view' : `₱${formatMoney(row.unattributed_legacy_balance)}` %></dd></div>
+                <div><dt>Opening liability</dt><dd><%= row.opening_liability_due == null ? 'Unavailable in this filtered view' : `₱${formatMoney(row.opening_liability_due)}` %></dd></div>
                 <div><dt>Voucher review</dt><dd><%= voucherNeedsReview ? 'Required' : 'No review flag' %></dd></div>
               </dl>
               <% if (voucherNeedsReview && row.voucher_review_reason) { %><p class="finance-review-flag">Review reason: <%= row.voucher_review_reason %></p><% } %>
@@ -85,8 +84,12 @@
                         <span><%= placement.section_name || 'No section' %><%= placement.cluster ? ` · ${placement.cluster}` : '' %><%= placement.strand ? ` · ${placement.strand}` : '' %><%= placement.modality ? ` · ${placement.modality === 'modular' ? `Modular ${placement.modular_subtype || ''}` : placement.modality}` : '' %></span>
                         <span class="finance-status"><%= placement.enrollment_status === 'pending_payment' ? 'Pending activation' : String(placement.enrollment_status || 'unassigned').replaceAll('_', ' ') %></span>
                       </div>
+                      <% const trackingAvailable = Number(placement.tracking_available) === 1 || placement.tracking_available === true; %>
                       <dl class="finance-roster-placement-status">
-                        <div><dt>Term due</dt><dd>₱<%= formatMoney(placement.current_term_due) %></dd></div>
+                        <div><dt><%= String(filters.installment || 'whole').toLowerCase() === 'whole' ? 'Whole-term due' : `${String(filters.installment).toUpperCase()} due` %></dt><dd><%= !trackingAvailable || placement.classified_due == null ? 'Unavailable or not assessed' : `₱${formatMoney(placement.classified_due)}` %></dd></div>
+                        <div><dt>Required</dt><dd><%= !trackingAvailable || placement.classified_required == null ? 'Unavailable or not assessed' : `₱${formatMoney(placement.classified_required)}` %></dd></div>
+                        <div><dt>Applied</dt><dd><%= !trackingAvailable || placement.classified_applied == null ? 'Unavailable or not assessed' : `₱${formatMoney(placement.classified_applied)}` %></dd></div>
+                        <div><dt>Payment status</dt><dd><%= ({unpaid:'Unpaid',partially_paid:'Partially paid',fully_paid:'Fully paid',no_payment_required:'No payment required',needs_review:'Needs review'})[placement.finance_status] || 'Needs review' %></dd></div>
                         <div><dt>Registrar enrollment</dt><dd><%= placement.term_scope_status === 'not_applicable' ? 'Not applicable before entry term' : placement.registrar_confirmation_id ? 'Confirmed by registrar' : 'Needs registrar confirmation' %></dd></div>
                         <div><dt>Term clearance</dt><dd><%= placement.signed_clearance_status === 'signed' ? 'Signed' : 'Not signed' %></dd></div>
                       </dl>
@@ -94,7 +97,8 @@
                   <% } %>
                 </ul>
               <% } %>
-              <p class="finance-roster-account-link"><a class="button button--secondary" href="/finance/students/<%= row.student_id %>/annual">Open annual account</a></p>
+              <% const backParams = new URLSearchParams(); for (const key of rosterQuery.keys()) { if (key !== 'page') backParams.set(`back${key[0].toUpperCase()}${key.slice(1)}`, rosterQuery.get(key)); } %>
+              <p class="finance-roster-account-link"><a class="button button--secondary" href="/finance/students/<%= row.student_id %>/annual<%= backParams.size ? `?${backParams.toString()}` : '' %>">Open annual account</a></p>
             </div>
           </details>
         <% } %>

@@ -14,12 +14,22 @@ class FakeHTMLElement {
   closest(selector) {
     return selector === 'details' ? this.disclosure : null;
   }
+
+  matches(selector) {
+    return selector === '[data-schedule-term]' && Boolean(this.disclosure?.isTerm);
+  }
+
+  focus() { this.disclosure.focused = true; }
 }
 
 function loadScheduleFormScript() {
   const listeners = new Map();
   const rows = { children: [], querySelectorAll: () => [], addEventListener() {} };
+  const formTermPanels = [1, 2, 3].map(() => ({ open: true, isTerm: true, parentElement: { closest: () => null } }));
+  const invalidElements = [];
   const form = {
+    noValidate: false,
+    elements: invalidElements,
     addEventListener(name, listener) { listeners.set(name, listener); },
     querySelector(selector) {
       if (selector === '[data-finance-line-rows]') return rows;
@@ -28,7 +38,9 @@ function loadScheduleFormScript() {
       return null;
     },
     querySelectorAll(selector) {
-      return selector === '[data-required-tuition-line]' ? Array.from({ length: 12 }) : [];
+      if (selector === '[data-required-tuition-line]') return Array.from({ length: 12 });
+      if (selector === '[data-schedule-term]') return formTermPanels;
+      return [];
     }
   };
 
@@ -37,26 +49,29 @@ function loadScheduleFormScript() {
     HTMLElement: FakeHTMLElement
   });
 
-  return { form, listeners };
+  return { form, listeners, termPanels: formTermPanels, invalidElements };
 }
 
-test('native validation opens each invalid term and its ancestor fee disclosures', () => {
-  const { listeners } = loadScheduleFormScript();
-  const createForm = { open: false, parentElement: null };
-  const termPanels = [1, 2, 3].map(() => ({
-    open: false,
-    parentElement: { closest: (selector) => selector === 'details' ? createForm : null }
-  }));
-  const additionalFees = {
-    open: false,
-    parentElement: { closest: (selector) => selector === 'details' ? createForm : null }
+test('schedule submit reveals only the first invalid field before asking the browser to report it', () => {
+  const { form, listeners, termPanels, invalidElements } = loadScheduleFormScript();
+  const hiddenParent = termPanels[0];
+  hiddenParent.open = false;
+  hiddenParent.matches = (selector) => selector === '[data-schedule-term]';
+  hiddenParent.parentElement = { closest: () => null };
+  const firstInvalid = {
+    willValidate: true, validity: { valid: false },
+    closest: () => hiddenParent,
+    focus() { this.focused = true; },
+    reportValidity() { this.reported = true; }
   };
-  const invalid = listeners.get('invalid');
-
-  for (const panel of termPanels) invalid({ target: new FakeHTMLElement(panel) });
-  invalid({ target: new FakeHTMLElement(additionalFees) });
-
-  assert.deepEqual(termPanels.map((panel) => panel.open), [true, true, true]);
-  assert.equal(additionalFees.open, true);
-  assert.equal(createForm.open, true);
+  const laterInvalid = { willValidate: true, validity: { valid: false } };
+  invalidElements.push(firstInvalid, laterInvalid);
+  let prevented = false;
+  listeners.get('submit')({ preventDefault() { prevented = true; } });
+  assert.equal(form.noValidate, true);
+  assert.equal(prevented, true);
+  assert.equal(hiddenParent.open, true);
+  assert.equal(firstInvalid.focused, true);
+  assert.equal(firstInvalid.reported, true);
+  assert.deepEqual(termPanels.map((panel) => panel.open), [true, false, false]);
 });
