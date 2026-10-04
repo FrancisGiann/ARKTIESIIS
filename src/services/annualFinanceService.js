@@ -12,6 +12,21 @@ const ID_PATTERN = /^\d{1,10}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_CENTS = 999999999999n;
 const TUITION_INSTALLMENTS = ['DP', 'Prelim', 'Midterm', 'Finals'];
+const FINANCE_ROSTER_QUERY_PHASES = Object.freeze([
+  'count', 'status_count', 'status_page', 'classification', 'page_data',
+  'options_year', 'options_term', 'options_section'
+]);
+
+async function runFinanceRosterQuery(request, phase, statement) {
+  try {
+    return await request.query(statement);
+  } catch (error) {
+    if (error && typeof error === 'object' && FINANCE_ROSTER_QUERY_PHASES.includes(phase)) {
+      try { Object.defineProperty(error, 'financeRosterQueryPhase', { value: phase, configurable: true }); } catch { /* Keep the original database error. */ }
+    }
+    throw error;
+  }
+}
 
 class AnnualFinanceError extends Error {
   constructor(message, status = 400) {
@@ -2416,7 +2431,7 @@ function createAnnualFinanceService({
           AND classification.${statusColumn} = @financeStatus
           AND (@searchPattern IS NULL OR student.student_no LIKE @searchPattern ESCAPE '~'
             OR CONCAT_WS(' ', student.first_name, NULLIF(student.middle_name, ''), student.last_name, NULLIF(student.suffix, '')) LIKE @searchPattern ESCAPE '~')`;
-      const statusCount = await bindRosterFilters(pool.request()).query(`SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
+      const statusCount = await runFinanceRosterQuery(bindRosterFilters(pool.request()), 'status_count', `SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
         WITH ${FINANCE_TERM_CLASSIFICATION_CTES}
         SELECT COUNT(*) AS total_records
         FROM FinanceTermClassification AS classification
@@ -2426,10 +2441,10 @@ function createAnnualFinanceService({
         WHERE ${statusFilters}`);
       totalRecords = Math.max(0, Number(statusCount.recordset?.[0]?.total_records || 0));
       const effectivePage = Math.min(requestedPage, Math.max(1, Math.ceil(totalRecords / pageSize)));
-      const statusPage = await bindRosterFilters(pool.request())
+      const statusPageRequest = bindRosterFilters(pool.request())
         .input('offset', sql.Int, (effectivePage - 1) * pageSize)
-        .input('pageSize', sql.Int, pageSize)
-        .query(`SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
+        .input('pageSize', sql.Int, pageSize);
+      const statusPage = await runFinanceRosterQuery(statusPageRequest, 'status_page', `SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
           WITH ${FINANCE_TERM_CLASSIFICATION_CTES}
           SELECT classification.annual_enrollment_id, classification.enrollment_id,
             classification.school_year, student.last_name, student.first_name
@@ -2451,7 +2466,7 @@ function createAnnualFinanceService({
           classificationRequest.input(name, sql.Int, annualId);
           return `@${name}`;
         });
-        const classifications = await classificationRequest.query(`SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
+        const classifications = await runFinanceRosterQuery(classificationRequest, 'classification', `SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
           WITH ${FINANCE_TERM_CLASSIFICATION_CTES}
           SELECT classification.*,
             CAST(classification.${amountColumns.required} AS CHAR(40)) AS classified_required,
@@ -2464,8 +2479,7 @@ function createAnnualFinanceService({
         }
       }
     } else {
-      const countResult = await bindRosterFilters(pool.request()).query(`WITH ${FINANCE_TERM_CLASSIFICATION_CTES}
-        SELECT COUNT(DISTINCT annual.id) AS total_records ${matchingFromWhere}`);
+      const countResult = await runFinanceRosterQuery(bindRosterFilters(pool.request()), 'count', `SELECT COUNT(DISTINCT annual.id) AS total_records ${matchingFromWhere}`);
       totalRecords = Math.max(0, Number(countResult.recordset?.[0]?.total_records || 0));
     }
     const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
@@ -2525,8 +2539,7 @@ function createAnnualFinanceService({
           FROM v_finance_opening_liability_due AS due GROUP BY due.student_id) AS opening_due
           ON opening_due.student_id = annual.student_id`;
     const [result, filterOptions] = await Promise.all([
-      pageRequest
-        .query(`SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
+      runFinanceRosterQuery(pageRequest, 'page_data', `SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
         WITH ${classificationCte}MatchingPlacements AS (
           SELECT annual.id AS annual_enrollment_id, enrollment.id AS enrollment_id,
               annual.school_year, student.last_name, student.first_name
@@ -2567,12 +2580,12 @@ function createAnnualFinanceService({
         ${pageWhere}
         ORDER BY annual.school_year DESC, student.last_name, student.first_name, annual.id, enrollment.annual_term_number;`),
       Promise.all([
-        pool.request().query(`SELECT DISTINCT school_year FROM annual_enrollments WHERE intake_status <> 'legacy' ORDER BY school_year DESC`),
-        pool.request().query(`SELECT DISTINCT term.id AS term_id, CONCAT(term.school_year, ' · ', term.term) AS term_label
+        runFinanceRosterQuery(pool.request(), 'options_year', `SELECT DISTINCT school_year FROM annual_enrollments WHERE intake_status <> 'legacy' ORDER BY school_year DESC`),
+        runFinanceRosterQuery(pool.request(), 'options_term', `SELECT DISTINCT term.id AS term_id, CONCAT(term.school_year, ' · ', term.term) AS term_label
           FROM academic_terms AS term INNER JOIN enrollments AS enrollment ON enrollment.academic_term_id = term.id
           INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
           WHERE annual.intake_status <> 'legacy' ORDER BY term.id`),
-        pool.request().query(`SELECT DISTINCT section.id AS section_id, section.name AS section_name, section.cluster, section.strand
+        runFinanceRosterQuery(pool.request(), 'options_section', `SELECT DISTINCT section.id AS section_id, section.name AS section_name, section.cluster, section.strand
           FROM sections AS section INNER JOIN enrollments AS enrollment ON enrollment.section_id = section.id
           INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
           WHERE annual.intake_status <> 'legacy' ORDER BY section.name, section.id`)
@@ -2672,6 +2685,7 @@ function createAnnualFinanceService({
 
 module.exports = {
   AnnualFinanceError,
+  FINANCE_ROSTER_QUERY_PHASES,
   TUITION_INSTALLMENTS,
   createAnnualFinanceService,
   normalizeLineRows,

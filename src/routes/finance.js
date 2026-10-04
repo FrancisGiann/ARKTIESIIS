@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('node:crypto');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { FinanceServiceError, createFinanceService, normalizeId, normalizeSearchTerm } = require('../services/financeService');
-const { AnnualFinanceError, createAnnualFinanceService } = require('../services/annualFinanceService');
+const { AnnualFinanceError, FINANCE_ROSTER_QUERY_PHASES, createAnnualFinanceService } = require('../services/annualFinanceService');
 const { FinanceCasesError, createAnnualFinanceCasesService } = require('../services/annualFinanceCasesService');
 const { FinanceReportsError, createAnnualFinanceReportsService } = require('../services/annualFinanceReportsService');
 const { FinanceDashboardError, createFinanceDashboardService } = require('../services/financeDashboardService');
@@ -22,6 +22,7 @@ const notices = {
   transactionRecorded: 'Financial transaction recorded.',
   existingPaymentCleared: 'The selected recorded payment was assigned to the enrollment clearance.'
 };
+const FINANCE_ROSTER_QUERY_PHASE_SET = new Set(FINANCE_ROSTER_QUERY_PHASES);
 
 function formValues(input = {}) {
   const value = (key, maxLength) => typeof input?.[key] === 'string' ? input[key].slice(0, maxLength) : '';
@@ -587,17 +588,12 @@ function createFinanceRouter({ getPool, sql, financeService, annualFinanceServic
     } catch (loadError) {
       if (loadError instanceof AnnualFinanceError) return res.status(loadError.status).render('error', { title: 'Finance roster', message: loadError.message });
       const supportReference = crypto.randomUUID().slice(0, 12);
-      const errorCode = typeof loadError?.code === 'string' && /^[A-Z0-9_]{1,40}$/.test(loadError.code) ? loadError.code : 'UNKNOWN';
-      const sourceLocation = typeof loadError?.stack === 'string'
-        ? loadError.stack.split('\n').slice(1).map((line) => line.trim().replace(/^at\s+/, '')).find((line) => /^[A-Za-z0-9_./(): -]{1,200}$/.test(line)) || 'unavailable'
-        : 'unavailable';
       logger.error?.('Finance roster request failed.', {
         supportReference,
-        errorName: typeof loadError?.name === 'string' && /^[A-Za-z0-9_]{1,60}$/.test(loadError.name) ? loadError.name : 'Error',
-        errorCode,
-        errorNumber: Number.isInteger(loadError?.errno) ? loadError.errno : null,
-        sqlState: typeof loadError?.sqlState === 'string' && /^[A-Z0-9]{1,10}$/.test(loadError.sqlState) ? loadError.sqlState : null,
-        sourceLocation
+        operation: 'finance.roster.load',
+        queryPhase: FINANCE_ROSTER_QUERY_PHASE_SET.has(loadError?.financeRosterQueryPhase)
+          ? loadError.financeRosterQueryPhase : 'unclassified',
+        ...safeErrorDiagnostics(loadError)
       });
       return res.status(503).set('Cache-Control', 'private, no-store').render('error', {
         title: 'Service Unavailable', message: `The annual finance roster is temporarily unavailable. Support reference: ${supportReference}.`

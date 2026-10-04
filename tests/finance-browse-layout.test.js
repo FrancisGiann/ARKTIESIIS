@@ -31,6 +31,14 @@ test('finance account and reports load failures return support references withou
   const router = createFinanceRouter({
     getPool: async () => { throw new Error('Unexpected database access in route test'); },
     annualFinanceService: {
+      async listRosterPage() {
+        const error = new Error('sensitive roster query detail');
+        error.code = 'ER_INVALID_GROUP_FUNC_USE';
+        error.errno = 1111;
+        error.sqlState = 'HY000';
+        error.financeRosterQueryPhase = 'count';
+        throw error;
+      },
       async getStudentLedger() { const error = new Error('sensitive student 102 SQL detail'); error.code = 'ER_QUERY_FAILURE'; throw error; },
       async listSchedules() { return []; }
     },
@@ -59,9 +67,52 @@ test('finance account and reports load failures return support references withou
   assert.equal(diagnostics[1][1].operation, 'finance.reports.load');
   assert.equal(diagnostics[1][1].errorCode, 'ER_QUERY_FAILURE');
 
+  const rosterResponse = responseRecorder();
+  await routeHandler('/')({ query: {}, authUser: { id: 7 } }, rosterResponse);
+  assert.equal(rosterResponse.statusCode, 503);
+  assert.match(rosterResponse.locals.message, /annual finance roster is temporarily unavailable\. Support reference: [a-f0-9-]+/i);
+  assert.equal(diagnostics[2][1].operation, 'finance.roster.load');
+  assert.equal(diagnostics[2][1].queryPhase, 'count');
+  assert.equal(diagnostics[2][1].errorCode, 'ER_INVALID_GROUP_FUNC_USE');
+  assert.equal(diagnostics[2][1].errorNumber, 1111);
+  assert.equal(diagnostics[2][1].sqlState, 'HY000');
+
   const logged = JSON.stringify(diagnostics);
-  assert.doesNotMatch(logged, /sensitive|102|studentId|raw sql/i);
+  assert.doesNotMatch(logged, /sensitive|102|studentId|raw sql|query detail/i);
+  assert.doesNotMatch(logged, /finance-browse-layout\.test\.js|\/home\//i);
   assert.match(logged, /ER_QUERY_FAILURE/);
+});
+
+test('annual roster tags the default count query phase and omits an unused finance classification CTE', async () => {
+  const queryFailure = Object.assign(new Error('private aggregate failure'), {
+    code: 'ER_INVALID_GROUP_FUNC_USE', errno: 1111, sqlState: 'HY000'
+  });
+  const statements = [];
+  const getPool = async () => ({
+    request() {
+      return {
+        input() { return this; },
+        async query(statement) {
+          statements.push(statement);
+          if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'finance' }] };
+          throw queryFailure;
+        }
+      };
+    }
+  });
+  const service = createAnnualFinanceService({
+    getPool,
+    sql: { Int: 'INT', NVarChar: () => 'VARCHAR' }
+  });
+
+  await assert.rejects(service.listRosterPage(7, {}), (error) => {
+    assert.equal(error, queryFailure, 'the original database error remains intact');
+    assert.equal(error.financeRosterQueryPhase, 'count');
+    return true;
+  });
+  assert.equal(statements.length, 2);
+  assert.match(statements[1], /SELECT COUNT\(DISTINCT annual\.id\) AS total_records/);
+  assert.doesNotMatch(statements[1], /FinanceChargeTotals|FinanceTermClassification/);
 });
 
 test('finance annual roster pages annual records and groups term placements under each summary', async () => {
@@ -125,6 +176,9 @@ test('finance annual roster pages annual records and groups term placements unde
   assert.equal(result.rows[0].annual_balance, '12345.67');
   assert.equal(result.rows[0].placements[0].current_term_due, '2500.01');
   const dataQuery = observed.find(({ statement }) => statement.includes('MatchingPlacements AS'));
+  const countQuery = observed.find(({ statement }) => statement.includes('COUNT(DISTINCT annual.id) AS total_records'));
+  assert.ok(countQuery, 'the default roster count query is preserved');
+  assert.doesNotMatch(countQuery.statement, /FinanceChargeTotals|FinanceTermClassification/);
   assert.match(dataQuery.statement, /LIMIT @pageSize OFFSET @offset/);
   assert.match(dataQuery.statement, /ORDER BY annual\.school_year DESC, student\.last_name, student\.first_name, annual\.id, enrollment\.annual_term_number/);
   assert.equal(dataQuery.values.offset, 40);
