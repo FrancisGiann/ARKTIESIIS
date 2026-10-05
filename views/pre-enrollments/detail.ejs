@@ -1,14 +1,192 @@
 <%- include('../partials/head', { title }) %>
-<main class="page-shell dashboard-page admin-page records-page pre-enrollment-page" id="main-content">
+<%
+  const statusLabels = {
+    draft: 'Draft',
+    ready_for_registrar: 'Ready for registrar',
+    enrollment_started: 'Enrollment started'
+  };
+  const eventLabels = {
+    created: 'Record created',
+    updated: 'Record corrected',
+    submitted_ready: 'Submitted as ready',
+    enrollment_started: 'Enrollment started'
+  };
+  const statusLabel = (value) => statusLabels[value] || String(value || 'None').replaceAll('_', ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+  const fieldLabel = (value) => String(value || '').replaceAll('_', ' ').replace(/\b\w/g, (character) => character.toUpperCase());
+  const fullName = [record.first_name, record.middle_name, record.last_name, record.suffix].filter(Boolean).join(' ');
+  const recorderName = [record.creator_first_name, record.creator_last_name].filter(Boolean).join(' ') || 'Staff account';
+  const updaterName = [record.updater_first_name, record.updater_last_name].filter(Boolean).join(' ') || 'Staff account';
+  const timestampIso = (value) => {
+    if (!value) return '';
+    if (value instanceof Date) return value.toISOString();
+    const raw = String(value).trim();
+    return /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw) ? raw : `${raw.replace(' ', 'T')}Z`;
+  };
+  const displayTimestamp = (value) => {
+    const isoValue = timestampIso(value);
+    if (!isoValue) return '—';
+    const date = new Date(isoValue);
+    return Number.isNaN(date.getTime())
+      ? String(value)
+      : date.toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' });
+  };
+  const displayDate = (value) => {
+    const raw = value instanceof Date ? value.toISOString().slice(0, 10) : String(value || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw || '—';
+    return new Date(`${raw}T00:00:00Z`).toLocaleDateString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium' });
+  };
+  const statusClass = record.status === 'ready_for_registrar'
+    ? 'pre-enrollment-status--ready'
+    : record.status === 'enrollment_started' ? 'pre-enrollment-status--started' : 'pre-enrollment-status--draft';
+%>
+<main class="page-shell dashboard-page admin-page records-page pre-enrollment-page pre-enrollment-detail-page" id="main-content">
   <a class="context-back" href="/pre-enrollments">Back to pre-enrollment records</a>
-  <header class="dashboard-heading"><div><h1><%= [record.first_name,record.middle_name,record.last_name,record.suffix].filter(Boolean).join(' ') || 'Pre-enrollment record' %></h1><p><%= record.school_year %> · <%= ({draft:'Draft',ready_for_registrar:'Ready for registrar',enrollment_started:'Enrollment started'})[record.status] %> · Revision <%= record.version %></p></div><% if (['front_desk','registrar'].includes(currentUser.role) && record.status !== 'enrollment_started') { %><a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(record.id) %>/edit">Correct paper record</a><% } %><% if (currentUser.role === 'registrar' && record.status === 'ready_for_registrar') { %><a class="button button--primary" href="/registrar/intake/new?preEnrollmentId=<%= encodeURIComponent(record.id) %>">Start enrollment</a><% } %></header>
+  <header class="dashboard-heading pre-enrollment-detail-heading">
+    <div class="pre-enrollment-detail-heading__copy">
+      <h1><%= fullName || 'Pre-enrollment record' %></h1>
+      <div class="pre-enrollment-detail-heading__meta" aria-label="Record summary">
+        <span>School year <strong><%= record.school_year || '—' %></strong></span>
+        <span class="status-chip pre-enrollment-status <%= statusClass %>"><%= statusLabels[record.status] || 'Draft' %></span>
+        <span>Revision <strong><%= record.version %></strong></span>
+      </div>
+    </div>
+    <div class="pre-enrollment-detail-actions">
+      <% if (['front_desk', 'registrar'].includes(currentUser.role) && record.status !== 'enrollment_started') { %>
+        <a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(record.id) %>/edit">Correct paper record</a>
+      <% } %>
+      <% if (currentUser.role === 'registrar' && record.status === 'ready_for_registrar') { %>
+        <a class="button button--primary" href="/registrar/intake/new?preEnrollmentId=<%= encodeURIComponent(record.id) %>">Start enrollment</a>
+      <% } %>
+      <% if (record.status === 'enrollment_started') { %>
+        <p class="pre-enrollment-readonly-note">Read-only after annual enrollment starts.</p>
+      <% } %>
+    </div>
+  </header>
+
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
-  <section class="form-section"><h2>Paper details</h2><dl class="pre-enrollment-summary">
-    <% for (const [label, value] of [['LRN',record.lrn],['Student contact number',record.student_contact_number],['Voucher type as written',record.voucher_type_text],['Voucher category as written',record.voucher_category_text],['Preferred track',record.preferred_track],['Preferred cluster',record.preferred_cluster],['Grade to enroll',record.target_grade_level],['Last grade level',record.prior_grade_level],['School attended',record.prior_school],['Student signature present',record.student_signature_present ? 'Yes' : 'No'],['Student signature date',record.student_signed_date],['Paper received by',record.received_by],['Paper received date',record.received_date],['Authenticated recorder',`${record.creator_first_name || ''} ${record.creator_last_name || ''}`.trim()],['Last updated by',`${record.updater_first_name || ''} ${record.updater_last_name || ''}`.trim()]]) { %><div><dt><%= label %></dt><dd><%= value || '—' %></dd></div><% } %>
-  </dl></section>
-  <section class="form-section"><h2>Requirements received</h2><p>Receipt indicators only. No document verification was recorded.</p><div class="table-wrap"><table class="data-table"><thead><tr><th scope="col">Requirement</th><th scope="col">Original</th><th scope="col">Photocopy</th></tr></thead><tbody><% for (const [code,label] of requirements) { const receipt = record.receipts.find((row) => row.requirement_code === code) || {}; %><tr><th scope="row"><%= label %></th><td><%= receipt.original_received ? 'Received' : 'Not recorded' %><% if (receipt.original_pieces) { %> · <%= receipt.original_pieces %> piece(s)<% } %></td><td><%= receipt.photocopy_received ? 'Received' : 'Not recorded' %><% if (receipt.photocopy_pieces) { %> · <%= receipt.photocopy_pieces %> piece(s)<% } %></td></tr><% } %></tbody></table></div></section>
-  <section class="form-section"><h2>Record history</h2><ol class="pre-enrollment-history"><% for (const event of record.events) { %><li><strong><%= ({created:'Record created',updated:'Record corrected',submitted_ready:'Submitted as ready',enrollment_started:'Enrollment started'})[event.event_type] || event.event_type %></strong><span>Revision <%= event.version %> · <%= [event.first_name,event.last_name].filter(Boolean).join(' ') || 'Staff account' %> · <%= event.created_at %></span><% if (event.from_status !== event.to_status) { %><span>Status: <%= event.from_status || 'none' %> → <%= event.to_status %></span><% } %></li><% } %></ol>
-    <% if (record.revisions.length) { %><details><summary>Field revision details</summary><div class="table-wrap"><table class="data-table"><thead><tr><th scope="col">Field</th><th scope="col">Before</th><th scope="col">After</th><th scope="col">Recorded by</th><th scope="col">Date</th></tr></thead><tbody><% for (const revision of record.revisions) { %><tr><th scope="row"><%= revision.field_name.replaceAll('_',' ') %></th><td><%= revision.before_value || '—' %></td><td><%= revision.after_value || '—' %></td><td><%= [revision.first_name,revision.last_name].filter(Boolean).join(' ') || 'Staff account' %></td><td><%= revision.created_at %></td></tr><% } %></tbody></table></div></details><% } %>
+
+  <section class="form-section pre-enrollment-panel" aria-labelledby="paper-details-heading">
+    <div class="pre-enrollment-panel__heading">
+      <h2 id="paper-details-heading">Paper details</h2>
+      <p>Transcribed from the paper form. The paper receiver may differ from the staff member who entered this record.</p>
+    </div>
+    <div class="pre-enrollment-detail-groups">
+      <section class="pre-enrollment-detail-group" aria-labelledby="pre-student-heading">
+        <h3 id="pre-student-heading">Student and contact</h3>
+        <dl class="pre-enrollment-summary">
+          <% for (const [label, value] of [['Student name', fullName], ['LRN', record.lrn], ['Student contact number', record.student_contact_number]]) { %>
+            <div><dt><%= label %></dt><dd><%= value || '—' %></dd></div>
+          <% } %>
+        </dl>
+      </section>
+      <section class="pre-enrollment-detail-group" aria-labelledby="pre-program-heading">
+        <h3 id="pre-program-heading">Program and previous school</h3>
+        <dl class="pre-enrollment-summary">
+          <% for (const [label, value, spanTwo] of [
+            ['Voucher type as written', record.voucher_type_text, false],
+            ['Voucher category as written', record.voucher_category_text, false],
+            ['Preferred track', record.preferred_track, false],
+            ['Preferred cluster', record.preferred_cluster, true],
+            ['Grade to enroll', record.target_grade_level, false],
+            ['Last grade level', record.prior_grade_level, false],
+            ['School attended', record.prior_school, true]
+          ]) { %>
+            <div class="<%= spanTwo ? 'pre-enrollment-summary__wide' : '' %>"><dt><%= label %></dt><dd><%= value || '—' %></dd></div>
+          <% } %>
+        </dl>
+      </section>
+      <section class="pre-enrollment-detail-group" aria-labelledby="pre-paper-office-heading">
+        <h3 id="pre-paper-office-heading">Signature and office record</h3>
+        <dl class="pre-enrollment-summary">
+          <div><dt>Student signature present</dt><dd><%= record.student_signature_present ? 'Yes' : 'No' %></dd></div>
+          <div><dt>Student signature date</dt><dd><%= displayDate(record.student_signed_date) %></dd></div>
+          <div><dt>Paper received by</dt><dd><%= record.received_by || '—' %></dd></div>
+          <div><dt>Paper received date</dt><dd><%= displayDate(record.received_date) %></dd></div>
+          <div><dt>Entered by</dt><dd><%= recorderName %></dd></div>
+          <div><dt>Last updated by</dt><dd><%= updaterName %></dd></div>
+        </dl>
+      </section>
+    </div>
+  </section>
+
+  <section class="form-section pre-enrollment-panel" aria-labelledby="requirements-heading">
+    <div class="pre-enrollment-panel__heading">
+      <h2 id="requirements-heading">Requirements received</h2>
+      <p>Receipt indicators only. No document inspection or verification was recorded.</p>
+    </div>
+    <div class="table-wrap pre-enrollment-table-wrap" role="region" aria-label="Pre-enrollment receipt checklist" tabindex="0">
+      <table class="data-table pre-enrollment-receipt-table">
+        <thead>
+          <tr><th scope="col">Requirement</th><th scope="col">Original</th><th scope="col">Photocopy</th></tr>
+        </thead>
+        <tbody>
+          <% for (const [code, label] of requirements) {
+            const receipt = record.receipts.find((row) => row.requirement_code === code) || {};
+            const originalCount = Number(receipt.original_pieces);
+            const photocopyCount = Number(receipt.photocopy_pieces);
+          %>
+            <tr>
+              <th scope="row"><%= label %></th>
+              <td><span class="pre-enrollment-receipt__status"><%= receipt.original_received ? 'Received' : 'Not recorded' %></span><% if (originalCount > 0) { %><span class="pre-enrollment-receipt__count"><%= originalCount %> piece<%= originalCount === 1 ? '' : 's' %></span><% } %></td>
+              <td><span class="pre-enrollment-receipt__status"><%= receipt.photocopy_received ? 'Received' : 'Not recorded' %></span><% if (photocopyCount > 0) { %><span class="pre-enrollment-receipt__count"><%= photocopyCount %> piece<%= photocopyCount === 1 ? '' : 's' %></span><% } %></td>
+            </tr>
+          <% } %>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="form-section pre-enrollment-panel" aria-labelledby="history-heading">
+    <div class="pre-enrollment-panel__heading">
+      <h2 id="history-heading">Record history</h2>
+      <p>Staff actions and changes for this paper record.</p>
+    </div>
+    <% if (record.events.length) { %>
+      <ol class="pre-enrollment-history">
+        <% for (const event of record.events) {
+          const actorName = [event.first_name, event.last_name].filter(Boolean).join(' ') || 'Staff account';
+          const eventDate = timestampIso(event.created_at);
+        %>
+          <li>
+            <strong class="pre-enrollment-history__title"><%= eventLabels[event.event_type] || fieldLabel(event.event_type) %></strong>
+            <p class="pre-enrollment-history__metadata">
+              <span>Revision <%= event.version %></span>
+              <span>Recorded by <%= actorName %></span>
+              <span class="pre-enrollment-history__timestamp"><span>Manila time</span><time<% if (eventDate) { %> datetime="<%= eventDate %>"<% } %>><%= displayTimestamp(event.created_at) %></time></span>
+            </p>
+            <% if (event.from_status !== event.to_status) { %>
+              <p class="pre-enrollment-history__transition"><span>Status changed</span><span><%= statusLabel(event.from_status) %> → <%= statusLabel(event.to_status) %></span></p>
+            <% } %>
+          </li>
+        <% } %>
+      </ol>
+    <% } else { %>
+      <p class="empty-state">No history has been recorded yet.</p>
+    <% } %>
+
+    <% if (record.revisions.length) { %>
+      <details class="pre-enrollment-revision-details">
+        <summary>Field revision details · <%= record.revisions.length %> change<%= record.revisions.length === 1 ? '' : 's' %></summary>
+        <div class="table-wrap pre-enrollment-table-wrap pre-enrollment-revision-table-wrap" role="region" aria-label="Pre-enrollment field revision details" tabindex="0">
+          <table class="data-table pre-enrollment-revision-table">
+            <thead><tr><th scope="col">Field</th><th scope="col">Before</th><th scope="col">After</th><th scope="col">Recorded by</th><th scope="col">Date</th></tr></thead>
+            <tbody>
+              <% for (const revision of record.revisions) { %>
+                <tr>
+                  <th scope="row"><%= fieldLabel(revision.field_name) %></th>
+                  <td><%= revision.before_value ?? '—' %></td>
+                  <td><%= revision.after_value ?? '—' %></td>
+                  <td><%= [revision.first_name, revision.last_name].filter(Boolean).join(' ') || 'Staff account' %></td>
+                  <td><time<% if (timestampIso(revision.created_at)) { %> datetime="<%= timestampIso(revision.created_at) %>"<% } %>><%= displayTimestamp(revision.created_at) %></time></td>
+                </tr>
+              <% } %>
+            </tbody>
+          </table>
+        </div>
+      </details>
+    <% } else { %>
+      <p class="pre-enrollment-no-revisions">No field corrections have been recorded.</p>
+    <% } %>
   </section>
 </main>
 <%- include('../partials/foot') %>

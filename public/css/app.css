@@ -2070,3 +2070,85 @@ label { font-size: 0.84rem; }
   .finance-detail-page .finance-balance-summary-details__list { grid-template-columns: minmax(0, 1fr); }
   .finance-review-term-editor[open], .finance-review-fee-line { grid-template-columns: minmax(0, 1fr); }
 }
+
+.pre-enrollment-detail-page { min-width: 0; }
+.pre-enrollment-detail-page .context-back { display: inline-block; margin-bottom: 0.8rem; }
+.pre-enrollment-detail-heading { align-items: center; gap: 1.25rem; margin-bottom: 1.15rem; }
+.pre-enrollment-detail-heading__copy { min-width: 0; }
+.pre-enrollment-detail-heading h1 { overflow-wrap: anywhere; }
+.pre-enrollment-detail-heading__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.85rem; color: var(--muted); font-size: 0.82rem; }
+.pre-enrollment-detail-heading__meta strong { color: var(--ink); font-weight: 700; }
+.pre-enrollment-status { text-transform: none; }
+.pre-enrollment-status--draft { color: var(--ink-soft); background: var(--surface-soft); }
+.pre-enrollment-status--ready { color: var(--success); background: var(--success-soft); }
+.pre-enrollment-status--started { color: var(--warning); background: var(--warning-soft); }
+.pre-enrollment-detail-actions { display: flex; min-width: 0; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.55rem; }
+.pre-enrollment-readonly-note { max-width: 29ch; margin: 0; color: var(--muted); font-size: 0.8rem; }
+.pre-enrollment-panel { min-width: 0; padding: 1.1rem 1.25rem; margin: 0 0 1rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-control); }
+.pre-enrollment-panel__heading { margin-bottom: 0.75rem; }
+.pre-enrollment-panel__heading h2 { margin-bottom: 0.2rem; }
+.pre-enrollment-panel__heading p { margin: 0; color: var(--muted); font-size: 0.84rem; }
+.pre-enrollment-detail-groups { display: grid; min-width: 0; }
+.pre-enrollment-detail-group { min-width: 0; padding-top: 0.8rem; margin-top: 0.75rem; border-top: 1px solid var(--line); }
+.pre-enrollment-detail-group:first-child { padding-top: 0; margin-top: 0; border-top: 0; }
+.pre-enrollment-detail-group h3 { margin: 0 0 0.55rem; font-size: 0.95rem; }
+.pre-enrollment-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.55rem 1.1rem; margin: 0; }
+.pre-enrollment-summary > div { display: grid; min-width: 0; align-content: start; gap: 0.12rem; }
+.pre-enrollment-summary__wide { grid-column: span 2; }
+.pre-enrollment-summary dt { color: var(--muted); font-size: 0.76rem; font-weight: 650; line-height: 1.35; }
+.pre-enrollment-summary dd { min-width: 0; margin: 0; color: var(--ink); font-size: 0.9rem; font-weight: 620; line-height: 1.4; overflow-wrap: anywhere; }
+.pre-enrollment-table-wrap { max-width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: thin; }
+.pre-enrollment-table-wrap:focus-visible { outline: 3px solid color-mix(in srgb, var(--focus) 42%, transparent); outline-offset: 3px; }
+.pre-enrollment-receipt-table, .pre-enrollment-revision-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.pre-enrollment-receipt-table th, .pre-enrollment-receipt-table td,
+.pre-enrollment-revision-table th, .pre-enrollment-revision-table td { padding: 0.62rem 0.72rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.pre-enrollment-receipt-table thead th, .pre-enrollment-revision-table thead th { color: var(--ink-soft); background: #f7f9f9; font-size: 0.77rem; font-weight: 700; }
+.pre-enrollment-receipt-table tbody th, .pre-enrollment-revision-table tbody th { font-size: 0.84rem; font-weight: 650; }
+.pre-enrollment-receipt-table tbody tr:last-child > *, .pre-enrollment-revision-table tbody tr:last-child > * { border-bottom: 0; }
+.pre-enrollment-receipt-table th:first-child { width: 48%; }
+.pre-enrollment-receipt-table td { font-size: 0.82rem; }
+.pre-enrollment-receipt__status, .pre-enrollment-receipt__count { display: block; }
+.pre-enrollment-receipt__status { color: var(--ink); font-weight: 650; }
+.pre-enrollment-receipt__count { margin-top: 0.12rem; color: var(--muted); font-size: 0.75rem; }
+.pre-enrollment-history { display: grid; gap: 0; padding: 0; margin: 0; list-style: none; }
+.pre-enrollment-history > li { display: grid; min-width: 0; gap: 0.28rem; padding: 0.7rem 0; border-top: 1px solid var(--line); }
+.pre-enrollment-history__title { color: var(--ink); font-size: 0.9rem; }
+.pre-enrollment-history__metadata { display: flex; min-width: 0; flex-wrap: wrap; gap: 0.18rem 0.85rem; margin: 0; color: var(--muted); font-size: 0.78rem; }
+.pre-enrollment-history__metadata > * { overflow-wrap: anywhere; }
+.pre-enrollment-history__timestamp { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 0.15rem 0.4rem; }
+.pre-enrollment-history__timestamp > span { font-weight: 650; }
+.pre-enrollment-history__transition { display: flex; min-width: 0; flex-wrap: wrap; gap: 0.2rem 0.7rem; margin: 0.12rem 0 0; color: var(--ink-soft); font-size: 0.78rem; }
+.pre-enrollment-history__transition span:first-child { color: var(--muted); }
+.pre-enrollment-revision-details, .pre-enrollment-no-revisions { padding-top: 0.65rem; margin: 0.8rem 0 0; border-top: 1px solid var(--line); }
+.pre-enrollment-revision-details > summary { display: flex; width: fit-content; min-height: 2.65rem; align-items: center; color: var(--accent); cursor: pointer; font-size: 0.86rem; font-weight: 700; text-underline-offset: 0.16em; }
+.pre-enrollment-revision-details > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 0.2rem; }
+.pre-enrollment-revision-details[open] > summary { margin-bottom: 0.5rem; }
+.pre-enrollment-revision-table th:first-child { width: 16%; }
+.pre-enrollment-revision-table th:nth-child(2), .pre-enrollment-revision-table th:nth-child(3) { width: 25%; }
+.pre-enrollment-revision-table th:nth-child(4) { width: 18%; }
+.pre-enrollment-revision-table td, .pre-enrollment-revision-table tbody th { font-size: 0.78rem; }
+.pre-enrollment-no-revisions { color: var(--muted); font-size: 0.82rem; }
+
+@media (max-width: 700px) {
+  .pre-enrollment-detail-heading { align-items: flex-start; flex-direction: column; }
+  .pre-enrollment-detail-actions { width: 100%; justify-content: flex-start; }
+}
+
+@media (max-width: 520px) {
+  .pre-enrollment-panel { padding: 0.9rem; }
+  .pre-enrollment-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem 0.8rem; }
+  .pre-enrollment-receipt-table { min-width: 0; }
+  .pre-enrollment-receipt-table th:first-child { width: 42%; }
+  .pre-enrollment-receipt-table th, .pre-enrollment-receipt-table td { padding: 0.48rem 0.35rem; }
+  .pre-enrollment-receipt-table thead th { font-size: 0.7rem; }
+  .pre-enrollment-receipt-table tbody th, .pre-enrollment-receipt-table td { font-size: 0.74rem; }
+  .pre-enrollment-receipt__count { font-size: 0.68rem; }
+  .pre-enrollment-revision-table { min-width: 48rem; }
+}
+
+@media (max-width: 360px) {
+  .pre-enrollment-summary { grid-template-columns: minmax(0, 1fr); }
+  .pre-enrollment-summary__wide { grid-column: auto; }
+  .pre-enrollment-detail-actions { width: 100%; }
+  .pre-enrollment-detail-actions .button { flex: 1 1 auto; }
+}

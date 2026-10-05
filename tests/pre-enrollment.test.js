@@ -101,6 +101,58 @@ test('address field component strings stay at five visible fields and enforce co
   assert.match(html, /name="addressMode"/);
 });
 
+function detailRecord(id, status = 'ready_for_registrar') {
+  return {
+    id,
+    school_year: '2027-2028',
+    first_name: 'Ari',
+    middle_name: 'Mae',
+    last_name: 'Santos',
+    suffix: '',
+    lrn: '012345678901',
+    student_contact_number: '09171234567',
+    voucher_type_text: 'ESC as written on original school form',
+    voucher_category_text: 'CATEGORY A',
+    preferred_track: 'Academic Track',
+    preferred_cluster: 'ASSH (Arts, Social Science, and Humanities) — long fixture cluster text to verify wrapping',
+    target_grade_level: 'Grade 11',
+    prior_grade_level: 'Grade 10',
+    prior_school: 'Lucena High School',
+    student_signature_present: 1,
+    student_signed_date: '2026-10-01',
+    received_by: 'Pat Fixture',
+    received_date: '2026-10-03',
+    creator_first_name: 'Pat',
+    creator_last_name: 'Fixture',
+    updater_first_name: 'Rae',
+    updater_last_name: 'Registrar',
+    status,
+    version: status === 'enrollment_started' ? 3 : 2,
+    receipts: RECEIPT_REQUIREMENTS.map(([requirement_code], index) => ({
+      requirement_code,
+      original_received: index === 0 || index === 7,
+      original_pieces: index === 0 ? 1 : index === 7 ? 3 : null,
+      photocopy_received: index === 1,
+      photocopy_pieces: index === 1 ? 1 : null
+    })),
+    events: [
+      { event_type: 'created', version: 1, first_name: 'Pat', last_name: 'Fixture', created_at: '2026-10-02 09:10:00.000', from_status: null, to_status: 'draft' },
+      { event_type: 'submitted_ready', version: 2, first_name: 'Rae', last_name: 'Registrar', created_at: '2026-10-03 10:30:00.000', from_status: 'draft', to_status: 'ready_for_registrar' },
+      ...(status === 'enrollment_started'
+        ? [{ event_type: 'enrollment_started', version: 3, first_name: 'Rae', last_name: 'Registrar', created_at: '2026-10-04 11:45:00.000', from_status: 'ready_for_registrar', to_status: 'enrollment_started' }]
+        : [])
+    ],
+    revisions: [{
+      field_name: 'preferred_cluster',
+      before_value: 'ASSH (Arts, Social Science, and Humanities)',
+      after_value: 'ASSH (Arts, Social Science, and Humanities) — confirmed from a longer handwritten paper note to test wrapping',
+      first_name: 'Rae',
+      last_name: 'Registrar',
+      created_at: '2026-10-03 10:30:00.000'
+    }]
+  };
+}
+
 test('pre-enrollment routes keep database administrators read-only and deny unrelated staff roles', async () => {
   const app = express();
   const csrfToken = 'c'.repeat(64);
@@ -122,7 +174,7 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
       async getActorDisplayName(actorId) { calls.push(['display', actorId]); return 'Front Desk'; },
       async create(actorId) { calls.push(['create', actorId]); return { id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261' }; },
       async update(actorId) { calls.push(['update', actorId]); return { id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261' }; },
-      async get(actorId) { calls.push(['get', actorId]); return { id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261', status: 'draft', version: 1, school_year: '2027-2028', receipts: [], events: [], revisions: [] }; }
+      async get(actorId, id) { calls.push(['get', actorId]); return detailRecord(id, id === 'b342bc01-2a68-4f19-a7fd-4d5bb1d83261' ? 'enrollment_started' : 'ready_for_registrar'); }
     }
   }));
   app.post('/registrar/intake', requireRole('registrar'), (_req, res) => res.status(204).end());
@@ -138,11 +190,35 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.equal(detail.status, 200);
     const detailHtml = await detail.text();
     for (const [, label] of RECEIPT_REQUIREMENTS) assert.ok(detailHtml.includes(label), `detail renders receipt row ${label}`);
+    for (const label of ['Student and contact', 'Program and previous school', 'Signature and office record', 'Entered by']) {
+      assert.ok(detailHtml.includes(label), `detail presents the grouped ${label} information`);
+    }
+    assert.match(detailHtml, /Submitted as ready/);
+    assert.match(detailHtml, /Status changed/);
+    assert.match(detailHtml, /datetime="2026-10-03T10:30:00.000Z"/);
+    assert.match(detailHtml, /Field revision details · 1 change/);
+    assert.match(detailHtml, /confirmed from a longer handwritten paper note/);
+    assert.doesNotMatch(detailHtml, /ready_for_registrar|submitted_ready/);
+    assert.doesNotMatch(detailHtml, /Start enrollment/, 'front desk can correct a ready record but cannot start enrollment');
+    assert.match(detailHtml, /Correct paper record/);
+
+    const registrarDetail = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261`, {
+      headers: { 'x-test-role': 'registrar' }
+    });
+    assert.match(await registrarDetail.text(), /Start enrollment/);
+    const startedDetail = await fetch(`${origin}/pre-enrollments/b342bc01-2a68-4f19-a7fd-4d5bb1d83261`);
+    const startedHtml = await startedDetail.text();
+    assert.match(startedHtml, /Enrollment started/);
+    assert.match(startedHtml, /Read-only after annual enrollment starts/);
+    assert.doesNotMatch(startedHtml, /Correct paper record|Start enrollment/);
 
     const adminHeaders = { 'x-test-role': 'database_admin' };
     const adminList = await fetch(`${origin}/pre-enrollments`, { headers: adminHeaders });
     assert.equal(adminList.status, 200);
     assert.doesNotMatch(await adminList.text(), /Record paper form/);
+    const adminDetail = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261`, { headers: adminHeaders });
+    assert.equal(adminDetail.status, 200);
+    assert.doesNotMatch(await adminDetail.text(), /Correct paper record|Start enrollment/);
     assert.equal((await fetch(`${origin}/pre-enrollments/new`, { headers: adminHeaders })).status, 403);
     const adminCreate = await fetch(`${origin}/pre-enrollments`, {
       method: 'POST', headers: { ...adminHeaders, 'content-type': 'application/x-www-form-urlencoded' },
