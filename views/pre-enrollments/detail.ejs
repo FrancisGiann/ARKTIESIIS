@@ -14,6 +14,15 @@
   const statusLabel = (value) => statusLabels[value] || String(value || 'None').replaceAll('_', ' ').replace(/\b\w/g, (character) => character.toUpperCase());
   const fieldLabel = (value) => String(value || '').replaceAll('_', ' ').replace(/\b\w/g, (character) => character.toUpperCase());
   const fullName = [record.first_name, record.middle_name, record.last_name, record.suffix].filter(Boolean).join(' ');
+  const formatAddress = (formatted, blockLot, barangay, city, province, zip) => {
+    const fields = [
+      ['Block and lot, street/purok', blockLot], ['Barangay', barangay], ['City', city],
+      ['Province', province], ['ZIP code', zip]
+    ].filter(([, value]) => String(value || '').trim());
+    return fields.length
+      ? fields.map(([label, value]) => `${label}: ${value}`).join('\n')
+      : formatted ? `Legacy free-text address: ${formatted}` : '—';
+  };
   const recorderName = [record.creator_first_name, record.creator_last_name].filter(Boolean).join(' ') || 'Staff account';
   const updaterName = [record.updater_first_name, record.updater_last_name].filter(Boolean).join(' ') || 'Staff account';
   const timestampIso = (value) => {
@@ -38,6 +47,7 @@
   const statusClass = record.status === 'ready_for_registrar'
     ? 'pre-enrollment-status--ready'
     : record.status === 'enrollment_started' ? 'pre-enrollment-status--started' : 'pre-enrollment-status--draft';
+  const applicantKindLabels = { new: 'New applicant', continuing: 'Continuing student', readmission: 'Balik-aral applicant' };
 %>
 <main class="page-shell dashboard-page admin-page records-page pre-enrollment-page pre-enrollment-detail-page" id="main-content">
   <a class="context-back" href="/pre-enrollments">Back to pre-enrollment records</a>
@@ -74,9 +84,29 @@
       <section class="pre-enrollment-detail-group" aria-labelledby="pre-student-heading">
         <h3 id="pre-student-heading">Student and contact</h3>
         <dl class="pre-enrollment-summary">
-          <% for (const [label, value] of [['Student name', fullName], ['LRN', record.lrn], ['Student contact number', record.student_contact_number]]) { %>
-            <div><dt><%= label %></dt><dd><%= value || '—' %></dd></div>
+          <% for (const [label, value, spanTwo] of [
+            ['Student name', fullName, true], ['LRN', record.lrn], ['Applicant status', applicantKindLabels[record.applicant_kind] || 'Not recorded'],
+            ['Student contact number', record.student_contact_number], ['Contact and sign-in email', record.email, true],
+            ['Birth date', displayDate(record.birth_date)], ['Gender', record.sex], ['Phone', record.profile_phone],
+            ['Birthplace', record.birthplace], ['Facebook name', record.facebook_name, true],
+            ['Student address', formatAddress(record.address, record.address_block_lot_street_purok, record.address_barangay, record.address_city, record.address_province, record.address_zip), true],
+            ['Mother’s name', record.mother_name], ['Mother’s phone', record.mother_phone],
+            ['Father’s name', record.father_name], ['Father’s phone', record.father_phone]
+          ]) { %>
+            <div class="<%= spanTwo ? 'pre-enrollment-summary__wide' : '' %>"><dt><%= label %></dt><dd><%= value || '—' %></dd></div>
           <% } %>
+        </dl>
+      </section>
+      <section class="pre-enrollment-detail-group" aria-labelledby="pre-emergency-heading">
+        <h3 id="pre-emergency-heading">Emergency contact</h3>
+        <dl class="pre-enrollment-summary">
+          <% for (const [label, value, spanTwo] of [
+            ['Contact person', record.emergency_contact_person, true], ['Relationship', record.emergency_contact_relationship],
+            ['Contact number', record.emergency_contact_phone],
+            ['Address', formatAddress(record.emergency_contact_address, record.emergency_contact_address_block_lot_street_purok,
+              record.emergency_contact_address_barangay, record.emergency_contact_address_city,
+              record.emergency_contact_address_province, record.emergency_contact_address_zip), true]
+          ]) { %><div class="<%= spanTwo ? 'pre-enrollment-summary__wide' : '' %>"><dt><%= label %></dt><dd><%= value || '—' %></dd></div><% } %>
         </dl>
       </section>
       <section class="pre-enrollment-detail-group" aria-labelledby="pre-program-heading">
@@ -95,6 +125,15 @@
           <% } %>
         </dl>
       </section>
+      <% if (record.applicant_kind === 'readmission') { %>
+        <section class="pre-enrollment-detail-group" aria-labelledby="pre-readmission-heading">
+          <h3 id="pre-readmission-heading">Balik-aral review link</h3>
+          <% if (record.readmission_evaluation) { %>
+            <p class="muted-copy">Bound to LRN <%= record.readmission_evaluation.applicant_lrn %>, <%= record.readmission_evaluation.school_year %>, <%= record.readmission_evaluation.target_grade_level %>. Saved revision <%= record.readmission_evaluation_version %> · current revision <%= record.readmission_evaluation.version %> · <%= record.readmission_evaluation.status === 'accepted' ? 'Accepted' : record.readmission_evaluation.status === 'under_review' ? 'Under review' : 'Not accepted' %><% if (Number(record.readmission_evaluation.version) !== Number(record.readmission_evaluation_version) || record.readmission_evaluation.status !== 'accepted') { %> · paper binding needs a registrar review<% } %></p>
+            <% if (['registrar','database_admin'].includes(currentUser.role)) { %><a class="text-link" href="/registrar/readmissions/<%= encodeURIComponent(record.readmission_evaluation_id) %>">Open registrar evaluation</a><% } %>
+          <% } else { %><p class="muted-copy">Evaluation link <%= record.readmission_evaluation_id || 'not saved' %> · revision <%= record.readmission_evaluation_version || '—' %></p><% } %>
+        </section>
+      <% } %>
       <section class="pre-enrollment-detail-group" aria-labelledby="pre-paper-office-heading">
         <h3 id="pre-paper-office-heading">Signature and office record</h3>
         <dl class="pre-enrollment-summary">

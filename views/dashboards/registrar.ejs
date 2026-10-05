@@ -3,7 +3,7 @@
   <header class="dashboard-heading">
     <div>
       <h1>Registrar workspace</h1>
-      <p>Check enrollment, find a student record, or continue to a registrar task.</p>
+      <p>Review paper submissions, find a student record, or continue to a registrar task.</p>
     </div>
   </header>
 
@@ -116,7 +116,7 @@
   </section>
 
   <section class="registrar-lookup registrar-lookup--primary" aria-labelledby="find-student-title">
-    <div class="registrar-lookup__heading"><h2 id="find-student-title">Find a student</h2><a class="button button--secondary" href="/registrar/intake/new">New enrollment</a></div>
+    <div class="registrar-lookup__heading"><h2 id="find-student-title">Find a student</h2><a class="button button--secondary" href="/pre-enrollments">Review paper submissions</a></div>
     <form class="admin-search registrar-lookup__form" method="get" action="/registrar/records">
       <div class="field"><label for="registrar-student-search">Student name, number, or LRN</label><input id="registrar-student-search" name="search" type="search" maxlength="100" autocomplete="off" required></div>
       <button class="button button--primary" type="submit">Search records</button>
@@ -128,7 +128,8 @@
     <section class="registrar-task-group" aria-labelledby="registrar-next-tasks">
       <h2 id="registrar-next-tasks">Enrollment and review</h2>
       <nav class="registrar-work-index" aria-label="Enrollment and review tasks">
-        <a class="registrar-work-index__link" href="/registrar/intake"><span><strong>Enrollment intake</strong><span>Create student profiles and finalize enrollment.</span></span><span class="registrar-work-index__action">Open intake</span></a>
+        <a class="registrar-work-index__link" href="/pre-enrollments"><span><strong>Paper intake handoff</strong><span>Review saved front-desk forms and start a new annual enrollment from a ready record.</span></span><span class="registrar-work-index__action">Review paper forms</span></a>
+        <a class="registrar-work-index__link" href="/registrar/readmissions"><span><strong>Balik-aral evaluation</strong><span>Review interrupted school histories and record a human decision.</span></span><span class="registrar-work-index__action">Review applicants</span></a>
         <a class="registrar-work-index__link" href="/documents"><span><strong>Document review</strong><span>Review Good Moral, PSA, and Form 137 status from student records.</span></span><span class="registrar-work-index__action">Review documents</span></a>
         <a class="registrar-work-index__link" href="/registrar/grade-submissions"><span><strong>Grade review</strong><span>Check teacher workbooks and approve grade imports.</span></span><span class="registrar-work-index__action">Review submissions</span></a>
         <a class="registrar-work-index__link" href="/registrar/schedules"><span><strong>Class schedules</strong><span>Manage meeting times for assigned classes.</span></span><span class="registrar-work-index__action">Manage schedules</span></a>

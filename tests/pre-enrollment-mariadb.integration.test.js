@@ -9,6 +9,7 @@ const mysql = require('mysql2/promise');
 const express = require('express');
 const { PoolFacade, Transaction, sql } = require('../src/config/database');
 const { createPreEnrollmentService } = require('../src/services/preEnrollmentService');
+const { createReadmissionService } = require('../src/services/readmissionService');
 const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
 const { RegistrarGradeOverviewError, createRegistrarGradeOverviewService } = require('../src/services/registrarGradeOverviewService');
 const { createStudentRecordsRouter } = require('../src/routes/studentRecords');
@@ -32,7 +33,7 @@ async function applyStatements(connection, statements) {
   for (const statement of statements) await connection.query(statement);
 }
 
-async function createSchema(connection, databaseName, through = 'v2.015') {
+async function createSchema(connection, databaseName, through = 'v2.016') {
   await connection.query(`CREATE DATABASE ${quoteDatabase(databaseName)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
   await connection.query(`USE ${quoteDatabase(databaseName)}`);
   const baseline = readSqlFile(path.resolve(ROOT, 'database/mariadb/schema.sql'));
@@ -66,7 +67,7 @@ async function createUsers(pool) {
 function readyPaper(idempotencyKey, overrides = {}) {
   return {
     idempotencyKey, schoolYear: '2027-2028', firstName: 'Ari', middleName: 'Mae', lastName: 'Santos', suffix: '',
-    lrn: '012345678901', studentContactNumber: '09171234567', voucherTypeText: 'ESC', voucherCategoryText: 'CATEGORY A',
+    lrn: '012345678901', email: 'ari-santos@integration.invalid', studentContactNumber: '09171234567', voucherTypeText: 'ESC', voucherCategoryText: 'CATEGORY A',
     preferredTrack: 'Academic Track', preferredCluster: 'ASSH (Arts, Social Science, and Humanities)',
     targetGradeLevel: 'Grade 11', priorGradeLevel: 'Grade 10', priorSchool: 'Lucena High School',
     studentSignaturePresent: '1', studentSignedDate: '2026-10-01', receivedBy: 'spoofed receiver',
@@ -85,6 +86,20 @@ function annualInput(sourceId, sourceVersion, sectionId, overrides = {}) {
     addressMode: 'replace', addressBlockLotStreetPurok: 'Block 2, Purok 1', addressBarangay: 'Ibabang Iyam',
     addressCity: 'Lucena', addressProvince: 'Quezon', addressZip: '0123',
     ...overrides
+  };
+}
+
+function readmissionInput(applicantLrn, overrides = {}) {
+  return {
+    applicantLrn, firstName: 'Ari', middleName: 'Mae', lastName: 'Santos', suffix: '',
+    schoolYear: '2027-2028', targetGradeLevel: 'Grade 11',
+    priorProgress: 'Completed part of Grade 11 before leaving school.',
+    evidenceReviewed: 'Reviewed school records and the applicant-provided report card.', form137Supporting: '1',
+    curriculumComparison: 'Compared completed subjects with the current curriculum by registrar review.',
+    curriculumReviewStatus: 'resolved',
+    requiredSubjects: 'Complete the listed Grade 11 subjects before placement.',
+    subjectAvailability: 'available', availabilityNotes: 'Required subjects are offered this school year.',
+    decisionReason: 'Human review completed.', ...overrides
   };
 }
 
@@ -134,6 +149,12 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     const [upgradeVersion] = await admin.execute('SELECT version FROM schema_migrations WHERE version = ?', ['v2.015']);
     assert.equal(upgradeVersion.length, 1);
 
+    const migration016 = readForwardMigrations().find(({ version }) => version === 'v2.016');
+    await applyStatements(admin, migration016.statements);
+    await admin.query('INSERT INTO schema_migrations (version) VALUES (?)', ['v2.016']);
+    const [upgrade016] = await admin.execute('SELECT version FROM schema_migrations WHERE version = ?', ['v2.016']);
+    assert.equal(upgrade016.length, 1, 'v2.015 upgrade applies the forward-only profile/readmission migration');
+
     // Fresh database exercises the inline column-level baseline CHECK replacement path.
     await createSchema(admin, freshName, 'v2.015');
     const [freshVersion] = await admin.execute(`SELECT version FROM ${quoteDatabase(freshName)}.schema_migrations WHERE version = 'v2.015'`);
@@ -141,6 +162,12 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     const [freshRole] = await admin.execute(`SELECT checks.level FROM information_schema.check_constraints AS checks
       WHERE checks.constraint_schema = ? AND checks.constraint_name = 'CK_users_role'`, [freshName]);
     assert.equal(freshRole[0]?.level, 'Table', 'fresh migration replaces the inline baseline check with the named expanded table check');
+    await admin.query(`USE ${quoteDatabase(freshName)}`);
+    await applyStatements(admin, migration016.statements);
+    await admin.query('INSERT INTO schema_migrations (version) VALUES (?)', ['v2.016']);
+    const [fresh016] = await admin.execute('SELECT version FROM schema_migrations WHERE version = ?', ['v2.016']);
+    assert.equal(fresh016.length, 1, 'fresh setup applies migration v2.016 after v2.015');
+    await admin.query(`USE ${quoteDatabase(upgradeName)}`);
 
     rawPool = mysql.createPool({ socketPath, user: os.userInfo().username, database: upgradeName,
       waitForConnections: true, connectionLimit: 8, supportBigNumbers: true, bigNumberStrings: true,
@@ -221,10 +248,18 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
       (name, grade_level, academic_term_id, cluster, strand) VALUES ('Empty', 'Grade 11', ?, 'ASSH', 'Academic')`, [terms[0]]);
     const emptySection = Number(emptySectionResult.insertId);
 
-    const convertInput = async (sourceId, sourceVersion, overrides = {}) => annualInput(sourceId, sourceVersion, sections[0], overrides);
+    const convertInput = async (sourceId, sourceVersion, overrides = {}) => {
+      const input = annualInput(sourceId, sourceVersion, sections[0], overrides);
+      const source = await preEnrollments.getForConversion(users.registrar, sourceId);
+      if (!Object.hasOwn(overrides, 'lrn')) input.lrn = source.lrn;
+      if (input.studentNo) {
+        input.studentReviewFingerprint = source.existingStudent?.profileReviewFingerprint || '';
+      }
+      return input;
+    };
     const conversionSource = receiptSource;
     const readyVersion = (await preEnrollments.get(users.registrar, conversionSource.id)).version;
-    const sourceConversion = await convertInput(conversionSource.id, readyVersion);
+    const sourceConversion = await convertInput(conversionSource.id, readyVersion, { intakeKind: 'transferee' });
     await assert.rejects(createAnnualEnrollmentService({ getPool: async () => pool, sql,
       transactionFactory: (currentPool) => new Transaction(currentPool), hashPassword: async () => 'integration-only-hash',
       createPassword: () => 'integration-only-password' }).createAnnualIntake(users.front_desk, sourceConversion), { status: 403 },
@@ -260,7 +295,7 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
         const transactionRequest = request();
         const query = transactionRequest.query.bind(transactionRequest);
         transactionRequest.query = async (statement) => {
-          if (/FROM pre_enrollments\s+WHERE id = @preEnrollmentId FOR UPDATE/.test(statement) && sourceLockArrivals < 2) {
+          if (/FROM pre_enrollments(?:\s+AS source)?\s+WHERE (?:source\.)?id = @preEnrollmentId FOR UPDATE/.test(statement) && sourceLockArrivals < 2) {
             sourceLockArrivals += 1;
             if (sourceLockArrivals === 2) resolveBothAtSourceLock();
             await sourceLockBarrier;
@@ -299,9 +334,20 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     assert.equal(replay.annualEnrollmentId, annualId);
     assert.equal(replay.alreadyCreated, true, 'lost-response retry returns the committed annual enrollment');
     await assert.rejects(annualService.createAnnualIntake(users.registrar,
-      { ...sourceConversion, email: 'changed@integration.invalid' }), { status: 409 }, 'changed replay details conflict');
-    await assert.rejects(annualService.createAnnualIntake(users.registrar,
-      { ...sourceConversion, addressBlockLotStreetPurok: 'Different street' }), { status: 409 }, 'structured address is fingerprinted on source replay');
+      { ...sourceConversion, enrollmentStartDate: '2026-10-04' }), { status: 409 }, 'changed placement details conflict on replay');
+    const sourceOwnedProfileReplay = await annualService.createAnnualIntake(users.registrar,
+      { ...sourceConversion, addressBlockLotStreetPurok: 'Forged posted address' });
+    assert.equal(sourceOwnedProfileReplay.alreadyCreated, true, 'posted profile fields cannot change the saved paper source fingerprint');
+    const persistedNewKind = await queryOne(rawPool,
+      'SELECT intake_kind FROM annual_enrollments WHERE id = ?', [annualId]);
+    assert.equal(persistedNewKind.intake_kind, 'new', 'client-selected transferee is replaced by server-derived source classification');
+    const createdAudit = await queryOne(rawPool,
+      `SELECT details_json FROM audit_logs WHERE action = 'registrar.annual_enrollment_created' AND entity_id = ?`, [String(annualId)]);
+    assert.equal(JSON.parse(createdAudit.details_json).intakeKind, 'new', 'audit records the same authoritative intake kind as annual enrollment');
+    const persistedProfile = await queryOne(rawPool,
+      'SELECT address, address_block_lot_street_purok FROM students WHERE id = ?', [conversions[0].studentId]);
+    assert.deepEqual(persistedProfile, { address: null, address_block_lot_street_purok: null },
+      'posted profile components cannot replace the saved front-desk profile');
     const afterConversion = await queryOne(rawPool, `SELECT
       (SELECT COUNT(*) FROM students) AS students, (SELECT COUNT(*) FROM annual_enrollments) AS annuals,
       (SELECT COUNT(*) FROM enrollments) AS enrollments`);
@@ -323,7 +369,9 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
       await convertInput(staleSource.id, 1, { email: 'stale@integration.invalid' })), { status: 409 });
 
     // A deliberate downstream failure proves the complete transaction rolls back user, student, annual, and source writes.
-    const rollbackSource = await preEnrollments.create(users.front_desk, readyPaper(uuid(), { lrn: '012345678905' }));
+    const rollbackSource = await preEnrollments.create(users.front_desk, readyPaper(uuid(), {
+      lrn: '012345678905', email: 'rollback@integration.invalid'
+    }));
     const rollbackInput = await convertInput(rollbackSource.id, 1, {
       email: 'rollback@integration.invalid', lrn: '012345678905',
       paper_report_card_record: '1', paper_report_card_status: 'received', paper_report_card_applicable: '1',
@@ -350,17 +398,359 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     const returningLrn = '012345678906';
     const [existingStudent] = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name, address)
       VALUES ('RETURNING-TEST', ?, 'Jordan', 'Existing', 'Saved legacy address')`, [returningLrn]);
+    await rawPool.execute(`INSERT INTO annual_enrollments
+      (student_id, school_year, grade_level, voucher_code, intake_status, created_by, idempotency_key)
+      VALUES (?, '2026-2027', 'Grade 11', 'PUB', 'enrolled', ?, ?)`,
+    [existingStudent.insertId, users.registrar, uuid()]);
     const mismatchedReturningSource = await preEnrollments.create(users.front_desk,
       readyPaper(uuid(), { lrn: '012345678908' }));
     await assert.rejects(annualService.createAnnualIntake(users.registrar,
       await convertInput(mismatchedReturningSource.id, 1, { studentNo: 'RETURNING-TEST', email: '' })),
     { status: 409 }, 'a returning student whose stored LRN differs from the paper source is rejected');
-    const returningSource = await preEnrollments.create(users.front_desk, readyPaper(uuid(), { lrn: returningLrn }));
+    const returningSource = await preEnrollments.create(users.front_desk,
+      readyPaper(uuid(), { lrn: returningLrn, applicantKind: 'continuing' }));
     const returning = await annualService.createAnnualIntake(users.registrar,
       await convertInput(returningSource.id, 1, { studentNo: 'RETURNING-TEST', email: '' }));
     assert.equal(Number(returning.studentId), Number(existingStudent.insertId));
     const returnedProfile = await queryOne(rawPool, 'SELECT first_name, address FROM students WHERE id = ?', [existingStudent.insertId]);
     assert.deepEqual(returnedProfile, { first_name: 'Jordan', address: 'Saved legacy address' });
+
+    // Returning-profile corrections require explicit field approval and bind to the reviewed snapshot.
+    const reviewedLrn = '012345678909';
+    const reviewedEmail = 'reviewed-student@integration.invalid';
+    const [reviewedUser] = await rawPool.execute(`INSERT INTO users (email, password_hash, role, is_active)
+      VALUES (?, 'preserve-this-test-password-hash', 'student', 1)`, [reviewedEmail]);
+    const [reviewedStudent] = await rawPool.execute(`INSERT INTO students
+      (user_id, student_no, lrn, first_name, last_name, address)
+      VALUES (?, 'REVIEWED-RETURNING', ?, 'Before', 'Santos', 'Saved profile address')`, [reviewedUser.insertId, reviewedLrn]);
+    await rawPool.execute(`INSERT INTO annual_enrollments
+      (student_id, school_year, grade_level, voucher_code, intake_status, created_by, idempotency_key)
+      VALUES (?, '2026-2027', 'Grade 11', 'PUB', 'enrolled', ?, ?)`,
+    [reviewedStudent.insertId, users.registrar, uuid()]);
+    await rawPool.execute(`INSERT INTO two_factor_codes (user_id, code_hash, expires_at)
+      VALUES (?, 'integration-only-code-hash', DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE))`, [reviewedUser.insertId]);
+    await rawPool.execute(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+      VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE))`, [reviewedUser.insertId, crypto.createHash('sha256').update(uuid()).digest('hex')]);
+
+    const activeEmailConflict = await queryOne(rawPool, 'SELECT email FROM users WHERE id = ?', [users.teacher]);
+    const pendingEmailConflict = 'reserved-pending@integration.invalid';
+    await rawPool.execute(`INSERT INTO pending_email_changes (user_id, new_email, token_hash, expires_at)
+      VALUES (?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE))`,
+    [users.finance, pendingEmailConflict, crypto.createHash('sha256').update(uuid()).digest('hex')]);
+    const reviewedSource = await preEnrollments.create(users.front_desk, readyPaper(uuid(), {
+      lrn: reviewedLrn, applicantKind: 'continuing', email: activeEmailConflict.email,
+      addressMode: 'replace', addressBlockLotStreetPurok: 'Block 8, Review Road', addressBarangay: 'Ibabang Iyam',
+      addressCity: 'Lucena', addressProvince: 'Quezon', addressZip: '0123',
+      emergencyContactAddressMode: 'replace', emergencyContactAddressBlockLotStreetPurok: 'Purok 4, Review Lane',
+      emergencyContactAddressBarangay: 'Gulang-gulang', emergencyContactAddressCity: 'Lucena',
+      emergencyContactAddressProvince: 'Quezon', emergencyContactAddressZip: '4301'
+    }));
+    const staleSnapshotInput = await convertInput(reviewedSource.id, 1, {
+      studentNo: 'REVIEWED-RETURNING', approvedProfileFields: ['firstName']
+    });
+    await rawPool.execute('UPDATE students SET last_name = \'Changed during review\' WHERE id = ?', [reviewedStudent.insertId]);
+    await assert.rejects(annualService.createAnnualIntake(users.registrar, staleSnapshotInput), { status: 409 },
+      'a changed master profile invalidates the registrar review snapshot');
+
+    let reviewedSourceVersion = 1;
+    await assert.rejects(annualService.createAnnualIntake(users.registrar,
+      await convertInput(reviewedSource.id, reviewedSourceVersion, {
+        studentNo: 'REVIEWED-RETURNING', approvedProfileFields: ['addressZip']
+      })), { status: 400 }, 'address components cannot be approved separately from their compatibility address');
+    await assert.rejects(annualService.createAnnualIntake(users.registrar,
+      await convertInput(reviewedSource.id, reviewedSourceVersion, {
+        studentNo: 'REVIEWED-RETURNING', approvedProfileFields: ['firstName', 'email']
+      })), { status: 409 }, 'an active email conflict prevents the returning profile and annual transaction');
+    const pendingConflictSource = readyPaper(uuid(), { lrn: reviewedLrn, applicantKind: 'continuing', email: pendingEmailConflict });
+    await preEnrollments.update(users.registrar, reviewedSource.id, reviewedSourceVersion, pendingConflictSource);
+    reviewedSourceVersion += 1;
+    await assert.rejects(annualService.createAnnualIntake(users.registrar,
+      await convertInput(reviewedSource.id, reviewedSourceVersion, {
+        studentNo: 'REVIEWED-RETURNING', approvedProfileFields: ['firstName', 'email']
+      })), { status: 409 }, 'a live pending email reservation also prevents conversion');
+    await rawPool.execute('UPDATE pending_email_changes SET consumed_at = UTC_TIMESTAMP(3) WHERE user_id = ?', [users.finance]);
+
+    const finalEmail = 'corrected-returning@integration.invalid';
+    const finalSource = readyPaper(uuid(), { lrn: reviewedLrn, applicantKind: 'continuing', email: finalEmail });
+    await preEnrollments.update(users.registrar, reviewedSource.id, reviewedSourceVersion, finalSource);
+    reviewedSourceVersion += 1;
+    await rawPool.execute(`INSERT INTO pending_email_changes (user_id, new_email, token_hash, expires_at)
+      VALUES (?, 'older-pending@integration.invalid', ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 10 MINUTE))`,
+    [reviewedUser.insertId, crypto.createHash('sha256').update(uuid()).digest('hex')]);
+    const beforeReviewedUser = await queryOne(rawPool,
+      'SELECT email, password_hash, auth_session_version FROM users WHERE id = ?', [reviewedUser.insertId]);
+    const approvedInput = await convertInput(reviewedSource.id, reviewedSourceVersion, {
+      studentNo: 'REVIEWED-RETURNING', approvedProfileFields: ['firstName', 'email', 'address', 'emergencyContactAddress']
+    });
+    const reviewedConversion = await annualService.createAnnualIntake(users.registrar, approvedInput);
+    const afterReviewedUser = await queryOne(rawPool,
+      'SELECT email, password_hash, auth_session_version FROM users WHERE id = ?', [reviewedUser.insertId]);
+    const afterReviewedStudent = await queryOne(rawPool,
+      `SELECT first_name, last_name, address, address_block_lot_street_purok, address_barangay,
+          address_city, address_province, address_zip, emergency_contact_address,
+          emergency_contact_address_block_lot_street_purok, emergency_contact_address_barangay,
+          emergency_contact_address_city, emergency_contact_address_province, emergency_contact_address_zip
+        FROM students WHERE id = ?`, [reviewedStudent.insertId]);
+    assert.equal(afterReviewedUser.email, finalEmail);
+    assert.equal(afterReviewedUser.password_hash, beforeReviewedUser.password_hash, 'contact update preserves login credential hash');
+    assert.notEqual(afterReviewedUser.auth_session_version, beforeReviewedUser.auth_session_version, 'contact update invalidates existing sessions');
+    assert.deepEqual(afterReviewedStudent, { first_name: 'Ari', last_name: 'Changed during review',
+      address: 'Block 8, Review Road, Ibabang Iyam, Lucena, Quezon, 0123',
+      address_block_lot_street_purok: 'Block 8, Review Road', address_barangay: 'Ibabang Iyam',
+      address_city: 'Lucena', address_province: 'Quezon', address_zip: '0123',
+      emergency_contact_address: 'Purok 4, Review Lane, Gulang-gulang, Lucena, Quezon, 4301',
+      emergency_contact_address_block_lot_street_purok: 'Purok 4, Review Lane', emergency_contact_address_barangay: 'Gulang-gulang',
+      emergency_contact_address_city: 'Lucena', emergency_contact_address_province: 'Quezon', emergency_contact_address_zip: '4301' },
+    'approved addresses update formatted and structured compatibility fields together, while unapproved master name fields remain unchanged');
+    assert.equal(Number((await queryOne(rawPool,
+      'SELECT COUNT(*) AS count FROM pending_email_changes WHERE user_id = ? AND consumed_at IS NULL', [reviewedUser.insertId])).count), 0,
+    'successful approved email change consumes prior pending email-change tokens');
+    assert.equal(Number((await queryOne(rawPool,
+      'SELECT COUNT(*) AS count FROM two_factor_codes WHERE user_id = ? AND consumed_at IS NULL', [reviewedUser.insertId])).count), 0,
+    'successful approved email change consumes pending two-factor codes');
+    assert.equal(Number((await queryOne(rawPool,
+      'SELECT COUNT(*) AS count FROM password_reset_tokens WHERE user_id = ? AND consumed_at IS NULL', [reviewedUser.insertId])).count), 0,
+    'successful approved email change consumes pending password-reset tokens');
+    assert.equal(Number((await queryOne(rawPool,
+      'SELECT COUNT(*) AS count FROM student_profile_revisions WHERE student_id = ?', [reviewedStudent.insertId])).count), 14,
+    'each changed approved master column receives a revision record');
+    const reviewAudit = await queryOne(rawPool, `SELECT entity_type, entity_id FROM audit_logs
+      WHERE action = 'registrar.student_profile_reviewed' AND entity_type = 'student' AND entity_id = ? ORDER BY id DESC LIMIT 1`,
+    [String(reviewedStudent.insertId)]);
+    assert.deepEqual(reviewAudit, { entity_type: 'student', entity_id: String(reviewedStudent.insertId) });
+    const accountAudit = await queryOne(rawPool, `SELECT entity_type, entity_id, details_json FROM audit_logs
+      WHERE action = 'registrar.student_account_email_updated' AND entity_type = 'user' AND entity_id = ? ORDER BY id DESC LIMIT 1`,
+    [String(reviewedUser.insertId)]);
+    assert.ok(accountAudit, 'approved email updates write a user-scoped account audit event');
+    assert.equal(JSON.parse(accountAudit.details_json).authSessionsInvalidated, true);
+    assert.doesNotMatch(accountAudit.details_json, /corrected-returning@integration\.invalid/, 'account audit does not store the email value');
+    const exactReplay = await annualService.createAnnualIntake(users.registrar, approvedInput);
+    assert.equal(exactReplay.annualEnrollmentId, reviewedConversion.annualEnrollmentId);
+    assert.equal(exactReplay.alreadyCreated, true);
+    await assert.rejects(annualService.createAnnualIntake(users.registrar,
+      { ...approvedInput, approvedProfileFields: ['firstName'] }), { status: 409 },
+    'a replay with changed field approvals conflicts instead of repeating the profile mutation');
+
+    const [preservedAddressStudent] = await rawPool.execute(`INSERT INTO students
+      (student_no, lrn, first_name, last_name, address, emergency_contact_address)
+      VALUES ('PRESERVE-ADDRESS', '012345678916', 'Before', 'Address', 'Saved legacy student address', 'Saved legacy emergency address')`);
+    await rawPool.execute(`INSERT INTO annual_enrollments
+      (student_id, school_year, grade_level, voucher_code, intake_status, created_by, idempotency_key)
+      VALUES (?, '2026-2027', 'Grade 11', 'PUB', 'enrolled', ?, ?)`,
+    [preservedAddressStudent.insertId, users.registrar, uuid()]);
+    const preserveAddressSource = await preEnrollments.create(users.front_desk, readyPaper(uuid(), {
+      lrn: '012345678916', applicantKind: 'continuing', email: 'address-review@integration.invalid',
+      addressMode: 'replace', addressBlockLotStreetPurok: 'Block 9, New Road', addressBarangay: 'New Barangay',
+      addressCity: 'Lucena', addressProvince: 'Quezon', addressZip: '4301',
+      emergencyContactAddressMode: 'replace', emergencyContactAddressBlockLotStreetPurok: 'Purok 8, New Lane',
+      emergencyContactAddressBarangay: 'New Barangay', emergencyContactAddressCity: 'Lucena',
+      emergencyContactAddressProvince: 'Quezon', emergencyContactAddressZip: '4301'
+    }));
+    const preserveAddressConversion = await annualService.createAnnualIntake(users.registrar,
+      await convertInput(preserveAddressSource.id, 1, {
+        studentNo: 'PRESERVE-ADDRESS', approvedProfileFields: ['firstName']
+      }));
+    assert.ok(preserveAddressConversion.annualEnrollmentId);
+    const unchangedLegacyAddresses = await queryOne(rawPool,
+      `SELECT address, address_block_lot_street_purok, emergency_contact_address,
+          emergency_contact_address_block_lot_street_purok FROM students WHERE id = ?`, [preservedAddressStudent.insertId]);
+    assert.deepEqual(unchangedLegacyAddresses, {
+      address: 'Saved legacy student address', address_block_lot_street_purok: null,
+      emergency_contact_address: 'Saved legacy emergency address', emergency_contact_address_block_lot_street_purok: null
+    }, 'an unrelated approved name correction does not replace either legacy address');
+
+    // Balik-aral evaluation is human-reviewed and linked to an interrupted student's exact LRN/year/grade.
+    const interruptedLrn = '012345678910';
+    const [interruptedInsert] = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name)
+      VALUES ('BALIK-TEST', ?, 'Ari', 'Santos')`, [interruptedLrn]);
+    const interruptedStudentId = Number(interruptedInsert.insertId);
+    await rawPool.execute(`INSERT INTO annual_enrollments
+      (student_id, school_year, grade_level, voucher_code, intake_status, created_by, idempotency_key)
+      VALUES (?, '2025-2026', 'Grade 11', 'PUB', 'transferred', ?, ?)`,
+    [interruptedStudentId, users.registrar, uuid()]);
+    const readmissions = createReadmissionService({ getPool: async () => pool, sql,
+      transactionFactory: (currentPool) => new Transaction(currentPool) });
+    const evaluationDraft = await readmissions.create(users.registrar, readmissionInput(interruptedLrn, { subjectAvailability: 'unresolved' }));
+    await assert.rejects(readmissions.create(users.database_admin, readmissionInput('012345678911')), { status: 403 },
+      'database administrators may review, but cannot create, evaluations');
+    await assert.rejects(readmissions.update(users.database_admin, evaluationDraft.id, 1, readmissionInput(interruptedLrn)), { status: 403 });
+    await assert.rejects(readmissions.decide(users.database_admin, evaluationDraft.id, 1, 'accepted', 'No write access'), { status: 403 });
+    const adminEvaluation = await readmissions.get(users.database_admin, evaluationDraft.id);
+    assert.equal(adminEvaluation.status, 'under_review');
+    assert.ok(adminEvaluation.prior_progress, 'database administrator can review evaluation details');
+    await assert.rejects(preEnrollments.listAcceptedReadmissionChoices(users.database_admin, '2027-2028'), { status: 403 },
+      'front-desk identity projections are not available to database administrators');
+    const preAcceptanceChoices = await preEnrollments.listAcceptedReadmissionChoices(users.front_desk, '2027-2028');
+    assert.equal(preAcceptanceChoices.some((row) => row.id === evaluationDraft.id), false);
+    assert.deepEqual(Object.keys(preAcceptanceChoices[0] || {}).filter((key) => /progress|evidence|comparison|subjects|reason/i.test(key)), [],
+      'front desk receives no academic evaluation notes');
+
+    const spoofNew = readyPaper(uuid(), { lrn: interruptedLrn, applicantKind: 'new' });
+    const spoofContinuing = readyPaper(uuid(), { lrn: interruptedLrn, applicantKind: 'continuing' });
+    await assert.rejects(preEnrollments.create(users.front_desk, spoofNew), { status: 409 },
+      'known interrupted history cannot be entered as a new applicant');
+    await assert.rejects(preEnrollments.create(users.front_desk, spoofContinuing), { status: 409 },
+      'known interrupted history cannot be entered as a continuous Grade 11 to 12 progression');
+    await assert.rejects(preEnrollments.create(users.front_desk,
+      readyPaper(uuid(), { lrn: '012345678907', applicantKind: 'continuing' })), { status: 409 },
+    'continuing classification requires a known student record');
+    const updateSpoof = await preEnrollments.create(users.front_desk,
+      readyPaper(uuid(), { lrn: '012345678907', status: 'draft', applicantKind: 'new' }));
+    await assert.rejects(preEnrollments.update(users.front_desk, updateSpoof.id, 1,
+      readyPaper(uuid(), { lrn: interruptedLrn, status: 'draft', applicantKind: 'continuing' })), { status: 409 },
+    'an edit cannot change an interrupted applicant into continuing');
+
+    await assert.rejects(readmissions.decide(users.registrar, evaluationDraft.id, 1, 'accepted', 'Reviewed'), { status: 409 },
+      'unresolved subjects prevent acceptance');
+    const curriculumPendingVersion = await readmissions.update(users.registrar, evaluationDraft.id, 1,
+      readmissionInput(interruptedLrn, { subjectAvailability: 'available', curriculumReviewStatus: 'unresolved' }));
+    await assert.rejects(readmissions.decide(users.registrar, evaluationDraft.id, curriculumPendingVersion.version, 'accepted', 'Comparison incomplete'), { status: 409 },
+      'available subjects do not permit acceptance while curriculum review remains explicitly unresolved');
+    const unavailableVersion = await readmissions.update(users.registrar, evaluationDraft.id, curriculumPendingVersion.version,
+      readmissionInput(interruptedLrn, { subjectAvailability: 'unavailable' }));
+    await assert.rejects(readmissions.decide(users.registrar, evaluationDraft.id, unavailableVersion.version, 'accepted', 'No seat'), { status: 409 },
+      'unavailable subjects prevent acceptance');
+    const reviewedVersion = await readmissions.update(users.registrar, evaluationDraft.id, unavailableVersion.version,
+      readmissionInput(interruptedLrn, { subjectAvailability: 'available' }));
+    const accepted = await readmissions.decide(users.registrar, evaluationDraft.id, reviewedVersion.version, 'accepted', 'Subjects can be scheduled.');
+    assert.equal(accepted.status, 'accepted');
+    assert.equal(accepted.version, reviewedVersion.version + 1);
+    const acceptedHistory = await readmissions.get(users.registrar, accepted.id);
+    const acceptedEvent = acceptedHistory.events.find((event) => event.event_type === 'accepted');
+    const acceptedDetails = JSON.parse(acceptedEvent.details_json);
+    assert.equal(acceptedDetails.before.status, 'under_review');
+    assert.equal(acceptedDetails.after.status, 'accepted');
+    assert.equal(acceptedDetails.after.decisionReason, 'Subjects can be scheduled.');
+
+    const staleBoundPaper = readyPaper(uuid(), { lrn: interruptedLrn, applicantKind: 'readmission',
+      readmissionEvaluationBinding: `${accepted.id}@${accepted.version}` });
+    const balikSourceCreated = await preEnrollments.create(users.front_desk, staleBoundPaper);
+    const balikSourceBeforeRefresh = await preEnrollments.get(users.registrar, balikSourceCreated.id);
+    const reopened = await readmissions.update(users.registrar, accepted.id, accepted.version,
+      readmissionInput(interruptedLrn, {
+        priorProgress: 'Completed part of Grade 11.\nLeft school after the first term.',
+        curriculumComparison: 'Updated comparison after a registrar review.\nEquivalent subjects were recorded.',
+        decisionReason: 'Reopened for review.\nThe family supplied another school record.'
+      }));
+    assert.equal(reopened.status, 'under_review', 'editing an accepted evaluation invalidates its decision');
+    const reopenedEvaluation = await readmissions.get(users.registrar, reopened.id);
+    const reopenedEvent = reopenedEvaluation.events.find((event) => event.event_type === 'reopened');
+    const reopenedDetails = JSON.parse(reopenedEvent.details_json);
+    assert.equal(reopenedDetails.before.curriculumComparison, 'Compared completed subjects with the current curriculum by registrar review.');
+    assert.equal(reopenedDetails.after.curriculumComparison, 'Updated comparison after a registrar review.\nEquivalent subjects were recorded.');
+    assert.equal(reopenedDetails.before.decisionReason, 'Subjects can be scheduled.');
+    assert.equal(reopenedDetails.after.decisionReason, 'Reopened for review.\nThe family supplied another school record.');
+    assert.equal(reopenedDetails.after.priorProgress, 'Completed part of Grade 11.\nLeft school after the first term.');
+    await assert.rejects(preEnrollments.update(users.registrar, balikSourceCreated.id, balikSourceBeforeRefresh.version,
+      staleBoundPaper), { status: 409 }, 'a ready paper record cannot retain a stale evaluation binding');
+    const reaccepted = await readmissions.decide(users.registrar, reopened.id, reopened.version, 'accepted', 'Re-reviewed current subjects.');
+    const refreshedPaper = readyPaper(uuid(), { lrn: interruptedLrn, applicantKind: 'readmission',
+      readmissionEvaluationBinding: `${reaccepted.id}@${reaccepted.version}` });
+    const refreshedSourceUpdate = await preEnrollments.update(users.registrar, balikSourceCreated.id,
+      balikSourceBeforeRefresh.version, refreshedPaper);
+    assert.equal(refreshedSourceUpdate.status, 'ready_for_registrar');
+    const balikSource = await preEnrollments.getForConversion(users.registrar, balikSourceCreated.id);
+    const fdChoices = await preEnrollments.listAcceptedReadmissionChoices(users.front_desk, '2027-2028');
+    const fdChoice = fdChoices.find((row) => row.id === reaccepted.id);
+    assert.ok(fdChoice);
+    const registrarChoices = await preEnrollments.listAcceptedReadmissionChoices(users.registrar, '2027-2028');
+    assert.ok(registrarChoices.some((row) => row.id === reaccepted.id), 'registrar paper correction can explicitly rebind to a current accepted evaluation');
+    assert.deepEqual(Object.keys(registrarChoices[0] || {}).filter((key) => /progress|evidence|comparison|subjects|reason|availability/i.test(key)), [],
+      'the shared selection projection exposes identity and binding metadata only');
+    assert.equal(fdChoice.applicant_lrn, interruptedLrn);
+    assert.equal(fdChoice.version, reaccepted.version);
+    assert.deepEqual(Object.keys(fdChoice).filter((key) => /progress|evidence|comparison|subjects|reason/i.test(key)), [],
+      'front desk can only see the identity, LRN, year, grade, and accepted revision projection');
+    await assert.rejects(annualService.createAnnualIntake(users.registrar,
+      await convertInput(balikSource.id, Number(balikSource.version), { studentNo: 'RETURNING-TEST' })), { status: 409 },
+    'a guessed unrelated student number cannot bypass the source LRN/student binding');
+    const balikInput = await convertInput(balikSource.id, Number(balikSource.version), {
+      studentNo: 'BALIK-TEST', intakeKind: 'standard'
+    });
+    const balikConversion = await annualService.createAnnualIntake(users.registrar, balikInput);
+    assert.equal(Number(balikConversion.studentId), interruptedStudentId);
+    const balikAnnual = await queryOne(rawPool,
+      `SELECT intake_kind, readmission_evaluation_id, readmission_evaluation_version
+        FROM annual_enrollments WHERE id = ?`, [balikConversion.annualEnrollmentId]);
+    assert.equal(balikAnnual.intake_kind, 'readmission', 'registrar POST selection cannot erase the source classification');
+    assert.equal(balikAnnual.readmission_evaluation_id, reaccepted.id);
+    assert.equal(Number(balikAnnual.readmission_evaluation_version), reaccepted.version);
+    await assert.rejects(readmissions.update(users.registrar, reaccepted.id, reaccepted.version,
+      readmissionInput(interruptedLrn, { decisionReason: 'Attempted post-conversion edit.' })), { status: 409 },
+    'evaluation content is locked after a linked annual source starts');
+    const changedEvaluationVersion = reaccepted.version + 1;
+    await rawPool.execute(`UPDATE readmission_evaluations SET status = 'under_review', version = ?, decided_by = NULL,
+      decided_at = NULL, updated_by = ?, updated_at = UTC_TIMESTAMP(3) WHERE id = ?`,
+    [changedEvaluationVersion, users.registrar, reaccepted.id]);
+    await rawPool.execute(`INSERT INTO readmission_evaluation_events
+      (evaluation_id, evaluation_version, actor_id, event_type, from_status, to_status, details_json)
+      VALUES (?, ?, ?, 'reopened', 'accepted', 'under_review', JSON_OBJECT('changedFields', JSON_ARRAY('status')))` ,
+    [reaccepted.id, changedEvaluationVersion, users.registrar]);
+    let staleEvaluationFeeCalls = 0;
+    const staleConfirmationService = createAnnualEnrollmentService({ getPool: async () => pool, sql,
+      transactionFactory: (currentPool) => new Transaction(currentPool),
+      annualFinanceService: { async confirmAnnualAssessmentInTransaction() { staleEvaluationFeeCalls += 1; throw new Error('fee finalization must remain behind the evaluation gate'); } } });
+    await assert.rejects(staleConfirmationService.confirmAnnualEnrollment(users.registrar, balikConversion.annualEnrollmentId, {
+      idempotencyKey: uuid(), scheduleId: '1', scheduleVersion: '1', voucherCode: 'PUB'
+    }), (error) => error.status === 409 && /evaluation changed or is no longer accepted/i.test(error.message),
+    'first confirmation revalidates the evaluation revision and accepted decision');
+    assert.equal(staleEvaluationFeeCalls, 0, 'a stale evaluation is rejected before fees, activation, or confirmation writes');
+
+    // Same-school-year reactivation is rejected before a paper record or evaluation can be created.
+    const sameYearLrn = '012345678912';
+    const [sameYearStudent] = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name)
+      VALUES ('SAME-YEAR-TEST', ?, 'Same', 'Year')`, [sameYearLrn]);
+    await rawPool.execute(`INSERT INTO annual_enrollments
+      (student_id, school_year, grade_level, voucher_code, intake_status, created_by, idempotency_key)
+      VALUES (?, '2027-2028', 'Grade 11', 'PUB', 'enrolled', ?, ?)`,
+    [sameYearStudent.insertId, users.registrar, uuid()]);
+    await assert.rejects(readmissions.create(users.registrar, readmissionInput(sameYearLrn)), { status: 409 });
+    const sameYearEvaluation = await readmissions.create(users.registrar,
+      readmissionInput('012345678913'));
+    const sameYearAccepted = await readmissions.decide(users.registrar, sameYearEvaluation.id, sameYearEvaluation.version,
+      'accepted', 'Human evaluation accepted before annual enrollment exists.');
+    const [sameYearEvaluationStudent] = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name)
+      VALUES ('SAME-YEAR-BINDING', ?, 'Same', 'Binding')`, ['012345678913']);
+    await rawPool.execute(`UPDATE readmission_evaluations SET student_id = ? WHERE id = ?`,
+      [sameYearEvaluationStudent.insertId, sameYearAccepted.id]);
+    await rawPool.execute(`INSERT INTO annual_enrollments
+      (student_id, school_year, grade_level, voucher_code, intake_status, created_by, idempotency_key)
+      VALUES (?, '2027-2028', 'Grade 11', 'PUB', 'enrolled', ?, ?)`,
+    [sameYearEvaluationStudent.insertId, users.registrar, uuid()]);
+    await assert.rejects(preEnrollments.create(users.front_desk, readyPaper(uuid(), { lrn: '012345678913',
+      applicantKind: 'readmission', readmissionEvaluationBinding: `${sameYearAccepted.id}@${sameYearAccepted.version}` })), { status: 409 },
+    'an evaluation cannot authorize same-year reactivation after a prior-year paper decision');
+
+    const lateSameYearLrn = '012345678917';
+    const lateBoundEvaluation = await readmissions.create(users.registrar, readmissionInput(lateSameYearLrn));
+    const [lateSameYearStudent] = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name)
+      VALUES ('SAME-YEAR-LATE-TEST', ?, 'Late', 'Year')`, [lateSameYearLrn]);
+    await rawPool.execute(`INSERT INTO annual_enrollments
+      (student_id, school_year, grade_level, voucher_code, intake_status, created_by, idempotency_key)
+      VALUES (?, '2027-2028', 'Grade 11', 'PUB', 'enrolled', ?, ?)`,
+    [lateSameYearStudent.insertId, users.registrar, uuid()]);
+    await assert.rejects(readmissions.decide(users.registrar, lateBoundEvaluation.id, lateBoundEvaluation.version,
+      'accepted', 'A same-year enrollment was added during review.'), { status: 409 },
+    'acceptance rechecks same-year activity by LRN when an evaluation had no linked student at creation');
+    assert.equal((await readmissions.get(users.registrar, lateBoundEvaluation.id)).status, 'under_review',
+      'the failed acceptance leaves the evaluation unchanged');
+
+    // A non-existent historic master may be evaluated, but is allocated only by annual conversion.
+    const noMasterLrn = '012345678914';
+    const noMasterEvaluation = await readmissions.create(users.registrar, readmissionInput(noMasterLrn));
+    const noMasterAccepted = await readmissions.decide(users.registrar, noMasterEvaluation.id, noMasterEvaluation.version,
+      'accepted', 'Reviewed available history supplied by the applicant.');
+    const noMasterSource = await preEnrollments.create(users.front_desk, readyPaper(uuid(), { lrn: noMasterLrn,
+      email: 'no-master-readmission@integration.invalid',
+      applicantKind: 'readmission', readmissionEvaluationBinding: `${noMasterAccepted.id}@${noMasterAccepted.version}` }));
+    assert.equal(Number((await queryOne(rawPool, 'SELECT COUNT(*) AS count FROM students WHERE lrn = ?', [noMasterLrn])).count), 0,
+      'evaluation and paper entry do not create a student master');
+    const noMasterAnnual = await annualService.createAnnualIntake(users.registrar,
+      await convertInput(noMasterSource.id, 1, { intakeKind: 'transferee' }));
+    assert.equal((await queryOne(rawPool, 'SELECT intake_kind FROM annual_enrollments WHERE id = ?', [noMasterAnnual.annualEnrollmentId])).intake_kind,
+      'readmission');
+    assert.equal(Number((await queryOne(rawPool, 'SELECT COUNT(*) AS count FROM students WHERE lrn = ?', [noMasterLrn])).count), 1,
+      'student master creation occurs only at the authorized annual transaction');
 
     // Actual MariaDB grade service coverage: four current periods, published zero/null values, pending cached values,
     // historical observed periods, and empty/invalid contexts. The authenticated route uses the same live service.

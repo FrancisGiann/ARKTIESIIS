@@ -11,6 +11,7 @@ const path = require('node:path');
 const { readSqlFile, readForwardMigrations } = require('../scripts/db-setup-v2');
 const { PoolFacade, sql } = require('../src/config/database');
 const { STUDENT_LEDGER_SUMMARY_SQL, createAnnualFinanceService } = require('../src/services/annualFinanceService');
+const { createStatementProjection } = require('../src/utils/financeStatementProjection');
 const { createAnnualFinanceCasesService } = require('../src/services/annualFinanceCasesService');
 const { createAnnualFinanceReportsService } = require('../src/services/annualFinanceReportsService');
 const { createFinanceDashboardService } = require('../src/services/financeDashboardService');
@@ -32,6 +33,37 @@ function moneyCents(value) {
   assert.ok(match, `MariaDB monetary result is not a decimal string (type=${typeof value}, null=${value === null}, undefined=${value === undefined})`);
   const cents = BigInt(match[2]) * 100n + BigInt((match[3] || '').padEnd(2, '0'));
   return match[1] === '-' ? -cents : cents;
+}
+
+function moneyText(cents) {
+  const sign = cents < 0n ? '-' : '';
+  const absolute = cents < 0n ? -cents : cents;
+  return `${sign}${absolute / 100n}.${String(absolute % 100n).padStart(2, '0')}`;
+}
+
+function assertLedgerBreakdownReconciles(ledger, scenario) {
+  const projection = createStatementProjection(ledger);
+  const annualDue = ledger.charges.reduce((sum, charge) => sum + moneyCents(charge.remaining_due), 0n);
+  const latestYearDue = ledger.charges
+    .filter((charge) => charge.school_year === ledger.summary.annualBalanceSchoolYear)
+    .reduce((sum, charge) => sum + moneyCents(charge.remaining_due), 0n);
+  const groupedDue = projection.chargeGroups.reduce((sum, group) => sum + moneyCents(group.due), 0n);
+  assert.equal(projection.summary.annualFeeBalance, moneyText(annualDue), `${scenario}: displayed fees equal canonical charge due`);
+  assert.equal(projection.summary.allYearsAnnualBalance, moneyText(annualDue), `${scenario}: annual summary reconciles with charge rows`);
+  assert.equal(ledger.summary.annualBalance, moneyText(latestYearDue), `${scenario}: latest-year summary reconciles with charge rows`);
+  assert.equal(moneyText(groupedDue), moneyText(annualDue), `${scenario}: term groups reconcile with charge rows`);
+  assert.equal(ledger.summary.totalBalance,
+    moneyText(annualDue + moneyCents(ledger.summary.unattributedLegacyBalance) + moneyCents(ledger.summary.openingLiabilityDue)),
+    `${scenario}: combined total includes annual, prior account, and opening balances once`);
+  assert.equal(projection.summary.availableCredit, ledger.summary.availableCredit, `${scenario}: unapplied credit remains separate`);
+  for (const charge of projection.charges) {
+    assert.equal(moneyText(moneyCents(charge.assessed_amount)
+      - moneyCents(charge.coverage_amount)
+      + moneyCents(charge.other_adjustments)
+      - moneyCents(charge.applied_amount)), charge.due_amount,
+    `${scenario}: displayed charge components reconcile for ${charge.line_name}/${charge.installment}`);
+  }
+  return projection;
 }
 
 async function executeStatements(connection, statements) {
@@ -97,7 +129,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       const baseline = readSqlFile(path.join(repoRoot, 'database/mariadb/schema.sql'));
       await executeStatements(setupConnection, baseline);
       const forwardMigrations = readForwardMigrations();
-      for (const migration of forwardMigrations.filter(({ version }) => !['v2.013', 'v2.014'].includes(version))) {
+      for (const migration of forwardMigrations.filter(({ version }) => !['v2.013', 'v2.014', 'v2.015', 'v2.016'].includes(version))) {
         await executeStatements(setupConnection, migration.statements);
         await setupConnection.execute('INSERT INTO schema_migrations (version) VALUES (?)', [migration.version]);
       }
@@ -184,7 +216,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       assert.ok(createdConfirmation.insertId);
       const chargeIds = new Map();
       for (const installment of installments) {
-        const amount = options.waived ? '0.00' : '100.00';
+        const amount = '100.00';
         const scheduleLineId = options.wholeTerm ? null : scheduleLineIds.get(installment);
         const [charge] = await appPool.execute(
           `INSERT INTO assessed_charges
@@ -194,6 +226,15 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
           [assessmentId, createdAnnualId, enrollmentId, scheduleLineId, installment, amount, grossPerLine, options.waived ? '100.00' : '0.00']
         );
         chargeIds.set(installment, Number(charge.insertId));
+      }
+      if (options.waived) {
+        for (const installment of installments) {
+          await appPool.execute(
+            `INSERT INTO finance_charge_adjustments (charge_id, amount, reason, idempotency_key, request_fingerprint, recorded_by)
+             VALUES (?, -100.00, 'Approved full coverage test exemption', ?, ?, ?)`,
+            [chargeIds.get(installment), crypto.randomUUID(), 'e'.repeat(64), actorId]
+          );
+        }
       }
       if (options.adjusted) {
         await appPool.execute(
@@ -315,6 +356,22 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     assert.equal(negativeDue?.amount_due, '-25.00', 'the authoritative view retains signed net-credit dues');
     assert.equal(negativeDue?.annual_allocated, '0.00');
     assert.equal(negativeDue?.legacy_allocated, '0.00');
+    const summaryProbe = await reportReadPool.getConnection();
+    try {
+      const positionalSummarySql = STUDENT_LEDGER_SUMMARY_SQL.replaceAll('@studentId', '?');
+      const summaryBindings = Array((positionalSummarySql.match(/\?/g) || []).length).fill(assessedScenarios.partial.studentId);
+      try {
+        const [firstPreparedSummary] = await summaryProbe.execute(positionalSummarySql, summaryBindings);
+        const [secondPreparedSummary] = await summaryProbe.execute(positionalSummarySql, summaryBindings);
+        const [textSummary] = await summaryProbe.query(positionalSummarySql, summaryBindings);
+        assert.deepEqual(secondPreparedSummary, firstPreparedSummary, 'complete summary prepared execution is stable');
+        assert.deepEqual(secondPreparedSummary, textSummary, 'complete summary prepared/text protocols match');
+      } catch (error) {
+        throw new Error(`MariaDB complete summary changed on repeated prepared execution (${String(error?.code || 'unknown')}).`, { cause: error });
+      }
+    } finally {
+      summaryProbe.release();
+    }
     const baselineLedger = await strictAnnual.getStudentLedger(actorId, assessedScenarios.partial.studentId);
     const dueViewMigration = readForwardMigrations().find(({ version }) => version === 'v2.013');
     assert.ok(dueViewMigration, 'the forward due-view migration is available');
@@ -584,6 +641,27 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     assert.equal(migratedLedger.charges.length, 4);
     assert.equal(migratedLedger.charges[0].allocated, '25.00');
     assert.equal(migratedLedger.charges[0].remaining_due, '75.00');
+
+    for (const [scenario, label] of [
+      [assessedScenarios.partial, 'partially allocated payment'],
+      [assessedScenarios.waived, 'approved full coverage'],
+      [assessedScenarios.reversed, 'reversed payment'],
+      [assessedScenarios.released, 'released allocation'],
+      [assessedScenarios.adjusted, 'negative adjustment'],
+      [assessedScenarios.settled, 'fully paid charges plus unused credit']
+    ]) {
+      const ledger = await strictAnnual.getStudentLedger(actorId, scenario.studentId);
+      assertLedgerBreakdownReconciles(ledger, label);
+    }
+    const [creditPayment] = await appPool.execute(`INSERT INTO finance_payments
+        (student_id, amount, payment_date, reference_no, receipt_issued, idempotency_key, request_fingerprint, recorded_by, is_reversed)
+      VALUES (?, 25.00, '2026-10-02', 'TEST-UNAPPLIED-CREDIT', 0, ?, ?, ?, 0)`,
+    [assessedScenarios.settled.studentId, crypto.randomUUID(), '8'.repeat(64), actorId]);
+    assert.ok(creditPayment.insertId);
+    const creditLedger = await strictAnnual.getStudentLedger(actorId, assessedScenarios.settled.studentId);
+    assert.equal(creditLedger.summary.availableCredit, '25.00', 'unapplied payments remain separate from assessed fee balances');
+    assert.equal(creditLedger.summary.totalBalance, '0.00', 'unapplied credit does not reduce the combined balance a second time');
+    assertLedgerBreakdownReconciles(creditLedger, 'unapplied payment credit');
 
     const alternatingStudentIds = [legacyBalanceStudentId, assessedScenarios.partial.studentId, openingStudentId,
       assessedScenarios.partial.studentId, legacyBalanceStudentId, assessedScenarios.partial.studentId,

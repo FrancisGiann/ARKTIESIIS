@@ -1035,26 +1035,15 @@ function createStudentRecordsService({
         .input('termId', sql.Int, enrollment.academicTermId)
         .query(`SELECT id FROM enrollments
           WHERE student_id = @studentId AND academic_term_id = @termId FOR UPDATE`);
-      let enrollmentId;
-      let action;
-      if (existing.recordset?.length) {
-        enrollmentId = existing.recordset[0].id;
-        action = 'enrollment_updated';
-        await transaction.request()
-          .input('enrollmentId', sql.Int, enrollmentId)
-          .input('sectionId', sql.Int, enrollment.sectionId)
-          .query('UPDATE enrollments SET section_id = @sectionId WHERE id = @enrollmentId');
-      } else {
-        action = 'enrollment_created';
-        const result = await transaction.request()
-          .input('studentId', sql.Int, enrollment.studentId)
-          .input('termId', sql.Int, enrollment.academicTermId)
-          .input('sectionId', sql.Int, enrollment.sectionId)
-          .query(`INSERT INTO enrollments (student_id, academic_term_id, section_id)
-            VALUES (@studentId, @termId, @sectionId)`);
-        enrollmentId = result.insertId;
-        if (!Number.isSafeInteger(enrollmentId) || enrollmentId < 1) throw new Error('Enrollment insert returned no identifier.');
+      if (!existing.recordset?.length) {
+        throw new StudentRecordsError('Create new enrollments through the front-desk paper intake and registrar annual workflow.', 409);
       }
+      const enrollmentId = existing.recordset[0].id;
+      const action = 'enrollment_updated';
+      await transaction.request()
+        .input('enrollmentId', sql.Int, enrollmentId)
+        .input('sectionId', sql.Int, enrollment.sectionId)
+        .query('UPDATE enrollments SET section_id = @sectionId WHERE id = @enrollmentId');
       await writeAudit(transaction, {
         actorId, actorRole: actor.role, action, entityType: 'enrollment', entityId: enrollmentId,
         details: { studentId: enrollment.studentId, academicTermId: enrollment.academicTermId }

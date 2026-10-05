@@ -15,8 +15,8 @@
     return `/registrar/intake?${params.toString()}`;
   }; %>
   <section class="dashboard-heading">
-    <div><h1>Annual enrollments</h1><p>Find an existing student’s annual record and review its term placements. Start a new intake when the student is not listed.</p></div>
-    <div class="admin-heading-actions"><a class="button button--secondary" href="/registrar/intake/setup/terms">Configure term order</a><a class="button button--secondary" href="/registrar/intake/new">Start annual intake</a></div>
+    <div><h1>Annual enrollments</h1><p>Find an existing student’s annual record and review its term placements. New annual enrollments start from a saved front-desk paper record.</p></div>
+    <div class="admin-heading-actions"><a class="button button--secondary" href="/registrar/intake/setup/terms">Configure term order</a><a class="button button--primary" href="/pre-enrollments">Review paper submissions</a></div>
   </section>
   <% if (notice === 'annualCreated') { %><p class="form-success" role="status">Annual enrollment saved. Open a learner’s paper requirements checklist from the roster to record submitted originals, photocopies, and pieces.</p><% } %>
   <% if (notice === 'voucherUpdated') { %><p class="form-success" role="status">Voucher type updated. Existing assessed charges remain unchanged and require finance review.</p><% } %>

@@ -13,6 +13,7 @@ const navigationByRole = {
     { id: 'accounts', label: 'Accounts', href: '/admin/users', group: 'People and records' },
     { id: 'students', label: 'Student records', href: '/registrar/records', group: 'People and records' },
     { id: 'pre-enrollments', label: 'Pre-enrollment records', href: '/pre-enrollments', group: 'People and records' },
+    { id: 'readmissions', label: 'Balik-aral evaluations', href: '/registrar/readmissions', group: 'People and records' },
     { id: 'audit', label: 'Audit activity', href: '/admin/audit', group: 'Oversight' },
     { id: 'documents', label: 'Documents', href: '/documents', group: 'Oversight' },
     ...financeNavigationItems
@@ -22,6 +23,7 @@ const navigationByRole = {
     { id: 'students', label: 'Student records', href: '/registrar/records', group: 'Records' },
     { id: 'intake', label: 'Enrollment intake', href: '/registrar/intake', group: 'Records' },
     { id: 'pre-enrollments', label: 'Pre-enrollment records', href: '/pre-enrollments', group: 'Records' },
+    { id: 'readmissions', label: 'Balik-aral evaluations', href: '/registrar/readmissions', group: 'Records' },
     { id: 'documents', label: 'Document review', href: '/documents', group: 'Records' },
     { id: 'grade-submissions', label: 'Grade review', href: '/registrar/grade-submissions', group: 'Academic work' },
     { id: 'schedules', label: 'Class schedules', href: '/registrar/schedules', group: 'Academic work' },
@@ -61,6 +63,7 @@ function buildNavigation(role, currentPath = '') {
     if (item.id === 'overview') current = path === '/admin' || path === '/registrar';
     else if (item.id === 'front-desk-pre-enrollments') current = path.startsWith('/pre-enrollments');
     else if (item.id === 'pre-enrollments') current = path.startsWith('/pre-enrollments');
+    else if (item.id === 'readmissions') current = path.startsWith('/registrar/readmissions');
     else if (item.id === 'accounts') current = path.startsWith('/admin/users') || path.startsWith('/admin/student-accounts');
     else if (item.id === 'audit') current = path === '/admin/audit';
     else if (item.id === 'students') current = (path === '/registrar/records' && (role !== 'registrar' || query.get('view') !== 'setup')) || path.startsWith('/registrar/records/students');

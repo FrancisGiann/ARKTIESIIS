@@ -1,0 +1,97 @@
+<%- include('../partials/head', { title }) %>
+<%
+  const value = (key, column) => values[key] ?? evaluation?.[column] ?? '';
+  const canEdit = currentUser.role === 'registrar' && !evaluation?.enrollment_started;
+  const eventLabels = { created: 'Evaluation started', updated: 'Review details saved', reopened: 'Decision reopened', accepted: 'Evaluation accepted', not_accepted: 'Evaluation not accepted' };
+  const displayDateTime = (raw) => {
+    if (!raw) return '—';
+    const value = raw instanceof Date ? raw.toISOString() : String(raw).trim();
+    const date = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(value) ? value : `${value.replace(' ', 'T')}Z`);
+    return Number.isNaN(date.getTime()) ? String(raw) : date.toLocaleString('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' });
+  };
+  const eventFieldLabels = {
+    applicantLrn: 'Applicant LRN', applicant_lrn: 'Applicant LRN',
+    firstName: 'First name', first_name: 'First name', middleName: 'Middle name', middle_name: 'Middle name',
+    lastName: 'Last name', last_name: 'Last name', suffix: 'Suffix',
+    schoolYear: 'School year', school_year: 'School year', targetGradeLevel: 'Target grade', target_grade_level: 'Target grade',
+    priorProgress: 'Prior progress', prior_progress: 'Prior progress', evidenceReviewed: 'Evidence reviewed', evidence_reviewed: 'Evidence reviewed',
+    form137Supporting: 'Form 137 consulted', form137_supporting: 'Form 137 consulted',
+    curriculumComparison: 'Curriculum comparison', curriculum_comparison: 'Curriculum comparison',
+    curriculumReviewStatus: 'Curriculum comparison status', curriculum_review_status: 'Curriculum comparison status',
+    requiredSubjects: 'Required subjects', required_subjects: 'Required subjects',
+    subjectAvailability: 'Subject availability', subject_availability: 'Subject availability',
+    availabilityNotes: 'Availability notes', availability_notes: 'Availability notes',
+    decisionReason: 'Decision reason', decision_reason: 'Decision reason', status: 'Decision status',
+    studentId: 'Linked student record', student_id: 'Linked student record'
+  };
+  const eventDisplayValue = (field, value) => {
+    if (value === null || value === undefined || value === '') return 'Not set';
+    if (field === 'form137Supporting' || field === 'form137_supporting') return value ? 'Yes' : 'No';
+    if (field === 'status') return ({ under_review: 'Under review', accepted: 'Accepted', not_accepted: 'Not accepted' })[value] || String(value);
+    if (field === 'curriculumReviewStatus' || field === 'curriculum_review_status') return value === 'resolved' ? 'Resolved' : 'Unresolved';
+    if (field === 'subjectAvailability' || field === 'subject_availability') return ({ unresolved: 'Unresolved', available: 'Available', unavailable: 'Unavailable' })[value] || String(value);
+    return String(value);
+  };
+  const eventChanges = (raw) => {
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      const fields = Array.isArray(parsed?.changedFields) ? parsed.changedFields : [];
+      const known = fields.filter((field) => eventFieldLabels[field]);
+      if (!known.length && parsed?.before && parsed?.after) {
+        for (const field of Object.keys(eventFieldLabels)) {
+          if (Object.hasOwn(parsed.before, field) || Object.hasOwn(parsed.after, field)) {
+            if (parsed.before[field] !== parsed.after[field]) known.push(field);
+          }
+        }
+      }
+      return [...new Set(known)].map((field) => ({
+        field,
+        label: eventFieldLabels[field],
+        hasSnapshot: Boolean(parsed?.before || parsed?.after),
+        before: parsed?.before?.[field],
+        after: parsed?.after?.[field]
+      }));
+    } catch { return []; }
+  };
+  const curriculumState = value('curriculumReviewStatus', 'curriculum_review_status') || 'unresolved';
+  const availabilityState = value('subjectAvailability', 'subject_availability') || 'unresolved';
+  const canAccept = curriculumState === 'resolved' && availabilityState === 'available';
+%>
+<main class="page-shell dashboard-page admin-page records-page" id="main-content">
+  <a class="context-back" href="/registrar/readmissions">Back to balik-aral evaluations</a>
+  <header class="dashboard-heading"><div><h1><%= evaluation ? 'Balik-aral evaluation' : 'New balik-aral evaluation' %></h1><p>Use this review only for a student returning after an interruption. A registrar makes the decision after reviewing evidence and curriculum needs.</p></div>
+    <% if (evaluation) { %><p class="status-pill"><%= ({under_review:'Under review',accepted:'Accepted',not_accepted:'Not accepted'})[evaluation.status] || evaluation.status %> · revision <%= evaluation.version %></p><% } %>
+  </header>
+  <% if (error) { %><p class="form-alert" role="alert" tabindex="-1"><%= error %></p><% } %>
+  <% if (evaluation?.student_id) { %><section class="readmission-evidence-link"><h2>Existing student evidence</h2><p>This evaluation is linked to <strong><%= evaluation.student_no || `student record ${evaluation.student_id}` %></strong>. Review the student’s existing academic progress and paper checklist before deciding.</p><p><a class="text-link" href="/registrar/records/students/<%= encodeURIComponent(evaluation.student_id) %>">Open existing student record and grades</a></p></section><% } %>
+  <% if (evaluation?.enrollment_started) { %><p class="notice-panel" role="status">This evaluation is read-only because its annual enrollment has started.</p><% } %>
+  <form class="form-stack admin-form" method="post" action="<%= evaluation ? `/registrar/readmissions/${encodeURIComponent(evaluation.id)}` : '/registrar/readmissions' %>">
+    <input type="hidden" name="_csrf" value="<%= csrfToken %>"><% if (evaluation) { %><input type="hidden" name="version" value="<%= evaluation.version %>"><% } %>
+    <section class="form-section"><h2>Applicant and prior progress</h2><div class="admin-form-grid">
+      <div class="field"><label for="eval-lrn">LRN</label><input id="eval-lrn" name="applicantLrn" inputmode="numeric" pattern="[0-9]{12}" maxlength="12" required <%= !canEdit ? 'readonly' : '' %> value="<%= value('applicantLrn','applicant_lrn') %>"></div>
+      <div class="field"><label for="eval-first">First name</label><input id="eval-first" name="firstName" maxlength="100" required <%= !canEdit ? 'readonly' : '' %> value="<%= value('firstName','first_name') %>"></div>
+      <div class="field"><label for="eval-middle">Middle name <span class="muted-copy">(optional)</span></label><input id="eval-middle" name="middleName" maxlength="100" <%= !canEdit ? 'readonly' : '' %> value="<%= value('middleName','middle_name') %>"></div>
+      <div class="field"><label for="eval-last">Last name</label><input id="eval-last" name="lastName" maxlength="100" required <%= !canEdit ? 'readonly' : '' %> value="<%= value('lastName','last_name') %>"></div>
+      <div class="field"><label for="eval-suffix">Suffix <span class="muted-copy">(optional)</span></label><input id="eval-suffix" name="suffix" maxlength="20" <%= !canEdit ? 'readonly' : '' %> value="<%= value('suffix','suffix') %>"></div>
+      <div class="field"><label for="eval-year">School year</label><input id="eval-year" name="schoolYear" maxlength="20" required <%= !canEdit ? 'readonly' : '' %> value="<%= value('schoolYear','school_year') %>"></div>
+      <div class="field"><label for="eval-grade">Target grade</label><select id="eval-grade" name="targetGradeLevel" required <%= !canEdit ? 'disabled' : '' %>><option value="">Choose grade</option><% for (const grade of ['Grade 11','Grade 12']) { %><option value="<%= grade %>" <%= value('targetGradeLevel','target_grade_level') === grade ? 'selected' : '' %>><%= grade %></option><% } %></select><% if (!canEdit) { %><input type="hidden" name="targetGradeLevel" value="<%= evaluation.target_grade_level %>"><% } %></div>
+      <div class="field field--full"><label for="eval-progress">Prior progress</label><textarea id="eval-progress" name="priorProgress" maxlength="4000" required <%= !canEdit ? 'readonly' : '' %>><%= value('priorProgress','prior_progress') %></textarea></div>
+      <div class="field field--full"><label for="eval-evidence">Evidence reviewed</label><textarea id="eval-evidence" name="evidenceReviewed" maxlength="4000" required <%= !canEdit ? 'readonly' : '' %>><%= value('evidenceReviewed','evidence_reviewed') %></textarea></div>
+      <label class="field field--check"><input type="checkbox" name="form137Supporting" value="1" <%= value('form137Supporting','form137_supporting') === true || Number(value('form137Supporting','form137_supporting')) === 1 ? 'checked' : '' %> <%= !canEdit ? 'disabled' : '' %>><span>Form 137 was consulted as supporting evidence (optional)</span></label>
+      <div class="field field--full"><label for="eval-curriculum">Curriculum comparison</label><textarea id="eval-curriculum" name="curriculumComparison" maxlength="4000" required <%= !canEdit ? 'readonly' : '' %>><%= value('curriculumComparison','curriculum_comparison') %></textarea></div>
+      <div class="field field--full"><label for="eval-subjects">Required subjects or learning areas</label><textarea id="eval-subjects" name="requiredSubjects" maxlength="4000" required <%= !canEdit ? 'readonly' : '' %>><%= value('requiredSubjects','required_subjects') %></textarea></div>
+      <div class="field"><label for="eval-curriculum-status">Curriculum comparison status</label><select id="eval-curriculum-status" name="curriculumReviewStatus" <%= !canEdit ? 'disabled' : '' %>><% for (const [choice,label] of [['unresolved','Unresolved'],['resolved','Resolved by registrar']]) { %><option value="<%= choice %>" <%= curriculumState === choice ? 'selected' : '' %>><%= label %></option><% } %></select><small>Mark resolved only after a registrar has completed the human curriculum comparison. An unresolved comparison cannot be accepted.</small><% if (!canEdit) { %><input type="hidden" name="curriculumReviewStatus" value="<%= evaluation.curriculum_review_status %>"><% } %></div>
+      <div class="field"><label for="eval-availability">Subject availability</label><select id="eval-availability" name="subjectAvailability" <%= !canEdit ? 'disabled' : '' %>><% for (const [choice,label] of [['unresolved','Unresolved'],['available','Available'],['unavailable','Unavailable']]) { %><option value="<%= choice %>" <%= availabilityState === choice ? 'selected' : '' %>><%= label %></option><% } %></select><% if (!canEdit) { %><input type="hidden" name="subjectAvailability" value="<%= evaluation.subject_availability %>"><% } %></div>
+      <div class="field"><label for="eval-availability-notes">Availability notes <span class="muted-copy">(optional)</span></label><textarea id="eval-availability-notes" name="availabilityNotes" maxlength="4000" <%= !canEdit ? 'readonly' : '' %>><%= value('availabilityNotes','availability_notes') %></textarea></div>
+      <div class="field field--full"><label for="eval-reason">Decision reason</label><textarea id="eval-reason" name="decisionReason" maxlength="4000" <%= !canEdit ? 'readonly' : '' %>><%= value('decisionReason','decision_reason') %></textarea></div>
+    </div></section>
+    <% if (canEdit) { %><div class="form-actions"><button class="button button--primary" type="submit"><%= evaluation ? 'Save review changes' : 'Save evaluation for review' %></button><a class="button button--secondary" href="/registrar/readmissions">Cancel</a></div><% } %>
+  </form>
+  <% if (evaluation && canEdit && evaluation.status === 'under_review') { %>
+    <section class="form-section"><h2>Registrar decision</h2><p>Accept only when prior progress and evidence are reviewed, the curriculum comparison is explicitly resolved, required subjects are identified, and subject availability is confirmed. This decision will be tied to revision <%= evaluation.version %>.</p>
+      <form class="form-stack" method="post" action="/registrar/readmissions/<%= encodeURIComponent(evaluation.id) %>/decision"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="version" value="<%= evaluation.version %>"><div class="field"><label for="decision-reason">Reason for decision</label><textarea id="decision-reason" name="decisionReason" maxlength="4000" required></textarea></div><div class="form-actions"><button class="button button--primary" name="decision" value="accepted" type="submit" <%= canAccept ? '' : 'disabled' %>>Accept evaluation</button><button class="button button--secondary" name="decision" value="not_accepted" type="submit">Not accepted</button></div></form>
+    </section>
+  <% } %>
+  <% if (evaluation) { %><section class="form-section readmission-history"><h2>Decision history</h2><ol class="pre-enrollment-history"><% for (const item of evaluation.events || []) { const stamp = item.created_at instanceof Date ? item.created_at.toISOString() : String(item.created_at || ''); const iso = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(stamp) ? stamp : `${stamp.replace(' ', 'T')}Z`; const changed = eventChanges(item.details_json); %><li class="readmission-history__item"><strong class="pre-enrollment-history__title"><%= eventLabels[item.event_type] || 'Evaluation updated' %></strong><div class="pre-enrollment-history__metadata"><span>Revision <%= item.evaluation_version %></span><span><%= [item.first_name,item.last_name].filter(Boolean).join(' ') || 'Staff' %></span><time datetime="<%= iso %>"><%= displayDateTime(item.created_at) %> Philippine time</time></div><% if (changed.length) { %><details class="readmission-history__details"><summary><%= item.event_type === 'created' ? 'View saved evaluation' : 'View saved changes' %> (<%= changed.length %>)</summary><dl><% for (const change of changed) { %><div><dt><%= change.label %></dt><dd><% if (change.hasSnapshot) { %><span><strong>Before:</strong> <%= eventDisplayValue(change.field, change.before) %></span><span><strong>After:</strong> <%= eventDisplayValue(change.field, change.after) %></span><% } else { %><span>Updated</span><% } %></dd></div><% } %></dl></details><% } %></li><% } %></ol></section><% } %>
+</main>
+<%- include('../partials/foot') %>

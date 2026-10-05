@@ -15,7 +15,7 @@ Students may upload a scan of a previous-school report card only for their own l
 
 ## Data entry and spreadsheet support
 
-Registrar intake creates student profiles and enrollment records. New numbers are assigned from the selected academic year's start year in the provisional format `SHS-YYYY-0001`; the sequence continues after the highest matching number in the configured MariaDB database. Admin-created profiles use the current academic year. The format is a prototype convention pending school confirmation. A bulk student-login workbook can link existing unlinked student records; it does not import student records. The teacher grade workflow supports the corrected SSHS E-Class Record format that its parser recognizes and requires the teacher's active class assignment. It is not a general-purpose spreadsheet importer. Other school spreadsheets are not assumed compatible; use the registrar forms until the school provides and approves a stable import template.
+Front desk transcribes the required paper form; the registrar reviews its saved profile and supplies placement and finance classification before creating an annual enrollment. Balik-aral applicants need an accepted registrar evaluation before paper entry. New numbers are assigned from the selected academic year's start year in the provisional format `SHS-YYYY-0001`; the sequence continues after the highest matching number in the configured MariaDB database. Admin-created profiles use the current academic year. The format is a prototype convention pending school confirmation. A bulk student-login workbook can link existing unlinked student records; it does not import student records. The teacher grade workflow supports the corrected SSHS E-Class Record format that its parser recognizes and requires the teacher's active class assignment. It is not a general-purpose spreadsheet importer. Other school spreadsheets are not assumed compatible; use the front-desk paper intake and registrar record workflows until the school provides and approves a stable import template.
 
 ## Stack
 
@@ -27,8 +27,12 @@ Registrar intake creates student profiles and enrollment records. New numbers ar
 ## Local setup
 
 1. Copy `.env.example` to `.env`; set the existing MariaDB host, port, database name, username, and password, plus SMTP settings, a session secret, and any Gemini configuration needed for document prechecks. Keep `.env` private.
+
+   For local development, use the MariaDB listener (normally port `3306`). SQL Server's usual port `1433` and legacy `DB_SERVER` settings do not configure this app. Use a separate local database; matching application code and migrations do not copy Hostinger accounts, records, or uploaded files.
 2. Install the locked dependencies with `npm ci`.
 3. Create an empty MariaDB database and its user in your local MariaDB or Hostinger hPanel. Hostinger supplies prefixed names; copy them exactly into `.env`. The app setup never creates a database.
+
+   On Linux, `npm run db:local:start` can run an isolated, user-owned MariaDB instance on `127.0.0.1:3307`; it needs the installed `mariadbd`, `mariadb-install-db`, `mariadbd-safe`, and standard `getent`, `stat`, `flock`, and `setsid` tools. It stores data under `~/.local/share/arktiesiis/local-mariadb` and does not change a system MariaDB instance. Use `npm run db:local:status` and `npm run db:local:stop` to manage it. Create a separate local database and scoped user there, then put those local values in `.env`.
 4. Initialize and check the selected empty database once:
 
    ```bash
@@ -46,7 +50,7 @@ The login-attempt limiter is skipped only while that development password-only m
 
 ## Local demo seed
 
-The minimal MariaDB seed creates repeatable demo accounts and one student, term, section, subject, enrollment, grade set, and empty finance account. It only inserts missing reserved demo rows and stops if their identifiers are already used by incompatible records. It does not create document files or school-approved fee rates. Set `DEMO_SEED_PASSWORD` to a private 12–72 byte password, and enable `DEV_PASSWORD_ONLY_LOGIN=true` only in local development so the `.test` demo emails can sign in without a real mail relay. Seed application is limited to `NODE_ENV=development`, a loopback database host, and a database name containing `demo`, `dev`, or `test`.
+The minimal MariaDB seed creates repeatable demo accounts and one student, term, section, subject, enrollment, four grades, a teacher assignment, and an empty finance account. It only inserts missing reserved demo rows and stops if their identifiers are already used by incompatible records. It does not create financial transactions, document files, or school-approved fee rates; it is smaller than the expanded Hostinger demo and does not copy hosted records or files. Set `DEMO_SEED_PASSWORD` to a private 12–72 byte password, and enable `DEV_PASSWORD_ONLY_LOGIN=true` only in local development so the `.test` demo emails can sign in without a real mail relay. Seed application is limited to `NODE_ENV=development`, a loopback database host, and a database name containing `demo`, `dev`, or `test`.
 
 ```bash
 npm run demo:seed-school -- --dry-run

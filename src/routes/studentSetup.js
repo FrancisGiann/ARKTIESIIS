@@ -12,6 +12,7 @@ const { PhysicalChecklistError, createPhysicalChecklistService } = require('../s
 const { latestBirthDate } = require('../services/studentRecordsService');
 const { isDuplicateKeyError } = require('../config/database');
 const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
+const { comparePreEnrollmentProfile } = require('../utils/studentProfileReview');
 
 const MAX_BULK_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_XLSX_ENTRIES = 80;
@@ -290,6 +291,21 @@ function createStudentIntakeRouter({ getPool, sql, studentSetupService } = {}) {
   const service = studentSetupService || createStudentSetupService({ getPool, sql });
   const notices = { intakeCreated: 'Student intake saved. Finance must clear this specific enrollment before finalization.' };
 
+  router.get('/', (req, res) => res.redirect(303, '/pre-enrollments'));
+  router.get('/activation', (req, res) => res.redirect(303, '/registrar/intake'));
+  router.post('/', (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    return res.status(409).render('error', { title: 'Annual enrollment required', message: 'Create new student intake through a front-desk paper source.' });
+  });
+  router.post('/:id/finalize', (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    return res.status(409).render('error', { title: 'Annual enrollment required', message: 'Finalize enrollment from its annual enrollment record.' });
+  });
+  router.post('/:id/confirm-first-activation', (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    return res.status(409).render('error', { title: 'Historic activation retired', message: 'Historic intake activation cannot authorize a student login.' });
+  });
+
   async function renderIntakeList(req, res, { status = 200, error = null, notice = null } = {}) {
     try {
       const pendingIntakes = await service.listPendingIntakes(req.authUser.id);
@@ -563,6 +579,8 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         idempotencyKey: values.idempotencyKey || values.preEnrollmentId || preEnrollmentSource?.id || crypto.randomUUID(),
         ...options, maxBirthDate: latestBirthDate(), values: { ...values, enrollmentStartDate: values.enrollmentStartDate || schoolLocalDate() }, error, activeStep,
         paperRequirements, preEnrollmentSource, preEnrollmentReceiptRequirements: RECEIPT_REQUIREMENTS,
+        profileReviewFields: preEnrollmentSource?.existingStudent?.profile
+          ? comparePreEnrollmentProfile(preEnrollmentSource, preEnrollmentSource.existingStudent.profile).filter((item) => item.differs) : [],
         paperTokens: Object.fromEntries((paperRequirements || []).map((item) => [item.requirement_code,
           values[`paper_${item.requirement_code}_token`] || crypto.randomUUID()]))
       });
@@ -575,7 +593,13 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
 
   async function loadSourceForRerender(req, values) {
     if (!values.preEnrollmentId || !preEnrollmentService?.get) return null;
-    try { return await preEnrollmentService.get(req.authUser.id, values.preEnrollmentId); }
+    try {
+      if (preEnrollmentService.getForConversion) {
+        try { return await preEnrollmentService.getForConversion(req.authUser.id, values.preEnrollmentId); }
+        catch { /* Keep the source snapshot visible when a concurrent conversion has already started. */ }
+      }
+      return await preEnrollmentService.get(req.authUser.id, values.preEnrollmentId);
+    }
     catch { return null; }
   }
 
@@ -677,7 +701,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
   router.get('/', (req, res) => renderList(req, res));
   router.get('/new', async (req, res) => {
     const preEnrollmentId = typeof req.query?.preEnrollmentId === 'string' ? req.query.preEnrollmentId : '';
-    if (!preEnrollmentId) return renderForm(req, res);
+    if (!preEnrollmentId) return res.redirect(303, '/pre-enrollments');
     if (!preEnrollmentService?.openConversion) {
       return res.status(503).render('error', { title: 'Pre-enrollment unavailable', message: 'The paper record handoff is unavailable.' });
     }
@@ -693,6 +717,8 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         firstName: source.first_name || '', middleName: source.middle_name || '', lastName: source.last_name || '', suffix: source.suffix || '',
         lrn: source.lrn || '', phone: source.student_contact_number || '',
         schoolYear: source.school_year, gradeLevel: source.target_grade_level || '',
+        email: source.email || '', studentNo: source.existingStudent?.studentNo || '',
+        intakeKind: source.applicant_kind, studentReviewFingerprint: source.existingStudent?.profileReviewFingerprint || '',
         addressMode: 'replace', emergencyContactAddressMode: 'replace'
       };
       return renderForm(req, res, { values, preEnrollmentSource: source });
@@ -803,13 +829,16 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
   router.post('/', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     const values = {};
-    for (const key of ['studentNo', 'intakeKind', 'enrollmentStartDate', 'entryTermNumber', 'schoolYear', 'gradeLevel', 'voucherCode', 'email', 'lrn', 'firstName', 'middleName', 'lastName', 'suffix', 'birthDate', 'sex', 'address',
+    for (const key of ['studentNo', 'intakeKind', 'enrollmentStartDate', 'entryTermNumber', 'schoolYear', 'gradeLevel', 'voucherCode', 'email', 'lrn', 'firstName', 'middleName', 'lastName', 'suffix', 'birthDate', 'sex', 'address', 'studentReviewFingerprint',
       'addressMode', 'addressBlockLotStreetPurok', 'addressBarangay', 'addressCity', 'addressProvince', 'addressZip',
       'emergencyContactPerson', 'emergencyContactRelationship', 'emergencyContactPhone', 'emergencyContactAddress', 'emergencyContactAddressMode',
       'emergencyContactAddressBlockLotStreetPurok', 'emergencyContactAddressBarangay', 'emergencyContactAddressCity', 'emergencyContactAddressProvince', 'emergencyContactAddressZip',
       'phone', 'sectionMode', 'annualSectionId', 'section1Id', 'section2Id', 'section3Id', 'section1Override', 'section2Override', 'section3Override', 'idempotencyKey', 'preEnrollmentId', 'preEnrollmentVersion']) {
       values[key] = typeof req.body?.[key] === 'string' ? req.body[key].slice(0, 500) : '';
     }
+    values.approvedProfileFields = Array.isArray(req.body?.approvedProfileFields)
+      ? req.body.approvedProfileFields.filter((value) => typeof value === 'string').slice(0, 40)
+      : typeof req.body?.approvedProfileFields === 'string' ? [req.body.approvedProfileFields] : [];
     for (const [key, value] of Object.entries(req.body || {})) {
       if (/^paper_[a-z0-9_]+_(?:record|status|applicable|token|originals|copies|pieces|note)$/.test(key) && typeof value === 'string') {
         values[key] = value.slice(0, 1000);

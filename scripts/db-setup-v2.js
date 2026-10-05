@@ -9,7 +9,7 @@ const BASELINE_VERSION = 'v2.001';
 const BASELINE_PATH = path.resolve(__dirname, '../database/mariadb/schema.sql');
 const MIGRATIONS_DIRECTORY = path.resolve(__dirname, '../database/mariadb/migrations');
 const APPLICATION_LOCK = 'ARKTIESIIS MariaDB schema setup';
-const KNOWN_VERSIONS = new Set(Array.from({ length: 15 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const KNOWN_VERSIONS = new Set(Array.from({ length: 16 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 class SetupError extends Error {}
 
@@ -121,7 +121,7 @@ function validateAppliedVersions(versions) {
   }
   const unknown = [...versions].filter((version) => !KNOWN_VERSIONS.has(version));
   if (unknown.length) throw new SetupError(`Unknown migration version(s): ${unknown.sort().join(', ')}.`);
-  for (let sequence = 2; sequence <= 15; sequence += 1) {
+  for (let sequence = 2; sequence <= 16; sequence += 1) {
     const version = `v2.${String(sequence).padStart(3, '0')}`;
     const prior = `v2.${String(sequence - 1).padStart(3, '0')}`;
     if (versions.has(version) && !versions.has(prior)) {

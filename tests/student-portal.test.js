@@ -49,10 +49,10 @@ async function withServer(app, run) {
 }
 
 test('student pages are separate, read-only destinations bound to the authenticated student', async () => {
-  const calls = { records: [], summaries: [], schedules: [], grades: [], finance: [] };
+  const calls = { records: [], summaries: [], schedules: [], grades: [], finance: [], annualFinance: [] };
   const financeEvents = Array.from({ length: 125 }, (_, index) => ({
     event_date: new Date(Date.UTC(2026, 6, 1 + index)),
-    event_type: index === 122 ? 'signed_clearance' : index % 2 ? 'charge' : 'payment',
+    event_type: index === 122 ? 'charge' : index % 2 ? 'charge' : 'payment',
     details: index === 122 ? '<script>alert(1)</script>' : `Finance activity ${index}`,
     reference_no: `REF-${String(index).padStart(3, '0')}`,
     amount: index === 122 ? '4990.00' : index === 121 ? null : `${(index + 1) * 10}.00`
@@ -61,6 +61,16 @@ test('student pages are separate, read-only destinations bound to the authentica
     summary: { annualBalanceSchoolYear: '2026-2027', annualBalance: '4990.00', allYearsAnnualBalance: '4990.00',
       unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00', totalBalance: '4990.00', currentTermOutstanding: '1000.00',
       priorTermYearDebt: '3990.00', availableCredit: '500.00' },
+    charges: [
+      { school_year: '2026-2027', annual_term_number: 2, term: 'Term 2', line_name: 'Tuition', installment: 'Term 2',
+        amount: '1500.00', waived_amount: '200.00', adjustments: '-250.00', allocated: '250.00', remaining_due: '1000.00' },
+      { school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', line_name: 'Tuition', installment: 'Term 1',
+        amount: '4500.00', waived_amount: '0.00', adjustments: '0.00', allocated: '510.00', remaining_due: '3990.00' },
+      { school_year: '2026-2027', annual_term_number: 2, term: 'Term 2', line_name: 'Paid materials fee', installment: 'Term 2',
+        amount: '100.00', waived_amount: '0.00', adjustments: '0.00', allocated: '100.00', remaining_due: '0.00' },
+      { school_year: '2026-2027', annual_term_number: 2, term: 'Term 2', line_name: 'Covered activity fee', installment: 'Term 2',
+        amount: '100.00', waived_amount: '100.00', adjustments: '-100.00', allocated: '0.00', remaining_due: '0.00' }
+    ],
     terms: [
       { school_year: '2026-2027', term: 'Term 1', is_current: false, enrollment_status: 'enrolled', term_scope_status: 'applicable',
         registrar_confirmation_id: 12, signed_clearance_status: 'signed', outstanding: '0.00' },
@@ -75,6 +85,7 @@ test('student pages are separate, read-only destinations bound to the authentica
     id: 55, student_no: 'SHS-2026-0042', first_name: 'Rae', middle_name: null, last_name: 'Student', suffix: null,
     birth_date: '2009-05-10', sex: 'female', phone: '555-0100', address: 'Lucena', status: 'active'
   };
+  studentFinanceLedger.student = student;
   const ownRecords = { student, enrollments: [{ school_year: '2026-2027', term: 'First', is_current: true,
     section_name: 'STEM A', grade_level: 'Grade 11', enrollment_status: 'enrolled', enrolled_at: new Date('2026-06-01') }] };
   const services = {
@@ -100,7 +111,13 @@ test('student pages are separate, read-only destinations bound to the authentica
       return { student: { ...student }, account: { balance: '4990.00' }, transactions: [{ transaction_type: 'charge',
         amount: '4990.00', description: 'Synthetic tuition sample', created_at: new Date('2026-09-01') }] };
     } },
-    annualFinanceService: { async getStudentLedger() { return studentFinanceLedger; } }
+    annualFinanceService: { async getStudentLedger(userId, studentId, access) {
+      calls.annualFinance.push({ userId, studentId, access });
+      assert.equal(userId, 7);
+      assert.equal(studentId, 55);
+      assert.equal(access, 'student');
+      return studentFinanceLedger;
+    } }
   };
 
   await withServer(createApp({ databasePool: authPool('student'), environment, ...services }), async (baseUrl) => {
@@ -130,9 +147,17 @@ test('student pages are separate, read-only destinations bound to the authentica
     const financeHtml = await financeResponse.text();
     assert.equal(financeResponse.status, 200);
     assert.match(financeHtml, /Combined account balance[\s\S]*?₱4,990\.00/);
-    assert.match(financeHtml, /Available payment credit[\s\S]*?₱500\.00[\s\S]*?not deducted from the balance owed/);
+    assert.match(financeHtml, /Available payment credit[\s\S]*?₱500\.00[\s\S]*?until it is applied to a fee/);
     assert.match(financeHtml, /Latest assessed year · 2026-2027/);
-    assert.match(financeHtml, /Configured current term due[\s\S]*?₱1,000\.00/);
+    assert.match(financeHtml, /All school-year fees due[\s\S]*?₱4,990\.00/);
+    assert.match(financeHtml, /Fees and payments by school year/);
+    assert.match(financeHtml, /Fee amount[\s\S]*?₱1,500\.00[\s\S]*?Coverage[\s\S]*?−₱200\.00[\s\S]*?Other changes[\s\S]*?−₱50\.00[\s\S]*?Payments applied[\s\S]*?−₱250\.00[\s\S]*?Remaining due[\s\S]*?₱1,000\.00/);
+    assert.match(financeHtml, /2026-2027 · Term 1[\s\S]*?Remaining due[\s\S]*?₱3,990\.00/);
+    assert.match(financeHtml, /Paid materials fee[\s\S]*?Coverage<\/dt><dd>₱0\.00[\s\S]*?Payments applied<\/dt><dd>−₱100\.00/);
+    assert.match(financeHtml, /Covered activity fee[\s\S]*?Coverage<\/dt><dd>−₱100\.00[\s\S]*?Payments applied<\/dt><dd>₱0\.00/);
+    assert.doesNotMatch(financeHtml, /−₱0\.00/, 'zero deductions are shown as zero, without an apparent negative amount');
+    assert.doesNotMatch(financeHtml, /\blegacy\b/i, 'student-facing labels use plain language');
+    assert.match(financeHtml, /Current term due[\s\S]*?₱1,000\.00/);
     assert.match(financeHtml, /Current term/);
     assert.match(financeHtml, /Confirmed by registrar/);
     assert.match(financeHtml, /Signed clearance[\s\S]*?Signed/);
@@ -152,17 +177,26 @@ test('student pages are separate, read-only destinations bound to the authentica
     assert.equal((completeHistory.match(/<tr>/g) || []).length, 126, 'all 125 history rows remain available');
     assert.match(completeHistory, /REF-000/);
     assert.match(completeHistory, /REF-124/);
+    assert.ok(calls.annualFinance.some(({ userId, studentId, access }) => userId === 7 && studentId === 55 && access === 'student'));
+
+    const statementResponse = await fetch(`${baseUrl}/student/finance/statement`, { headers: { cookie } });
+    const statementHtml = await statementResponse.text();
+    assert.equal(statementResponse.status, 200);
+    assert.match(statementHtml, /All school-year fees due[\s\S]*?₱4,990\.00/);
+    assert.match(statementHtml, /Fee breakdown[\s\S]*?Coverage[\s\S]*?₱0\.00[\s\S]*?Payments applied[\s\S]*?₱0\.00/);
+    assert.doesNotMatch(statementHtml, /−₱0\.00|\blegacy\b/i, 'student statement omits zero negative-looking deductions and old account terminology');
 
     studentFinanceLedger = {
       summary: { annualBalanceSchoolYear: null, annualBalance: '0.00', allYearsAnnualBalance: '0.00',
         unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00', totalBalance: '0.00', currentTermOutstanding: '0.00',
         priorTermYearDebt: '0.00', availableCredit: '0.00' },
-      terms: [], events: []
+      charges: [], terms: [], events: []
     };
     const emptyFinanceResponse = await fetch(`${baseUrl}/student/finance`, { headers: { cookie } });
     const emptyFinanceHtml = await emptyFinanceResponse.text();
     assert.equal(emptyFinanceResponse.status, 200);
     assert.match(emptyFinanceHtml, /Latest assessed year · none recorded/);
+    assert.match(emptyFinanceHtml, /No school-year fees have been assessed yet/);
     assert.match(emptyFinanceHtml, /No term finance activity has been posted yet/);
     assert.match(emptyFinanceHtml, /No finance entries have been recorded/);
     assert.match(emptyFinanceHtml, /View complete finance history · 0 entries/);
@@ -170,7 +204,7 @@ test('student pages are separate, read-only destinations bound to the authentica
     assert.deepEqual(calls.summaries, [], 'student home does not load a document summary used only by removed shortcuts');
     assert.deepEqual(calls.schedules, [7, 7]);
     assert.deepEqual(calls.grades, [7]);
-    assert.deepEqual(calls.finance, [7, 7, 7]);
+    assert.deepEqual(calls.finance, [7, 7, 7, 7]);
   });
 });
 

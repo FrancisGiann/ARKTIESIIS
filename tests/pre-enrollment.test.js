@@ -5,15 +5,17 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const ejs = require('ejs');
 const express = require('express');
-const { normalizeRecord, RECEIPT_REQUIREMENTS } = require('../src/services/preEnrollmentService');
+const { normalizeRecord, RECEIPT_REQUIREMENTS, PreEnrollmentError } = require('../src/services/preEnrollmentService');
 const { createPreEnrollmentRouter } = require('../src/routes/preEnrollments');
 const { requireRole } = require('../src/middleware/roles');
 const { applyAddressInput } = require('../src/services/studentRecordsService');
 const { normalizeStructuredAddress, StudentAddressError } = require('../src/utils/studentAddress');
+const { comparePreEnrollmentProfile, PROFILE_REVIEW_GROUPS } = require('../src/utils/studentProfileReview');
 
 function readyInput(overrides = {}) {
   return {
     schoolYear: '2027-2028', firstName: 'Ari', middleName: 'Mae', lastName: 'Santos', suffix: '', lrn: '012345678901',
+    email: 'ari.santos@example.test',
     studentContactNumber: '09171234567', voucherTypeText: 'ESC', voucherCategoryText: 'CATEGORY A',
     preferredTrack: 'Academic Track', preferredCluster: 'ASSH (Arts, Social Science, and Humanities)',
     targetGradeLevel: 'Grade 11', priorGradeLevel: 'Grade 10', priorSchool: 'Lucena High School',
@@ -80,6 +82,28 @@ test('structured student and emergency addresses preserve legacy text unless exp
   assert.equal(emergencyReplacement.emergencyContactAddress, 'Purok 1, Gulang-gulang, Lucena, Quezon, 4301');
 });
 
+test('returning address comparison presents one atomic approval per address with components visible', () => {
+  const source = {
+    address: 'Block 2, Ibabang Iyam, Lucena, Quezon, 0123',
+    address_block_lot_street_purok: 'Block 2', address_barangay: 'Ibabang Iyam', address_city: 'Lucena',
+    address_province: 'Quezon', address_zip: '0123',
+    emergency_contact_address: 'Purok 3, Gulang-gulang, Lucena, Quezon, 4301',
+    emergency_contact_address_block_lot_street_purok: 'Purok 3', emergency_contact_address_barangay: 'Gulang-gulang',
+    emergency_contact_address_city: 'Lucena', emergency_contact_address_province: 'Quezon', emergency_contact_address_zip: '4301'
+  };
+  const current = { address: 'Legacy student address', emergency_contact_address: 'Legacy emergency address' };
+  const differences = comparePreEnrollmentProfile(source, current).filter((item) => item.differs);
+  const address = differences.find((item) => item.key === 'address');
+  const emergency = differences.find((item) => item.key === 'emergencyContactAddress');
+  assert.match(address.sourceValue, /Barangay: Ibabang Iyam/);
+  assert.match(address.sourceValue, /ZIP code: 0123/);
+  assert.match(address.studentValue, /Legacy free-text address/);
+  assert.match(emergency.sourceValue, /Block and lot, street\/purok: Purok 3/);
+  assert.ok(PROFILE_REVIEW_GROUPS.some(({ key }) => key === 'address'));
+  assert.ok(!PROFILE_REVIEW_GROUPS.some(({ key }) => ['addressZip', 'addressCity', 'emergencyContactAddressZip'].includes(key)),
+    'address columns cannot be approved separately');
+});
+
 test('address field component strings stay at five visible fields and enforce compatibility length and ZIP markup', async () => {
   const base = {
     addressBlockLotStreetPurok: 'B'.repeat(200), addressBarangay: 'B'.repeat(100),
@@ -111,6 +135,18 @@ function detailRecord(id, status = 'ready_for_registrar') {
     suffix: '',
     lrn: '012345678901',
     student_contact_number: '09171234567',
+    applicant_kind: 'readmission',
+    email: 'ari.santos@example.test', birth_date: '2008-04-21', sex: 'Female', profile_phone: '09171234567',
+    address: 'Block 2, Lucena', address_block_lot_street_purok: 'Block 2', address_barangay: 'Ibabang Iyam',
+    address_city: 'Lucena', address_province: 'Quezon', address_zip: '4301',
+    emergency_contact_person: 'Mae Santos', emergency_contact_relationship: 'Mother',
+    emergency_contact_phone: '09181234567', emergency_contact_address: 'Purok 3, Lucena',
+    emergency_contact_address_block_lot_street_purok: 'Purok 3', emergency_contact_address_barangay: 'Gulang-gulang',
+    emergency_contact_address_city: 'Lucena', emergency_contact_address_province: 'Quezon', emergency_contact_address_zip: '0123',
+    mother_name: 'Ana Santos', mother_phone: '09170000001', father_name: 'Ben Santos', father_phone: '09170000002',
+    birthplace: 'Lucena City', facebook_name: 'Ari Santos',
+    readmission_evaluation_id: 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261', readmission_evaluation_version: 4,
+    readmission_evaluation: { applicant_lrn: '012345678901', school_year: '2027-2028', target_grade_level: 'Grade 11', status: 'accepted', version: 4 },
     voucher_type_text: 'ESC as written on original school form',
     voucher_category_text: 'CATEGORY A',
     preferred_track: 'Academic Track',
@@ -157,7 +193,9 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
   const app = express();
   const csrfToken = 'c'.repeat(64);
   const calls = [];
+  const choicesCalls = [];
   const roleIds = { registrar: 1, front_desk: 2, database_admin: 3, teacher: 4, finance: 5, student: 6 };
+  const acceptedChoice = { id: 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261', version: 4, applicant_lrn: '012345678901', first_name: 'Ari', last_name: 'Santos', school_year: '2027-2028', target_grade_level: 'Grade 11' };
   app.set('views', path.resolve(__dirname, '../views'));
   app.set('view engine', 'ejs');
   app.use(express.urlencoded({ extended: false }));
@@ -173,7 +211,8 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
       async list(actorId) { calls.push(['list', actorId]); return { rows: [], filters: { search: '', schoolYear: '', status: '' }, pagination: { page: 1, pageSize: 20, totalRecords: 0, totalPages: 1, from: 0, to: 0 } }; },
       async getActorDisplayName(actorId) { calls.push(['display', actorId]); return 'Front Desk'; },
       async create(actorId) { calls.push(['create', actorId]); return { id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261' }; },
-      async update(actorId) { calls.push(['update', actorId]); return { id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261' }; },
+      async update(actorId) { calls.push(['update', actorId]); throw new PreEnrollmentError('The correction needs a current accepted evaluation.', 409); },
+      async listAcceptedReadmissionChoices(actorId, schoolYear) { choicesCalls.push([actorId, schoolYear]); return [acceptedChoice]; },
       async get(actorId, id) { calls.push(['get', actorId]); return detailRecord(id, id === 'b342bc01-2a68-4f19-a7fd-4d5bb1d83261' ? 'enrollment_started' : 'ready_for_registrar'); }
     }
   }));
@@ -193,6 +232,10 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     for (const label of ['Student and contact', 'Program and previous school', 'Signature and office record', 'Entered by']) {
       assert.ok(detailHtml.includes(label), `detail presents the grouped ${label} information`);
     }
+    for (const label of ['Contact and sign-in email', 'Gender', 'Birthplace', 'Facebook name', 'Student address',
+      'Block 2', 'ZIP code', 'Emergency contact', 'Mother’s name', 'Father’s phone', '012345678901, 2027-2028, Grade 11']) {
+      assert.ok(detailHtml.includes(label), `detail shows saved profile or evaluation binding ${label}`);
+    }
     assert.match(detailHtml, /Submitted as ready/);
     assert.match(detailHtml, /Status changed/);
     assert.match(detailHtml, /datetime="2026-10-03T10:30:00.000Z"/);
@@ -206,6 +249,25 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
       headers: { 'x-test-role': 'registrar' }
     });
     assert.match(await registrarDetail.text(), /Start enrollment/);
+    const registrarList = await fetch(`${origin}/pre-enrollments`, { headers: { 'x-test-role': 'registrar' } });
+    assert.doesNotMatch(await registrarList.text(), /Record paper form/, 'only front desk can create paper records');
+    const registrarEdit = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261/edit`, { headers: { 'x-test-role': 'registrar' } });
+    const registrarEditHtml = await registrarEdit.text();
+    assert.equal(registrarEdit.status, 200);
+    assert.ok(registrarEditHtml.includes('value="c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4" selected'),
+      'registrar correction shows the current saved accepted evaluation as an explicit selection');
+    assert.ok(choicesCalls.some(([actorId]) => actorId === roleIds.registrar), 'the correction route asks the service for registrar-authorized identity choices');
+    assert.doesNotMatch(registrarEditHtml, /Prior progress|Evidence reviewed|Decision reason/,
+      'paper correction gets no private academic evaluation notes');
+    const csrfCorrection = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261`, {
+      method: 'POST', headers: { 'x-test-role': 'registrar', 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, version: '2', schoolYear: '2027-2028', applicantKind: 'readmission',
+        readmissionEvaluationBinding: 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4' })
+    });
+    const correctionHtml = await csrfCorrection.text();
+    assert.equal(csrfCorrection.status, 409);
+    assert.ok(correctionHtml.includes('value="c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4" selected'),
+      'a failed correction rerender retains the explicit evaluation binding and version');
     const startedDetail = await fetch(`${origin}/pre-enrollments/b342bc01-2a68-4f19-a7fd-4d5bb1d83261`);
     const startedHtml = await startedDetail.text();
     assert.match(startedHtml, /Enrollment started/);
@@ -237,8 +299,8 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
         'x-test-role': role, 'content-type': 'application/x-www-form-urlencoded'
       }, body: new URLSearchParams({ _csrf: csrfToken }) })).status, 403);
     }
-    assert.deepEqual(calls.filter(([method]) => ['create', 'update'].includes(method)), [],
-      'read-only/unauthorized role requests stop before service writes');
+    assert.deepEqual(calls.filter(([method]) => ['create', 'update'].includes(method)), [['update', roleIds.registrar]],
+      'only the explicit registrar correction reaches the write service; admin and unrelated roles stop first');
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

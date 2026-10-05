@@ -28,7 +28,8 @@ const REQUIRED_OBJECTS = Object.freeze([
   'finance_review_drafts',
   'v_document_latest_review_event', 'v_document_latest_decision_event',
   'v_document_latest_validation', 'v_form137_latest_status_event', 'v_previous_school_report_card_latest_status_event',
-  'pre_enrollments', 'pre_enrollment_receipts', 'pre_enrollment_events', 'pre_enrollment_revisions'
+  'pre_enrollments', 'pre_enrollment_receipts', 'pre_enrollment_events', 'pre_enrollment_revisions',
+  'readmission_evaluations', 'readmission_evaluation_events'
 ]);
 
 const REQUIRED_COLUMNS = Object.freeze({
@@ -39,22 +40,30 @@ const REQUIRED_COLUMNS = Object.freeze({
     'emergency_contact_address_province', 'emergency_contact_address_zip'],
   documents: ['is_legacy_archive'],
   enrollments: ['finalized_at', 'annual_enrollment_id', 'term_scope_status'],
-  annual_enrollments: ['esc_id', 'eform_status', 'finance_handbook_number', 'pre_enrollment_id'],
+  annual_enrollments: ['esc_id', 'eform_status', 'finance_handbook_number', 'pre_enrollment_id', 'intake_kind',
+    'readmission_evaluation_id', 'readmission_evaluation_version'],
   previous_school_report_card_status_events: ['status'],
   finance_payment_allocations: ['legacy_opening_charge_id'],
   assessed_charges: ['gross_amount', 'waived_amount'],
   student_document_requests: ['expected_claim_date', 'handover_reference', 'current_claim_slip_id'],
   student_document_request_events: ['handover_reference_before', 'handover_reference_after', 'handover_reference'],
-  pre_enrollments: ['id', 'school_year', 'status', 'version', 'created_by', 'updated_by'],
+  pre_enrollments: ['id', 'school_year', 'status', 'version', 'created_by', 'created_by_role', 'updated_by', 'applicant_kind', 'email',
+    'birth_date', 'readmission_evaluation_id', 'readmission_evaluation_version'],
   pre_enrollment_receipts: ['pre_enrollment_id', 'requirement_code', 'original_received', 'original_pieces', 'photocopy_received', 'photocopy_pieces'],
   pre_enrollment_events: ['pre_enrollment_id', 'actor_id', 'event_type', 'version'],
-  pre_enrollment_revisions: ['pre_enrollment_id', 'actor_id', 'field_name', 'before_value', 'after_value']
+  pre_enrollment_revisions: ['pre_enrollment_id', 'actor_id', 'field_name', 'before_value', 'after_value'],
+  readmission_evaluations: ['applicant_lrn', 'student_id', 'school_year', 'target_grade_level', 'curriculum_review_status', 'status', 'version'],
+  readmission_evaluation_events: ['evaluation_id', 'actor_id', 'event_type', 'evaluation_version']
 });
 const REQUIRED_CONSTRAINTS = Object.freeze([
   { tableName: 'previous_school_report_card_status_events', constraintName: 'CK_previous_school_report_card_status_status', type: 'CHECK' },
   { tableName: 'users', constraintName: 'CK_users_role', type: 'CHECK', clauseIncludes: "'front_desk'" },
   { tableName: 'students', constraintName: 'CK_student_address_zip', type: 'CHECK', clauseIncludes: 'address_zip' },
-  { tableName: 'students', constraintName: 'CK_student_emergency_address_zip', type: 'CHECK', clauseIncludes: 'emergency_contact_address_zip' }
+  { tableName: 'students', constraintName: 'CK_student_emergency_address_zip', type: 'CHECK', clauseIncludes: 'emergency_contact_address_zip' },
+  { tableName: 'readmission_evaluations', constraintName: 'CK_readmission_evaluation_status', type: 'CHECK', clauseIncludes: 'not_accepted' },
+  { tableName: 'readmission_evaluations', constraintName: 'CK_readmission_evaluation_curriculum_status', type: 'CHECK', clauseIncludes: 'resolved' },
+  { tableName: 'pre_enrollments', constraintName: 'CK_pre_enrollment_created_by_role', type: 'CHECK', clauseIncludes: 'front_desk' },
+  { tableName: 'annual_enrollments', constraintName: 'CK_annual_enrollment_intake_kind', type: 'CHECK', clauseIncludes: 'readmission' }
 ]);
 const REQUIRED_INDEXES = Object.freeze([
   { tableName: 'students', indexName: 'UX_students_user_id_linked', columns: ['user_id'] },
@@ -64,9 +73,13 @@ const REQUIRED_INDEXES = Object.freeze([
 ]);
 const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'annual_enrollments', constraintName: 'FK_annual_enrollment_pre_enrollment',
-    columnName: 'pre_enrollment_id', referencedTable: 'pre_enrollments', referencedColumn: 'id' }
+    columnName: 'pre_enrollment_id', referencedTable: 'pre_enrollments', referencedColumn: 'id' },
+  { tableName: 'pre_enrollments', constraintName: 'FK_pre_enrollment_readmission_evaluation',
+    columnName: 'readmission_evaluation_id', referencedTable: 'readmission_evaluations', referencedColumn: 'id' },
+  { tableName: 'annual_enrollments', constraintName: 'FK_annual_enrollment_readmission_evaluation',
+    columnName: 'readmission_evaluation_id', referencedTable: 'readmission_evaluations', referencedColumn: 'id' }
 ]);
-const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 15 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 16 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 function bindInList(request, values, prefix) {
   return values.map((value, index) => {
@@ -182,7 +195,7 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
       process.exitCode = 1;
       return;
     }
-    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.015.`);
+    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.016.`);
   } catch {
     logger.error('MariaDB database check failed. Confirm DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD, then run npm run db:setup.');
     process.exitCode = 1;

@@ -7,6 +7,7 @@ const { allocateStudentNumber, StudentNumberAllocationError } = require('./stude
 const { normalizeIntakeChecklistUpdates } = require('./physicalChecklistService');
 const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
 const { runSerializableTransaction } = require('./transactionRetry');
+const { REVIEWABLE_PROFILE_FIELDS, PROFILE_REVIEW_GROUPS, profileReviewFingerprint } = require('../utils/studentProfileReview');
 
 const BCRYPT_ROUNDS = 12;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -106,11 +107,11 @@ function profileFieldValue(value) {
   return String(value);
 }
 
-function normalizeAnnualInput(input = {}) {
+function normalizeAnnualInput(input = {}, { preEnrollmentSource = false } = {}) {
   const studentNo = printable(input.studentNo || '', 'Student number', 50);
   const isReturning = Boolean(studentNo);
   const email = isReturning ? null : normalizeEmail(input.email);
-  if (!isReturning && !email) throw new AnnualEnrollmentError('Enter a valid contact email address.');
+  if (!isReturning && !email && !preEnrollmentSource) throw new AnnualEnrollmentError('Enter a valid contact email address.');
   const schoolYear = printable(input.schoolYear || '', 'School year', 20, { required: true });
   const gradeLevel = printable(input.gradeLevel || '', 'Grade level', 50, { required: true });
   if (!['Grade 11', 'Grade 12'].includes(gradeLevel)) throw new AnnualEnrollmentError('Choose Grade 11 or Grade 12.');
@@ -677,6 +678,7 @@ function createAnnualEnrollmentService({
 
   async function createAnnualIntake(actorInput, input = {}) {
     const sourceId = input.preEnrollmentId ? normalizeUuid(input.preEnrollmentId, 'pre-enrollment record') : null;
+    if (!sourceId) throw new AnnualEnrollmentError('Start every new annual intake from a Ready for registrar front-desk record.', 409);
     const sourceVersion = sourceId ? Number(input.preEnrollmentVersion) : null;
     if (sourceId && (!Number.isSafeInteger(sourceVersion) || sourceVersion < 1)) {
       throw new AnnualEnrollmentError('Reload the pre-enrollment record before starting annual enrollment.', 409);
@@ -684,34 +686,29 @@ function createAnnualEnrollmentService({
     if (sourceId && normalizeUuid(input.idempotencyKey) !== sourceId) {
       throw new AnnualEnrollmentError('The enrollment submission token does not match this pre-enrollment record. Reload the form.', 409);
     }
-    const entry = normalizeAnnualInput(sourceId ? { ...input, idempotencyKey: sourceId } : input);
+    const entry = normalizeAnnualInput({ ...input, idempotencyKey: sourceId }, { preEnrollmentSource: true });
     const checklistUpdates = normalizeIntakeChecklistUpdates(input);
     if (checklistUpdates.length && typeof physicalChecklistService?.recordIntakeUpdatesInTransaction !== 'function') {
       throw new AnnualEnrollmentError('The paper checklist service is unavailable. Reload and try again.', 503);
     }
-    const profileInput = entry.isReturning ? null : (() => {
-      try {
-        const profile = validateStudent(input, { requireStudentNo: false });
-        for (const prefix of ['address', 'emergencyContactAddress']) {
-          const fields = ADDRESS_DEFINITIONS[prefix].map(([inputName]) => inputName);
-          const hasStructuredInput = Object.hasOwn(input, `${prefix}Mode`) || fields.some((field) => Object.hasOwn(input, field));
-          if (hasStructuredInput) applyAddressInput(profile, input, prefix);
-        }
-        return profile;
+    const approvedProfileFields = (() => {
+      const raw = input.approvedProfileFields == null ? [] : Array.isArray(input.approvedProfileFields)
+        ? input.approvedProfileFields : [input.approvedProfileFields];
+      if (raw.length > PROFILE_REVIEW_GROUPS.length) throw new AnnualEnrollmentError('Too many profile changes were selected.');
+      const allowed = new Set(PROFILE_REVIEW_GROUPS.map(({ key }) => key));
+      if (raw.some((field) => typeof field !== 'string' || !allowed.has(field)) || new Set(raw).size !== raw.length) {
+        throw new AnnualEnrollmentError('Choose only the profile fields shown for approval.');
       }
-      catch (error) {
-        if (error instanceof StudentRecordsError) throw new AnnualEnrollmentError(error.message, error.status);
-        throw error;
-      }
+      return [...raw].sort();
     })();
+    const studentReviewSnapshot = input.studentReviewFingerprint || null;
     const checklistFingerprint = checklistUpdates.map(({ idempotencyKey, ...update }) => update);
     const fingerprintForEntry = (fingerprintEntry) => crypto.createHash('sha256')
-      .update(JSON.stringify({ entry: fingerprintEntry, profileInput, checklistUpdates: checklistFingerprint })).digest('hex');
-    const fingerprint = sourceId
-      ? crypto.createHash('sha256').update(JSON.stringify({ entry, profileInput,
-        checklistUpdates: checklistFingerprint, preEnrollmentId: sourceId, preEnrollmentVersion: sourceVersion })).digest('hex')
-      : fingerprintForEntry(entry);
-    const placeholderHash = profileInput ? await hashPassword(createPassword(), BCRYPT_ROUNDS) : null;
+      .update(JSON.stringify({ entry: fingerprintEntry, profileInput: null, checklistUpdates: checklistFingerprint })).digest('hex');
+    const sourceEntryFingerprint = { ...entry, intakeKind: null, email: null, voucherCategory: null };
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ entry: sourceEntryFingerprint, checklistUpdates: checklistFingerprint,
+      preEnrollmentId: sourceId, preEnrollmentVersion: sourceVersion, approvedProfileFields, studentReviewSnapshot })).digest('hex');
+    const placeholderHash = entry.isReturning ? null : await hashPassword(createPassword(), BCRYPT_ROUNDS);
     return runTransaction(async (transaction) => {
       const actor = await requireRegistrar(transaction.request(), actorInput);
 
@@ -742,18 +739,71 @@ function createAnnualEnrollmentService({
       let preEnrollment = null;
       if (sourceId) {
         const sourceResult = await transaction.request().input('preEnrollmentId', sql.Char(36), sourceId)
-          .query(`SELECT id, school_year, lrn, target_grade_level, status, version
-            FROM pre_enrollments WHERE id = @preEnrollmentId FOR UPDATE`);
+          .query(`SELECT source.* FROM pre_enrollments AS source WHERE source.id = @preEnrollmentId FOR UPDATE`);
         preEnrollment = sourceResult.recordset?.[0] || null;
         if (!preEnrollment) throw new AnnualEnrollmentError('The pre-enrollment record no longer exists.', 404);
+        if (preEnrollment.created_by_role !== 'front_desk') throw new AnnualEnrollmentError('This paper record lacks recorded front-desk provenance and cannot start a new annual enrollment.', 409);
         if (preEnrollment.status !== 'ready_for_registrar' || Number(preEnrollment.version) !== sourceVersion) {
           throw new AnnualEnrollmentError('This pre-enrollment record changed after the enrollment form was opened. Reload and review it.', 409);
         }
         if (preEnrollment.school_year !== entry.schoolYear || preEnrollment.target_grade_level !== entry.gradeLevel) {
           throw new AnnualEnrollmentError('School year and grade must match the ready pre-enrollment record. Correct that record before starting enrollment.', 409);
         }
-        if (!/^\d{12}$/.test(String(preEnrollment.lrn || '')) || profileInput?.lrn && profileInput.lrn !== preEnrollment.lrn) {
+        if (!/^\d{12}$/.test(String(preEnrollment.lrn || ''))) {
           throw new AnnualEnrollmentError('The student LRN must match the ready pre-enrollment record. Correct that record before starting enrollment.', 409);
+        }
+        if (typeof input.lrn === 'string' && input.lrn.trim() && input.lrn.trim() !== preEnrollment.lrn) {
+          throw new AnnualEnrollmentError('The submitted LRN does not match the saved front-desk record. Correct that record before starting enrollment.', 409);
+        }
+        if (!normalizeEmail(preEnrollment.email)) throw new AnnualEnrollmentError('A valid email must be saved to the front-desk record before enrollment can start.', 409);
+        if (preEnrollment.applicant_kind === 'readmission') {
+          const evaluation = await transaction.request().input('evaluationId', sql.Char(36), preEnrollment.readmission_evaluation_id)
+            .query(`SELECT id, applicant_lrn, student_id, school_year, target_grade_level, status, version, curriculum_review_status
+              FROM readmission_evaluations WHERE id = @evaluationId FOR UPDATE`);
+          const bound = evaluation.recordset?.[0];
+          if (!bound || bound.status !== 'accepted' || bound.curriculum_review_status !== 'resolved'
+            || Number(bound.version) !== Number(preEnrollment.readmission_evaluation_version)
+            || bound.applicant_lrn !== preEnrollment.lrn || bound.school_year !== preEnrollment.school_year
+            || bound.target_grade_level !== preEnrollment.target_grade_level) {
+            throw new AnnualEnrollmentError('The linked balik-aral evaluation is no longer accepted for this LRN, school year, grade, and revision.', 409);
+          }
+          preEnrollment.readmission = bound;
+        } else if (preEnrollment.readmission_evaluation_id || preEnrollment.readmission_evaluation_version) {
+          throw new AnnualEnrollmentError('Only a balik-aral source can carry a readmission evaluation.', 409);
+        }
+        entry.email = normalizeEmail(preEnrollment.email);
+        if (!entry.email) throw new AnnualEnrollmentError('A valid email must be saved to the front-desk record before enrollment can start.', 409);
+      }
+      let profileInput = null;
+      if (preEnrollment) {
+        try {
+          profileInput = validateStudent({
+            studentNo: '', lrn: preEnrollment.lrn, firstName: preEnrollment.first_name,
+            middleName: preEnrollment.middle_name, lastName: preEnrollment.last_name, suffix: preEnrollment.suffix,
+            birthDate: preEnrollment.birth_date instanceof Date ? preEnrollment.birth_date.toISOString().slice(0, 10) : preEnrollment.birth_date,
+            sex: preEnrollment.sex, address: preEnrollment.address, phone: preEnrollment.profile_phone,
+            birthplace: preEnrollment.birthplace, facebookName: preEnrollment.facebook_name,
+            emergencyContactPerson: preEnrollment.emergency_contact_person,
+            emergencyContactRelationship: preEnrollment.emergency_contact_relationship,
+            emergencyContactPhone: preEnrollment.emergency_contact_phone,
+            emergencyContactAddress: preEnrollment.emergency_contact_address,
+            motherName: preEnrollment.mother_name, motherPhone: preEnrollment.mother_phone,
+            fatherName: preEnrollment.father_name, fatherPhone: preEnrollment.father_phone
+          }, { requireStudentNo: false });
+          for (const [, inputName, dbColumn] of [
+            ['address', 'addressBlockLotStreetPurok', 'address_block_lot_street_purok'],
+            ['address', 'addressBarangay', 'address_barangay'], ['address', 'addressCity', 'address_city'],
+            ['address', 'addressProvince', 'address_province'], ['address', 'addressZip', 'address_zip'],
+            ['emergencyContactAddress', 'emergencyContactAddressBlockLotStreetPurok', 'emergency_contact_address_block_lot_street_purok'],
+            ['emergencyContactAddress', 'emergencyContactAddressBarangay', 'emergency_contact_address_barangay'],
+            ['emergencyContactAddress', 'emergencyContactAddressCity', 'emergency_contact_address_city'],
+            ['emergencyContactAddress', 'emergencyContactAddressProvince', 'emergency_contact_address_province'],
+            ['emergencyContactAddress', 'emergencyContactAddressZip', 'emergency_contact_address_zip']
+          ]) profileInput[inputName] = preEnrollment[dbColumn] || null;
+          profileInput.email = entry.email;
+        } catch (error) {
+          if (error instanceof StudentRecordsError) throw new AnnualEnrollmentError(error.message, error.status);
+          throw error;
         }
       }
 
@@ -835,12 +885,13 @@ function createAnnualEnrollmentService({
       }
 
       let student;
+      let actualIntakeKind;
       let activateOnFirstTerm = false;
       let activationSourceAnnualId = null;
       if (entry.isReturning) {
         const studentResult = await transaction.request()
           .input('studentNo', sql.NVarChar(50), entry.studentNo)
-          .query(`SELECT student.id, student.student_no, student.user_id, student.status, student.lrn,
+          .query(`SELECT student.*,
               account.role AS linked_account_role, account.email, account.is_active
             FROM students AS student
             LEFT JOIN users AS account ON account.id = student.user_id
@@ -911,6 +962,8 @@ function createAnnualEnrollmentService({
           .input('addressProvince', sql.NVarChar(100), profile.addressProvince)
           .input('addressZip', sql.Char(4), profile.addressZip)
           .input('phone', sql.NVarChar(50), profile.phone)
+          .input('birthplace', sql.NVarChar(160), profile.birthplace)
+          .input('facebookName', sql.NVarChar(120), profile.facebookName)
           .input('emergencyContactPerson', sql.NVarChar(160), profile.emergencyContactPerson)
           .input('emergencyContactRelationship', sql.NVarChar(80), profile.emergencyContactRelationship)
           .input('emergencyContactPhone', sql.NVarChar(50), profile.emergencyContactPhone)
@@ -920,21 +973,158 @@ function createAnnualEnrollmentService({
           .input('emergencyContactAddressCity', sql.NVarChar(100), profile.emergencyContactAddressCity)
           .input('emergencyContactAddressProvince', sql.NVarChar(100), profile.emergencyContactAddressProvince)
           .input('emergencyContactAddressZip', sql.Char(4), profile.emergencyContactAddressZip)
+          .input('motherName', sql.NVarChar(160), profile.motherName)
+          .input('motherPhone', sql.NVarChar(50), profile.motherPhone)
+          .input('fatherName', sql.NVarChar(160), profile.fatherName)
+          .input('fatherPhone', sql.NVarChar(50), profile.fatherPhone)
           .query(`INSERT INTO students
               (user_id, student_no, lrn, first_name, middle_name, last_name, suffix, birth_date, sex, address,
                 address_block_lot_street_purok, address_barangay, address_city, address_province, address_zip, phone,
+                birthplace, facebook_name,
                 emergency_contact_person, emergency_contact_relationship, emergency_contact_phone, emergency_contact_address,
                 emergency_contact_address_block_lot_street_purok, emergency_contact_address_barangay,
-                emergency_contact_address_city, emergency_contact_address_province, emergency_contact_address_zip)
+                emergency_contact_address_city, emergency_contact_address_province, emergency_contact_address_zip,
+                mother_name, mother_phone, father_name, father_phone)
             VALUES (@userId, @studentNo, @lrn, @firstName, @middleName, @lastName, @suffix, @birthDate, @sex, @address,
-              @addressBlockLotStreetPurok, @addressBarangay, @addressCity, @addressProvince, @addressZip, @phone,
+              @addressBlockLotStreetPurok, @addressBarangay, @addressCity, @addressProvince, @addressZip, @phone, @birthplace, @facebookName,
               @emergencyContactPerson, @emergencyContactRelationship, @emergencyContactPhone, @emergencyContactAddress,
               @emergencyContactAddressBlockLotStreetPurok, @emergencyContactAddressBarangay,
-              @emergencyContactAddressCity, @emergencyContactAddressProvince, @emergencyContactAddressZip)`);
+              @emergencyContactAddressCity, @emergencyContactAddressProvince, @emergencyContactAddressZip,
+              @motherName, @motherPhone, @fatherName, @fatherPhone)`);
         const studentId = studentResult.insertId;
         if (!Number.isSafeInteger(studentId) || studentId < 1) throw new Error('Student profile insert returned no identifier.');
         student = { id: studentId, user_id: userId, status: 'active', student_no: studentNo, email: entry.email };
         activateOnFirstTerm = true;
+      }
+
+      if (!entry.isReturning) {
+        if (preEnrollment.applicant_kind === 'continuing') {
+          throw new AnnualEnrollmentError('A continuing classification requires an explicit existing student selection.', 409);
+        }
+        if (preEnrollment.applicant_kind === 'readmission') {
+          if (Number(preEnrollment.readmission?.student_id || 0) > 0) {
+            throw new AnnualEnrollmentError('This accepted evaluation is linked to an existing student. Select that student instead of creating a new master record.', 409);
+          }
+          actualIntakeKind = 'readmission';
+        } else {
+          actualIntakeKind = 'new';
+        }
+      } else {
+        const targetYear = Number(String(entry.schoolYear).slice(0, 4));
+        const history = await transaction.request().input('studentId', sql.Int, student.id)
+          .input('schoolYear', sql.NVarChar(20), entry.schoolYear)
+          .query(`SELECT annual.school_year, annual.intake_status,
+              EXISTS(SELECT 1 FROM finance_departure_cases AS departure
+                WHERE departure.annual_enrollment_id = annual.id) AS has_departure
+            FROM annual_enrollments AS annual
+            WHERE annual.student_id = @studentId AND annual.school_year < @schoolYear
+            ORDER BY annual.school_year DESC, annual.id DESC FOR UPDATE`);
+        const priorRows = history.recordset || [];
+        const latest = priorRows[0] || null;
+        const continuous = Boolean(latest && latest.school_year === `${targetYear - 1}-${targetYear}`
+          && ['enrolled', 'legacy'].includes(latest.intake_status)
+          && !(latest.has_departure === true || latest.has_departure === 1));
+        if (continuous) {
+          if (preEnrollment.applicant_kind !== 'continuing') {
+            throw new AnnualEnrollmentError('Previous-year participation shows continuous progression. Correct the front-desk applicant classification before continuing.', 409);
+          }
+          if (preEnrollment.readmission_evaluation_id) throw new AnnualEnrollmentError('Continuous progression does not use a balik-aral evaluation.', 409);
+          actualIntakeKind = 'continuing';
+        } else {
+          if (preEnrollment.applicant_kind !== 'readmission' || !preEnrollment.readmission) {
+            throw new AnnualEnrollmentError('This existing student has no uninterrupted previous-year participation. An accepted balik-aral evaluation is required.', 409);
+          }
+          if (Number(preEnrollment.readmission.student_id || 0) !== Number(student.id)) {
+            throw new AnnualEnrollmentError('The accepted balik-aral evaluation is not linked to the selected existing student. Reopen and re-accept the evaluation.', 409);
+          }
+          actualIntakeKind = 'readmission';
+        }
+
+        if (studentReviewSnapshot !== profileReviewFingerprint(student)) {
+          throw new AnnualEnrollmentError('The existing student profile changed after review. Reload the registrar workspace and review the current record.', 409);
+        }
+        const approved = new Set(approvedProfileFields);
+        const profileFieldForColumn = new Map(REVIEWABLE_PROFILE_FIELDS.map(([key, column]) => [column, key]));
+        const selectedColumns = PROFILE_REVIEW_GROUPS.filter(({ key }) => approved.has(key))
+          .flatMap(({ key, columns }) => columns.map((column) => [key, column]));
+        const storedValue = (column) => {
+          const value = student[column];
+          return value instanceof Date ? value.toISOString().slice(0, 10) : value == null ? '' : String(value);
+        };
+        const proposedValue = (key, column) => {
+          const value = key === 'email' ? entry.email : profileInput?.[profileFieldForColumn.get(column)];
+          return value == null ? '' : String(value);
+        };
+        const actualChanges = selectedColumns.filter(([key, column]) => storedValue(column) !== proposedValue(key, column));
+        if (actualChanges.some(([key]) => key === 'email') && !student.user_id) {
+          throw new AnnualEnrollmentError('A contact email can be changed only for a student with a linked student login.', 409);
+        }
+        const profileAssignments = actualChanges.filter(([key]) => key !== 'email');
+        if (profileAssignments.length) {
+          const updateRequest = transaction.request().input('studentId', sql.Int, student.id);
+          const setClauses = [];
+          for (const [key, column] of profileAssignments) {
+            const type = column === 'birth_date' ? sql.Date : column.endsWith('_zip') ? sql.Char(4) : sql.NVarChar(sql.MAX);
+            const sourceField = profileFieldForColumn.get(column);
+            updateRequest.input(`profile_${column}`, type, profileInput[sourceField]);
+            setClauses.push(`${column} = @profile_${column}`);
+          }
+          await updateRequest.query(`UPDATE students SET ${setClauses.join(', ')}, updated_at = UTC_TIMESTAMP(6) WHERE id = @studentId`);
+        }
+        const emailChange = actualChanges.find(([key]) => key === 'email');
+        if (emailChange && student.user_id) {
+          const email = entry.email;
+          if (!email) throw new AnnualEnrollmentError('A valid email must be saved to the front-desk record before enrollment can start.', 409);
+          const accountResult = await transaction.request().input('userId', sql.Int, student.user_id)
+            .query('SELECT id, role FROM users WHERE id = @userId FOR UPDATE');
+          const linkedAccount = accountResult.recordset?.[0];
+          if (!linkedAccount || linkedAccount.role !== 'student') throw new AnnualEnrollmentError('The linked login is not a student account.', 409);
+          const emailConflict = await transaction.request().input('email', sql.NVarChar(255), email).input('userId', sql.Int, student.user_id)
+            .query('SELECT id FROM users WHERE LOWER(email) = @email AND id <> @userId LIMIT 1 FOR UPDATE');
+          const pendingConflict = await transaction.request().input('email', sql.NVarChar(255), email).input('userId', sql.Int, student.user_id)
+            .query(`SELECT id FROM pending_email_changes WHERE LOWER(new_email) = @email AND user_id <> @userId
+              AND consumed_at IS NULL AND expires_at > UTC_TIMESTAMP(6) LIMIT 1 FOR UPDATE`);
+          if (emailConflict.recordset?.length || pendingConflict.recordset?.length) throw new AnnualEnrollmentError('That email address is already in use or reserved.', 409);
+          await transaction.request().input('userId', sql.Int, student.user_id)
+            .query('UPDATE pending_email_changes SET consumed_at = UTC_TIMESTAMP(6) WHERE user_id = @userId AND consumed_at IS NULL');
+          await transaction.request().input('userId', sql.Int, student.user_id)
+            .query('UPDATE two_factor_codes SET consumed_at = UTC_TIMESTAMP(6) WHERE user_id = @userId AND consumed_at IS NULL');
+          await transaction.request().input('userId', sql.Int, student.user_id)
+            .query('UPDATE password_reset_tokens SET consumed_at = UTC_TIMESTAMP(6) WHERE user_id = @userId AND consumed_at IS NULL');
+          const accountUpdated = await transaction.request().input('userId', sql.Int, student.user_id)
+            .input('email', sql.NVarChar(255), email)
+            .query(`UPDATE users SET email = @email, auth_session_version = UUID(), updated_at = UTC_TIMESTAMP(6)
+              WHERE id = @userId AND role = 'student'`);
+          if (accountUpdated.rowsAffected?.[0] !== 1) throw new AnnualEnrollmentError('The student email changed while the profile was being saved. Reload and review it.', 409);
+        }
+        if (actualChanges.length) {
+          const revisionGroup = crypto.randomUUID();
+          for (const [key, column] of actualChanges) {
+            const beforeValue = student[column] ?? null;
+            const afterValue = key === 'email' ? entry.email : profileInput[profileFieldForColumn.get(column)] ?? null;
+            if (String(beforeValue ?? '') === String(afterValue ?? '')) continue;
+            await transaction.request().input('revisionGroup', sql.UniqueIdentifier, revisionGroup)
+              .input('studentId', sql.Int, student.id).input('actorId', sql.Int, actor.id)
+              .input('fieldName', sql.NVarChar(60), column).input('beforeValue', sql.NVarChar(sql.MAX), beforeValue === null ? null : String(beforeValue))
+              .input('afterValue', sql.NVarChar(sql.MAX), afterValue === null ? null : String(afterValue))
+              .query(`INSERT INTO student_profile_revisions (revision_group, student_id, actor_id, field_name, before_value, after_value)
+                VALUES (@revisionGroup, @studentId, @actorId, @fieldName, @beforeValue, @afterValue)`);
+          }
+          await transaction.request().input('auditActorId', sql.Int, actor.id)
+            .input('studentEntityId', sql.NVarChar(100), String(student.id))
+            .input('auditDetails', sql.NVarChar(sql.MAX), JSON.stringify({ annualSourceId: sourceId,
+              approvedFields: approvedProfileFields, changedFields: actualChanges.map(([, column]) => column) }))
+            .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
+              VALUES (@auditActorId, 'registrar.student_profile_reviewed', 'student', @studentEntityId, @auditDetails)`);
+          if (emailChange) {
+            await transaction.request().input('auditActorId', sql.Int, actor.id)
+              .input('userEntityId', sql.NVarChar(100), String(student.user_id))
+              .input('auditDetails', sql.NVarChar(sql.MAX), JSON.stringify({ studentId: student.id, annualSourceId: sourceId,
+                authSessionsInvalidated: true, emailChangeReason: 'registrar-approved returning-student profile correction' }))
+              .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
+                VALUES (@auditActorId, 'registrar.student_account_email_updated', 'user', @userEntityId, @auditDetails)`);
+          }
+        }
       }
 
       const existingAnnualResult = await transaction.request()
@@ -951,19 +1141,23 @@ function createAnnualEnrollmentService({
         .input('schoolYear', sql.NVarChar(20), entry.schoolYear)
         .input('gradeLevel', sql.NVarChar(50), entry.gradeLevel)
         .input('voucherCode', sql.NVarChar(10), entry.voucherCode)
-        .input('intakeKind', sql.NVarChar(20), entry.intakeKind)
+        .input('intakeKind', sql.NVarChar(20), actualIntakeKind)
         .input('entryTermNumber', sql.TinyInt, entry.entryTermNumber)
         .input('enrollmentStartDate', sql.Date, entry.enrollmentStartDate)
         .input('activationPending', sql.Bit, activateOnFirstTerm)
         .input('actorId', sql.Int, actor.id)
         .input('preEnrollmentId', sql.Char(36), sourceId)
+        .input('readmissionEvaluationId', sql.Char(36), preEnrollment.readmission_evaluation_id || null)
+        .input('readmissionEvaluationVersion', sql.Int, preEnrollment.readmission_evaluation_version || null)
         .input('idempotencyKey', sql.UniqueIdentifier, entry.idempotencyKey)
         .input('requestFingerprint', sql.Char(64), fingerprint)
         .query(`INSERT INTO annual_enrollments
             (student_id, school_year, grade_level, voucher_code, voucher_category, intake_kind, entry_term_number,
-              enrollment_start_date, account_activation_pending, created_by, pre_enrollment_id, idempotency_key, request_fingerprint)
+              enrollment_start_date, account_activation_pending, created_by, pre_enrollment_id, readmission_evaluation_id,
+              readmission_evaluation_version, idempotency_key, request_fingerprint)
           VALUES (@studentId, @schoolYear, @gradeLevel, @voucherCode, NULL, @intakeKind, @entryTermNumber,
-            @enrollmentStartDate, @activationPending, @actorId, @preEnrollmentId, @idempotencyKey, @requestFingerprint)`);
+            @enrollmentStartDate, @activationPending, @actorId, @preEnrollmentId, @readmissionEvaluationId,
+            @readmissionEvaluationVersion, @idempotencyKey, @requestFingerprint)`);
       const annualEnrollmentId = annualResult.insertId;
       if (!Number.isSafeInteger(annualEnrollmentId) || annualEnrollmentId < 1) throw new Error('Annual enrollment insert returned no identifier.');
       if (activationSourceAnnualId) {
@@ -1033,7 +1227,7 @@ function createAnnualEnrollmentService({
       }
       const auditDetails = {
         studentId: student.id, schoolYear: entry.schoolYear, gradeLevel: entry.gradeLevel,
-        intakeKind: entry.intakeKind, entryTermNumber: entry.entryTermNumber, enrollmentStartDate: entry.enrollmentStartDate,
+        intakeKind: actualIntakeKind, entryTermNumber: entry.entryTermNumber, enrollmentStartDate: entry.enrollmentStartDate,
         voucherCode: entry.voucherCode, enrollmentIds,
         physicalChecklistEventIds
       };
@@ -1463,6 +1657,7 @@ function createAnnualEnrollmentService({
       const parentResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
         .input('studentId', sql.Int, ownerStudentId)
         .query(`SELECT annual.id, annual.student_id, annual.school_year, annual.grade_level, annual.voucher_code,
+            annual.pre_enrollment_id, annual.readmission_evaluation_id, annual.readmission_evaluation_version, annual.intake_kind,
             annual.entry_term_number, annual.intake_status, annual.enrollment_start_date, student.status AS student_status,
             assessment.id AS existing_assessment_id, assessment.schedule_id AS existing_schedule_id,
             assessment.schedule_version AS existing_schedule_version, assessment.voucher_code_snapshot,
@@ -1493,6 +1688,40 @@ function createAnnualEnrollmentService({
       if (!parent) throw new AnnualEnrollmentError('Annual enrollment not found.', 404);
       if (parent.student_status === 'archived') throw new AnnualEnrollmentError('Archived student records cannot be confirmed.', 409);
       if (parent.intake_status !== 'pending') throw new AnnualEnrollmentError('This annual enrollment has already been confirmed or closed.', 409);
+      if (!parent.pre_enrollment_id) {
+        throw new AnnualEnrollmentError('A new annual enrollment must retain its front-desk paper source before confirmation.', 409);
+      }
+      const sourceResult = await transaction.request().input('preEnrollmentId', sql.Char(36), parent.pre_enrollment_id)
+        .query(`SELECT source.id, source.lrn, source.school_year, source.target_grade_level, source.applicant_kind,
+            source.status, source.readmission_evaluation_id, source.readmission_evaluation_version,
+            source.created_by_role
+          FROM pre_enrollments AS source WHERE source.id = @preEnrollmentId FOR UPDATE`);
+      const linkedSource = sourceResult.recordset?.[0];
+      if (!linkedSource || linkedSource.status !== 'enrollment_started' || linkedSource.created_by_role !== 'front_desk'
+        || linkedSource.school_year !== parent.school_year || linkedSource.target_grade_level !== parent.grade_level
+        || !/^\d{12}$/.test(String(linkedSource.lrn || ''))) {
+        throw new AnnualEnrollmentError('The front-desk paper source is no longer valid for this annual enrollment.', 409);
+      }
+      if (parent.intake_kind === 'readmission') {
+        if (!parent.readmission_evaluation_id || String(parent.readmission_evaluation_id).toLowerCase() !== String(linkedSource.readmission_evaluation_id || '').toLowerCase()
+          || Number(parent.readmission_evaluation_version) !== Number(linkedSource.readmission_evaluation_version)) {
+          throw new AnnualEnrollmentError('The readmission evaluation binding changed after annual intake was opened.', 409);
+        }
+        const evaluationResult = await transaction.request().input('evaluationId', sql.Char(36), parent.readmission_evaluation_id)
+          .query(`SELECT id, applicant_lrn, student_id, school_year, target_grade_level, status, version
+            FROM readmission_evaluations WHERE id = @evaluationId FOR UPDATE`);
+        const evaluation = evaluationResult.recordset?.[0];
+        if (!evaluation || evaluation.status !== 'accepted' || Number(evaluation.version) !== Number(parent.readmission_evaluation_version)
+          || evaluation.applicant_lrn !== linkedSource.lrn || evaluation.school_year !== parent.school_year
+          || evaluation.target_grade_level !== parent.grade_level
+          || (evaluation.student_id != null && Number(evaluation.student_id) !== Number(parent.student_id))) {
+          throw new AnnualEnrollmentError('The balik-aral evaluation changed or is no longer accepted for this enrollment. Reopen it for registrar review.', 409);
+        }
+      } else if (parent.intake_kind === 'continuing'
+        ? linkedSource.applicant_kind !== 'continuing' || linkedSource.readmission_evaluation_id
+        : linkedSource.applicant_kind === 'readmission' || linkedSource.readmission_evaluation_id) {
+        throw new AnnualEnrollmentError('The paper source classification no longer matches this enrollment.', 409);
+      }
       if (parent.entry_status !== 'pending_payment' || parent.entry_finalized_at || parent.term_scope_status !== 'applicable' || !parent.valid_section_id) {
         throw new AnnualEnrollmentError('Assign a valid section to the entry term before confirming enrollment.', 409);
       }

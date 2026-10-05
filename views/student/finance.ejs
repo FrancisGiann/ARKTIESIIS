@@ -4,7 +4,7 @@
   <header class="page-heading student-finance-heading">
     <div>
       <h1>My finance account</h1>
-      <p>Read-only statement of your assessed charges, payments, allocations, and balances.</p>
+      <p>See the fees on your account, payments applied, and what remains due.</p>
     </div>
     <a class="button button--secondary" href="/student/finance/statement">Statement of Account</a>
   </header>
@@ -16,6 +16,8 @@
     </section>
   <% } else { %>
     <% const summary = annualLedger.summary; %>
+    <% const pesoAmount = (amount) => { const text = String(amount ?? '0.00'); const negative = text.startsWith('-'); const value = formatMoney(negative ? text.slice(1) : text); return negative ? `−₱${value}` : `₱${value}`; }; %>
+    <% const deductionAmount = (amount) => { const value = String(amount ?? '0.00'); return /^-?0(?:\.0{1,2})?$/.test(value) ? `₱${formatMoney('0.00')}` : `−₱${formatMoney(value.replace(/^-/, ''))}`; }; %>
     <% const recentFinanceEvents = annualLedger.events.slice(-5).reverse(); %>
     <section class="student-finance-ledger" aria-labelledby="finance-ledger-title">
       <div class="student-finance-ledger__heading">
@@ -30,14 +32,14 @@
         <div class="student-finance-summary__lead">
           <div>
             <h3>Combined account balance</h3>
-            <p>Includes annual balances and any legacy or verified opening liability. Positive amounts are owed.</p>
+            <p>Includes fee balances across all school years and any separately recorded earlier balance. Positive amounts are owed.</p>
           </div>
-          <p class="student-finance-summary__amount">₱<%= formatMoney(summary.totalBalance) %></p>
+          <p class="student-finance-summary__amount"><%= pesoAmount(summary.totalBalance) %></p>
         </div>
         <div class="student-finance-summary__credit">
           <h3>Available payment credit</h3>
-          <p class="student-finance-summary__amount">₱<%= formatMoney(summary.availableCredit) %></p>
-          <p>Shown separately and not deducted from the balance owed.</p>
+          <p class="student-finance-summary__amount"><%= pesoAmount(summary.availableCredit) %></p>
+          <p>Shown separately until it is applied to a fee.</p>
         </div>
       </section>
 
@@ -46,14 +48,48 @@
         <dl class="student-finance-details__list">
           <div>
             <dt><%= summary.annualBalanceSchoolYear ? `Latest assessed year · ${summary.annualBalanceSchoolYear}` : 'Latest assessed year · none recorded' %></dt>
-            <dd>₱<%= formatMoney(summary.annualBalance) %></dd>
+            <dd><%= pesoAmount(summary.annualBalance) %></dd>
           </div>
-          <div><dt>All annual years</dt><dd>₱<%= formatMoney(summary.allYearsAnnualBalance) %></dd></div>
-          <div><dt>Unattributed legacy balance</dt><dd>₱<%= formatMoney(summary.unattributedLegacyBalance) %></dd></div>
-          <div><dt>Verified opening liability</dt><dd>₱<%= formatMoney(summary.openingLiabilityDue) %></dd></div>
-          <div><dt>Configured current term due</dt><dd>₱<%= formatMoney(summary.currentTermOutstanding) %></dd></div>
-          <div><dt>Prior term/year debt</dt><dd>₱<%= formatMoney(summary.priorTermYearDebt) %></dd></div>
+          <div><dt>All school-year fees due</dt><dd><%= pesoAmount(summary.annualFeeBalance) %></dd></div>
+          <% if (summary.showPreviousAccountBalance) { %><div><dt>Earlier account balance</dt><dd><%= pesoAmount(summary.unattributedLegacyBalance) %></dd></div><% } %>
+          <% if (summary.showPreviouslyConfirmedBalance) { %><div><dt>Previously confirmed balance</dt><dd><%= pesoAmount(summary.openingLiabilityDue) %></dd></div><% } %>
+          <div><dt>Current term due</dt><dd><%= pesoAmount(summary.currentTermOutstanding) %></dd></div>
+          <div><dt>Earlier term/year due</dt><dd><%= pesoAmount(summary.priorTermYearDebt) %></dd></div>
         </dl>
+      </section>
+
+      <section class="student-finance-charges" aria-labelledby="finance-charges-title">
+        <div class="student-finance-section-heading">
+          <div>
+            <h3 id="finance-charges-title">Fees and payments by school year</h3>
+            <p>Each fee shows its assessed amount, coverage, other changes, payments applied, and remaining amount due. Unapplied payment credit is listed above.</p>
+          </div>
+        </div>
+        <% if (annualLedger.chargeGroups?.length) { %>
+          <div class="student-finance-charge-groups">
+            <% for (const group of annualLedger.chargeGroups) { %>
+              <section class="student-finance-charge-group" aria-label="<%= group.school_year %>, <%= group.term %>">
+                <div class="student-finance-charge-group__heading"><h4><%= group.school_year %> · <%= group.term %></h4><p><span>Remaining due</span><strong><%= pesoAmount(group.due) %></strong></p></div>
+                <ul class="student-finance-charge-list">
+                  <% for (const charge of group.charges) { %>
+                    <li class="student-finance-charge">
+                      <h5><%= charge.line_name %><% if (charge.installment) { %> · <%= charge.installment %><% } %></h5>
+                      <dl class="student-finance-charge__details">
+                        <div><dt>Fee amount</dt><dd><%= pesoAmount(charge.assessed_amount) %></dd></div>
+                        <div><dt>Coverage</dt><dd><%= deductionAmount(charge.coverage_amount) %></dd></div>
+                        <div><dt>Other changes</dt><dd><%= pesoAmount(charge.other_adjustments) %></dd></div>
+                        <div><dt>Payments applied</dt><dd><%= deductionAmount(charge.applied_amount) %></dd></div>
+                        <div class="student-finance-charge__due"><dt>Remaining due</dt><dd><%= pesoAmount(charge.due_amount) %></dd></div>
+                      </dl>
+                    </li>
+                  <% } %>
+                </ul>
+              </section>
+            <% } %>
+          </div>
+        <% } else { %>
+          <p class="student-finance-empty">No school-year fees have been assessed yet.</p>
+        <% } %>
       </section>
 
       <section class="student-finance-placements" aria-labelledby="finance-placements-title">
@@ -75,7 +111,7 @@
                   </div>
                   <div class="student-finance-term__outstanding">
                     <span>Outstanding</span>
-                    <strong>₱<%= formatMoney(term.outstanding) %></strong>
+                  <strong><%= pesoAmount(term.outstanding) %></strong>
                   </div>
                 </div>
                 <dl class="student-finance-term__details">
@@ -115,14 +151,14 @@
               <% const hasValidEventDate = Number.isFinite(eventDate.getTime()); %>
               <li class="student-finance-activity-item">
                 <div class="student-finance-activity-item__entry">
-                  <strong><%= event.event_type.replaceAll('_', ' ') %></strong>
+                  <strong><%= event.display_label || 'Account update' %></strong>
                   <% if (hasValidEventDate) { %><time datetime="<%= eventDate.toISOString() %>"><%= eventDate.toLocaleString() %></time><% } else { %><span>Date not recorded</span><% } %>
                 </div>
                 <div class="student-finance-activity-item__details">
                   <span><%= event.details || 'Recorded by finance' %></span>
                   <span>Reference: <%= event.reference_no || '—' %></span>
                 </div>
-                <p class="student-finance-activity-item__amount"><span>Recorded amount</span><strong><%= event.amount == null ? '—' : `₱${formatMoney(event.amount)}` %></strong></p>
+                <p class="student-finance-activity-item__amount"><span>Recorded amount</span><strong><%= event.amount == null ? '—' : pesoAmount(event.amount) %></strong></p>
               </li>
             <% } %>
           </ol>
@@ -141,10 +177,10 @@
                     <% const eventDate = new Date(event.event_date); %>
                     <tr>
                       <td data-label="Date"><%= Number.isFinite(eventDate.getTime()) ? eventDate.toLocaleString() : 'Date not recorded' %></td>
-                      <td data-label="Entry"><%= event.event_type.replaceAll('_', ' ') %></td>
+                  <td data-label="Entry"><%= event.display_label || 'Account update' %></td>
                       <td data-label="Details"><%= event.details || 'Recorded by finance' %></td>
                       <td data-label="Reference"><%= event.reference_no || '—' %></td>
-                      <td data-label="Recorded amount"><%= event.amount == null ? '—' : `₱${formatMoney(event.amount)}` %></td>
+                      <td data-label="Recorded amount"><%= event.amount == null ? '—' : pesoAmount(event.amount) %></td>
                     </tr>
                   <% } %>
                 </tbody>

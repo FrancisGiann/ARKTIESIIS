@@ -80,6 +80,20 @@ const unlinkedRows = rosterRows.map((row) => ({
   row_number: row.rowNumber, student_id: row.rowNumber + 10, user_id: null,
   student_status: 'active', email_user_id: null, pending_email_id: null
 }));
+const fixturePreEnrollmentId = '0e0ec641-ff2a-4474-9030-aafcc0d593ad';
+function readyPreEnrollmentFixture(overrides = {}) {
+  return {
+    id: fixturePreEnrollmentId, version: 3, status: 'ready_for_registrar', created_by_role: 'front_desk',
+    applicant_kind: 'new', school_year: '2026-2027', target_grade_level: 'Grade 11',
+    first_name: 'Jamie', middle_name: 'Rae', last_name: 'Lee', suffix: '', lrn: '123456789012',
+    email: 'learner@example.edu', birth_date: '2008-04-21', sex: 'Female', profile_phone: '09171234567',
+    address: '25 Mabini Street', emergency_contact_person: 'Morgan Lee', emergency_contact_phone: '09170000000',
+    emergency_contact_address: 'Lucena, Quezon', preferred_track: 'Academic Track', preferred_cluster: 'ASSH',
+    voucher_type_text: 'ESC as written', voucher_category_text: 'Category A', prior_grade_level: 'Grade 10',
+    prior_school: 'Lucena High School', student_signature_present: 1, student_signed_date: '2026-10-01',
+    received_by: 'Front Desk Operator', received_date: '2026-10-02', receipts: [], ...overrides
+  };
+}
 
 test('bulk roster validation reports missing fields and case-insensitive duplicates', () => {
   const rows = normalizeBulkRows([
@@ -142,110 +156,33 @@ test('bulk setup returns distinct temporary credentials while storing bcrypt has
   assert.ok(writes.every(({ statement }) => statement.includes('must_change_password')));
 });
 
-test('registrar intake rejects existing identifiers before any inserts', async () => {
-  const fixture = setupFixture(({ statement }) => {
-    if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
-    if (statement.includes('SELECT section.id, term.school_year')) return { recordset: [{ id: 8, school_year: '2026-2027' }] };
-    if (statement.includes('INSERT INTO application_locks')) return { affectedRows: 1 };
-    if (statement.includes('FROM application_locks')) return { recordset: [{ lock_name: 'student-number:2026' }] };
-    if (generatedStudentNumberQuery(statement)) return { recordset: [{ sequence: '320' }] };
-    if (statement.includes('student_no_exists')) return { recordset: [{ student_no_exists: 0, lrn_exists: 1, email_exists: 0, pending_email_exists: 0 }] };
-    throw new Error('Unexpected query: ' + statement);
-  });
-  await assert.rejects(fixture.service.createEnrollmentIntake(5, {
-    studentNo: 'ST-100', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee',
-    email: 'new@example.edu', academicTermId: '2', sectionId: '8'
-  }), /LRN is already in use/);
-  assert.equal(fixture.log.rolledBack, true);
-  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO users')), false);
-  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO students')), false);
-});
-
-test('registrar intake creates an inactive linked login, new profile, pending enrollment, and clearance atomically', async () => {
-  let nextUserId = 31;
-  const fixture = setupFixture(({ statement, values }) => {
-    if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
-    if (statement.includes('SELECT section.id, term.school_year')) {
-      assert.equal(values.termId, 2);
-      assert.equal(values.sectionId, 8);
-      return { recordset: [{ id: 8, school_year: '2026-2027' }] };
-    }
-    if (statement.includes('INSERT INTO application_locks')) return { affectedRows: 1 };
-    if (statement.includes('FROM application_locks')) return { recordset: [{ lock_name: 'student-number:2026' }] };
-    if (generatedStudentNumberQuery(statement)) return { recordset: [{ sequence: '320' }] };
-    if (statement.includes('student_no_exists')) return { recordset: [{
-      student_no_exists: 0, lrn_exists: 0, email_exists: 0, pending_email_exists: 0
-    }] };
-    if (statement.includes('FROM sections AS section')) return { recordset: [{ id: values.sectionId }] };
-    if (statement.includes('INSERT INTO users')) {
-      assert.equal(values.email, 'jamie@example.edu');
-      assert.equal(values.mustChangePassword, true);
-      assert.match(statement, /'student', 0, @mustChangePassword/);
-      assert.notEqual(values.passwordHash, 'inaccessible-placeholder');
-      return { insertId: nextUserId++ };
-    }
-    if (statement.includes('INSERT INTO students')) {
-      assert.equal(values.userId, 31);
-      assert.equal(values.studentNo, 'SHS-2026-0321');
-      assert.equal(values.firstName, 'Jamie');
-      return { insertId: 41 };
-    }
-    if (statement.includes('INSERT INTO enrollments')) {
-      assert.equal(values.studentId, 41);
-      assert.equal(values.termId, 2);
-      assert.equal(values.sectionId, 8);
-      assert.match(statement, /'pending_payment'/);
-      return { insertId: 51 };
-    }
-    if (statement.includes('INSERT INTO enrollment_clearances')) {
-      assert.equal(values.enrollmentId, 51);
-      assert.equal(values.actorId, 5);
-      assert.match(statement, /'pending'/);
-      return { recordset: [] };
-    }
-    if (statement.includes('INSERT INTO audit_logs')) {
-      assert.doesNotMatch(values.detailsJson, /Jamie|ST-100|jamie@example/);
-      return { recordset: [] };
-    }
-    throw new Error('Unexpected query: ' + statement);
-  }, { createPassword: () => 'inaccessible-placeholder' });
-  const enrollmentId = await fixture.service.createEnrollmentIntake(5, {
-    studentNo: 'FORGED-9999', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee',
-    birthDate: '2008-02-29', email: 'Jamie@Example.edu', academicTermId: '2', sectionId: '8'
-  });
-  assert.equal(enrollmentId, 51);
-  assert.equal(fixture.log.isolation, 'SERIALIZABLE');
-  assert.equal(fixture.log.committed, true);
-  assert.equal(fixture.log.queries.find(({ statement }) => statement.includes('INSERT INTO students')).values.studentNo, 'SHS-2026-0321');
-  assert.ok(fixture.log.queries.some(({ statement, values }) => statement.includes('INSERT INTO application_locks') && values.lockName === 'student-number:2026'));
-  assert.equal(fixture.log.queries.filter(({ statement }) => statement.includes('INSERT INTO audit_logs')).length, 1);
-});
-
-test('registrar intake rejects missing or invalid term years before creating records', async () => {
-  const validProfile = {
-    lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee', email: 'new@example.edu',
-    academicTermId: '2', sectionId: '8'
-  };
-  const missingTerm = setupFixture(({ statement }) => {
-    if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
-    if (statement.includes('SELECT section.id, term.school_year')) return { recordset: [] };
-    throw new Error('Unexpected query: ' + statement);
-  });
-  await assert.rejects(missingTerm.service.createEnrollmentIntake(5, validProfile), /Choose an existing academic term/);
-  assert.equal(missingTerm.log.queries.some(({ statement }) => statement.includes('INSERT INTO users')), false);
-
-  const invalidTerm = setupFixture(({ statement }) => {
-    if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
-    if (statement.includes('SELECT section.id, term.school_year')) return { recordset: [{ id: 8, school_year: '2026/2027' }] };
-    throw new Error('Unexpected query: ' + statement);
-  });
-  await assert.rejects(invalidTerm.service.createEnrollmentIntake(5, validProfile), /invalid school year/);
-  assert.equal(invalidTerm.log.queries.some(({ statement }) => statement.includes('sp_getapplock')), false);
-  assert.equal(invalidTerm.log.queries.some(({ statement }) => statement.includes('INSERT INTO students')), false);
+test('legacy registrar intake creation and activation services are retired without database writes', async () => {
+  const fixture = setupFixture(() => { throw new Error('retired workflow must not query the database'); });
+  await assert.rejects(fixture.service.createEnrollmentIntake(5, { lrn: '123456789012' }),
+    (error) => error instanceof StudentSetupError && error.status === 409 && /front-desk paper source/.test(error.message));
+  await assert.rejects(fixture.service.finalizeEnrollment(5, 51),
+    (error) => error instanceof StudentSetupError && error.status === 409 && /annual enrollment workflow/.test(error.message));
+  await assert.rejects(fixture.service.listLegacyActivationCandidates(5),
+    (error) => error instanceof StudentSetupError && error.status === 409);
+  await assert.rejects(fixture.service.confirmLegacyInitialActivation(5, 51, {}),
+    (error) => error instanceof StudentSetupError && error.status === 409);
+  assert.equal(fixture.log.queries.length, 0);
 });
 
 test('registrar intake opens the guided annual form and links the roster to fee confirmation and paper records', async () => {
   const app = express();
+  const preEnrollmentId = 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261';
+  const preEnrollmentRecord = {
+    id: preEnrollmentId, version: 3, status: 'ready_for_registrar', created_by_role: 'front_desk',
+    school_year: '2026-2027', target_grade_level: 'Grade 11', applicant_kind: 'new',
+    first_name: 'Jamie', middle_name: 'Rae', last_name: 'Lee', suffix: '', lrn: '123456789012',
+    email: 'learner@example.edu', birth_date: '2008-04-21', sex: 'Female', profile_phone: '09171234567',
+    address: '25 Mabini Street', emergency_contact_person: 'Morgan Lee', emergency_contact_phone: '09170000000',
+    emergency_contact_address: 'Lucena, Quezon', preferred_track: 'Academic Track', preferred_cluster: 'ASSH',
+    voucher_type_text: 'ESC as written', voucher_category_text: 'Category A', prior_grade_level: 'Grade 10',
+    prior_school: 'Lucena High School', student_signature_present: 1, student_signed_date: '2026-10-01',
+    received_by: 'Front Desk Operator', received_date: '2026-10-02', receipts: []
+  };
   let confirmationCall = null;
   let hasConfirmed = false;
   const session = {};
@@ -357,13 +294,15 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     { requirement_code: 'two_by_two_photo', requirement_name: '2x2 Picture', guidance: '3 pieces.', applicability: 'all', originals_required: 0, copies_required: 0, pieces_required: 3 },
     { requirement_code: 'grade11_card', requirement_name: 'Grade 11 Card', guidance: 'Grade 11 card applies to Grade 12 learners.', applicability: 'grade12', originals_required: 0, copies_required: 0, pieces_required: 0 }
   ];
-  let validationPoolCalls = 0;
-  const intakeValidationService = createAnnualEnrollmentService({
-    getPool: async () => { validationPoolCalls += 1; throw new Error('database should not be reached for invalid profile input'); },
-    hashPassword: async () => 'synthetic-hash'
-  });
-  annualEnrollmentService.createAnnualIntake = (actorId, input) => intakeValidationService.createAnnualIntake(actorId, input);
   app.use('/registrar/intake', createAnnualStudentIntakeRouter({ annualEnrollmentService,
+    preEnrollmentService: {
+      async openConversion(actorId, id) {
+        assert.equal(actorId, registrar.id);
+        assert.equal(id, preEnrollmentId);
+        return { alreadyStarted: false, record: preEnrollmentRecord };
+      },
+      async get(actorId, id) { assert.equal(actorId, registrar.id); assert.equal(id, preEnrollmentId); return preEnrollmentRecord; }
+    },
     physicalChecklistService: {
       async listIntakeRequirements() { return paperRequirements; },
       async getStudentChecklist(actorId, studentId) {
@@ -382,7 +321,10 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     }
   }));
   await withServer(app, async (baseUrl) => {
-    const response = await fetch(`${baseUrl}/registrar/intake/new`);
+    const unsourced = await fetch(`${baseUrl}/registrar/intake/new`, { redirect: 'manual' });
+    assert.equal(unsourced.status, 303);
+    assert.equal(unsourced.headers.get('location'), '/pre-enrollments');
+    const response = await fetch(`${baseUrl}/registrar/intake/new?preEnrollmentId=${preEnrollmentId}`);
     const html = await response.text();
     assert.equal(response.status, 200);
     assert.match(html, /Student details/);
@@ -404,51 +346,16 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.ok(zeroCountCardRow);
     assert.doesNotMatch(zeroCountCardRow, /<details/);
     assert.doesNotMatch(html, /long_brown_envelopes|name="paper_[a-z0-9_]+_status"/);
-    assert.match(html, /id="annual-student-mode"/);
-    assert.match(html, /name="studentNo"/);
+    assert.match(html, /Paper pre-enrollment for review/);
+    assert.match(html, /Saved front-desk profile/);
+    assert.match(html, /name="preEnrollmentId" value="a342bc01-2a68-4f19-a7fd-4d5bb1d83261"/);
+    assert.doesNotMatch(html, /name="(?:firstName|middleName|lastName|lrn|email|birthDate|sex|phone|address)"/);
     assert.match(html, /src="\/js\/annual-intake-form.js"/);
-    assert.match(html, /name="lrn"/);
     assert.match(html, /name="section1Id"/);
     assert.match(html, /name="section2Id"/);
     assert.match(html, /name="section3Id"/);
     assert.match(html, /Voucher type/);
-    assert.doesNotMatch(html, /name="voucherCategory"|voucher category/i);
-    assert.match(html, /pattern="\\p\{L\}/);
-    assert.match(html, /name="sex"/);
-    assert.match(html, new RegExp(`max="${latestBirthDate()}"`));
-    const intakeCsrfToken = html.match(/name="_csrf" value="([^"]+)"/)?.[1];
-    assert.ok(intakeCsrfToken);
-    const invalidStudent = await fetch(`${baseUrl}/registrar/intake`, {
-      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        _csrf: intakeCsrfToken, idempotencyKey: '41111111-1111-4111-8111-111111111111', lrn: '123456789012',
-        email: 'learner@example.edu', firstName: '12345', middleName: '8', lastName: '3578', suffix: '',
-        birthDate: '', sex: '', phone: '', address: '', schoolYear: '2026-2027', gradeLevel: 'Grade 11',
-        voucherCode: 'PUB', entryTermNumber: '1', enrollmentStartDate: '2026-10-03',
-        sectionMode: 'same', annualSectionId: '8'
-      })
-    });
-    const invalidStudentHtml = await invalidStudent.text();
-    assert.equal(invalidStudent.status, 400);
-    assert.match(invalidStudentHtml, /data-active-step="1"/);
-    assert.match(invalidStudentHtml, /First name must contain letters/);
-    assert.match(invalidStudentHtml, /value="12345"/);
-    assert.equal(validationPoolCalls, 0);
-    const invalidGender = await fetch(`${baseUrl}/registrar/intake`, {
-      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        _csrf: intakeCsrfToken, idempotencyKey: '41111111-1111-4111-8111-111111111111', lrn: '123456789012',
-        email: 'learner@example.edu', firstName: 'Alex', middleName: '', lastName: 'Learner', suffix: '',
-        birthDate: '', sex: 'fish', phone: '', address: '', schoolYear: '2026-2027', gradeLevel: 'Grade 11',
-        voucherCode: 'PUB', entryTermNumber: '1', enrollmentStartDate: '2026-10-03',
-        sectionMode: 'same', annualSectionId: '8'
-      })
-    });
-    const invalidGenderHtml = await invalidGender.text();
-    assert.equal(invalidGender.status, 400);
-    assert.match(invalidGenderHtml, /Choose Male, Female, or Other for gender/);
-    assert.match(invalidGenderHtml, /<option value="fish" selected>Invalid value \(choose again\): fish<\/option>/);
-    assert.equal(validationPoolCalls, 0);
+    assert.doesNotMatch(html, /name="voucherCategory"/i);
     const pending = await fetch(`${baseUrl}/registrar/intake`);
     const pendingHtml = await pending.text();
     assert.equal(pending.status, 200);
@@ -808,6 +715,7 @@ test('final review unexpected load failures return a support reference and only 
 test('unexpected annual intake failures log safe diagnostics and retain the submission token in the form', async () => {
   const app = express();
   const session = {};
+  const source = readyPreEnrollmentFixture();
   const errors = [];
   const failure = new Error('raw SQL details and private@example.test');
   failure.code = 'ER_BAD_FIELD_ERROR';
@@ -831,11 +739,15 @@ test('unexpected annual intake failures log safe diagnostics and retain the subm
       },
       async createAnnualIntake() { throw failure; }
     },
+    preEnrollmentService: {
+      async openConversion(_actorId, id) { assert.equal(id, source.id); return { alreadyStarted: false, record: source }; },
+      async get(_actorId, id) { assert.equal(id, source.id); return source; }
+    },
     logger: { error(...args) { errors.push(args); } }
   }));
 
   await withServer(app, async (baseUrl) => {
-    const openingResponse = await fetch(`${baseUrl}/registrar/intake/new`);
+    const openingResponse = await fetch(`${baseUrl}/registrar/intake/new?preEnrollmentId=${source.id}`);
     const openingHtml = await openingResponse.text();
     assert.equal(openingResponse.status, 200);
     const csrfToken = openingHtml.match(/name="_csrf" value="([^"]+)"/)?.[1];
@@ -846,7 +758,8 @@ test('unexpected annual intake failures log safe diagnostics and retain the subm
     const response = await fetch(`${baseUrl}/registrar/intake`, {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        _csrf: csrfToken, idempotencyKey, email: 'new.student+fixture@gmail.com', lrn: '123456789012',
+        _csrf: csrfToken, idempotencyKey, preEnrollmentId: source.id, preEnrollmentVersion: String(source.version),
+        email: 'new.student+fixture@gmail.com', lrn: '123456789012',
         firstName: 'Casey', middleName: 'R', lastName: 'Example', suffix: '', birthDate: '2008-07-14',
         sex: 'Male', address: 'Synthetic address', phone: '09170000000', schoolYear: '2026-2027',
         gradeLevel: 'Grade 11', voucherCode: 'PUB', voucherCategory: 'A', intakeKind: 'standard',
@@ -857,8 +770,9 @@ test('unexpected annual intake failures log safe diagnostics and retain the subm
     assert.equal(response.status, 503);
     assert.match(response.headers.get('cache-control'), /no-store/);
     assert.match(html, /data-active-step="3"/);
-    assert.match(html, /value="new\.student\+fixture@gmail\.com"/);
-    assert.match(html, /value="123456789012"/);
+    assert.match(html, /learner@example\.edu/);
+    assert.match(html, /123456789012/);
+    assert.doesNotMatch(html, /new\.student\+fixture@gmail\.com/);
     assert.match(html, /name="idempotencyKey" value="[^"]+"/);
     assert.match(html, new RegExp(`name="idempotencyKey" value="${idempotencyKey}"`));
     assert.doesNotMatch(html, /name="voucherCategory"/);
@@ -883,6 +797,7 @@ test('unexpected annual intake failures log safe diagnostics and retain the subm
 test('annual intake error fallback tells staff to check for a committed record before starting over', async () => {
   const app = express();
   const session = {};
+  const source = readyPreEnrollmentFixture();
   let optionLoads = 0;
   let incident = null;
   app.set('views', path.join(__dirname, '..', 'views'));
@@ -900,18 +815,23 @@ test('annual intake error fallback tells staff to check for a committed record b
       },
       async createAnnualIntake() { throw new Error('synthetic save failure'); }
     },
+    preEnrollmentService: {
+      async openConversion(_actorId, id) { assert.equal(id, source.id); return { alreadyStarted: false, record: source }; },
+      async get(_actorId, id) { assert.equal(id, source.id); return source; }
+    },
     logger: { error(_message, details) { incident = details; } }
   }));
 
   await withServer(app, async (baseUrl) => {
-    const openingResponse = await fetch(`${baseUrl}/registrar/intake/new`);
+    const openingResponse = await fetch(`${baseUrl}/registrar/intake/new?preEnrollmentId=${source.id}`);
     const openingHtml = await openingResponse.text();
     assert.equal(openingResponse.status, 200);
     const csrfToken = openingHtml.match(/name="_csrf" value="([^"]+)"/)?.[1];
     const idempotencyKey = openingHtml.match(/name="idempotencyKey" value="([^"]+)"/)?.[1];
     const response = await fetch(`${baseUrl}/registrar/intake`, {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey })
+      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey,
+        preEnrollmentId: source.id, preEnrollmentVersion: String(source.version) })
     });
     const html = await response.text();
     assert.equal(response.status, 503);
@@ -923,93 +843,12 @@ test('annual intake error fallback tells staff to check for a committed record b
   });
 });
 
-test('finalization requires an explicitly cleared pending enrollment and an inactive student login', async () => {
-  for (const state of [
-    { clearance_status: 'pending', is_active: false, message: /has not cleared/ }
-  ]) {
-    const fixture = setupFixture(({ statement }) => {
-      if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
-      if (statement.includes('INNER JOIN annual_enrollments AS annual')) return { recordset: [] };
-      if (statement.includes('FROM enrollments AS enrollment')) return { recordset: [{
-        enrollment_id: 51, enrollment_status: 'pending_payment', finalized_at: null,
-        student_id: 41, student_no: 'ST-100', student_status: 'active', user_id: 31, first_name: 'Jamie',
-        last_name: 'Lee', email: 'new@example.edu', is_active: state.is_active ? 1 : 0,
-        school_year: '2026-2027', term: 'Term 1', section_name: 'A',
-        clearance_status: state.clearance_status, created_for_intake: 1
-      }] };
-      throw new Error('Unexpected query: ' + statement);
-    });
-    await assert.rejects(fixture.service.finalizeEnrollment(5, 51), state.message);
-    assert.equal(fixture.log.rolledBack, true);
-    assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE users SET is_active = 1')), false);
-  }
-});
-
-test('a deliberately active legacy student login is not reset during pending placement finalization', async () => {
-  let activationWrites = 0;
-  const fixture = setupFixture(({ statement }) => {
-    if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
-    if (statement.includes('INNER JOIN annual_enrollments AS annual')) return { recordset: [] };
-    if (statement.includes('FROM enrollments AS enrollment')) return { recordset: [{
-      enrollment_id: 51, enrollment_status: 'pending_payment', finalized_at: null,
-      student_id: 41, student_no: 'ST-100', student_status: 'active', user_id: 31,
-      first_name: 'Jamie', last_name: 'Lee', email: 'jamie@example.edu', is_active: 1,
-      school_year: '2026-2027', term: 'Term 1', section_name: 'A', clearance_status: 'cleared',
-      created_for_intake: 1, account_activation_pending: 0
-    }] };
-    if (statement.includes('UPDATE enrollment_clearances SET account_activation_pending')) return { recordset: [] };
-    if (statement.includes('UPDATE enrollments SET enrollment_status')) return { affectedRows: 1 };
-    if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
-    if (statement.includes('UPDATE users SET is_active = 1')) activationWrites += 1;
-    throw new Error('Unexpected query: ' + statement);
-  }, { createPassword: () => { throw new Error('Existing active login must not receive a new password.'); } });
-  const result = await fixture.service.finalizeEnrollment(5, 51);
-  assert.equal(result.temporaryPassword, null);
-  assert.equal(activationWrites, 0);
-  assert.equal(fixture.log.committed, true);
-});
-
-test('finalization activates a cleared intake once and returns the temporary password only in the response', async () => {
-  const storedHashes = [];
-  let finalized = false;
-  const fixture = setupFixture(({ statement, values }) => {
-    if (statement.includes('SELECT id, role FROM users')) return { recordset: [registrar] };
-    if (statement.includes('INNER JOIN annual_enrollments AS annual')) return { recordset: [] };
-    if (statement.includes('FROM enrollments AS enrollment')) return { recordset: [{
-      enrollment_id: 51, enrollment_status: finalized ? 'enrolled' : 'pending_payment',
-      finalized_at: finalized ? new Date('2026-09-28T00:00:00Z') : null,
-      student_id: 41, student_no: 'ST-100', student_status: 'active', user_id: 31,
-      first_name: 'Jamie', last_name: 'Lee', email: 'jamie@example.edu', is_active: 0,
-      school_year: '2026-2027', term: 'Term 1', section_name: 'A', clearance_status: 'cleared', created_for_intake: 1,
-      account_activation_pending: 1
-    }] };
-    if (statement.includes('UPDATE users SET is_active = 1')) {
-      storedHashes.push(values.passwordHash);
-      assert.match(statement, /must_change_password = 1/);
-      assert.equal(values.passwordHash, 'bcrypt:temporary-secret-' + storedHashes.length);
-      return { affectedRows: 1 };
-    }
-    if (statement.includes('UPDATE enrollments SET enrollment_status')) {
-      finalized = true;
-      return { affectedRows: 1 };
-    }
-    if (statement.includes('UPDATE enrollment_clearances SET account_activation_pending')) return { recordset: [] };
-    if (statement.includes('INSERT INTO audit_logs')) {
-      assert.doesNotMatch(values.detailsJson, /Jamie|ST-100|jamie@example|temporary-secret/);
-      return { recordset: [] };
-    }
-    throw new Error('Unexpected query: ' + statement);
-  }, {
-    createPassword: (() => { let count = 0; return () => 'temporary-secret-' + (++count); })(),
-    hashPassword: async (password, rounds) => { assert.equal(rounds, 12); return 'bcrypt:' + password; }
-  });
-  const first = await fixture.service.finalizeEnrollment(5, '51');
-  assert.equal(first.temporaryPassword, 'temporary-secret-1');
-  assert.equal(first.email, 'jamie@example.edu');
-  assert.equal(fixture.log.committed, true);
-  await assert.rejects(fixture.service.finalizeEnrollment(5, '51'), /already been finalized/);
-  assert.deepEqual(storedHashes, ['bcrypt:temporary-secret-1']);
-  assert.equal(fixture.log.rolledBack, true);
+test('legacy finalization cannot activate a student login through the retired service', async () => {
+  const fixture = setupFixture(() => { throw new Error('retired workflow must not query the database'); });
+  await assert.rejects(fixture.service.finalizeEnrollment(5, 51),
+    (error) => error instanceof StudentSetupError && error.status === 409);
+  assert.equal(fixture.log.queries.length, 0);
+  assert.equal(fixture.log.committed, false);
 });
 
 test('finance clearance requires a payment, an exact enrollment, and explicit attestation', () => {
@@ -1106,6 +945,11 @@ test('pre-enrollment source identity, version, token, and receipt labels survive
   const baseRecord = {
     id: sourceId, version: 3, status: 'ready_for_registrar', school_year: '2027-2028',
     first_name: 'Ari', middle_name: 'Mae', last_name: 'Santos', suffix: '', lrn: '012345678901',
+    address: 'Old full address value', address_block_lot_street_purok: 'Block 2, Lot 8, Mabini Street',
+    address_barangay: 'Barangay 1', address_city: 'Lucena', address_province: 'Quezon', address_zip: '4301',
+    emergency_contact_address: 'Old emergency address value', emergency_contact_address_block_lot_street_purok: 'Lot 3, Rizal Street',
+    emergency_contact_address_barangay: 'Barangay 2', emergency_contact_address_city: 'Lucena',
+    emergency_contact_address_province: 'Quezon', emergency_contact_address_zip: '4301',
     student_contact_number: '09171234567', target_grade_level: 'Grade 11',
     voucher_type_text: 'ESC as written', voucher_category_text: 'Category A as written',
     preferred_track: 'Academic Track', preferred_cluster: 'ASSH', prior_grade_level: 'Grade 10',
@@ -1144,7 +988,10 @@ test('pre-enrollment source identity, version, token, and receipt labels survive
     const openingHtml = await opening.text();
     assert.equal(opening.status, 200);
     assert.match(openingHtml, /Report Card \(Grade 10 \/ ALS-AF5\)/);
-    assert.match(openingHtml, /receipt counts stay separate/);
+    assert.match(openingHtml, /Receipt counts stay separate/);
+    assert.match(openingHtml, /Block and Lot, Street\/Purok: Block 2, Lot 8, Mabini Street[\s\S]*Barangay: Barangay 1[\s\S]*ZIP code: 4301/);
+    assert.match(openingHtml, /Block and Lot, Street\/Purok: Lot 3, Rizal Street[\s\S]*Barangay: Barangay 2[\s\S]*ZIP code: 4301/);
+    assert.doesNotMatch(openingHtml, /Old full address value|Old emergency address value/);
     const post = await fetch(`${baseUrl}/registrar/intake`, {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({

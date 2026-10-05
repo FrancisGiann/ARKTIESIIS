@@ -210,7 +210,7 @@ test('annual intake accepts explicit midyear entry with an optional future place
   }), /valid calendar date/);
 });
 
-test('new annual intake rejects malformed profile fields before hashing or database access', async () => {
+test('profile validation stays strict while annual creation requires a saved front-desk source', async () => {
   let poolCalls = 0;
   let hashCalls = 0;
   const service = createAnnualEnrollmentService({
@@ -237,8 +237,12 @@ test('new annual intake rejects malformed profile fields before hashing or datab
     [{ lrn: 'letters' }, /LRN must contain exactly 12 digits/],
     [{ email: 'jojojo44' }, /valid contact email/]
   ]) {
-    await assert.rejects(service.createAnnualIntake(7, { ...valid, ...change }), message);
+    const input = { ...valid, ...change };
+    if (Object.hasOwn(change, 'email')) assert.throws(() => normalizeAnnualInput(input), message);
+    else assert.throws(() => validateStudent(input, { requireStudentNo: false }), message);
   }
+  await assert.rejects(service.createAnnualIntake(7, valid),
+    (error) => error instanceof AnnualEnrollmentError && error.status === 409 && /Ready for registrar front-desk record/.test(error.message));
   assert.equal(poolCalls, 0);
   assert.equal(hashCalls, 0);
 });
@@ -306,64 +310,21 @@ test('registrar voucher type updates preserve legacy category and keep assessmen
   assert.equal(rolledBack, false);
 });
 
-test('annual intake idempotency replays accept legacy null or category fingerprints but reject changed voucher types', async () => {
+test('annual creation cannot use an old or client-supplied idempotency key without a source', async () => {
+  let poolCalls = 0;
+  const service = createAnnualEnrollmentService({
+    getPool: async () => { poolCalls += 1; throw new Error('source-less request must stop before database access'); },
+    hashPassword: async () => { throw new Error('source-less request must not create credentials'); }
+  });
   const payload = {
     studentNo: '', email: 'learner@example.edu', lrn: '123456789012', firstName: 'Alex', middleName: '',
     lastName: 'Learner', suffix: '', birthDate: '', sex: '', phone: '', address: '', schoolYear: '2026-2027',
-    gradeLevel: 'Grade 11', voucherCode: 'PUB', voucherCategory: 'stale-input-value', entryTermNumber: '1',
-    enrollmentStartDate: '2026-10-03', sectionMode: 'same', annualSectionId: '8', idempotencyKey: uuid
+    gradeLevel: 'Grade 11', voucherCode: 'PUB', entryTermNumber: '1', enrollmentStartDate: '2026-10-03',
+    sectionMode: 'same', annualSectionId: '8', idempotencyKey: uuid
   };
-  const profileInput = validateStudent(payload, { requireStudentNo: false });
-  const fingerprintFor = (voucherCode, category) => {
-    // This is the pre-removal normalized shape, with category in its original property position.
-    const legacyEntry = {
-      isReturning: false, intakeKind: 'new', studentNo: null, email: 'learner@example.edu',
-      schoolYear: '2026-2027', gradeLevel: 'Grade 11', voucherCode, voucherCategory: category,
-      entryTermNumber: 1, enrollmentStartDate: '2026-10-03', sectionIds: [8, null, null],
-      sectionMode: 'same', annualSectionId: 8, sectionOverrides: [false, false, false], idempotencyKey: uuid
-    };
-    return crypto.createHash('sha256')
-      .update(JSON.stringify({ entry: legacyEntry, profileInput, checklistUpdates: [] })).digest('hex');
-  };
-  const makeReplayService = (voucherCategory, requestFingerprint) => {
-    const sql = {
-      Int: 'Int', MAX: 'MAX', UniqueIdentifier: 'UniqueIdentifier',
-      NVarChar: (length) => `NVarChar(${length})`,
-      ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' }
-    };
-    const transaction = {
-      async begin() {}, async commit() {}, async rollback() {},
-      request() {
-        const values = {};
-        return {
-          input(name, _type, value) { values[name] = value; return this; },
-          async query(statement) {
-            if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
-            if (statement.includes('SELECT id AS annual_enrollment_id, student_id, request_fingerprint')) {
-              return { recordset: [{ annual_enrollment_id: 71, student_id: 41, voucher_category: voucherCategory, request_fingerprint: requestFingerprint }] };
-            }
-            throw new Error(`Unexpected query during replay: ${statement}`);
-          }
-        };
-      }
-    };
-    return createAnnualEnrollmentService({
-      getPool: async () => ({}), sql, transactionFactory: () => transaction,
-      hashPassword: async () => 'synthetic-hash', createPassword: () => 'synthetic-password'
-    });
-  };
-
-  const nullReplay = await makeReplayService(null, fingerprintFor('PUB', null)).createAnnualIntake(7, payload);
-  assert.equal(nullReplay.alreadyCreated, true);
-
-  const categoryReplay = await makeReplayService('A', fingerprintFor('PUB', 'A')).createAnnualIntake(7, payload);
-  assert.equal(categoryReplay.alreadyCreated, true);
-
-  const changedVoucherPayload = { ...payload, voucherCode: 'ESC' };
-  await assert.rejects(
-    makeReplayService('A', fingerprintFor('PUB', 'A')).createAnnualIntake(7, changedVoucherPayload),
-    (error) => error instanceof AnnualEnrollmentError && error.status === 409
-  );
+  await assert.rejects(service.createAnnualIntake(7, payload),
+    (error) => error instanceof AnnualEnrollmentError && error.status === 409);
+  assert.equal(poolCalls, 0);
 });
 
 test('annual section defaults map only unique exact term matches and preserve explicit term choices', () => {

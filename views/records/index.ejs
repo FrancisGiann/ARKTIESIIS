@@ -8,7 +8,7 @@
       <p><%= view === 'setup' ? 'Configure academic terms and sections used by student records.' : `${currentUser.role === 'database_admin' ? 'Database administrator' : 'Registrar'} workspace · Lucena Branch` %></p>
     </div>
     <div class="admin-heading-actions">
-      <% if (view === 'setup') { %><a class="button button--secondary" href="/registrar/records">Back to student records</a><% } else { %><% if (currentUser.role === 'registrar') { %><a class="button button--primary" href="/registrar/intake/new">New enrollment</a><% } %><a class="button button--secondary" href="/registrar/records?view=setup">Academic setup</a><% } %>
+      <% if (view === 'setup') { %><a class="button button--secondary" href="/registrar/records">Back to student records</a><% } else { %><% if (currentUser.role === 'registrar') { %><a class="button button--primary" href="/pre-enrollments">Review paper submissions</a><% } %><a class="button button--secondary" href="/registrar/records?view=setup">Academic setup</a><% } %>
       <% if (currentUser.role === 'registrar') { %><a class="button button--secondary" href="/registrar/intake">Enrollment intake</a><% } %>
       <% if (currentUser.role === 'database_admin') { %><a class="button button--secondary" href="/admin/student-accounts">Set up student logins</a><% } %>
       <a class="button button--secondary" href="/registrar/records/grades/missing">Grade completion overview</a>

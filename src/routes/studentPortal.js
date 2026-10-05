@@ -5,7 +5,7 @@ const { createAcademicRecordsService } = require('../services/academicRecordsSer
 const { createFinanceService } = require('../services/financeService');
 const { createAnnualFinanceService } = require('../services/annualFinanceService');
 const { createClassScheduleService } = require('../services/classScheduleService');
-const { createStatementProjection } = require('../utils/financeStatementProjection');
+const { createStatementProjection, createStudentFinanceProjection } = require('../utils/financeStatementProjection');
 const { formatFinanceDateTime } = require('../utils/financeDateTime');
 
 const gradeLabelCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
@@ -137,7 +137,9 @@ function createStudentPortalRouter({ getPool, sql, studentRecordsService, academ
   router.get('/finance', async (req, res) => {
     try {
       const finance = await finances.getOwnStudentAccount(req.authUser.id);
-      const annualLedger = finance.student ? await annualFinances.getStudentLedger(req.authUser.id, finance.student.id, 'student') : null;
+      const annualLedger = finance.student
+        ? createStudentFinanceProjection(await annualFinances.getStudentLedger(req.authUser.id, finance.student.id, 'student'))
+        : null;
       return res.set('Cache-Control', 'private, no-store').render('student/finance', {
         title: 'My finance account', currentUser: req.authUser, finance, annualLedger
       });

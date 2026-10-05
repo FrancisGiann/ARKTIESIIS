@@ -47,6 +47,8 @@ const { RegistrarDashboardError } = require('../services/registrarDashboardServi
 const { createClassScheduleService } = require('../services/classScheduleService');
 const { createPreEnrollmentService } = require('../services/preEnrollmentService');
 const { createPreEnrollmentRouter } = require('./preEnrollments');
+const { createReadmissionRouter } = require('./readmissions');
+const { createReadmissionService } = require('../services/readmissionService');
 const { createAccountRouter, createEmailConfirmationRouter } = require('./account');
 
 const credentialError = 'Invalid email or password.';
@@ -94,6 +96,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     getPool, sql, physicalChecklistService: physicalChecklistsService, annualFinanceService: annualFinancesService
   });
   const preEnrollmentsService = preEnrollmentService || createPreEnrollmentService({ getPool, sql });
+  const readmissionsService = createReadmissionService({ getPool, sql });
   const studentDocumentRequests = documentRequestService || createStudentDocumentRequestService({ getPool, sql });
   const studentDocumentClearance = documentClearanceService || createStudentDocumentFinanceClearanceService({ getPool, sql });
   const registrarGradeOverview = gradeOverviewService || createRegistrarGradeOverviewService({ getPool, sql });
@@ -200,6 +203,8 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   }));
   router.use('/pre-enrollments', requireAuth, requireRole('registrar', 'front_desk', 'database_admin'),
     createPreEnrollmentRouter({ getPool, sql, preEnrollmentService: preEnrollmentsService }));
+  router.use('/registrar/readmissions', requireAuth, requireRole('registrar', 'database_admin'),
+    createReadmissionRouter({ getPool, sql, readmissionService: readmissionsService }));
   router.get('/front-desk', requireAuth, requireRole('front_desk'), (req, res) => res.redirect(303, '/pre-enrollments'));
   router.use('/registrar/intake/legacy', requireAuth, requireRole('registrar'), createStudentIntakeRouter({ getPool, sql, studentSetupService: studentSetup }));
   router.use('/finance', requireAuth, requireRole('finance', 'database_admin'), createFinanceRouter({ getPool, sql,

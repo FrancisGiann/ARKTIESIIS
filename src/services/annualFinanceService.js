@@ -17,6 +17,7 @@ const FINANCE_ROSTER_QUERY_PHASES = Object.freeze([
   'assessed_charge_balances', 'legacy_account_balances', 'opening_liability_balances',
   'options_year', 'options_term', 'options_section'
 ]);
+// Base-table sums avoid MariaDB failures on repeated prepared execution of nested aggregate views.
 const STUDENT_LEDGER_SUMMARY_SQL = `SELECT
     CAST(COALESCE(legacy.total, 0) AS CHAR(40)) AS unattributed_legacy_balance,
     CAST(COALESCE(opening.total, 0) AS CHAR(40)) AS opening_liability_due,
@@ -24,17 +25,47 @@ const STUDENT_LEDGER_SUMMARY_SQL = `SELECT
     CAST(COALESCE(adjustments.total, 0) AS CHAR(40)) AS adjustments,
     CAST(COALESCE(payments.total, 0) AS CHAR(40)) AS annual_payments,
     CAST(COALESCE(reconciliations.total, 0) AS CHAR(40)) AS legacy_reconciled_amount,
-    CAST(COALESCE(credits.total, 0) AS CHAR(40)) AS available_credit
+    CAST(
+      COALESCE((SELECT SUM(payment.amount) FROM finance_payments AS payment
+        WHERE payment.student_id = @studentId AND payment.is_reversed = 0), 0)
+      - COALESCE((SELECT SUM(allocation.amount) FROM finance_payment_allocations AS allocation
+        INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
+        WHERE payment.student_id = @studentId AND payment.is_reversed = 0), 0)
+      + COALESCE((SELECT SUM(release_row.amount) FROM finance_payment_allocation_releases AS release_row
+        INNER JOIN finance_payment_allocations AS allocation ON allocation.id = release_row.allocation_id
+        INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
+        WHERE payment.student_id = @studentId AND payment.is_reversed = 0), 0)
+      AS CHAR(40)) AS available_credit
   FROM students AS student
   LEFT JOIN (
-    SELECT balance.student_id, SUM(balance.remaining_legacy_balance) AS total
-    FROM v_finance_legacy_account_balance AS balance
-    WHERE balance.student_id = @studentId GROUP BY balance.student_id
+    SELECT account.student_id,
+      account.balance
+        + COALESCE((SELECT SUM(reconciliation.amount)
+          FROM finance_legacy_reconciliations AS reconciliation
+          INNER JOIN financial_transactions AS transaction_record ON transaction_record.id = reconciliation.transaction_id
+          WHERE transaction_record.financial_account_id = account.id), 0)
+        - COALESCE((SELECT SUM(release_row.amount)
+          FROM finance_legacy_reconciliation_releases AS release_row
+          INNER JOIN finance_legacy_reconciliations AS reconciliation ON reconciliation.id = release_row.reconciliation_id
+          INNER JOIN financial_transactions AS transaction_record ON transaction_record.id = reconciliation.transaction_id
+          WHERE transaction_record.financial_account_id = account.id), 0)
+        - COALESCE((SELECT SUM(opening.amount) FROM finance_legacy_opening_charges AS opening
+          WHERE opening.financial_account_id = account.id), 0) AS total
+    FROM financial_accounts AS account WHERE account.student_id = @studentId
   ) AS legacy ON legacy.student_id = student.id
   LEFT JOIN (
-    SELECT due.student_id, SUM(due.amount_due) AS total
-    FROM v_finance_opening_liability_due AS due
-    WHERE due.student_id = @studentId GROUP BY due.student_id
+    SELECT opening.student_id,
+      opening.amount
+        - COALESCE((SELECT SUM(allocation.amount)
+          FROM finance_payment_allocations AS allocation
+          INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
+          WHERE allocation.legacy_opening_charge_id = opening.id AND payment.is_reversed = 0), 0)
+        + COALESCE((SELECT SUM(release_row.amount)
+          FROM finance_payment_allocation_releases AS release_row
+          INNER JOIN finance_payment_allocations AS allocation ON allocation.id = release_row.allocation_id
+          INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
+          WHERE allocation.legacy_opening_charge_id = opening.id AND payment.is_reversed = 0), 0) AS total
+    FROM finance_legacy_opening_charges AS opening WHERE opening.student_id = @studentId
   ) AS opening ON opening.student_id = student.id
   LEFT JOIN (
     SELECT annual.student_id, SUM(charge.amount) AS total
@@ -66,11 +97,6 @@ const STUDENT_LEDGER_SUMMARY_SQL = `SELECT
     WHERE account.student_id = @studentId
     GROUP BY account.student_id
   ) AS reconciliations ON reconciliations.student_id = student.id
-  LEFT JOIN (
-    SELECT credit.student_id, SUM(credit.available_credit) AS total
-    FROM v_finance_payment_credit AS credit
-    WHERE credit.student_id = @studentId AND credit.is_reversed = 0 GROUP BY credit.student_id
-  ) AS credits ON credits.student_id = student.id
   WHERE student.id = @studentId`;
 
 async function runFinanceRosterQuery(request, phase, statement) {

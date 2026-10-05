@@ -530,10 +530,18 @@ function createStudentSetupService({
     createBulkStudentAccounts,
     loadIntakeOptions,
     listPendingIntakes,
-    listLegacyActivationCandidates,
-    confirmLegacyInitialActivation,
-    createEnrollmentIntake,
-    finalizeEnrollment
+    listLegacyActivationCandidates: async () => {
+      throw new StudentSetupError('Historic intake activation is retired. Use the front-desk paper source and registrar annual workflow.', 409);
+    },
+    confirmLegacyInitialActivation: async () => {
+      throw new StudentSetupError('Historic intake activation is retired. Existing disabled student logins remain unchanged.', 409);
+    },
+    createEnrollmentIntake: async () => {
+      throw new StudentSetupError('New student intake must use a front-desk paper source and registrar annual workflow.', 409);
+    },
+    finalizeEnrollment: async () => {
+      throw new StudentSetupError('Legacy enrollment finalization is retired. Use the annual enrollment workflow.', 409);
+    }
   };
 }
 
