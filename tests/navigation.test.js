@@ -40,6 +40,12 @@ function createAuthPool(role) {
 
 function services({ ownStudentRecords = null } = {}) {
   return {
+    preEnrollmentService: {
+      async list() {
+        return { rows: [], filters: { search: '', schoolYear: '', status: '' },
+          pagination: { page: 1, pageSize: 20, totalRecords: 0, totalPages: 1, from: 0, to: 0 } };
+      }
+    },
     teacherGradeSubmissionService: {
       async listTeacherAssignments() { return []; }
     },
@@ -206,8 +212,9 @@ test('finance navigation keeps roster selected for annual accounts, statements, 
 
 test('authenticated navigation only exposes destinations available to each role', async () => {
   const cases = [
-    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Audit activity', 'Documents', 'Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: [] },
-    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollment intake', 'Document review', 'Grade review', 'Class schedules', 'Subject catalog', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
+    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Pre-enrollment records', 'Audit activity', 'Documents', 'Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/pre-enrollments', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: [] },
+    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollment intake', 'Pre-enrollment records', 'Document review', 'Grade review', 'Class schedules', 'Subject catalog', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
+    { role: 'front_desk', path: '/pre-enrollments', labels: ['Pre-enrollment records'], hrefs: ['/pre-enrollments'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/documents', '/admin'] },
     { role: 'teacher', path: '/teacher', labels: ['My classes', 'Submit grades'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/admin'] },
     { role: 'finance', path: '/finance', labels: ['Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: ['/registrar/records', '/documents', '/admin'] },
     { role: 'student', path: '/student', labels: ['Home', 'Schedule', 'Grades', 'Finance', 'My records', 'Documents'], forbidden: ['/registrar/records', '/finance', '/admin'] }
@@ -227,8 +234,13 @@ test('authenticated navigation only exposes destinations available to each role'
       const navigation = html.match(/<aside class="desktop-nav"[\s\S]*?<\/aside>/)[0];
       const desktopGroupLabels = [...navigation.matchAll(/<section class="nav-group">\s*<h2>([^<]+)<\/h2>/g)].map((match) => match[1]);
       assert.ok(desktopGroupLabels.every((label) => !scenario.labels.includes(label)), `${scenario.role} group labels do not repeat destination labels`);
+      if (scenario.role === 'registrar') assert.deepEqual(desktopGroupLabels, ['Workspace', 'Records', 'Academic work', 'Setup']);
       const mobileNavigation = html.match(/<details class="mobile-nav">([\s\S]*?)<\/details>/)?.[1];
       assert.ok(mobileNavigation, 'expected the mobile role menu');
+      if (scenario.role === 'registrar') {
+        const mobileGroupLabels = [...mobileNavigation.matchAll(/<section class="nav-group">\s*<h2>([^<]+)<\/h2>/g)].map((match) => match[1]);
+        assert.deepEqual(mobileGroupLabels, ['Workspace', 'Records', 'Academic work', 'Setup']);
+      }
       const mobileLabels = [...mobileNavigation.matchAll(/class="mobile-nav__link[^\"]*"[^>]*>([\s\S]*?)<\/a>/g)]
         .map((match) => match[1].replace(/<[^>]+>/g, '').trim());
       assert.deepEqual(mobileLabels, scenario.labels, `${scenario.role} mobile destinations match its server-filtered desktop menu`);
@@ -240,8 +252,8 @@ test('authenticated navigation only exposes destinations available to each role'
       for (const [index, match] of navigationLinks.entries()) {
         assert.match(match[0], new RegExp(`>${scenario.labels[index]}</a>`));
       }
-      const expectedHome = { database_admin: '/admin', registrar: '/registrar', teacher: '/teacher', finance: '/finance/overview', student: '/student' }[scenario.role];
-      assert.match(html, new RegExp(`<a class="brand" href="${expectedHome}" aria-label="ARKTIESIIS, Ark Technological Institute Education System Incorporated, Lucena Branch">`));
+      const expectedHome = { database_admin: '/admin', registrar: '/registrar', front_desk: '/front-desk', teacher: '/teacher', finance: '/finance/overview', student: '/student' }[scenario.role];
+      assert.match(html, new RegExp(`<a class="brand" href="${expectedHome}" aria-label="ARKTIESIIS, Ark Technological Institute Education System Inc\\., Lucena Branch">`));
       assert.match(navigation, /<a class="app-nav__link[^\"]*" href="[^\"]+" aria-current="page"/);
       assert.match(html, /<details class="mobile-nav">\s*<summary>/, 'mobile navigation uses a keyboard-operable native disclosure');
       assert.match(html, /<a class="account-shortcut[^\"]*" href="\/account"/);

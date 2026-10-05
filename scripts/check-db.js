@@ -27,22 +27,46 @@ const REQUIRED_OBJECTS = Object.freeze([
   'finance_handbook_number_events', 'student_document_clearance_events', 'student_document_claim_slips',
   'finance_review_drafts',
   'v_document_latest_review_event', 'v_document_latest_decision_event',
-  'v_document_latest_validation', 'v_form137_latest_status_event', 'v_previous_school_report_card_latest_status_event'
+  'v_document_latest_validation', 'v_form137_latest_status_event', 'v_previous_school_report_card_latest_status_event',
+  'pre_enrollments', 'pre_enrollment_receipts', 'pre_enrollment_events', 'pre_enrollment_revisions'
 ]);
 
 const REQUIRED_COLUMNS = Object.freeze({
   users: ['auth_session_version', 'must_change_password'],
-  students: ['birthplace', 'emergency_contact_person', 'debt_increase_revision'],
+  students: ['birthplace', 'emergency_contact_person', 'debt_increase_revision', 'address_block_lot_street_purok',
+    'address_barangay', 'address_city', 'address_province', 'address_zip', 'emergency_contact_address_block_lot_street_purok',
+    'emergency_contact_address_barangay', 'emergency_contact_address_city',
+    'emergency_contact_address_province', 'emergency_contact_address_zip'],
   documents: ['is_legacy_archive'],
   enrollments: ['finalized_at', 'annual_enrollment_id', 'term_scope_status'],
-  annual_enrollments: ['esc_id', 'eform_status', 'finance_handbook_number'],
+  annual_enrollments: ['esc_id', 'eform_status', 'finance_handbook_number', 'pre_enrollment_id'],
   previous_school_report_card_status_events: ['status'],
   finance_payment_allocations: ['legacy_opening_charge_id'],
   assessed_charges: ['gross_amount', 'waived_amount'],
   student_document_requests: ['expected_claim_date', 'handover_reference', 'current_claim_slip_id'],
-  student_document_request_events: ['handover_reference_before', 'handover_reference_after', 'handover_reference']
+  student_document_request_events: ['handover_reference_before', 'handover_reference_after', 'handover_reference'],
+  pre_enrollments: ['id', 'school_year', 'status', 'version', 'created_by', 'updated_by'],
+  pre_enrollment_receipts: ['pre_enrollment_id', 'requirement_code', 'original_received', 'original_pieces', 'photocopy_received', 'photocopy_pieces'],
+  pre_enrollment_events: ['pre_enrollment_id', 'actor_id', 'event_type', 'version'],
+  pre_enrollment_revisions: ['pre_enrollment_id', 'actor_id', 'field_name', 'before_value', 'after_value']
 });
-const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 14 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const REQUIRED_CONSTRAINTS = Object.freeze([
+  { tableName: 'previous_school_report_card_status_events', constraintName: 'CK_previous_school_report_card_status_status', type: 'CHECK' },
+  { tableName: 'users', constraintName: 'CK_users_role', type: 'CHECK', clauseIncludes: "'front_desk'" },
+  { tableName: 'students', constraintName: 'CK_student_address_zip', type: 'CHECK', clauseIncludes: 'address_zip' },
+  { tableName: 'students', constraintName: 'CK_student_emergency_address_zip', type: 'CHECK', clauseIncludes: 'emergency_contact_address_zip' }
+]);
+const REQUIRED_INDEXES = Object.freeze([
+  { tableName: 'students', indexName: 'UX_students_user_id_linked', columns: ['user_id'] },
+  { tableName: 'pre_enrollments', indexName: 'UQ_pre_enrollment_idempotency', columns: ['idempotency_key'] },
+  { tableName: 'pre_enrollments', indexName: 'UQ_pre_enrollment_year_lrn', columns: ['school_year', 'complete_lrn'] },
+  { tableName: 'annual_enrollments', indexName: 'UQ_annual_enrollment_pre_enrollment', columns: ['pre_enrollment_id'] }
+]);
+const REQUIRED_FOREIGN_KEYS = Object.freeze([
+  { tableName: 'annual_enrollments', constraintName: 'FK_annual_enrollment_pre_enrollment',
+    columnName: 'pre_enrollment_id', referencedTable: 'pre_enrollments', referencedColumn: 'id' }
+]);
+const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 15 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 function bindInList(request, values, prefix) {
   return values.map((value, index) => {
@@ -90,17 +114,58 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
       FROM information_schema.columns WHERE table_schema = DATABASE() AND (${columnPairs.join(' OR ')})`);
     const columns = new Set((columnResult.recordset || []).map(({ tableName, columnName }) => `${tableName}.${columnName}`));
 
-    const constraintRequest = pool.request()
-      .input('constraintName', sql.VarChar(100), 'CK_previous_school_report_card_status_status');
-    const constraintResult = await constraintRequest.query(`SELECT COUNT(*) AS constraintCount
-      FROM information_schema.table_constraints
-      WHERE constraint_schema = DATABASE() AND table_name = 'previous_school_report_card_status_events'
-        AND constraint_name = @constraintName AND constraint_type = 'CHECK'`);
+    const constraintRequest = pool.request();
+    const constraintPairs = REQUIRED_CONSTRAINTS.map(({ tableName, constraintName }, index) => {
+      constraintRequest.input(`constraintTable${index}`, sql.VarChar(100), tableName);
+      constraintRequest.input(`constraintName${index}`, sql.VarChar(100), constraintName);
+      return `(constraints.table_name = @constraintTable${index} AND constraints.constraint_name = @constraintName${index})`;
+    });
+    const constraintResult = await constraintRequest.query(`SELECT constraints.table_name AS tableName,
+        constraints.constraint_name AS constraintName, constraints.constraint_type AS constraintType,
+        checks.check_clause AS checkClause
+      FROM information_schema.table_constraints AS constraints
+      LEFT JOIN information_schema.check_constraints AS checks
+        ON checks.constraint_schema = constraints.constraint_schema
+          AND checks.table_name = constraints.table_name AND checks.constraint_name = constraints.constraint_name
+      WHERE constraints.constraint_schema = DATABASE() AND (${constraintPairs.join(' OR ')})`);
 
-    const indexRequest = pool.request()
-      .input('indexName', sql.VarChar(100), 'UX_students_user_id_linked');
-    const indexResult = await indexRequest.query(`SELECT COUNT(*) AS indexCount FROM information_schema.statistics
-      WHERE table_schema = DATABASE() AND table_name = 'students' AND index_name = @indexName AND non_unique = 0`);
+    const indexRequest = pool.request();
+    const indexPairs = REQUIRED_INDEXES.map(({ tableName, indexName }, index) => {
+      indexRequest.input(`indexTable${index}`, sql.VarChar(100), tableName);
+      indexRequest.input(`indexName${index}`, sql.VarChar(100), indexName);
+      return `(table_name = @indexTable${index} AND index_name = @indexName${index})`;
+    });
+    const indexResult = await indexRequest.query(`SELECT table_name AS tableName, index_name AS indexName, non_unique AS nonUnique,
+        GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') AS columns
+      FROM information_schema.statistics WHERE table_schema = DATABASE() AND (${indexPairs.join(' OR ')})
+      GROUP BY table_name, index_name, non_unique`);
+
+    const foreignKeyRequest = pool.request()
+      .input('foreignKeyTable', sql.VarChar(100), REQUIRED_FOREIGN_KEYS[0].tableName)
+      .input('foreignKeyName', sql.VarChar(100), REQUIRED_FOREIGN_KEYS[0].constraintName);
+    const foreignKeyResult = await foreignKeyRequest.query(`SELECT table_name AS tableName, constraint_name AS constraintName,
+        column_name AS columnName, referenced_table_name AS referencedTable, referenced_column_name AS referencedColumn
+      FROM information_schema.key_column_usage
+      WHERE table_schema = DATABASE() AND table_name = @foreignKeyTable AND constraint_name = @foreignKeyName`);
+
+    const constraints = new Map((constraintResult.recordset || []).map((row) => [`${row.tableName}.${row.constraintName}`, row]));
+    const indexes = new Map((indexResult.recordset || []).map((row) => [`${row.tableName}.${row.indexName}`, row]));
+    const foreignKeys = new Map((foreignKeyResult.recordset || []).map((row) => [`${row.tableName}.${row.constraintName}`, row]));
+    const missingConstraints = REQUIRED_CONSTRAINTS.filter((expected) => {
+      const actual = constraints.get(`${expected.tableName}.${expected.constraintName}`);
+      return !actual || String(actual.constraintType).toUpperCase() !== expected.type
+        || (expected.clauseIncludes && !String(actual.checkClause || '').toLowerCase().includes(expected.clauseIncludes));
+    }).map(({ tableName, constraintName }) => `constraint ${tableName}.${constraintName}`);
+    const missingIndexes = REQUIRED_INDEXES.filter((expected) => {
+      const actual = indexes.get(`${expected.tableName}.${expected.indexName}`);
+      return !actual || Number(actual.nonUnique) !== 0
+        || String(actual.columns || '').split(',').join('\0') !== expected.columns.join('\0');
+    }).map(({ tableName, indexName }) => `unique index ${tableName}.${indexName}`);
+    const missingForeignKeys = REQUIRED_FOREIGN_KEYS.filter((expected) => {
+      const actual = foreignKeys.get(`${expected.tableName}.${expected.constraintName}`);
+      return !actual || actual.columnName !== expected.columnName || actual.referencedTable !== expected.referencedTable
+        || actual.referencedColumn !== expected.referencedColumn;
+    }).map(({ tableName, constraintName }) => `foreign key ${tableName}.${constraintName}`);
 
     const missing = [
       ...REQUIRED_OBJECTS.filter((name) => !objects.has(name)).map((name) => `object ${name}`),
@@ -108,15 +173,16 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
         .filter((columnName) => !columns.has(`${tableName}.${columnName}`))
         .map((columnName) => `column ${tableName}.${columnName}`)),
       ...EXPECTED_VERSIONS.filter((version) => !versions.has(version)).map((version) => `migration ${version}`),
-      ...(Number(constraintResult.recordset?.[0]?.constraintCount || 0) < 1 ? ['paper-copy status constraint'] : []),
-      ...(Number(indexResult.recordset?.[0]?.indexCount || 0) < 1 ? ['unique linked student-account index'] : [])
+      ...missingConstraints,
+      ...missingIndexes,
+      ...missingForeignKeys
     ];
     if (missing.length) {
       logger.error(`MariaDB is reachable, but its ARKTIESIIS schema is incomplete: ${missing.join(', ')}.`);
       process.exitCode = 1;
       return;
     }
-    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.014.`);
+    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.015.`);
   } catch {
     logger.error('MariaDB database check failed. Confirm DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD, then run npm run db:setup.');
     process.exitCode = 1;
@@ -132,4 +198,4 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
 
 if (require.main === module) checkDatabase();
 
-module.exports = { REQUIRED_OBJECTS, REQUIRED_COLUMNS, EXPECTED_VERSIONS, checkDatabase };
+module.exports = { REQUIRED_OBJECTS, REQUIRED_COLUMNS, REQUIRED_CONSTRAINTS, REQUIRED_INDEXES, REQUIRED_FOREIGN_KEYS, EXPECTED_VERSIONS, checkDatabase };

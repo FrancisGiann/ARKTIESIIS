@@ -134,7 +134,7 @@ function createRequireAuth({ getPool = defaultGetPool, sql = defaultSql, environ
       res.locals.navigationGroups = navigation.groups;
       res.locals.currentPage = navigation.currentPage;
       res.locals.csrfToken = ensureCsrfToken(req);
-      const workspaceHomes = { database_admin: '/admin', registrar: '/registrar', teacher: '/teacher', finance: '/finance', student: '/student' };
+      const workspaceHomes = { database_admin: '/admin', registrar: '/registrar', front_desk: '/front-desk', teacher: '/teacher', finance: '/finance', student: '/student' };
       res.locals.errorRecovery = { href: workspaceHomes[req.authUser.role] || '/', label: 'Return to your workspace' };
       return next();
     } catch {

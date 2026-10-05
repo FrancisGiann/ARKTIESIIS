@@ -9,17 +9,17 @@
   <% const stylesheetUrl = typeof assetVersion === 'undefined' ? '/css/app.css' : `/css/app.css?v=${assetVersion}`; %>
   <link rel="stylesheet" href="<%= stylesheetUrl %>">
 </head>
-<body class="<%= typeof currentUser !== 'undefined' && currentUser && typeof navigationItems !== 'undefined' ? 'workspace-body' : 'public-body' %>">
+<body class="<%= typeof currentUser !== 'undefined' && currentUser && typeof navigationItems !== 'undefined' ? `workspace-body${currentUser.role === 'registrar' ? ' workspace-body--registrar' : ''}` : 'public-body' %>">
 <a class="skip-link" href="#main-content">Skip to main content</a>
 <% if (typeof currentUser !== 'undefined' && currentUser && typeof navigationItems !== 'undefined') { %>
-  <% const roleLabels = { database_admin: 'Database administrator', registrar: 'Registrar', teacher: 'Teacher', finance: 'Finance', student: 'Student' }; %>
-  <% const workspaceHomes = { database_admin: '/admin', registrar: '/registrar', teacher: '/teacher', finance: '/finance/overview', student: '/student' }; %>
+  <% const roleLabels = { database_admin: 'Database administrator', registrar: 'Registrar', front_desk: 'Front desk', teacher: 'Teacher', finance: 'Finance', student: 'Student' }; %>
+  <% const workspaceHomes = { database_admin: '/admin', registrar: '/registrar', front_desk: '/front-desk', teacher: '/teacher', finance: '/finance/overview', student: '/student' }; %>
   <% const currentNavItem = navigationItems.find((item) => item.current); %>
   <div class="app-shell">
     <header class="app-header">
-      <a class="brand" href="<%= workspaceHomes[currentUser.role] || '/' %>" aria-label="ARKTIESIIS, Ark Technological Institute Education System Incorporated, Lucena Branch">
+      <a class="brand" href="<%= workspaceHomes[currentUser.role] || '/' %>" aria-label="ARKTIESIIS, Ark Technological Institute Education System Inc., Lucena Branch">
         <img class="brand__seal" src="/images/arktiesiis-school-seal.png" alt="Official school seal">
-        <span class="brand__copy"><strong class="brand__name">ARKTIESIIS</strong><span class="brand__institution">Ark Technological Institute Education System Incorporated</span><span class="brand__branch">Lucena Branch</span></span>
+        <span class="brand__copy"><strong class="brand__name">ARKTIESIIS</strong><span class="brand__institution">Ark Technological Institute Education System Inc.</span><span class="brand__branch">Lucena Branch</span></span>
       </a>
       <details class="mobile-nav">
         <summary><span>Menu</span><span class="mobile-nav__current"><%= currentNavItem?.label || 'Workspace' %></span></summary>
@@ -66,7 +66,7 @@
     <header class="public-header">
       <a class="brand" href="/" aria-label="ARKTIESIIS home">
         <img class="brand__seal" src="/images/arktiesiis-school-seal.png" alt="Official school seal">
-        <span class="brand__copy"><strong class="brand__name">ARKTIESIIS</strong><span class="brand__institution">Ark Technological Institute Education System Incorporated</span><span class="brand__branch">Lucena Branch</span></span>
+        <span class="brand__copy"><strong class="brand__name">ARKTIESIIS</strong><span class="brand__institution">Ark Technological Institute Education System Inc.</span><span class="brand__branch">Lucena Branch</span></span>
       </a>
     </header>
     <div class="public-content">

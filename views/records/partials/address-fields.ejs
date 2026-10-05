@@ -1,0 +1,18 @@
+<% const isEmergencyAddress = prefix === 'emergencyContactAddress';
+  const idPrefix = isEmergencyAddress ? 'emergency-address' : 'student-address';
+  const modeKey = isEmergencyAddress ? 'emergencyContactAddressMode' : 'addressMode';
+  const fieldSet = isEmergencyAddress
+    ? [['emergencyContactAddressBlockLotStreetPurok', 'Block and Lot, Street/Purok'], ['emergencyContactAddressBarangay', 'Barangay'], ['emergencyContactAddressCity', 'City'], ['emergencyContactAddressProvince', 'Province'], ['emergencyContactAddressZip', 'ZIP code']]
+    : [['addressBlockLotStreetPurok', 'Block and Lot, Street/Purok'], ['addressBarangay', 'Barangay'], ['addressCity', 'City'], ['addressProvince', 'Province'], ['addressZip', 'ZIP code']];
+  const legacyAddress = isEmergencyAddress ? student?.emergency_contact_address : student?.address;
+%>
+<section class="address-entry field--full" aria-labelledby="<%= idPrefix %>-heading">
+  <h3 id="<%= idPrefix %>-heading"><%= isEmergencyAddress ? 'Emergency contact address' : 'Student address' %></h3>
+  <% if (legacyAddress) { %><p class="legacy-address-note" role="status">Address on file: <strong><%= legacyAddress %></strong>. This formatted address will stay intact until you choose to replace it.</p><% } %>
+  <% if (student) { %><div class="field"><label for="<%= idPrefix %>-mode">Saved address</label><select id="<%= idPrefix %>-mode" name="<%= modeKey %>"><option value="preserve" <%= values[modeKey] !== 'replace' ? 'selected' : '' %>>Keep the address currently on file</option><option value="replace" <%= values[modeKey] === 'replace' ? 'selected' : '' %>>Replace with the components below</option></select><small>Unrelated profile edits preserve the saved address. Replacing a legacy address will not copy its old text into these fields.</small></div><% } else { %><input type="hidden" name="<%= modeKey %>" value="replace"><% } %>
+  <div class="admin-form-grid address-entry__fields">
+    <% for (const [field,label] of fieldSet) { const zip = field.endsWith('Zip'); const max = zip ? 4 : label.startsWith('Block') ? 200 : 100; %>
+      <div class="field"><label for="<%= idPrefix %>-<%= field %>"><%= label %></label><input id="<%= idPrefix %>-<%= field %>" name="<%= field %>" maxlength="<%= max %>" <% if (zip) { %>inputmode="numeric" pattern="[0-9]{4}" title="Enter four digits; keep any leading zeroes."<% } %> value="<%= values[field] || '' %>"></div>
+    <% } %>
+  </div>
+</section>

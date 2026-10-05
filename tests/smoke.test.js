@@ -211,7 +211,7 @@ test('home page renders with Helmet default content security policy', async () =
     assert.equal(response.status, 200);
     assert.match(html, /ARKTIESIIS/);
     assert.match(html, /src="\/images\/arktiesiis-campus-building-hero\.png"/);
-    assert.match(html, /Street view of the Ark Technological Institute Education System Incorporated building at Lucena Branch/);
+    assert.match(html, /Street view of the Ark Technological Institute Education System Inc\. building at Lucena Branch/);
     assert.match(html, /src="\/images\/arktiesiis-school-seal\.png"/);
     for (const section of ['home-overview', 'home-school-day', 'home-documents', 'home-access']) {
       assert.match(html, new RegExp(`id="${section}"`));
@@ -575,6 +575,45 @@ test('non-development login requires OTP even when the development bypass flag i
     });
     assert.equal(dashboardAfterOtp.status, 303);
     assert.equal(dashboardAfterOtp.headers.get('location'), '/registrar');
+  });
+});
+
+test('front-desk accounts use email 2FA, the front-desk home, and the shared pre-enrollment route', async () => {
+  const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
+  const user = { id: 32, email: 'front-desk@example.edu', password_hash: passwordHash, role: 'front_desk', is_active: true };
+  const twoFactorService = createTestTwoFactorService(user);
+  const environment = emailTwoFactorEnvironment({ nodeEnv: 'test', devPasswordOnlyLogin: true });
+  const preEnrollmentService = {
+    async list(actorId) {
+      assert.equal(actorId, user.id);
+      return { rows: [], filters: { search: '', schoolYear: '', status: '' },
+        pagination: { page: 1, pageSize: 20, totalRecords: 0, totalPages: 1, from: 0, to: 0 } };
+    }
+  };
+  await withServer(createApp({ databasePool: createAuthDatabase([user]).getPool, environment, twoFactorService, preEnrollmentService }), async (baseUrl) => {
+    const login = await startEmailLogin(baseUrl, user.email);
+    assert.equal(login.response.status, 303);
+    assert.equal(login.response.headers.get('location'), '/login/verify');
+    const verification = await getVerificationForm(baseUrl, login.authenticatedCookie);
+    const verified = await postForm(baseUrl, '/login/verify', login.authenticatedCookie, {
+      _csrf: verification.csrfToken, code: twoFactorService.state.deliveredCode
+    });
+    assert.equal(verified.status, 303);
+    assert.equal(verified.headers.get('location'), '/front-desk');
+    const sessionCookie = getSessionCookie(verified);
+    const dashboard = await fetch(`${baseUrl}/dashboard`, { headers: { cookie: sessionCookie }, redirect: 'manual' });
+    assert.equal(dashboard.status, 303);
+    assert.equal(dashboard.headers.get('location'), '/front-desk');
+    const home = await fetch(`${baseUrl}/front-desk`, { headers: { cookie: sessionCookie }, redirect: 'manual' });
+    assert.equal(home.status, 303);
+    assert.equal(home.headers.get('location'), '/pre-enrollments');
+    const workspace = await fetch(`${baseUrl}/pre-enrollments`, { headers: { cookie: sessionCookie } });
+    assert.equal(workspace.status, 200);
+    assert.match(await workspace.text(), /Pre-enrollment records/);
+    for (const protectedPath of ['/registrar/records', '/registrar/records/grades/missing', '/finance', '/admin/users', '/documents']) {
+      const denied = await fetch(`${baseUrl}${protectedPath}`, { headers: { cookie: sessionCookie } });
+      assert.equal(denied.status, 403, `front desk cannot access ${protectedPath}`);
+    }
   });
 });
 

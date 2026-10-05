@@ -142,6 +142,87 @@ test('teacher account creation and editing accept staff profile fields', () => {
   });
 });
 
+test('front-desk accounts use normal staff account creation and edit fields', () => {
+  const account = {
+    email: 'frontdesk@example.edu', role: 'front_desk', password: 'a-valid-frontdesk-password',
+    firstName: 'Casey', lastName: 'Frontdesk', department: 'Admissions'
+  };
+  assert.deepEqual(validateCreateUser(account), account);
+  assert.deepEqual(validateUpdateUser({ ...account, isActive: '1', password: undefined }), {
+    email: account.email, role: account.role, isActive: true,
+    firstName: account.firstName, lastName: account.lastName, department: account.department
+  });
+});
+
+test('creating a front-desk account stores a regular staff profile and audits only its role', async () => {
+  const { service, log } = transactionalService(({ statement }) => {
+    if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
+    if (statement.includes('INSERT INTO users')) return { insertId: 19 };
+    if (statement.includes('FROM staff_profiles')) return { recordset: [] };
+    if (statement.includes('INSERT INTO staff_profiles') || statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
+    throw new Error(`Unexpected query: ${statement}`);
+  });
+  const id = await service.createUser(7, {
+    email: 'frontdesk@example.edu', role: 'front_desk', password: 'new-frontdesk-password',
+    firstName: 'Casey', lastName: 'Frontdesk', department: 'Admissions'
+  });
+  assert.equal(id, 19);
+  const accountInsert = log.queries.find(({ statement }) => statement.includes('INSERT INTO users'));
+  const profileInsert = log.queries.find(({ statement }) => statement.includes('INSERT INTO staff_profiles'));
+  const auditInsert = log.queries.find(({ statement }) => statement.includes('INSERT INTO audit_logs'));
+  assert.equal(accountInsert.values.role, 'front_desk');
+  assert.deepEqual([profileInsert.values.firstName, profileInsert.values.lastName, profileInsert.values.department],
+    ['Casey', 'Frontdesk', 'Admissions']);
+  assert.equal(auditInsert.values.detailsJson, JSON.stringify({ role: 'front_desk' }));
+  assert.equal(JSON.stringify(log.queries).includes('new-frontdesk-password'), false);
+});
+
+test('editing a front-desk account keeps normal staff-profile management and audit history', async () => {
+  const { service, log } = transactionalService(({ statement }) => {
+    if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
+    if (statement.includes('SELECT id, email, role, is_active FROM users')) {
+      return { recordset: [{ id: 19, email: 'frontdesk@example.edu', role: 'front_desk', is_active: true }] };
+    }
+    if (statement.includes('SELECT id FROM staff_profiles')) return { recordset: [{ id: 27 }] };
+    if (statement.startsWith('UPDATE users') || statement.startsWith('UPDATE staff_profiles')
+      || statement.startsWith('UPDATE two_factor_codes') || statement.startsWith('UPDATE password_reset_tokens')
+      || statement.startsWith('UPDATE pending_email_changes') || statement.startsWith('UPDATE students')
+      || statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
+    throw new Error(`Unexpected query: ${statement}`);
+  });
+  await service.updateUser(7, 19, {
+    email: 'frontdesk-updated@example.edu', role: 'front_desk', isActive: '1',
+    firstName: 'Casey', lastName: 'Frontdesk', department: 'Admissions'
+  });
+  const userUpdate = log.queries.find(({ statement }) => statement.startsWith('UPDATE users'));
+  const profileUpdate = log.queries.find(({ statement }) => statement.startsWith('UPDATE staff_profiles'));
+  const auditInsert = log.queries.find(({ statement }) => statement.includes('INSERT INTO audit_logs'));
+  assert.equal(userUpdate.values.role, 'front_desk');
+  assert.deepEqual([profileUpdate.values.firstName, profileUpdate.values.lastName, profileUpdate.values.department],
+    ['Casey', 'Frontdesk', 'Admissions']);
+  assert.equal(auditInsert.values.detailsJson, JSON.stringify({ previousRole: 'front_desk', role: 'front_desk',
+    wasActive: true, isActive: true, emailChanged: true }));
+});
+
+test('administrator create and edit forms expose the front-desk role', async () => {
+  const adminService = {
+    async getUser(id) {
+      assert.equal(id, 19);
+      return { id: 19, email: 'frontdesk@example.edu', role: 'front_desk', is_active: true,
+        first_name: 'Casey', last_name: 'Frontdesk', department: 'Admissions' };
+    }
+  };
+  await withServer(createApp({ databasePool: createAuthPool('database_admin'), environment: testEnvironment, adminService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'database_admin@example.edu');
+    const newResponse = await fetch(`${baseUrl}/admin/users/new?role=front_desk`, { headers: { cookie } });
+    assert.equal(newResponse.status, 200);
+    assert.match(await newResponse.text(), /<option value="front_desk" selected>Front Desk<\/option>/);
+    const editResponse = await fetch(`${baseUrl}/admin/users/19/edit`, { headers: { cookie } });
+    assert.equal(editResponse.status, 200);
+    assert.match(await editResponse.text(), /<option value="front_desk" selected>Front Desk<\/option>/);
+  });
+});
+
 test('editing a user to teacher updates the account and staff profile in one transaction', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
@@ -233,7 +314,7 @@ test('staff directory applies approved role and active status and safely clamps 
   };
   const service = createAdminService({ getPool: async () => pool, sql: fakeSql() });
   const directory = await service.listAccounts({ category: 'staff', role: 'teacher', status: 'active', page: '9999999999' });
-  assert.match(calls[0].statement, /u\.role IN \('database_admin', 'registrar', 'finance', 'teacher'\)/);
+  assert.match(calls[0].statement, /u\.role IN \('database_admin', 'registrar', 'front_desk', 'finance', 'teacher'\)/);
   assert.match(calls[1].statement, /u\.role = @role/);
   assert.match(calls[1].statement, /u\.is_active = 1/);
   assert.equal(calls[1].values.role, 'teacher');

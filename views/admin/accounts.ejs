@@ -44,7 +44,7 @@
           <label for="account-role">Staff role</label>
           <select id="account-role" name="role">
             <option value="">All staff roles</option>
-            <% for (const role of ['teacher', 'registrar', 'finance', 'database_admin']) { %>
+            <% for (const role of ['teacher', 'registrar', 'front_desk', 'finance', 'database_admin']) { %>
               <option value="<%= role %>" <%= filters.role === role ? 'selected' : '' %>><%= role.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) %></option>
             <% } %>
           </select>

@@ -23,7 +23,7 @@
         <div class="field">
           <label for="role">Role</label>
           <select id="role" name="role" required>
-            <% for (const role of ['registrar', 'teacher', 'finance', 'database_admin', 'student']) { %>
+            <% for (const role of ['registrar', 'front_desk', 'teacher', 'finance', 'database_admin', 'student']) { %>
               <option value="<%= role %>" <%= values.role === role ? 'selected' : '' %>><%= role.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) %></option>
             <% } %>
           </select>

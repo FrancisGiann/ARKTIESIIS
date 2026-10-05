@@ -14,7 +14,7 @@ const { formatStudentPlacement } = require('./utils/formatStudentPlacement');
 
 const projectRoot = path.resolve(__dirname, '..');
 
-function createApp({ databasePool = getPool, environment = env, twoFactorService, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeReviewActionService, registrarDashboardService, annualEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService } = {}) {
+function createApp({ databasePool = getPool, environment = env, twoFactorService, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeReviewActionService, registrarDashboardService, annualEnrollmentService, preEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService } = {}) {
   const app = express();
   const stylesheetPath = path.join(projectRoot, 'public', 'css', 'app.css');
   app.locals.formatMoney = formatMoney;
@@ -44,14 +44,14 @@ function createApp({ databasePool = getPool, environment = env, twoFactorService
     }
   }));
 
-  app.use(createRouter({ getPool: databasePool, environment, twoFactorService, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeReviewActionService, registrarDashboardService, annualEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService }));
+  app.use(createRouter({ getPool: databasePool, environment, twoFactorService, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeReviewActionService, registrarDashboardService, annualEnrollmentService, preEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService }));
 
   app.use((req, res) => {
     res.status(404).render('error', {
       title: 'Not Found',
       message: 'Page not found.',
-      errorRecovery: res.locals.currentUser
-        ? { href: ({ database_admin: '/admin', registrar: '/registrar', teacher: '/teacher', finance: '/finance/overview', student: '/student' })[res.locals.currentUser.role] || '/', label: 'Return to your workspace' }
+        errorRecovery: res.locals.currentUser
+        ? { href: ({ database_admin: '/admin', registrar: '/registrar', front_desk: '/front-desk', teacher: '/teacher', finance: '/finance/overview', student: '/student' })[res.locals.currentUser.role] || '/', label: 'Return to your workspace' }
         : { href: '/', label: 'Return to home' }
     });
   });

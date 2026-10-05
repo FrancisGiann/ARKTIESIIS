@@ -33,6 +33,7 @@ function fakeSql() {
     ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' },
     Int: 'Int',
     Bit: 'Bit',
+    Char: (length) => `Char(${length})`,
     NVarChar: (length) => `NVarChar(${length})`
   };
 }

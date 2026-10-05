@@ -43,6 +43,12 @@ function studentValues(input = {}) {
     birthDate: typeof input.birthDate === 'string' ? input.birthDate.slice(0, 10) : '',
     sex: typeof input.sex === 'string' ? input.sex.slice(0, 20) : '',
     address: typeof input.address === 'string' ? input.address.slice(0, 500) : '',
+    addressMode: input.addressMode === 'replace' ? 'replace' : 'preserve',
+    addressBlockLotStreetPurok: typeof input.addressBlockLotStreetPurok === 'string' ? input.addressBlockLotStreetPurok.slice(0, 200) : '',
+    addressBarangay: typeof input.addressBarangay === 'string' ? input.addressBarangay.slice(0, 100) : '',
+    addressCity: typeof input.addressCity === 'string' ? input.addressCity.slice(0, 100) : '',
+    addressProvince: typeof input.addressProvince === 'string' ? input.addressProvince.slice(0, 100) : '',
+    addressZip: typeof input.addressZip === 'string' ? input.addressZip.slice(0, 4) : '',
     phone: typeof input.phone === 'string' ? input.phone.slice(0, 50) : '',
     birthplace: typeof input.birthplace === 'string' ? input.birthplace.slice(0, 160) : '',
     facebookName: typeof input.facebookName === 'string' ? input.facebookName.slice(0, 120) : '',
@@ -50,6 +56,12 @@ function studentValues(input = {}) {
     emergencyContactRelationship: typeof input.emergencyContactRelationship === 'string' ? input.emergencyContactRelationship.slice(0, 80) : '',
     emergencyContactPhone: typeof input.emergencyContactPhone === 'string' ? input.emergencyContactPhone.slice(0, 50) : '',
     emergencyContactAddress: typeof input.emergencyContactAddress === 'string' ? input.emergencyContactAddress.slice(0, 500) : '',
+    emergencyContactAddressMode: input.emergencyContactAddressMode === 'replace' ? 'replace' : 'preserve',
+    emergencyContactAddressBlockLotStreetPurok: typeof input.emergencyContactAddressBlockLotStreetPurok === 'string' ? input.emergencyContactAddressBlockLotStreetPurok.slice(0, 200) : '',
+    emergencyContactAddressBarangay: typeof input.emergencyContactAddressBarangay === 'string' ? input.emergencyContactAddressBarangay.slice(0, 100) : '',
+    emergencyContactAddressCity: typeof input.emergencyContactAddressCity === 'string' ? input.emergencyContactAddressCity.slice(0, 100) : '',
+    emergencyContactAddressProvince: typeof input.emergencyContactAddressProvince === 'string' ? input.emergencyContactAddressProvince.slice(0, 100) : '',
+    emergencyContactAddressZip: typeof input.emergencyContactAddressZip === 'string' ? input.emergencyContactAddressZip.slice(0, 4) : '',
     motherName: typeof input.motherName === 'string' ? input.motherName.slice(0, 160) : '',
     motherPhone: typeof input.motherPhone === 'string' ? input.motherPhone.slice(0, 50) : '',
     fatherName: typeof input.fatherName === 'string' ? input.fatherName.slice(0, 160) : '',
@@ -68,6 +80,12 @@ function valuesFromStudent(student) {
     birthDate: student.birth_date instanceof Date ? student.birth_date.toISOString().slice(0, 10) : student.birth_date,
     sex: student.sex,
     address: student.address,
+    addressMode: 'preserve',
+    addressBlockLotStreetPurok: student.address_block_lot_street_purok,
+    addressBarangay: student.address_barangay,
+    addressCity: student.address_city,
+    addressProvince: student.address_province,
+    addressZip: student.address_zip,
     phone: student.phone,
     birthplace: student.birthplace,
     facebookName: student.facebook_name,
@@ -75,6 +93,12 @@ function valuesFromStudent(student) {
     emergencyContactRelationship: student.emergency_contact_relationship,
     emergencyContactPhone: student.emergency_contact_phone,
     emergencyContactAddress: student.emergency_contact_address,
+    emergencyContactAddressMode: 'preserve',
+    emergencyContactAddressBlockLotStreetPurok: student.emergency_contact_address_block_lot_street_purok,
+    emergencyContactAddressBarangay: student.emergency_contact_address_barangay,
+    emergencyContactAddressCity: student.emergency_contact_address_city,
+    emergencyContactAddressProvince: student.emergency_contact_address_province,
+    emergencyContactAddressZip: student.emergency_contact_address_zip,
     motherName: student.mother_name,
     motherPhone: student.mother_phone,
     fatherName: student.father_name,
@@ -163,6 +187,10 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         ? studentValues(values)
         : record ? valuesFromStudent(record.student) : studentValues();
       if (!record) formValues.studentNo = '';
+      if (!record && !Object.keys(values).length) {
+        formValues.addressMode = 'replace';
+        formValues.emergencyContactAddressMode = 'replace';
+      }
       if (record && req.authUser.role === 'registrar') formValues.studentNo = record.student.student_no;
       return res.status(status).render('records/student-form', {
         title: studentId === null ? 'Create Student Profile' : 'Student Record',

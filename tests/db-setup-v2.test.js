@@ -26,7 +26,7 @@ test('V2 setup targets the existing MariaDB baseline and ordered forward migrati
   assert.ok(baseline.every((statement) => !/\b(?:CREATE|DROP)\s+DATABASE\b/i.test(statement)));
   const migrations = readForwardMigrations();
   assert.deepEqual(migrations.map(({ version }) => version),
-    Array.from({ length: 13 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
+    Array.from({ length: 14 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
   assert.ok(migrations.every(({ statements }) => statements.length > 0));
 });
 
@@ -46,9 +46,9 @@ test('V2 setup refuses unknown or discontinuous migration history', () => {
     Array.from({ length: 13 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
   )));
   assert.doesNotThrow(() => validateAppliedVersions(new Set(
-    Array.from({ length: 14 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
+    Array.from({ length: 15 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
   )));
-  assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.015'])), /Unknown migration/);
+  assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.016'])), /Unknown migration/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.013'])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.003'])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.002'])), /no recorded MariaDB v2.001/);

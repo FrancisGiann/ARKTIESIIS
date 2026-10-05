@@ -2,9 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const env = require('../src/config/environment');
-const { REQUIRED_OBJECTS, REQUIRED_COLUMNS, EXPECTED_VERSIONS, checkDatabase } = require('../scripts/check-db');
+const { REQUIRED_OBJECTS, REQUIRED_COLUMNS, REQUIRED_CONSTRAINTS, REQUIRED_INDEXES, REQUIRED_FOREIGN_KEYS, EXPECTED_VERSIONS, checkDatabase } = require('../scripts/check-db');
 
-function checkHarness({ databaseName = env.database.database, missingObject = null, failAt = null } = {}) {
+function checkHarness({ databaseName = env.database.database, missingObject = null, missingConstraint = null,
+  invalidRoleConstraint = false, missingIndex = null, missingForeignKey = false, failAt = null } = {}) {
   const state = { queries: [], logs: [], errors: [], closed: 0 };
   let queryCount = 0;
   const pool = { request() {
@@ -19,8 +20,21 @@ function checkHarness({ databaseName = env.database.database, missingObject = nu
         if (statement.includes('FROM schema_migrations')) return { recordset: EXPECTED_VERSIONS.map((version) => ({ version })) };
         if (statement.includes('information_schema.tables')) return { recordset: REQUIRED_OBJECTS.filter((name) => name !== missingObject).map((objectName) => ({ objectName })) };
         if (statement.includes('information_schema.columns')) return { recordset: Object.entries(REQUIRED_COLUMNS).flatMap(([tableName, columnNames]) => columnNames.map((columnName) => ({ tableName, columnName }))) };
-        if (statement.includes('information_schema.table_constraints')) return { recordset: [{ constraintCount: 1 }] };
-        if (statement.includes('information_schema.statistics')) return { recordset: [{ indexCount: 1 }] };
+        if (statement.includes('information_schema.table_constraints')) return { recordset: REQUIRED_CONSTRAINTS
+          .filter(({ tableName, constraintName }) => `${tableName}.${constraintName}` !== missingConstraint)
+          .map(({ tableName, constraintName, type, clauseIncludes }) => ({
+            tableName, constraintName, constraintType: type,
+            checkClause: invalidRoleConstraint && constraintName === 'CK_users_role'
+              ? "role IN ('database_admin','registrar','teacher','finance','student')"
+              : clauseIncludes || 'valid constraint'
+          })) };
+        if (statement.includes('information_schema.statistics')) return { recordset: REQUIRED_INDEXES
+          .filter(({ tableName, indexName }) => `${tableName}.${indexName}` !== missingIndex)
+          .map(({ tableName, indexName, columns }) => ({ tableName, indexName, nonUnique: 0, columns: columns.join(',') })) };
+        if (statement.includes('information_schema.key_column_usage')) return { recordset: missingForeignKey ? [] : REQUIRED_FOREIGN_KEYS.map((foreignKey) => ({
+          tableName: foreignKey.tableName, constraintName: foreignKey.constraintName,
+          columnName: foreignKey.columnName, referencedTable: foreignKey.referencedTable, referencedColumn: foreignKey.referencedColumn
+        })) };
         throw new Error(`Unexpected check query: ${statement}`);
       }
     };
@@ -50,7 +64,7 @@ test('MariaDB database check verifies migration versions, required tables, views
   assert.equal(state.exitCode, undefined);
   assert.equal(state.closed, 1);
   assert.match(state.logs[0], /MariaDB connectivity/);
-  assert.match(state.logs[0], /v2\.014/);
+  assert.match(state.logs[0], /v2\.015/);
   assert.ok(state.queries.some((statement) => statement.includes('information_schema.tables')));
   assert.ok(state.queries.some((statement) => statement.includes('information_schema.columns')));
   assert.ok(state.queries.every((statement) => !/\b(?:DB_NAME|OBJECT_ID|dbo\.|sys\.tables|TRIGGER)\b/i.test(statement)));
@@ -71,6 +85,20 @@ test('MariaDB database check identifies missing schema objects and masks databas
   const failed = await runCheck({ failAt: 2 });
   assert.equal(failed.exitCode, 1);
   assert.doesNotMatch(failed.errors.join('\n'), /raw private SQL details/);
+});
+
+test('MariaDB database check verifies role, address, idempotency, LRN, and annual-source constraints', async () => {
+  const wrongRole = await runCheck({ invalidRoleConstraint: true });
+  assert.equal(wrongRole.exitCode, 1);
+  assert.match(wrongRole.errors.join('\n'), /constraint users\.CK_users_role/);
+
+  const missingUnique = await runCheck({ missingIndex: 'pre_enrollments.UQ_pre_enrollment_year_lrn' });
+  assert.equal(missingUnique.exitCode, 1);
+  assert.match(missingUnique.errors.join('\n'), /unique index pre_enrollments\.UQ_pre_enrollment_year_lrn/);
+
+  const missingForeignKey = await runCheck({ missingForeignKey: true });
+  assert.equal(missingForeignKey.exitCode, 1);
+  assert.match(missingForeignKey.errors.join('\n'), /foreign key annual_enrollments\.FK_annual_enrollment_pre_enrollment/);
 });
 
 test('the former SQL Server baseline stays untouched and MariaDB setup avoids Hostinger-blocked DDL', () => {

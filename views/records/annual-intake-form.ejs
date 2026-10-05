@@ -18,6 +18,20 @@
     data-intake-wizard data-profile-validation data-active-step="<%= activeStep || 1 %>" data-submitting-message="Saving the student and paper updates. Please wait.">
     <input type="hidden" name="_csrf" value="<%= csrfToken %>">
     <input type="hidden" name="idempotencyKey" value="<%= values.idempotencyKey || idempotencyKey %>">
+    <% if (values.preEnrollmentId) { %><input type="hidden" name="preEnrollmentId" value="<%= values.preEnrollmentId %>"><input type="hidden" name="preEnrollmentVersion" value="<%= values.preEnrollmentVersion || '' %>"><% } %>
+
+    <% if (preEnrollmentSource) { %>
+      <section class="form-section pre-enrollment-handoff" aria-labelledby="handoff-heading">
+        <h2 id="handoff-heading">Paper pre-enrollment for review</h2>
+        <p>This record is revision <%= preEnrollmentSource.version %>. Confirm the paper details before saving. Its receipt counts stay separate from the verified enrollment checklist below.</p>
+        <% if (String(values.preEnrollmentVersion || '') !== String(preEnrollmentSource.version) || preEnrollmentSource.status !== 'ready_for_registrar') { %><p class="form-alert" role="alert">The paper record changed after this enrollment form opened. Reload the source record before continuing; this form keeps its original revision and token.</p><% } %>
+        <dl class="pre-enrollment-summary">
+          <% for (const [label,value] of [['Voucher type as written',preEnrollmentSource.voucher_type_text],['Voucher category as written',preEnrollmentSource.voucher_category_text],['Preferred track',preEnrollmentSource.preferred_track],['Preferred cluster',preEnrollmentSource.preferred_cluster],['Last grade level',preEnrollmentSource.prior_grade_level],['School attended',preEnrollmentSource.prior_school],['Student signature present',preEnrollmentSource.student_signature_present ? 'Yes' : 'No'],['Student signature date',preEnrollmentSource.student_signed_date],['Paper received by',preEnrollmentSource.received_by],['Paper received date',preEnrollmentSource.received_date]]) { %><div><dt><%= label %></dt><dd><%= value || '—' %></dd></div><% } %>
+        </dl>
+        <h3>Paper receipts recorded</h3>
+        <ul><% for (const receipt of preEnrollmentSource.receipts || []) { const label = (preEnrollmentReceiptRequirements || []).find(([code]) => code === receipt.requirement_code)?.[1] || receipt.requirement_code; %><li><%= label %>: original <%= receipt.original_received ? `received${receipt.original_pieces ? ` (${receipt.original_pieces})` : ''}` : 'not recorded' %>; photocopy <%= receipt.photocopy_received ? `received${receipt.photocopy_pieces ? ` (${receipt.photocopy_pieces})` : ''}` : 'not recorded' %></li><% } %></ul>
+      </section>
+    <% } %>
 
     <section class="intake-step" data-step-panel="1" aria-labelledby="intake-student-heading">
       <div class="intake-step__heading"><h2 id="intake-student-heading">Student details</h2></div>
@@ -44,15 +58,21 @@
         <div class="field"><label for="annual-birth-date">Birth date <span class="muted-copy">(optional)</span></label><input id="annual-birth-date" name="birthDate" type="date" max="<%= maxBirthDate %>" value="<%= values.birthDate || '' %>"></div>
         <div class="field"><label for="annual-sex">Gender <span class="muted-copy">(optional)</span></label><select id="annual-sex" name="sex"><option value="" <%= values.sex ? '' : 'selected' %>>Not recorded</option><% for (const gender of ['Male', 'Female', 'Other']) { %><option value="<%= gender %>" <%= String(values.sex || '').toLowerCase() === gender.toLowerCase() ? 'selected' : '' %>><%= gender %></option><% } %><% if (values.sex && !['male', 'female', 'other'].includes(String(values.sex).toLowerCase())) { %><option value="<%= values.sex %>" selected>Invalid value (choose again): <%= values.sex %></option><% } %></select></div>
         <div class="field"><label for="annual-phone">Phone <span class="muted-copy">(optional)</span></label><input id="annual-phone" name="phone" type="tel" maxlength="50" pattern="\+?[0-9\x28\x29\x20\x2d]{7,50}" title="Use 7 to 15 digits; a leading +, spaces, hyphens, and balanced parentheses are allowed." value="<%= values.phone || '' %>"></div>
-        <div class="field field--full"><label for="annual-address">Address <span class="muted-copy">(optional)</span></label><textarea id="annual-address" name="address" maxlength="500" rows="2" aria-describedby="annual-address-help"><%= values.address || '' %></textarea><small id="annual-address-help">Include street or area text. Numbers and punctuation are welcome.</small></div>
       </div>
+      <%- include('partials/address-fields', { prefix: 'address', values, student: null }) %>
+      <div class="admin-form-grid">
+        <div class="field"><label for="annual-emergency-person">Emergency contact person <span class="muted-copy">(optional)</span></label><input id="annual-emergency-person" name="emergencyContactPerson" maxlength="160" value="<%= values.emergencyContactPerson || '' %>"></div>
+        <div class="field"><label for="annual-emergency-relationship">Relationship <span class="muted-copy">(optional)</span></label><input id="annual-emergency-relationship" name="emergencyContactRelationship" maxlength="80" value="<%= values.emergencyContactRelationship || '' %>"></div>
+        <div class="field"><label for="annual-emergency-phone">Emergency contact number <span class="muted-copy">(optional)</span></label><input id="annual-emergency-phone" name="emergencyContactPhone" type="tel" maxlength="50" pattern="\+?[0-9\x28\x29\x20\x2d]{7,50}" value="<%= values.emergencyContactPhone || '' %>"></div>
+      </div>
+      <%- include('partials/address-fields', { prefix: 'emergencyContactAddress', values, student: null }) %>
       <div class="intake-actions"><button class="button button--primary" type="button" data-step-next>Continue to enrollment</button><a class="button button--secondary" href="/registrar/intake">Cancel</a></div>
     </section>
 
     <section class="intake-step" data-step-panel="2" aria-labelledby="intake-enrollment-heading">
       <div class="intake-step__heading"><h2 id="intake-enrollment-heading">Enrollment details</h2></div>
       <div class="admin-form-grid">
-        <div class="field"><label for="annual-school-year">School year</label><select id="annual-school-year" name="schoolYear" required><option value="">Choose school year</option><% for (const year of schoolYears) { %><option value="<%= year.school_year %>" <%= values.schoolYear === year.school_year ? 'selected' : '' %>><%= year.school_year %></option><% } %></select></div>
+        <div class="field"><label for="annual-school-year">School year</label><select id="annual-school-year" name="schoolYear" required><option value="">Choose school year</option><% if (values.schoolYear && !schoolYears.some((year) => year.school_year === values.schoolYear)) { %><option value="<%= values.schoolYear %>" selected><%= values.schoolYear %> · configure term order before saving</option><% } %><% for (const year of schoolYears) { %><option value="<%= year.school_year %>" <%= values.schoolYear === year.school_year ? 'selected' : '' %>><%= year.school_year %></option><% } %></select></div>
         <div class="field"><label for="annual-grade">Grade level</label><select id="annual-grade" name="gradeLevel" required><option value="">Choose grade</option><% for (const grade of ['Grade 11', 'Grade 12']) { %><option value="<%= grade %>" <%= values.gradeLevel === grade ? 'selected' : '' %>><%= grade %></option><% } %></select></div>
         <div class="field"><label for="annual-voucher">Voucher type</label><select id="annual-voucher" name="voucherCode" required><option value="">Choose voucher type</option><% for (const [voucher, label] of [['PUB', 'Public-school voucher (PUB)'], ['ESC', 'ESC voucher'], ['NV', 'No voucher (NV)']]) { %><option value="<%= voucher %>" <%= values.voucherCode === voucher ? 'selected' : '' %>><%= label %></option><% } %></select></div>
         <div class="field"><label for="annual-intake-kind">Intake type</label><select id="annual-intake-kind" name="intakeKind"><option value="standard">Standard intake</option><option value="transferee" <%= values.intakeKind === 'transferee' ? 'selected' : '' %>>Transferee</option></select></div>

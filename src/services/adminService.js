@@ -2,7 +2,7 @@ const bcrypt = require('bcrypt');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 
 const PASSWORD_HASH_ROUNDS = 12;
-const STAFF_ROLES = new Set(['database_admin', 'registrar', 'finance', 'teacher']);
+const STAFF_ROLES = new Set(['database_admin', 'registrar', 'front_desk', 'finance', 'teacher']);
 const ROLES = new Set([...STAFF_ROLES, 'student']);
 const ACCOUNT_PAGE_SIZE = 25;
 const AUDIT_PAGE_SIZE = 25;
@@ -267,7 +267,7 @@ function createAdminService({
   async function listAccounts(input = {}) {
     const filters = normalizeAccountFilters(input);
     const searchPattern = filters.searchTerm ? `%${escapeLikePattern(filters.searchTerm)}%` : null;
-    const conditions = [filters.category === 'students' ? "u.role = 'student'" : "u.role IN ('database_admin', 'registrar', 'finance', 'teacher')"];
+    const conditions = [filters.category === 'students' ? "u.role = 'student'" : "u.role IN ('database_admin', 'registrar', 'front_desk', 'finance', 'teacher')"];
     if (filters.status === 'active') conditions.push('u.is_active = 1');
     if (filters.status === 'inactive') conditions.push('u.is_active = 0');
     if (filters.role) conditions.push('u.role = @role');

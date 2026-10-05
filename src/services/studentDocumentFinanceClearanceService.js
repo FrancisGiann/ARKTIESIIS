@@ -491,7 +491,7 @@ function createStudentDocumentFinanceClearanceService({
       }
       const fullName = [request.first_name, request.middle_name, request.last_name, request.suffix].filter(Boolean).join(' ');
       return {
-        schoolName: 'Ark Technological Institute Education System Incorporated - Lucena Branch',
+        schoolName: 'Ark Technological Institute Education System Inc. - Lucena Branch',
         studentId,
         requestReference: request.reference_text || String(request.id).toUpperCase(),
         studentName: fullName,

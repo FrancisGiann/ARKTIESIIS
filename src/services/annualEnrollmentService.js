@@ -1,7 +1,8 @@
 const crypto = require('node:crypto');
 const bcrypt = require('bcrypt');
 const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
-const { validateStudent, StudentRecordsError, normalizeRecordId } = require('./studentRecordsService');
+const { validateStudent, StudentRecordsError, normalizeRecordId, applyAddressInput } = require('./studentRecordsService');
+const { ADDRESS_DEFINITIONS } = require('../utils/studentAddress');
 const { allocateStudentNumber, StudentNumberAllocationError } = require('./studentNumberAllocator');
 const { normalizeIntakeChecklistUpdates } = require('./physicalChecklistService');
 const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
@@ -675,13 +676,29 @@ function createAnnualEnrollmentService({
   }
 
   async function createAnnualIntake(actorInput, input = {}) {
-    const entry = normalizeAnnualInput(input);
+    const sourceId = input.preEnrollmentId ? normalizeUuid(input.preEnrollmentId, 'pre-enrollment record') : null;
+    const sourceVersion = sourceId ? Number(input.preEnrollmentVersion) : null;
+    if (sourceId && (!Number.isSafeInteger(sourceVersion) || sourceVersion < 1)) {
+      throw new AnnualEnrollmentError('Reload the pre-enrollment record before starting annual enrollment.', 409);
+    }
+    if (sourceId && normalizeUuid(input.idempotencyKey) !== sourceId) {
+      throw new AnnualEnrollmentError('The enrollment submission token does not match this pre-enrollment record. Reload the form.', 409);
+    }
+    const entry = normalizeAnnualInput(sourceId ? { ...input, idempotencyKey: sourceId } : input);
     const checklistUpdates = normalizeIntakeChecklistUpdates(input);
     if (checklistUpdates.length && typeof physicalChecklistService?.recordIntakeUpdatesInTransaction !== 'function') {
       throw new AnnualEnrollmentError('The paper checklist service is unavailable. Reload and try again.', 503);
     }
     const profileInput = entry.isReturning ? null : (() => {
-      try { return validateStudent(input, { requireStudentNo: false }); }
+      try {
+        const profile = validateStudent(input, { requireStudentNo: false });
+        for (const prefix of ['address', 'emergencyContactAddress']) {
+          const fields = ADDRESS_DEFINITIONS[prefix].map(([inputName]) => inputName);
+          const hasStructuredInput = Object.hasOwn(input, `${prefix}Mode`) || fields.some((field) => Object.hasOwn(input, field));
+          if (hasStructuredInput) applyAddressInput(profile, input, prefix);
+        }
+        return profile;
+      }
       catch (error) {
         if (error instanceof StudentRecordsError) throw new AnnualEnrollmentError(error.message, error.status);
         throw error;
@@ -690,23 +707,54 @@ function createAnnualEnrollmentService({
     const checklistFingerprint = checklistUpdates.map(({ idempotencyKey, ...update }) => update);
     const fingerprintForEntry = (fingerprintEntry) => crypto.createHash('sha256')
       .update(JSON.stringify({ entry: fingerprintEntry, profileInput, checklistUpdates: checklistFingerprint })).digest('hex');
-    const fingerprint = fingerprintForEntry(entry);
+    const fingerprint = sourceId
+      ? crypto.createHash('sha256').update(JSON.stringify({ entry, profileInput,
+        checklistUpdates: checklistFingerprint, preEnrollmentId: sourceId, preEnrollmentVersion: sourceVersion })).digest('hex')
+      : fingerprintForEntry(entry);
     const placeholderHash = profileInput ? await hashPassword(createPassword(), BCRYPT_ROUNDS) : null;
     return runTransaction(async (transaction) => {
       const actor = await requireRegistrar(transaction.request(), actorInput);
 
       const priorResult = await transaction.request()
         .input('idempotencyKey', sql.UniqueIdentifier, entry.idempotencyKey)
-        .query(`SELECT id AS annual_enrollment_id, student_id, request_fingerprint, voucher_category FROM annual_enrollments
+        .query(`SELECT id AS annual_enrollment_id, student_id, request_fingerprint, voucher_category, pre_enrollment_id FROM annual_enrollments
           WHERE idempotency_key = @idempotencyKey FOR UPDATE`);
       if (priorResult.recordset?.[0]) {
         const prior = priorResult.recordset[0];
+        if (sourceId) {
+          if (String(prior.pre_enrollment_id || '').toLowerCase() !== sourceId || prior.request_fingerprint !== fingerprint) {
+            throw new AnnualEnrollmentError('This pre-enrollment submission token was already used for different details.', 409);
+          }
+          return { annualEnrollmentId: prior.annual_enrollment_id,
+            studentId: prior.student_id, alreadyCreated: true };
+        }
+        if (prior.pre_enrollment_id) {
+          throw new AnnualEnrollmentError('This submission token belongs to a pre-enrollment conversion. Reload the registrar workspace.', 409);
+        }
         const legacyFingerprint = fingerprintForEntry({ ...entry, voucherCategory: prior.voucher_category ?? null });
         if (prior.request_fingerprint !== fingerprint && prior.request_fingerprint !== legacyFingerprint) {
           throw new AnnualEnrollmentError('This submission token was already used for different annual enrollment details.', 409);
         }
         return { annualEnrollmentId: prior.annual_enrollment_id,
           studentId: prior.student_id, alreadyCreated: true };
+      }
+
+      let preEnrollment = null;
+      if (sourceId) {
+        const sourceResult = await transaction.request().input('preEnrollmentId', sql.Char(36), sourceId)
+          .query(`SELECT id, school_year, lrn, target_grade_level, status, version
+            FROM pre_enrollments WHERE id = @preEnrollmentId FOR UPDATE`);
+        preEnrollment = sourceResult.recordset?.[0] || null;
+        if (!preEnrollment) throw new AnnualEnrollmentError('The pre-enrollment record no longer exists.', 404);
+        if (preEnrollment.status !== 'ready_for_registrar' || Number(preEnrollment.version) !== sourceVersion) {
+          throw new AnnualEnrollmentError('This pre-enrollment record changed after the enrollment form was opened. Reload and review it.', 409);
+        }
+        if (preEnrollment.school_year !== entry.schoolYear || preEnrollment.target_grade_level !== entry.gradeLevel) {
+          throw new AnnualEnrollmentError('School year and grade must match the ready pre-enrollment record. Correct that record before starting enrollment.', 409);
+        }
+        if (!/^\d{12}$/.test(String(preEnrollment.lrn || '')) || profileInput?.lrn && profileInput.lrn !== preEnrollment.lrn) {
+          throw new AnnualEnrollmentError('The student LRN must match the ready pre-enrollment record. Correct that record before starting enrollment.', 409);
+        }
       }
 
       const termOrderResult = await transaction.request().input('schoolYear', sql.NVarChar(20), entry.schoolYear)
@@ -792,7 +840,7 @@ function createAnnualEnrollmentService({
       if (entry.isReturning) {
         const studentResult = await transaction.request()
           .input('studentNo', sql.NVarChar(50), entry.studentNo)
-          .query(`SELECT student.id, student.student_no, student.user_id, student.status,
+          .query(`SELECT student.id, student.student_no, student.user_id, student.status, student.lrn,
               account.role AS linked_account_role, account.email, account.is_active
             FROM students AS student
             LEFT JOIN users AS account ON account.id = student.user_id
@@ -800,6 +848,9 @@ function createAnnualEnrollmentService({
         student = studentResult.recordset?.[0];
         if (!student) throw new AnnualEnrollmentError('No student record matches that student number.', 404);
         if (student.status === 'archived') throw new AnnualEnrollmentError('Archived student records cannot be enrolled.', 409);
+        if (preEnrollment && student.lrn !== preEnrollment.lrn) {
+          throw new AnnualEnrollmentError('Choose the existing student whose LRN matches the ready pre-enrollment record.', 409);
+        }
         if (student.user_id && student.linked_account_role !== 'student') throw new AnnualEnrollmentError('The linked account is not a student login.', 409);
         if (student.user_id && !(student.is_active === true || student.is_active === 1)) {
           const authorization = await transaction.request().input('studentId', sql.Int, student.id)
@@ -854,10 +905,32 @@ function createAnnualEnrollmentService({
           .input('birthDate', sql.Date, profile.birthDate)
           .input('sex', sql.NVarChar(20), profile.sex)
           .input('address', sql.NVarChar(500), profile.address)
+          .input('addressBlockLotStreetPurok', sql.NVarChar(200), profile.addressBlockLotStreetPurok)
+          .input('addressBarangay', sql.NVarChar(100), profile.addressBarangay)
+          .input('addressCity', sql.NVarChar(100), profile.addressCity)
+          .input('addressProvince', sql.NVarChar(100), profile.addressProvince)
+          .input('addressZip', sql.Char(4), profile.addressZip)
           .input('phone', sql.NVarChar(50), profile.phone)
+          .input('emergencyContactPerson', sql.NVarChar(160), profile.emergencyContactPerson)
+          .input('emergencyContactRelationship', sql.NVarChar(80), profile.emergencyContactRelationship)
+          .input('emergencyContactPhone', sql.NVarChar(50), profile.emergencyContactPhone)
+          .input('emergencyContactAddress', sql.NVarChar(500), profile.emergencyContactAddress)
+          .input('emergencyContactAddressBlockLotStreetPurok', sql.NVarChar(200), profile.emergencyContactAddressBlockLotStreetPurok)
+          .input('emergencyContactAddressBarangay', sql.NVarChar(100), profile.emergencyContactAddressBarangay)
+          .input('emergencyContactAddressCity', sql.NVarChar(100), profile.emergencyContactAddressCity)
+          .input('emergencyContactAddressProvince', sql.NVarChar(100), profile.emergencyContactAddressProvince)
+          .input('emergencyContactAddressZip', sql.Char(4), profile.emergencyContactAddressZip)
           .query(`INSERT INTO students
-              (user_id, student_no, lrn, first_name, middle_name, last_name, suffix, birth_date, sex, address, phone)
-            VALUES (@userId, @studentNo, @lrn, @firstName, @middleName, @lastName, @suffix, @birthDate, @sex, @address, @phone)`);
+              (user_id, student_no, lrn, first_name, middle_name, last_name, suffix, birth_date, sex, address,
+                address_block_lot_street_purok, address_barangay, address_city, address_province, address_zip, phone,
+                emergency_contact_person, emergency_contact_relationship, emergency_contact_phone, emergency_contact_address,
+                emergency_contact_address_block_lot_street_purok, emergency_contact_address_barangay,
+                emergency_contact_address_city, emergency_contact_address_province, emergency_contact_address_zip)
+            VALUES (@userId, @studentNo, @lrn, @firstName, @middleName, @lastName, @suffix, @birthDate, @sex, @address,
+              @addressBlockLotStreetPurok, @addressBarangay, @addressCity, @addressProvince, @addressZip, @phone,
+              @emergencyContactPerson, @emergencyContactRelationship, @emergencyContactPhone, @emergencyContactAddress,
+              @emergencyContactAddressBlockLotStreetPurok, @emergencyContactAddressBarangay,
+              @emergencyContactAddressCity, @emergencyContactAddressProvince, @emergencyContactAddressZip)`);
         const studentId = studentResult.insertId;
         if (!Number.isSafeInteger(studentId) || studentId < 1) throw new Error('Student profile insert returned no identifier.');
         student = { id: studentId, user_id: userId, status: 'active', student_no: studentNo, email: entry.email };
@@ -883,13 +956,14 @@ function createAnnualEnrollmentService({
         .input('enrollmentStartDate', sql.Date, entry.enrollmentStartDate)
         .input('activationPending', sql.Bit, activateOnFirstTerm)
         .input('actorId', sql.Int, actor.id)
+        .input('preEnrollmentId', sql.Char(36), sourceId)
         .input('idempotencyKey', sql.UniqueIdentifier, entry.idempotencyKey)
         .input('requestFingerprint', sql.Char(64), fingerprint)
         .query(`INSERT INTO annual_enrollments
             (student_id, school_year, grade_level, voucher_code, voucher_category, intake_kind, entry_term_number,
-              enrollment_start_date, account_activation_pending, created_by, idempotency_key, request_fingerprint)
+              enrollment_start_date, account_activation_pending, created_by, pre_enrollment_id, idempotency_key, request_fingerprint)
           VALUES (@studentId, @schoolYear, @gradeLevel, @voucherCode, NULL, @intakeKind, @entryTermNumber,
-            @enrollmentStartDate, @activationPending, @actorId, @idempotencyKey, @requestFingerprint)`);
+            @enrollmentStartDate, @activationPending, @actorId, @preEnrollmentId, @idempotencyKey, @requestFingerprint)`);
       const annualEnrollmentId = annualResult.insertId;
       if (!Number.isSafeInteger(annualEnrollmentId) || annualEnrollmentId < 1) throw new Error('Annual enrollment insert returned no identifier.');
       if (activationSourceAnnualId) {
@@ -939,11 +1013,33 @@ function createAnnualEnrollmentService({
         .input('actorId', sql.Int, actor.id)
         .query(`INSERT INTO annual_enrollment_events (annual_enrollment_id, actor_id, event_type)
           VALUES (@annualEnrollmentId, @actorId, 'created')`);
-      await writeAudit(transaction, actor, 'annual_enrollment_created', annualEnrollmentId, {
+      if (preEnrollment) {
+        const nextSourceVersion = sourceVersion + 1;
+        const sourceUpdated = await transaction.request()
+          .input('preEnrollmentId', sql.Char(36), sourceId).input('expectedVersion', sql.Int, sourceVersion)
+          .input('nextVersion', sql.Int, nextSourceVersion).input('actorId', sql.Int, actor.id)
+          .query(`UPDATE pre_enrollments SET status = 'enrollment_started', version = @nextVersion,
+              updated_by = @actorId, updated_at = UTC_TIMESTAMP(3)
+            WHERE id = @preEnrollmentId AND version = @expectedVersion AND status = 'ready_for_registrar'`);
+        if (sourceUpdated.rowsAffected?.[0] !== 1) {
+          throw new AnnualEnrollmentError('This pre-enrollment record changed while enrollment was being saved. Retry after reloading it.', 409);
+        }
+        await transaction.request().input('preEnrollmentId', sql.Char(36), sourceId).input('actorId', sql.Int, actor.id)
+          .input('annualEnrollmentId', sql.Int, annualEnrollmentId).input('sourceVersion', sql.Int, nextSourceVersion)
+          .query(`INSERT INTO pre_enrollment_events
+            (pre_enrollment_id, actor_id, event_type, version, from_status, to_status, details_json)
+            VALUES (@preEnrollmentId, @actorId, 'enrollment_started', @sourceVersion,
+              'ready_for_registrar', 'enrollment_started', JSON_OBJECT('annualEnrollmentId', @annualEnrollmentId))`);
+      }
+      const auditDetails = {
         studentId: student.id, schoolYear: entry.schoolYear, gradeLevel: entry.gradeLevel,
         intakeKind: entry.intakeKind, entryTermNumber: entry.entryTermNumber, enrollmentStartDate: entry.enrollmentStartDate,
         voucherCode: entry.voucherCode, enrollmentIds,
         physicalChecklistEventIds
+      };
+      if (sourceId) auditDetails.preEnrollmentId = sourceId;
+      await writeAudit(transaction, actor, 'annual_enrollment_created', annualEnrollmentId, {
+        ...auditDetails
       });
       return { annualEnrollmentId, enrollmentIds, studentId: student.id, studentNo: student.student_no || null,
         isNewStudent: activateOnFirstTerm, physicalChecklistEventIds };

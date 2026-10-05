@@ -32,7 +32,7 @@ function isUniqueConflict(error) {
 function safeAccountFilters(query = {}) {
   const category = ['students', 'staff'].includes(query.category) ? query.category : 'students';
   const status = ['all', 'active', 'inactive'].includes(query.status) ? query.status : 'all';
-  const role = category === 'staff' && ['database_admin', 'registrar', 'finance', 'teacher'].includes(query.role) ? query.role : '';
+  const role = category === 'staff' && ['database_admin', 'registrar', 'front_desk', 'finance', 'teacher'].includes(query.role) ? query.role : '';
   return {
     category,
     status,
@@ -79,7 +79,7 @@ function createAdminRouter({ getPool, sql, adminService } = {}) {
   const service = adminService || createAdminService({ getPool, sql });
 
   const renderNewUser = (req, res, { error = null, status = 200, values = {} } = {}) => {
-    const requestedRole = ['database_admin', 'registrar', 'teacher', 'finance'].includes(req.query?.role)
+    const requestedRole = ['database_admin', 'registrar', 'front_desk', 'teacher', 'finance'].includes(req.query?.role)
       ? req.query.role : 'registrar';
     return res.status(status).render('admin/user-new', {
       title: 'Create User Account',

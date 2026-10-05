@@ -28,7 +28,7 @@
         <div class="field"><label for="birth-date">Birth date (optional)</label><input id="birth-date" name="birthDate" type="date" max="<%= maxBirthDate %>" value="<%= values.birthDate || '' %>"></div>
         <div class="field"><label for="sex">Gender (optional)</label><select id="sex" name="sex"><option value="" <%= values.sex ? '' : 'selected' %>>Not recorded</option><% for (const gender of ['Male', 'Female', 'Other']) { %><option value="<%= gender %>" <%= String(values.sex || '').toLowerCase() === gender.toLowerCase() ? 'selected' : '' %>><%= gender %></option><% } %><% if (values.sex === 'unspecified') { %><option value="unspecified" selected>Not recorded (existing value)</option><% } %></select></div>
         <div class="field"><label for="phone">Phone (optional)</label><input id="phone" name="phone" type="tel" maxlength="50" pattern="\+?[0-9\x28\x29\x20\x2d]{7,50}" title="Use 7 to 15 digits; a leading +, spaces, hyphens, and balanced parentheses are allowed." value="<%= values.phone %>"></div>
-        <div class="field field--full"><label for="address">Address (optional)</label><textarea id="address" name="address" maxlength="500" rows="3" aria-describedby="address-help"><%= values.address %></textarea><small id="address-help">Include street or area text. Numbers and punctuation are welcome.</small></div>
+        <%- include('./partials/address-fields', { prefix: 'address', values, student }) %>
         <details class="student-profile-extra field--full">
           <summary>Background and family contacts <span class="muted-copy">Optional · staff only</span></summary>
           <div class="admin-form-grid">
@@ -41,7 +41,7 @@
             <div class="field"><label for="emergency-contact-person">Emergency contact person</label><input id="emergency-contact-person" name="emergencyContactPerson" maxlength="160" value="<%= values.emergencyContactPerson %>"></div>
             <div class="field"><label for="emergency-contact-relationship">Relationship to student</label><input id="emergency-contact-relationship" name="emergencyContactRelationship" maxlength="80" value="<%= values.emergencyContactRelationship %>"></div>
             <div class="field"><label for="emergency-contact-phone">Emergency contact phone</label><input id="emergency-contact-phone" name="emergencyContactPhone" type="tel" maxlength="50" pattern="\+?[0-9\x28\x29\x20\x2d]{7,50}" title="Use 7 to 15 digits; a leading +, spaces, hyphens, and balanced parentheses are allowed." value="<%= values.emergencyContactPhone %>"></div>
-            <div class="field field--full"><label for="emergency-contact-address">Emergency contact address</label><textarea id="emergency-contact-address" name="emergencyContactAddress" maxlength="500" rows="2"><%= values.emergencyContactAddress %></textarea></div>
+            <%- include('./partials/address-fields', { prefix: 'emergencyContactAddress', values, student }) %>
           </div>
         </details>
       </div>

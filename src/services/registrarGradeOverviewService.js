@@ -145,13 +145,13 @@ function createRegistrarGradeOverviewService({ getPool = defaultGetPool, sql = d
         ), ranked_submission_rows AS (
           SELECT submission_row.id, submission_row.submission_id, submission_row.student_subject_id,
             ROW_NUMBER() OVER (PARTITION BY submission_row.submission_id, submission_row.student_subject_id
-              ORDER BY submission_row.id DESC) AS row_number
+              ORDER BY submission_row.id DESC) AS submission_row_rank
           FROM teacher_grade_submission_rows AS submission_row
         ), ranked_submission_grades AS (
           SELECT submission_row.submission_id, submission_row.student_subject_id,
             cached_grade.id, cached_grade.grade_value, cached_grade.grading_period,
             ROW_NUMBER() OVER (PARTITION BY submission_row.submission_id, submission_row.student_subject_id, cached_grade.grading_period
-              ORDER BY cached_grade.id DESC) AS row_number
+              ORDER BY cached_grade.id DESC) AS cached_grade_rank
           FROM teacher_grade_submission_rows AS submission_row
           INNER JOIN teacher_grade_submission_grades AS cached_grade ON cached_grade.submission_row_id = submission_row.id
         )
@@ -163,9 +163,9 @@ function createRegistrarGradeOverviewService({ getPool = defaultGetPool, sql = d
           latest_submission.id AS latest_submission_id,
           CASE WHEN latest_submission_row.id IS NULL THEN NULL ELSE latest_submission.status END AS submission_status,
           latest_submission.submitted_at,
-          CASE WHEN latest_submission_row.id IS NULL THEN CAST(0 AS BIT) ELSE CAST(1 AS BIT) END AS has_submission_row,
+          CASE WHEN latest_submission_row.id IS NULL THEN 0 ELSE 1 END AS has_submission_row,
           cached_grade.grade_value AS cached_grade_value,
-          CASE WHEN cached_grade.id IS NULL THEN CAST(0 AS BIT) ELSE CAST(1 AS BIT) END AS has_cached_grade
+          CASE WHEN cached_grade.id IS NULL THEN 0 ELSE 1 END AS has_cached_grade
         FROM enrolled_subjects AS roster
         CROSS JOIN period_names AS period
         LEFT JOIN grades AS grade ON grade.student_subject_id = roster.student_subject_id
@@ -174,12 +174,12 @@ function createRegistrarGradeOverviewService({ getPool = defaultGetPool, sql = d
         LEFT JOIN ranked_submission_rows AS latest_submission_row
           ON latest_submission_row.submission_id = latest_submission.id
           AND latest_submission_row.student_subject_id = roster.student_subject_id
-          AND latest_submission_row.row_number = 1
+          AND latest_submission_row.submission_row_rank = 1
         LEFT JOIN ranked_submission_grades AS cached_grade
           ON cached_grade.submission_id = latest_submission.id
           AND cached_grade.student_subject_id = roster.student_subject_id
           AND cached_grade.grading_period = period.grading_period
-          AND cached_grade.row_number = 1
+          AND cached_grade.cached_grade_rank = 1
         WHERE @gradingPeriod IS NULL OR period.grading_period = @gradingPeriod
         ORDER BY roster.last_name, roster.first_name, roster.student_no, period.grading_period`);
     const rosterCount = await pool.request()
@@ -201,7 +201,9 @@ function createRegistrarGradeOverviewService({ getPool = defaultGetPool, sql = d
       hasCachedGrade: Boolean(row.has_cached_grade),
       displayName: [row.first_name, row.middle_name, row.last_name, row.suffix].filter(Boolean).join(' ')
     }));
-    const periods = [...new Set(entries.map((row) => row.grading_period))];
+    const periods = Boolean(context.is_current)
+      ? [...CURRENT_ECR_PERIODS]
+      : [...new Set(entries.map((row) => row.grading_period))];
     if (requestedPeriod && !periods.includes(requestedPeriod)) {
       throw new RegistrarGradeOverviewError('That grading period is not recorded for this academic context.', 404);
     }

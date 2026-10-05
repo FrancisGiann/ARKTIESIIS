@@ -12,6 +12,7 @@ const {
 const { createStudentBulkAccountsRouter, createStudentIntakeRouter, createAnnualStudentIntakeRouter,
   createAnnualConfirmationRouter } = require('../src/routes/studentSetup');
 const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
+const { AnnualEnrollmentError } = require('../src/services/annualEnrollmentService');
 const { latestBirthDate } = require('../src/services/studentRecordsService');
 const { validateTransaction, createFinanceService } = require('../src/services/financeService');
 
@@ -1096,4 +1097,70 @@ test('bulk roster template provides a starter file and print control is compatib
   assert.match(printPage, /<script src="\/js\/app\.js" defer><\/script>/);
   assert.doesNotMatch(printPage, /onclick\s*=/i);
   assert.match(appScript, /querySelectorAll\('\[data-print-page\]'\)[\s\S]*window\.print\(\)/);
+});
+
+test('pre-enrollment source identity, version, token, and receipt labels survive annual-intake validation rerender', async () => {
+  const app = express();
+  const sourceId = 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261';
+  const csrfToken = 'd'.repeat(64);
+  const baseRecord = {
+    id: sourceId, version: 3, status: 'ready_for_registrar', school_year: '2027-2028',
+    first_name: 'Ari', middle_name: 'Mae', last_name: 'Santos', suffix: '', lrn: '012345678901',
+    student_contact_number: '09171234567', target_grade_level: 'Grade 11',
+    voucher_type_text: 'ESC as written', voucher_category_text: 'Category A as written',
+    preferred_track: 'Academic Track', preferred_cluster: 'ASSH', prior_grade_level: 'Grade 10',
+    prior_school: 'Lucena High School', student_signature_present: 1, student_signed_date: '2026-10-01',
+    received_by: 'Front Desk Operator', received_date: '2026-10-02',
+    receipts: [{ requirement_code: 'report_card', original_received: 1, original_pieces: 1,
+      photocopy_received: 0, photocopy_pieces: null }]
+  };
+  let createCalls = 0;
+  app.set('views', path.join(__dirname, '..', 'views'));
+  app.set('view engine', 'ejs');
+  app.locals.formatStudentPlacement = require('../src/utils/formatStudentPlacement').formatStudentPlacement;
+  app.locals.formatMoney = require('../src/utils/formatMoney').formatMoney;
+  app.use(express.urlencoded({ extended: false }));
+  app.use((req, _res, next) => { req.authUser = registrar; req.session = { csrfToken }; next(); });
+  app.use('/registrar/intake', createAnnualStudentIntakeRouter({
+    annualEnrollmentService: {
+      async loadIntakeOptions() { return { schoolYears: [{ school_year: '2027-2028' }], terms: [], sections: [] }; },
+      async createAnnualIntake(_actorId, input) {
+        createCalls += 1;
+        assert.equal(input.preEnrollmentId, sourceId);
+        assert.equal(input.preEnrollmentVersion, '3');
+        assert.equal(input.idempotencyKey, sourceId);
+        throw new AnnualEnrollmentError('Enter a valid contact email address.');
+      }
+    },
+    physicalChecklistService: { async listIntakeRequirements() { return []; } },
+    preEnrollmentService: {
+      async openConversion(_actorId, id) { assert.equal(id, sourceId); return { alreadyStarted: false, record: baseRecord }; },
+      async get(_actorId, id) { assert.equal(id, sourceId); return { ...baseRecord, version: 4 }; }
+    }
+  }));
+
+  await withServer(app, async (baseUrl) => {
+    const opening = await fetch(`${baseUrl}/registrar/intake/new?preEnrollmentId=${sourceId}`);
+    const openingHtml = await opening.text();
+    assert.equal(opening.status, 200);
+    assert.match(openingHtml, /Report Card \(Grade 10 \/ ALS-AF5\)/);
+    assert.match(openingHtml, /receipt counts stay separate/);
+    const post = await fetch(`${baseUrl}/registrar/intake`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        _csrf: csrfToken, preEnrollmentId: sourceId, preEnrollmentVersion: '3', idempotencyKey: sourceId,
+        firstName: 'Ari', middleName: 'Mae', lastName: 'Santos', lrn: '012345678901',
+        schoolYear: '2027-2028', gradeLevel: 'Grade 11', email: ''
+      })
+    });
+    const html = await post.text();
+    assert.equal(post.status, 400);
+    assert.equal(createCalls, 1);
+    assert.match(html, /name="preEnrollmentId" value="a342bc01-2a68-4f19-a7fd-4d5bb1d83261"/);
+    assert.match(html, /name="preEnrollmentVersion" value="3"/);
+    assert.match(html, new RegExp(`name="idempotencyKey" value="${sourceId}"`));
+    assert.match(html, /record is revision 4/);
+    assert.match(html, /keeps its original revision and token/);
+    assert.match(html, /Report Card \(Grade 10 \/ ALS-AF5\)/);
+  });
 });

@@ -142,6 +142,45 @@ test('temporary-password gate checks current database state and blocks direct pr
   assert.equal(passwordOnlySession.res.location, '/login');
 });
 
+test('front-desk sessions use the standard authenticated navigation, recovery home, and forced-password gate', async () => {
+  const environment = { nodeEnv: 'production', sessionSecret: 'front-desk-authentication-test-secret' };
+  const user = {
+    id: 41, email: 'frontdesk@example.edu', role: 'front_desk', is_active: true,
+    password_hash: 'front-desk-bcrypt-hash', must_change_password: false,
+    auth_session_version: 'front-desk-session-v1', updated_at_fingerprint: '2026-10-02T01:02:03.0000000'
+  };
+  const requireAuth = createRequireAuth({ environment, sql: { Int: 'Int' }, getPool: async () => ({
+    request() { return { input() { return this; }, async query() { return { recordset: [{ ...user }] }; } }; }
+  }) });
+  async function check(url) {
+    const res = {
+      headers: {}, locals: {}, set(name, value) { this.headers[name.toLowerCase()] = value; return this; },
+      redirect(status, location) { this.statusCode = location === undefined ? 302 : status; this.location = location === undefined ? status : location; return this; }
+    };
+    const req = { originalUrl: url, method: 'GET', session: {
+      userId: user.id, authLevel: 'email_2fa', authFingerprint: createAuthFingerprint(user, environment),
+      authSessionVersion: user.auth_session_version
+    } };
+    let continued = false;
+    await requireAuth(req, res, () => { continued = true; });
+    return { req, res, continued };
+  }
+
+  const workspace = await check('/pre-enrollments');
+  assert.equal(workspace.continued, true);
+  assert.equal(workspace.res.locals.errorRecovery.href, '/front-desk');
+  assert.deepEqual(workspace.res.locals.navigationItems.filter(({ id }) => id !== 'account').map(({ href }) => href), ['/pre-enrollments']);
+  assert.equal(workspace.res.locals.currentPage, 'front-desk-pre-enrollments');
+
+  user.must_change_password = true;
+  const forced = await check('/pre-enrollments');
+  assert.equal(forced.continued, false);
+  assert.equal(forced.res.statusCode, 303);
+  assert.equal(forced.res.location, '/account/password/required');
+  const changePage = await check('/account/password/required');
+  assert.equal(changePage.continued, true);
+});
+
 test('demo password sessions are destroyed when the feature is disabled or their email leaves the allowlist', async () => {
   const environment = {
     nodeEnv: 'production', demoPasswordOnlyLogin: true,

@@ -12,6 +12,7 @@ const navigationByRole = {
     { id: 'overview', label: 'Overview', href: '/admin', group: 'Workspace' },
     { id: 'accounts', label: 'Accounts', href: '/admin/users', group: 'People and records' },
     { id: 'students', label: 'Student records', href: '/registrar/records', group: 'People and records' },
+    { id: 'pre-enrollments', label: 'Pre-enrollment records', href: '/pre-enrollments', group: 'People and records' },
     { id: 'audit', label: 'Audit activity', href: '/admin/audit', group: 'Oversight' },
     { id: 'documents', label: 'Documents', href: '/documents', group: 'Oversight' },
     ...financeNavigationItems
@@ -20,12 +21,16 @@ const navigationByRole = {
     { id: 'overview', label: 'Overview', href: '/registrar', group: 'Workspace' },
     { id: 'students', label: 'Student records', href: '/registrar/records', group: 'Records' },
     { id: 'intake', label: 'Enrollment intake', href: '/registrar/intake', group: 'Records' },
+    { id: 'pre-enrollments', label: 'Pre-enrollment records', href: '/pre-enrollments', group: 'Records' },
     { id: 'documents', label: 'Document review', href: '/documents', group: 'Records' },
     { id: 'grade-submissions', label: 'Grade review', href: '/registrar/grade-submissions', group: 'Academic work' },
     { id: 'schedules', label: 'Class schedules', href: '/registrar/schedules', group: 'Academic work' },
     { id: 'subjects', label: 'Subject catalog', href: '/registrar/records/subjects', group: 'Setup' },
     { id: 'assignments', label: 'Teacher assignments', href: '/registrar/records/teacher-assignments', group: 'Setup' },
     { id: 'academic-setup', label: 'Academic setup', href: '/registrar/records?view=setup', group: 'Setup' }
+  ],
+  front_desk: [
+    { id: 'front-desk-pre-enrollments', label: 'Pre-enrollment records', href: '/pre-enrollments', group: 'Workspace' }
   ],
   teacher: [
     { id: 'teacher-workspace', label: 'My classes', href: '/teacher', group: 'Teaching' },
@@ -54,6 +59,8 @@ function buildNavigation(role, currentPath = '') {
   const roleItems = (navigationByRole[role] || []).map((item) => {
     let current = false;
     if (item.id === 'overview') current = path === '/admin' || path === '/registrar';
+    else if (item.id === 'front-desk-pre-enrollments') current = path.startsWith('/pre-enrollments');
+    else if (item.id === 'pre-enrollments') current = path.startsWith('/pre-enrollments');
     else if (item.id === 'accounts') current = path.startsWith('/admin/users') || path.startsWith('/admin/student-accounts');
     else if (item.id === 'audit') current = path === '/admin/audit';
     else if (item.id === 'students') current = (path === '/registrar/records' && (role !== 'registrar' || query.get('view') !== 'setup')) || path.startsWith('/registrar/records/students');

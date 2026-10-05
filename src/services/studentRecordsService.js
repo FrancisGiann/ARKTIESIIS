@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
 const { allocateStudentNumber, StudentNumberAllocationError } = require('./studentNumberAllocator');
+const { ADDRESS_DEFINITIONS, StudentAddressError, normalizeStructuredAddress } = require('../utils/studentAddress');
 
 const RECORDS_ROLES = new Set(['database_admin', 'registrar']);
 const STUDENT_PAGE_SIZE = 25;
@@ -10,6 +11,11 @@ const PROFILE_REVISION_FIELDS = [
   ['address', 'address'], ['phone', 'phone'], ['birthplace', 'birthplace'], ['facebook_name', 'facebookName'],
   ['emergency_contact_person', 'emergencyContactPerson'], ['emergency_contact_relationship', 'emergencyContactRelationship'],
   ['emergency_contact_phone', 'emergencyContactPhone'], ['emergency_contact_address', 'emergencyContactAddress'],
+  ['address_block_lot_street_purok', 'addressBlockLotStreetPurok'], ['address_barangay', 'addressBarangay'],
+  ['address_city', 'addressCity'], ['address_province', 'addressProvince'], ['address_zip', 'addressZip'],
+  ['emergency_contact_address_block_lot_street_purok', 'emergencyContactAddressBlockLotStreetPurok'],
+  ['emergency_contact_address_barangay', 'emergencyContactAddressBarangay'], ['emergency_contact_address_city', 'emergencyContactAddressCity'],
+  ['emergency_contact_address_province', 'emergencyContactAddressProvince'], ['emergency_contact_address_zip', 'emergencyContactAddressZip'],
   ['mother_name', 'motherName'], ['mother_phone', 'motherPhone'], ['father_name', 'fatherName'], ['father_phone', 'fatherPhone']
 ];
 
@@ -275,6 +281,34 @@ function normalizeUniqueConflict(error) {
   return isDuplicateKeyError(error);
 }
 
+function applyAddressInput(student, input, prefix, current = null) {
+  const modeKey = prefix === 'address' ? 'addressMode' : 'emergencyContactAddressMode';
+  const mode = input[modeKey] || (current ? 'preserve' : 'replace');
+  if (!['preserve', 'replace'].includes(mode)) throw new StudentRecordsError('Choose whether to keep or replace the saved address.');
+  const legacyColumn = prefix === 'address' ? 'address' : 'emergency_contact_address';
+  const fields = ADDRESS_DEFINITIONS[prefix];
+  if (current && mode === 'preserve') {
+    student[prefix] = current[legacyColumn] ?? null;
+    for (const [inputName, column] of fields) student[inputName] = current[column] ?? null;
+    return;
+  }
+  if (!current && mode === 'preserve') throw new StudentRecordsError('A new student address must be entered as components.');
+  const componentNames = fields.map(([inputName]) => inputName);
+  if (!current && mode === 'replace' && componentNames.every((inputName) => input[inputName] === undefined)
+    && typeof input[prefix] === 'string') {
+    // Preserve legacy callers' free text; never attempt to infer components from it.
+    return;
+  }
+  try {
+    const normalized = normalizeStructuredAddress(input, prefix);
+    student[prefix] = normalized.formatted;
+    for (const [inputName, column] of fields) student[inputName] = normalized[column];
+  } catch (error) {
+    if (error instanceof StudentAddressError) throw new StudentRecordsError(error.message);
+    throw error;
+  }
+}
+
 function createStudentRecordsService({
   getPool = defaultGetPool,
   sql = defaultSql,
@@ -483,6 +517,9 @@ function createStudentRecordsService({
       .query(`SELECT s.id, s.user_id, s.student_no, s.lrn, s.first_name, s.middle_name, s.last_name, s.suffix,
         s.birth_date, s.sex, s.address, s.phone, s.birthplace, s.facebook_name,
         s.emergency_contact_person, s.emergency_contact_relationship, s.emergency_contact_phone, s.emergency_contact_address,
+        s.address_block_lot_street_purok, s.address_barangay, s.address_city, s.address_province, s.address_zip,
+        s.emergency_contact_address_block_lot_street_purok, s.emergency_contact_address_barangay,
+        s.emergency_contact_address_city, s.emergency_contact_address_province, s.emergency_contact_address_zip,
         s.mother_name, s.mother_phone, s.father_name, s.father_phone, s.status, s.created_at, s.updated_at,
         u.is_active AS linked_account_is_active,
         good_moral.status AS good_moral_status, good_moral.created_at AS good_moral_submitted_at,
@@ -668,6 +705,31 @@ function createStudentRecordsService({
           throw error;
         }
       }
+      let currentRecord = null;
+      if (id !== null) {
+        const current = await transaction.request().input('studentId', sql.Int, id)
+          .query(`SELECT id, status, student_no, lrn, first_name, middle_name, last_name, suffix,
+              birth_date, sex, address, phone, birthplace, facebook_name,
+              emergency_contact_person, emergency_contact_relationship, emergency_contact_phone, emergency_contact_address,
+              address_block_lot_street_purok, address_barangay, address_city, address_province, address_zip,
+              emergency_contact_address_block_lot_street_purok, emergency_contact_address_barangay,
+              emergency_contact_address_city, emergency_contact_address_province, emergency_contact_address_zip,
+              mother_name, mother_phone, father_name, father_phone
+            FROM students WHERE id = @studentId FOR UPDATE`);
+        currentRecord = current.recordset?.[0];
+        if (!currentRecord) throw new StudentRecordsError('Student record not found.', 404);
+        if (currentRecord.status === 'archived') throw new StudentRecordsError('Archived student profiles cannot be edited.', 409);
+        if (actor.role === 'registrar' && student.studentNo !== currentRecord.student_no) {
+          throw new StudentRecordsError('Only database administrators can change a student number.', 403);
+        }
+        const currentLrn = currentRecord.lrn || null;
+        if (actor.role === 'registrar' && currentLrn && student.lrn !== currentLrn) {
+          throw new StudentRecordsError('Only database administrators can change a recorded LRN.', 403);
+        }
+        if (currentLrn && !student.lrn) throw new StudentRecordsError('A recorded LRN cannot be cleared. Enter its replacement LRN.', 400);
+      }
+      applyAddressInput(student, input, 'address', currentRecord);
+      applyAddressInput(student, input, 'emergencyContactAddress', currentRecord);
       const request = transaction.request()
         .input('studentNo', sql.NVarChar(50), student.studentNo)
         .input('lrn', sql.NVarChar(12), student.lrn)
@@ -685,6 +747,16 @@ function createStudentRecordsService({
         .input('emergencyContactRelationship', sql.NVarChar(80), student.emergencyContactRelationship)
         .input('emergencyContactPhone', sql.NVarChar(50), student.emergencyContactPhone)
         .input('emergencyContactAddress', sql.NVarChar(500), student.emergencyContactAddress)
+        .input('addressBlockLotStreetPurok', sql.NVarChar(200), student.addressBlockLotStreetPurok)
+        .input('addressBarangay', sql.NVarChar(100), student.addressBarangay)
+        .input('addressCity', sql.NVarChar(100), student.addressCity)
+        .input('addressProvince', sql.NVarChar(100), student.addressProvince)
+        .input('addressZip', sql.Char(4), student.addressZip)
+        .input('emergencyContactAddressBlockLotStreetPurok', sql.NVarChar(200), student.emergencyContactAddressBlockLotStreetPurok)
+        .input('emergencyContactAddressBarangay', sql.NVarChar(100), student.emergencyContactAddressBarangay)
+        .input('emergencyContactAddressCity', sql.NVarChar(100), student.emergencyContactAddressCity)
+        .input('emergencyContactAddressProvince', sql.NVarChar(100), student.emergencyContactAddressProvince)
+        .input('emergencyContactAddressZip', sql.Char(4), student.emergencyContactAddressZip)
         .input('motherName', sql.NVarChar(160), student.motherName)
         .input('motherPhone', sql.NVarChar(50), student.motherPhone)
         .input('fatherName', sql.NVarChar(160), student.fatherName)
@@ -694,44 +766,39 @@ function createStudentRecordsService({
         const result = await request.query(`INSERT INTO students
           (student_no, lrn, first_name, middle_name, last_name, suffix, birth_date, sex, address, phone,
             birthplace, facebook_name, emergency_contact_person, emergency_contact_relationship,
-            emergency_contact_phone, emergency_contact_address, mother_name, mother_phone, father_name, father_phone)
+            emergency_contact_phone, emergency_contact_address, address_block_lot_street_purok, address_barangay,
+            address_city, address_province, address_zip, emergency_contact_address_block_lot_street_purok,
+            emergency_contact_address_barangay, emergency_contact_address_city, emergency_contact_address_province,
+            emergency_contact_address_zip, mother_name, mother_phone, father_name, father_phone)
           VALUES (@studentNo, @lrn, @firstName, @middleName, @lastName, @suffix, @birthDate, @sex, @address, @phone,
             @birthplace, @facebookName, @emergencyContactPerson, @emergencyContactRelationship,
-            @emergencyContactPhone, @emergencyContactAddress, @motherName, @motherPhone, @fatherName, @fatherPhone)`);
+            @emergencyContactPhone, @emergencyContactAddress, @addressBlockLotStreetPurok, @addressBarangay,
+            @addressCity, @addressProvince, @addressZip, @emergencyContactAddressBlockLotStreetPurok,
+            @emergencyContactAddressBarangay, @emergencyContactAddressCity, @emergencyContactAddressProvince,
+            @emergencyContactAddressZip, @motherName, @motherPhone, @fatherName, @fatherPhone)`);
         savedId = result.insertId;
         if (!Number.isSafeInteger(savedId) || savedId < 1) throw new Error('Student record insert returned no identifier.');
       } else {
-        const current = await transaction.request().input('studentId', sql.Int, id)
-          .query(`SELECT id, status, student_no, lrn, first_name, middle_name, last_name, suffix,
-              birth_date, sex, address, phone, birthplace, facebook_name,
-              emergency_contact_person, emergency_contact_relationship, emergency_contact_phone, emergency_contact_address,
-              mother_name, mother_phone, father_name, father_phone
-            FROM students WHERE id = @studentId FOR UPDATE`);
-        if (!current.recordset?.length) throw new StudentRecordsError('Student record not found.', 404);
-        if (current.recordset[0].status === 'archived') throw new StudentRecordsError('Archived student profiles cannot be edited.', 409);
-        if (actor.role === 'registrar' && student.studentNo !== current.recordset[0].student_no) {
-          throw new StudentRecordsError('Only database administrators can change a student number.', 403);
-        }
-        const currentLrn = current.recordset[0].lrn || null;
-        if (actor.role === 'registrar' && currentLrn && student.lrn !== currentLrn) {
-          throw new StudentRecordsError('Only database administrators can change a recorded LRN.', 403);
-        }
-        if (currentLrn && !student.lrn) {
-          throw new StudentRecordsError('A recorded LRN cannot be cleared. Enter its replacement LRN.', 400);
-        }
         await request.input('studentId', sql.Int, id).query(`UPDATE students
           SET student_no = @studentNo, lrn = @lrn, first_name = @firstName, middle_name = @middleName,
             last_name = @lastName, suffix = @suffix, birth_date = @birthDate,
             sex = @sex, address = @address, phone = @phone, birthplace = @birthplace, facebook_name = @facebookName,
             emergency_contact_person = @emergencyContactPerson, emergency_contact_relationship = @emergencyContactRelationship,
             emergency_contact_phone = @emergencyContactPhone, emergency_contact_address = @emergencyContactAddress,
+            address_block_lot_street_purok = @addressBlockLotStreetPurok, address_barangay = @addressBarangay,
+            address_city = @addressCity, address_province = @addressProvince, address_zip = @addressZip,
+            emergency_contact_address_block_lot_street_purok = @emergencyContactAddressBlockLotStreetPurok,
+            emergency_contact_address_barangay = @emergencyContactAddressBarangay,
+            emergency_contact_address_city = @emergencyContactAddressCity,
+            emergency_contact_address_province = @emergencyContactAddressProvince,
+            emergency_contact_address_zip = @emergencyContactAddressZip,
             mother_name = @motherName, mother_phone = @motherPhone, father_name = @fatherName, father_phone = @fatherPhone,
             updated_at = UTC_TIMESTAMP(6)
           WHERE id = @studentId`);
         savedId = id;
         const revisionGroup = crypto.randomUUID();
         for (const [fieldName, inputName] of PROFILE_REVISION_FIELDS) {
-          const beforeValue = canonicalProfileValue(current.recordset[0][fieldName]);
+          const beforeValue = canonicalProfileValue(currentRecord[fieldName]);
           const afterValue = canonicalProfileValue(student[inputName]);
           if (beforeValue === afterValue) continue;
           await transaction.request()
@@ -1006,8 +1073,11 @@ function createStudentRecordsService({
 module.exports = {
   StudentRecordsError,
   createStudentRecordsService,
+  applyAddressInput,
   normalizeRecordId,
   normalizeSearchTerm,
+  validateName,
+  normalizePhone,
   validateStudent,
   normalizeLrn,
   currentManilaDate,

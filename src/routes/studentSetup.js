@@ -6,6 +6,7 @@ const { inflateRawSync } = require('node:zlib');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { StudentSetupError, MAX_BULK_ROWS, createStudentSetupService } = require('../services/studentSetupService');
 const { AnnualEnrollmentError, createAnnualEnrollmentService } = require('../services/annualEnrollmentService');
+const { PreEnrollmentError, RECEIPT_REQUIREMENTS } = require('../services/preEnrollmentService');
 const { AnnualFinanceError } = require('../services/annualFinanceService');
 const { PhysicalChecklistError, createPhysicalChecklistService } = require('../services/physicalChecklistService');
 const { latestBirthDate } = require('../services/studentRecordsService');
@@ -515,7 +516,7 @@ function createAnnualConfirmationRouter({ annualEnrollmentService, annualFinance
   return router;
 }
 
-function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService, annualFinanceService, physicalChecklistService, logger = console } = {}) {
+function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService, annualFinanceService, physicalChecklistService, preEnrollmentService, logger = console } = {}) {
   const router = express.Router();
   const feeService = annualFinanceService || null;
   const checklistService = physicalChecklistService || (getPool ? createPhysicalChecklistService({ getPool, sql }) : null);
@@ -551,16 +552,17 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
     }
   }
 
-  async function renderForm(req, res, { status = 200, error = null, values = {}, activeStep = 1, fallbackMessage = null } = {}) {
+  async function renderForm(req, res, { status = 200, error = null, values = {}, activeStep = 1, fallbackMessage = null, preEnrollmentSource = null } = {}) {
     try {
       const [options, paperRequirements] = await Promise.all([
         service.loadIntakeOptions(req.authUser.id),
         checklistService?.listIntakeRequirements ? checklistService.listIntakeRequirements(req.authUser.id) : Promise.resolve([])
       ]);
       return setPrivateHeaders(res).status(status).render('records/annual-intake-form', {
-        title: 'New Annual Enrollment', csrfToken: ensureCsrfToken(req), idempotencyKey: crypto.randomUUID(),
+        title: 'New Annual Enrollment', csrfToken: ensureCsrfToken(req),
+        idempotencyKey: values.idempotencyKey || values.preEnrollmentId || preEnrollmentSource?.id || crypto.randomUUID(),
         ...options, maxBirthDate: latestBirthDate(), values: { ...values, enrollmentStartDate: values.enrollmentStartDate || schoolLocalDate() }, error, activeStep,
-        paperRequirements,
+        paperRequirements, preEnrollmentSource, preEnrollmentReceiptRequirements: RECEIPT_REQUIREMENTS,
         paperTokens: Object.fromEntries((paperRequirements || []).map((item) => [item.requirement_code,
           values[`paper_${item.requirement_code}_token`] || crypto.randomUUID()]))
       });
@@ -569,6 +571,12 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         title: 'Annual Intake Unavailable', message: fallbackMessage || 'Academic terms and sections could not be loaded.'
       });
     }
+  }
+
+  async function loadSourceForRerender(req, values) {
+    if (!values.preEnrollmentId || !preEnrollmentService?.get) return null;
+    try { return await preEnrollmentService.get(req.authUser.id, values.preEnrollmentId); }
+    catch { return null; }
   }
 
   async function renderTermOrder(req, res, { status = 200, error = null } = {}) {
@@ -667,7 +675,34 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
   }
 
   router.get('/', (req, res) => renderList(req, res));
-  router.get('/new', (req, res) => renderForm(req, res));
+  router.get('/new', async (req, res) => {
+    const preEnrollmentId = typeof req.query?.preEnrollmentId === 'string' ? req.query.preEnrollmentId : '';
+    if (!preEnrollmentId) return renderForm(req, res);
+    if (!preEnrollmentService?.openConversion) {
+      return res.status(503).render('error', { title: 'Pre-enrollment unavailable', message: 'The paper record handoff is unavailable.' });
+    }
+    try {
+      const opened = await preEnrollmentService.openConversion(req.authUser.id, preEnrollmentId);
+      if (opened.alreadyStarted) {
+        if (opened.annualEnrollmentId) return res.redirect(303, `/registrar/intake/${encodeURIComponent(opened.annualEnrollmentId)}/fees`);
+        throw new AnnualEnrollmentError('Annual enrollment was marked started but its linked record could not be found. Contact the database administrator.', 409);
+      }
+      const source = opened.record;
+      const values = {
+        preEnrollmentId: source.id, preEnrollmentVersion: source.version, idempotencyKey: source.id,
+        firstName: source.first_name || '', middleName: source.middle_name || '', lastName: source.last_name || '', suffix: source.suffix || '',
+        lrn: source.lrn || '', phone: source.student_contact_number || '',
+        schoolYear: source.school_year, gradeLevel: source.target_grade_level || '',
+        addressMode: 'replace', emergencyContactAddressMode: 'replace'
+      };
+      return renderForm(req, res, { values, preEnrollmentSource: source });
+    } catch (error) {
+      if (error instanceof PreEnrollmentError || error instanceof AnnualEnrollmentError) {
+        return res.status(error.status).render('error', { title: 'Pre-enrollment handoff', message: error.message });
+      }
+      return res.status(503).render('error', { title: 'Pre-enrollment unavailable', message: 'The paper record could not be opened for enrollment.' });
+    }
+  });
   router.get('/setup/terms', (req, res) => renderTermOrder(req, res));
   router.post('/setup/terms', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
@@ -768,7 +803,11 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
   router.post('/', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     const values = {};
-    for (const key of ['studentNo', 'intakeKind', 'enrollmentStartDate', 'entryTermNumber', 'schoolYear', 'gradeLevel', 'voucherCode', 'email', 'lrn', 'firstName', 'middleName', 'lastName', 'suffix', 'birthDate', 'sex', 'address', 'phone', 'sectionMode', 'annualSectionId', 'section1Id', 'section2Id', 'section3Id', 'section1Override', 'section2Override', 'section3Override', 'idempotencyKey']) {
+    for (const key of ['studentNo', 'intakeKind', 'enrollmentStartDate', 'entryTermNumber', 'schoolYear', 'gradeLevel', 'voucherCode', 'email', 'lrn', 'firstName', 'middleName', 'lastName', 'suffix', 'birthDate', 'sex', 'address',
+      'addressMode', 'addressBlockLotStreetPurok', 'addressBarangay', 'addressCity', 'addressProvince', 'addressZip',
+      'emergencyContactPerson', 'emergencyContactRelationship', 'emergencyContactPhone', 'emergencyContactAddress', 'emergencyContactAddressMode',
+      'emergencyContactAddressBlockLotStreetPurok', 'emergencyContactAddressBarangay', 'emergencyContactAddressCity', 'emergencyContactAddressProvince', 'emergencyContactAddressZip',
+      'phone', 'sectionMode', 'annualSectionId', 'section1Id', 'section2Id', 'section3Id', 'section1Override', 'section2Override', 'section3Override', 'idempotencyKey', 'preEnrollmentId', 'preEnrollmentVersion']) {
       values[key] = typeof req.body?.[key] === 'string' ? req.body[key].slice(0, 500) : '';
     }
     for (const [key, value] of Object.entries(req.body || {})) {
@@ -784,9 +823,10 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       }
       return res.redirect(303, '/registrar/intake?notice=annualCreated');
     } catch (error) {
-      if (error instanceof PhysicalChecklistError) return renderForm(req, res, { status: error.status, error: error.message, values, activeStep: 3 });
-      if (error instanceof AnnualEnrollmentError) return renderForm(req, res, { status: error.status, error: error.message, values, activeStep: annualIntakeErrorStep(error) });
-      if (isDuplicateKeyError(error)) return renderForm(req, res, { status: 409, error: 'This student already has an annual enrollment for the selected school year.', values, activeStep: 2 });
+      const preEnrollmentSource = await loadSourceForRerender(req, values);
+      if (error instanceof PhysicalChecklistError) return renderForm(req, res, { status: error.status, error: error.message, values, activeStep: 3, preEnrollmentSource });
+      if (error instanceof AnnualEnrollmentError) return renderForm(req, res, { status: error.status, error: error.message, values, activeStep: annualIntakeErrorStep(error), preEnrollmentSource });
+      if (isDuplicateKeyError(error)) return renderForm(req, res, { status: 409, error: 'This student already has an annual enrollment for the selected school year.', values, activeStep: 2, preEnrollmentSource });
       const incidentId = crypto.randomUUID();
       try {
         logger.error('Annual intake save failed', {
@@ -800,7 +840,8 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         error: `The save did not return a confirmation. Your entries are still on this form and can be retried. Support reference: ${incidentId}.`,
         fallbackMessage: `The save did not return a confirmation. Check the annual intake list before starting a new submission. Support reference: ${incidentId}.`,
         values,
-        activeStep: 3
+        activeStep: 3,
+        preEnrollmentSource
       });
     }
   });
