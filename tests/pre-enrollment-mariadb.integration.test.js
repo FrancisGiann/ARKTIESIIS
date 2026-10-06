@@ -110,6 +110,27 @@ async function queryOne(pool, sqlText, parameters = []) {
   return rows[0] || null;
 }
 
+async function insertHistoricalUnlinkedEvaluation(pool, actorId, input) {
+  const id = uuid();
+  await pool.execute(`INSERT INTO readmission_evaluations
+    (id, applicant_lrn, student_id, first_name, middle_name, last_name, suffix, school_year, target_grade_level,
+      prior_progress, evidence_reviewed, form137_supporting, curriculum_comparison, curriculum_review_status,
+      required_subjects, subject_availability, availability_notes, decision_reason, status, version, created_by, updated_by)
+    VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'under_review', 1, ?, ?)`,
+  [id, input.applicantLrn, input.firstName, input.middleName, input.lastName, input.suffix, input.schoolYear,
+    input.targetGradeLevel, input.priorProgress, input.evidenceReviewed, input.form137Supporting ? 1 : 0,
+    input.curriculumComparison, input.curriculumReviewStatus || 'unresolved', input.requiredSubjects,
+    input.subjectAvailability || 'unresolved', input.availabilityNotes, input.decisionReason, actorId, actorId]);
+  await pool.execute(`INSERT INTO readmission_evaluation_events
+    (evaluation_id, evaluation_version, actor_id, event_type, from_status, to_status, details_json)
+    VALUES (?, 1, ?, 'created', NULL, 'under_review', ?)`,
+  [id, actorId, JSON.stringify({
+    changedFields: ['applicantLrn', 'firstName', 'middleName', 'lastName', 'schoolYear', 'targetGradeLevel', 'priorProgress', 'evidenceReviewed'],
+    after: { ...input, status: 'under_review', studentId: null }
+  })]);
+  return { id, version: 1, status: 'under_review' };
+}
+
 test('pre-enrollment migration recovery, role-gated receipts, annual conversion, and MariaDB grade overview', {
   skip: !socketPath && 'Set PRE_ENROLLMENT_MARIADB_TEST_SOCKET to a disposable local MariaDB socket.',
   timeout: 180000
@@ -583,9 +604,19 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     [interruptedStudentId, users.registrar, uuid()]);
     const readmissions = createReadmissionService({ getPool: async () => pool, sql,
       transactionFactory: (currentPool) => new Transaction(currentPool) });
+    const evaluationsBeforeUnlinkedAttempts = Number((await queryOne(rawPool,
+      'SELECT COUNT(*) AS count FROM readmission_evaluations')).count);
     await assert.rejects(readmissions.createUnlinked(users.registrar,
-      readmissionInput('012345678919', { firstName: '' })), { status: 400 },
-    'missing required applicant names are rejected by service validation before an insert');
+      readmissionInput('012345678919', { firstName: '' })),
+    (error) => error.status === 409 && error.code === 'SAVED_STUDENT_REQUIRED',
+    'direct unlinked creation is retired with a consistent saved-record requirement');
+    await assert.rejects(readmissions.create(users.registrar, readmissionInput('012345678919')),
+      (error) => error.status === 409 && error.code === 'SAVED_STUDENT_REQUIRED',
+    'generic legacy creation cannot create a review for an LRN without a saved student');
+    assert.equal(Number((await queryOne(rawPool, 'SELECT COUNT(*) AS count FROM readmission_evaluations')).count),
+      evaluationsBeforeUnlinkedAttempts, 'retired creation attempts do not insert evaluation or history rows');
+    await assert.rejects(readmissions.createUnlinked(users.database_admin), { status: 403 },
+      'database administrators remain read-only before the retired creation response');
     await assert.rejects(readmissions.getStudentReturnEligibility(users.front_desk, interruptedStudentId), { status: 403 },
       'return eligibility is visible only to registrar and database administrator');
     const recordedDepartureEligibility = await readmissions.getStudentReturnEligibility(users.registrar, interruptedStudentId);
@@ -706,8 +737,9 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
       'unlinked endpoint guards reject before mutation');
 
     await assert.rejects(readmissions.createUnlinked(users.registrar,
-      readmissionInput(interruptedLrn, { schoolYear: '2028-2029' })), { status: 409 },
-    'an unlinked creation path cannot accept an LRN that belongs to a saved student');
+      readmissionInput(interruptedLrn, { schoolYear: '2028-2029' })),
+    (error) => error.status === 409 && error.code === 'SAVED_STUDENT_REQUIRED',
+    'the retired unlinked service rejects creation even when its posted LRN matches a saved student');
     await assert.rejects(readmissions.create(users.database_admin, readmissionInput('012345678911')), { status: 403 },
       'database administrators may review, but cannot create, evaluations');
     await assert.rejects(readmissions.update(users.database_admin, evaluationDraft.id, 1, readmissionInput(interruptedLrn)), { status: 403 });
@@ -843,14 +875,17 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
       VALUES (?, '2027-2028', 'Grade 11', 'PUB', 'enrolled', ?, ?)`,
     [sameYearStudent.insertId, users.registrar, uuid()]);
     await assert.rejects(readmissions.create(users.registrar, readmissionInput(sameYearLrn)), { status: 409 });
+    const sameYearEvaluationLrn = '012345678913';
+    const [sameYearEvaluationStudent] = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name)
+      VALUES ('SAME-YEAR-BINDING', ?, 'Same', 'Binding')`, [sameYearEvaluationLrn]);
+    await rawPool.execute(`INSERT INTO annual_enrollments
+      (student_id, school_year, grade_level, voucher_code, intake_status, created_by, idempotency_key)
+      VALUES (?, '2025-2026', 'Grade 11', 'PUB', 'transferred', ?, ?)`,
+    [sameYearEvaluationStudent.insertId, users.registrar, uuid()]);
     const sameYearEvaluation = await readmissions.create(users.registrar,
-      readmissionInput('012345678913'));
+      readmissionInput(sameYearEvaluationLrn));
     const sameYearAccepted = await readmissions.decide(users.registrar, sameYearEvaluation.id, sameYearEvaluation.version,
       'accepted', 'Human evaluation accepted before annual enrollment exists.');
-    const [sameYearEvaluationStudent] = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name)
-      VALUES ('SAME-YEAR-BINDING', ?, 'Same', 'Binding')`, ['012345678913']);
-    await rawPool.execute(`UPDATE readmission_evaluations SET student_id = ? WHERE id = ?`,
-      [sameYearEvaluationStudent.insertId, sameYearAccepted.id]);
     await rawPool.execute(`INSERT INTO annual_enrollments
       (student_id, school_year, grade_level, voucher_code, intake_status, created_by, idempotency_key)
       VALUES (?, '2027-2028', 'Grade 11', 'PUB', 'enrolled', ?, ?)`,
@@ -860,7 +895,9 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     'an evaluation cannot authorize same-year reactivation after a prior-year paper decision');
 
     const lateSameYearLrn = '012345678917';
-    const lateBoundEvaluation = await readmissions.createUnlinked(users.registrar, readmissionInput(lateSameYearLrn));
+    // Legacy row fixture: new unlinked evaluations are retired, while already-saved unlinked records remain usable.
+    const lateBoundEvaluation = await insertHistoricalUnlinkedEvaluation(rawPool, users.registrar,
+      readmissionInput(lateSameYearLrn));
     const [lateSameYearStudent] = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name)
       VALUES ('SAME-YEAR-LATE-TEST', ?, 'Late', 'Year')`, [lateSameYearLrn]);
     const lateStudentId = Number(lateSameYearStudent.insertId);
@@ -879,9 +916,11 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     assert.equal((await readmissions.get(users.registrar, lateBoundEvaluation.id)).status, 'under_review',
       'the failed acceptance leaves the evaluation unchanged');
 
-    // A non-existent historic master may be evaluated, but is allocated only by annual conversion.
+    // A previously saved unlinked evaluation remains usable, and its student master is allocated only by annual conversion.
     const noMasterLrn = '012345678914';
-    const noMasterEvaluation = await readmissions.createUnlinked(users.registrar, readmissionInput(noMasterLrn));
+    // Legacy row fixture: preserve correction, decision, search, and paper-conversion coverage for prior unlinked reviews.
+    const noMasterEvaluation = await insertHistoricalUnlinkedEvaluation(rawPool, users.registrar,
+      readmissionInput(noMasterLrn));
     assert.equal(noMasterEvaluation.status, 'under_review');
     const unlinkedSearch = await readmissions.searchUnlinkedMatches(users.registrar, 'Santos');
     assert.ok(unlinkedSearch.some((row) => row.id === noMasterEvaluation.id), 'unlinked applicants are searchable by saved evaluation name');

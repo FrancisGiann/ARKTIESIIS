@@ -69,6 +69,7 @@ test('fixture profiles include complete required paper identity, both address re
   assert.equal(draft.lrn, '');
   assert.equal(draft.receipt_two_by_two_photos_original_pieces, '3');
   assert.equal(EXPECTED_FIXTURE.preEnrollments, 9);
+  assert.equal(EXPECTED_FIXTURE.evaluations, 1, 'the demo seed starts a return evaluation only for its eligible saved student');
   assert.equal(EXPECTED_FIXTURE.verifiedPaperEvents, 0);
 });
 

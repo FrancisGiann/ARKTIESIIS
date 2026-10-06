@@ -457,21 +457,22 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     });
   }
 
+  const savedStudentRequired = (res) => res.status(409).render('error', {
+    title: 'Saved student record required',
+    message: 'Return evaluations can only be started from an eligible saved student record. Search Student records by name or LRN; if no record matches, resolve the student record before beginning this review.',
+    errorRecovery: { href: '/registrar/records', label: 'Search student records' }
+  });
+
   router.get('/return-evaluations/new', (req, res) => req.authUser.role === 'registrar'
-    ? renderUnlinkedEvaluation(req, res)
+    ? savedStudentRequired(res)
     : res.status(403).render('error', { title: 'Read-only access', message: 'Database administrators can review return evaluations but cannot create them.' }));
 
   router.post('/return-evaluations', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload and try again.' });
-    try {
-      const result = await readmissions.createUnlinked(req.authUser.id, req.body || {});
-      return res.redirect(303, `/registrar/records/return-evaluations/${encodeURIComponent(result.id)}`);
-    } catch (error) {
-      if (error instanceof ReadmissionError) return renderUnlinkedEvaluation(req, res, {
-        values: req.body || {}, error: error.message, status: error.status
-      });
-      return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The evaluation could not be saved.' });
-    }
+    if (req.authUser.role !== 'registrar') return res.status(403).render('error', {
+      title: 'Read-only access', message: 'Database administrators can review return evaluations but cannot create them.'
+    });
+    return savedStudentRequired(res);
   });
 
   router.get('/return-evaluations/:evaluationId', async (req, res) => {

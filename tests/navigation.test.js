@@ -386,6 +386,9 @@ test('student records use the workspace rail and show a clear no-current-term st
     assert.match(html, /<main class="page-shell dashboard-page admin-page records-page"/);
     assert.match(html, /<h1>Student records<\/h1>/);
     assert.match(html, /No academic term is marked current\./);
+    assert.match(html, /href="\/pre-enrollments">Review paper submissions/);
+    assert.match(html, /href="\/registrar\/records\?view=setup">Academic setup/);
+    assert.doesNotMatch(html, /Evaluate return without a saved record/);
     assert.match(html, /Find a student record/);
     assert.doesNotMatch(html, /<h2 id="terms-title">Academic terms/);
     assert.doesNotMatch(html, /<h2 id="sections-title">Sections/);
@@ -398,6 +401,7 @@ test('student records use the workspace rail and show a clear no-current-term st
     const setupHtml = await setup.text();
     assert.equal(setup.status, 200);
     assert.match(setupHtml, /<h1>Academic setup<\/h1>/);
+    assert.match(setupHtml, /href="\/registrar\/records">Back to student records/);
     assert.match(setupHtml, /href="\/registrar\/records\?view=setup" aria-current="page">Academic setup<\/a>/);
   });
 });

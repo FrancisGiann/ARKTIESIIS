@@ -8,7 +8,7 @@
       <p><%= view === 'setup' ? 'Configure academic terms and sections used by student records.' : `${currentUser.role === 'database_admin' ? 'Database administrator' : 'Registrar'} workspace · Lucena Branch` %></p>
     </div>
     <div class="admin-heading-actions">
-      <% if (view === 'setup') { %><a class="button button--secondary" href="/registrar/records">Back to student records</a><% } else { %><% if (currentUser.role === 'registrar') { %><a class="button button--primary" href="/pre-enrollments">Review paper submissions</a><a class="button button--secondary" href="/registrar/records/return-evaluations/new">Evaluate return without a saved record</a><% } %><a class="button button--secondary" href="/registrar/records?view=setup">Academic setup</a><% } %>
+      <% if (view === 'setup') { %><a class="button button--secondary" href="/registrar/records">Back to student records</a><% } else { %><% if (currentUser.role === 'registrar') { %><a class="button button--primary" href="/pre-enrollments">Review paper submissions</a><% } %><a class="button button--secondary" href="/registrar/records?view=setup">Academic setup</a><% } %>
       <% if (currentUser.role === 'registrar') { %><a class="button button--secondary" href="/registrar/intake">Enrollment intake</a><% } %>
       <% if (currentUser.role === 'database_admin') { %><a class="button button--secondary" href="/admin/student-accounts">Set up student logins</a><% } %>
       <a class="button button--secondary" href="/registrar/records/grades/missing">Grade completion overview</a>
@@ -58,7 +58,7 @@
         </select>
       </div>
       <div class="field">
-        <label for="return-status-filter">Unlinked return evaluation status</label>
+        <label for="return-status-filter">Previously recorded return evaluation status</label>
         <select id="return-status-filter" name="returnStatus">
           <option value="">All statuses</option>
           <% for (const [value, label] of [['under_review', 'Under review'], ['accepted', 'Accepted'], ['not_accepted', 'Not accepted']]) { %>
@@ -110,13 +110,12 @@
           <% if (page < totalPages) { %><a class="button button--secondary" rel="next" href="<%= pageUrl(page + 1) %>">Next</a><% } else { %><span class="button button--secondary" aria-disabled="true">Next</span><% } %>
         </nav>
       <% } %>
-    <% } else { %><p class="empty-state">No student records match these filters.</p><% } %>
+    <% } else { %><p class="empty-state">No student records match these filters. For a returning student, verify the name or LRN against the saved student record before starting a return evaluation.</p><% } %>
   </section>
-  <% if (searchTerm) { %>
-    <section class="admin-section records-list-panel" aria-labelledby="unlinked-return-evaluations-title">
-      <div class="admin-section__heading"><div><h2 id="unlinked-return-evaluations-title">Unlinked return evaluations</h2><p>These applicant reviews have no saved student record. Searching by name or LRN can resume the review without creating a student profile.</p></div></div>
-      <% if (unlinkedEvaluations.length) { %>
-        <div class="table-scroll" tabindex="0" aria-label="Unlinked return evaluations"><table class="admin-table"><thead><tr><th scope="col">Applicant</th><th scope="col">LRN</th><th scope="col">School year</th><th scope="col">Target grade</th><th scope="col">Status</th><th scope="col">Revision</th><th scope="col"><span class="visually-hidden">Action</span></th></tr></thead><tbody>
+  <% if (searchTerm && unlinkedEvaluations.length) { %>
+    <section class="admin-section records-list-panel" aria-labelledby="previous-return-evaluations-title">
+      <div class="admin-section__heading"><div><h2 id="previous-return-evaluations-title">Previously recorded return evaluations</h2><p>These saved reviews have no linked student record. Search by applicant name or LRN to reopen their existing review and history.</p></div></div>
+      <div class="table-scroll" tabindex="0" aria-label="Previously recorded return evaluations"><table class="admin-table"><thead><tr><th scope="col">Applicant</th><th scope="col">LRN</th><th scope="col">School year</th><th scope="col">Target grade</th><th scope="col">Status</th><th scope="col">Revision</th><th scope="col"><span class="visually-hidden">Action</span></th></tr></thead><tbody>
           <% for (const evaluation of unlinkedEvaluations) { const statusLabel = ({under_review:'Under review',accepted:'Accepted',not_accepted:'Not accepted'})[evaluation.status] || 'Under review'; %><tr>
             <th scope="row" data-label="Applicant"><%= [evaluation.first_name, evaluation.middle_name, evaluation.last_name, evaluation.suffix].filter(Boolean).join(' ') %></th>
             <td data-label="LRN"><%= evaluation.applicant_lrn %></td><td data-label="School year"><%= evaluation.school_year %></td><td data-label="Target grade"><%= evaluation.target_grade_level %></td>
@@ -124,7 +123,6 @@
             <td data-label="Action"><a class="table-action" href="/registrar/records/return-evaluations/<%= encodeURIComponent(evaluation.id) %>">Open evaluation</a></td>
           </tr><% } %>
         </tbody></table></div>
-      <% } else { %><p class="empty-state">No unlinked return evaluations match this name or LRN.<% if (currentUser.role === 'registrar') { %> You can <a class="text-link" href="/registrar/records/return-evaluations/new">evaluate an applicant without a saved student record</a> here.<% } %></p><% } %>
     </section>
   <% } %>
   <% } %>

@@ -209,6 +209,73 @@ test('student pages are separate, read-only destinations bound to the authentica
   });
 });
 
+test('student profile and enrollment history remain available when paper-clearance progress fails', async () => {
+  const student = {
+    student_no: 'SHS-2026-0042', first_name: 'Rae', middle_name: null, last_name: 'Student', suffix: null,
+    birth_date: '2009-05-10', sex: 'female', phone: '555-0100', address: 'Lucena', status: 'active'
+  };
+  const diagnostics = [];
+  const app = createApp({
+    databasePool: authPool('student'), environment,
+    studentRecordsService: {
+      async getOwnStudentRecord(userId) {
+        assert.equal(userId, 7, 'the record lookup uses the authenticated account id');
+        return { student, enrollments: [{ school_year: '2026-2027', term: 'First', grade_level: 'Grade 11',
+          section_name: 'STEM A', enrollment_status: 'enrolled' }] };
+      }
+    },
+    termClearanceService: {
+      async getOwnStudentProgress(userId) {
+        assert.equal(userId, 7, 'clearance progress also uses the authenticated account id');
+        const error = new Error('private SQL text and student context');
+        error.code = 'ER_NO_SUCH_TABLE';
+        throw error;
+      }
+    }
+  });
+  app.set('logger', { error(message, metadata) { diagnostics.push({ message, metadata }); } });
+
+  await withServer(app, async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'student');
+    const response = await fetch(`${baseUrl}/student/records?studentId=999`, { headers: { cookie } });
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(html, /Rae Student/);
+    assert.match(html, /Student number <strong>SHS-2026-0042<\/strong>/);
+    assert.match(html, /2026-2027 · First/);
+    assert.match(html, /Paper-clearance progress is temporarily unavailable/);
+    assert.doesNotMatch(html, /No paper-clearance progress has been recorded/);
+    assert.doesNotMatch(html, /private SQL text|student context|signer_name/i);
+  });
+
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].message, 'Student paper-clearance progress could not be loaded.');
+  assert.equal(diagnostics[0].metadata.errorCode, 'ER_NO_SUCH_TABLE');
+  assert.doesNotMatch(JSON.stringify(diagnostics), /private SQL text|student context/);
+});
+
+test('student records remain unavailable when the primary own-record lookup fails', async () => {
+  const app = createApp({
+    databasePool: authPool('student'), environment,
+    studentRecordsService: { async getOwnStudentRecord(userId) {
+      assert.equal(userId, 7);
+      throw new Error('private primary query details');
+    } },
+    termClearanceService: { async getOwnStudentProgress() { return { terms: [] }; } }
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'student');
+    const response = await fetch(`${baseUrl}/student/records`, { headers: { cookie } });
+    const html = await response.text();
+    assert.equal(response.status, 503);
+    assert.match(html, /Student space unavailable/);
+    assert.match(html, /Your school information could not be loaded right now/);
+    assert.doesNotMatch(html, /No paper-clearance progress|profile and enrollment history/);
+    assert.doesNotMatch(html, /private primary query details/);
+  });
+});
+
 test('non-student roles cannot open student self-service pages or invoke their data services', async () => {
   let dataCalls = 0;
   const services = {

@@ -10,7 +10,13 @@ function createReadmissionRouter({ getPool, sql, readmissionService } = {}) {
   const recordsPath = '/registrar/records';
   const privateHeaders = (res) => res.set('Cache-Control', 'private, no-store, max-age=0').set('Pragma', 'no-cache');
   const renderError = (res, error) => {
-    if (error instanceof ReadmissionError) return res.status(error.status).render('error', { title: 'Return evaluation', message: error.message });
+    if (error instanceof ReadmissionError) return res.status(error.status).render('error', {
+      title: error.code === 'SAVED_STUDENT_REQUIRED' ? 'Saved student record required' : 'Return evaluation',
+      message: error.message,
+      ...(error.code === 'SAVED_STUDENT_REQUIRED'
+        ? { errorRecovery: { href: recordsPath, label: 'Search student records' } }
+        : {})
+    });
     return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The evaluation could not be loaded or saved.' });
   };
 

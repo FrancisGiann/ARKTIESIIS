@@ -8,6 +8,7 @@ const { createClassScheduleService } = require('../services/classScheduleService
 const { createTermClearanceService } = require('../services/termClearanceService');
 const { createStatementProjection, createStudentFinanceProjection } = require('../utils/financeStatementProjection');
 const { formatFinanceDateTime } = require('../utils/financeDateTime');
+const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
 
 const gradeLabelCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 const ordinalRanks = new Map([
@@ -196,10 +197,20 @@ function createStudentPortalRouter({ getPool, sql, studentRecordsService, academ
   });
 
   router.get('/records', (req, res) => renderOwnPage(req, res, 'student/records', 'My profile and enrollment history', async (userId) => {
-    const [ownRecords, paperClearanceProgress] = await Promise.all([
-      records.getOwnStudentRecord(userId), termClearances.getOwnStudentProgress(userId)
+    const clearanceProgressPromise = Promise.resolve()
+      .then(() => termClearances.getOwnStudentProgress(userId))
+      .then((paperClearanceProgress) => ({ paperClearanceProgress, paperClearanceProgressAvailable: true }))
+      .catch((error) => {
+        try {
+          const logger = req.app.get('logger') || console;
+          logger.error?.('Student paper-clearance progress could not be loaded.', safeErrorDiagnostics(error));
+        } catch { /* A progress diagnostic must not hide the student's profile. */ }
+        return { paperClearanceProgress: null, paperClearanceProgressAvailable: false };
+      });
+    const [ownRecords, clearanceProgress] = await Promise.all([
+      records.getOwnStudentRecord(userId), clearanceProgressPromise
     ]);
-    return { ownRecords, paperClearanceProgress };
+    return { ownRecords, ...clearanceProgress };
   }));
 
   return router;

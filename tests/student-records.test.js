@@ -1108,6 +1108,7 @@ test('return evaluations are searched and reviewed in student records with serve
   const calls = [];
   const mutations = [];
   let failCreate = false;
+  let matchingUnlinkedApplicant = true;
   let currentEvaluation = evaluation;
   let currentEligibility = { eligible: true, basis: 'recorded_departure', latestRecordedSchoolYear: '2024-2025',
     departure: { schoolYear: '2024-2025', term: 'Term 3', termNumber: 3, departureType: 'transferred',
@@ -1115,7 +1116,10 @@ test('return evaluations are searched and reviewed in student records with serve
   const readmissionService = {
     async listForStudent(...args) { calls.push(['listForStudent', ...args]); return [{ id: evaluation.id, school_year: evaluation.school_year, target_grade_level: evaluation.target_grade_level, status: evaluation.status, version: evaluation.version }]; },
     async getStudentReturnEligibility(...args) { calls.push(['getStudentReturnEligibility', ...args]); return currentEligibility; },
-    async searchUnlinkedMatches(...args) { calls.push(['searchUnlinkedMatches', ...args]); return [{ id: '22222222-2222-4222-8222-222222222222', applicant_lrn: '987654321098', first_name: 'Alex', last_name: 'Applicant', school_year: '2027-2028', target_grade_level: 'Grade 11', status: 'not_accepted', version: 2 }]; },
+    async searchUnlinkedMatches(...args) {
+      calls.push(['searchUnlinkedMatches', ...args]);
+      return matchingUnlinkedApplicant ? [{ id: '22222222-2222-4222-8222-222222222222', applicant_lrn: '987654321098', first_name: 'Alex', last_name: 'Applicant', school_year: '2027-2028', target_grade_level: 'Grade 11', status: 'not_accepted', version: 2 }] : [];
+    },
     async get(...args) { calls.push(['get', ...args]); return args[1] === unlinkedEvaluation.id ? unlinkedEvaluation : currentEvaluation; },
     async getForStudent(...args) { calls.push(['getForStudent', ...args]); return currentEvaluation; },
     async createForStudent(...args) {
@@ -1123,7 +1127,10 @@ test('return evaluations are searched and reviewed in student records with serve
       if (failCreate) throw new ReadmissionError('Curriculum comparison is required.', 400);
       return { id: evaluation.id, version: 1 };
     },
-    async createUnlinked(...args) { calls.push(['createUnlinked', ...args]); return { id: unlinkedEvaluation.id, version: 1 }; },
+    async createUnlinked(...args) {
+      calls.push(['createUnlinked', ...args]);
+      throw new ReadmissionError('Return evaluations can only be started from an eligible saved student record.', 409, 'SAVED_STUDENT_REQUIRED');
+    },
     async update(...args) {
       calls.push(['update', ...args]);
       if (args[5] === true && args[1] === evaluation.id) throw new ReadmissionError('This evaluation is linked to a student record. Open that record to continue.', 409);
@@ -1172,23 +1179,38 @@ test('return evaluations are searched and reviewed in student records with serve
     const search = await fetch(`${baseUrl}/registrar/records?search=Alex&returnStatus=not_accepted`, { headers: { cookie } });
     assert.equal(search.status, 200);
     const searchHtml = await search.text();
-    assert.match(searchHtml, /Unlinked return evaluations/);
+    assert.match(searchHtml, /Previously recorded return evaluations/);
+    assert.doesNotMatch(searchHtml, /Evaluate return without a saved record/);
     assert.match(searchHtml, /Alex Applicant/);
     assert.match(searchHtml, /href="\/registrar\/records\/return-evaluations\/22222222-2222-4222-8222-222222222222"/);
     assert.deepEqual(calls.find(([name]) => name === 'searchUnlinkedMatches'), ['searchUnlinkedMatches', 7, 'Alex', 'not_accepted']);
 
+    matchingUnlinkedApplicant = false;
+    const noUnlinkedSearch = await fetch(`${baseUrl}/registrar/records?search=No%20match`, { headers: { cookie } });
+    const noUnlinkedHtml = await noUnlinkedSearch.text();
+    assert.equal(noUnlinkedSearch.status, 200);
+    assert.match(noUnlinkedHtml, /verify the name or LRN against the saved student record before starting a return evaluation/);
+    assert.doesNotMatch(noUnlinkedHtml, /Previously recorded return evaluations/,
+      'the historical-evaluation panel is omitted when the search has no saved review');
+    assert.doesNotMatch(noUnlinkedHtml, /href="\/registrar\/records\/return-evaluations\/new"/);
+
     const unlinkedNew = await fetch(`${baseUrl}/registrar/records/return-evaluations/new`, { headers: { cookie } });
-    assert.equal(unlinkedNew.status, 200);
+    assert.equal(unlinkedNew.status, 409);
     const unlinkedNewHtml = await unlinkedNew.text();
-    assert.match(unlinkedNewHtml, /Saving this review does not create a student profile, account, or enrollment/);
-    assert.match(unlinkedNewHtml, /action="\/registrar\/records\/return-evaluations"/);
-    const unlinkedCsrf = csrfFromHtml(unlinkedNewHtml);
+    assert.match(unlinkedNewHtml, /Saved student record required/);
+    assert.match(unlinkedNewHtml, /href="\/registrar\/records">Search student records/);
+    const unlinkedCsrf = csrfFromHtml(searchHtml);
+    const noCsrfUnlinkedPost = await postForm(baseUrl, '/registrar/records/return-evaluations', cookie, {
+      applicantLrn: unlinkedEvaluation.applicant_lrn
+    });
+    assert.equal(noCsrfUnlinkedPost.status, 403, 'retired unlinked POST still enforces CSRF');
     const unlinkedCreated = await postForm(baseUrl, '/registrar/records/return-evaluations', cookie, {
       _csrf: unlinkedCsrf, applicantLrn: unlinkedEvaluation.applicant_lrn, firstName: 'Alex', lastName: 'Applicant'
     });
-    assert.equal(unlinkedCreated.status, 303);
-    assert.equal(unlinkedCreated.headers.get('location'), `/registrar/records/return-evaluations/${unlinkedEvaluation.id}`);
-    assert.equal(calls.find(([name]) => name === 'createUnlinked')[1], 7);
+    assert.equal(unlinkedCreated.status, 409);
+    assert.match(await unlinkedCreated.text(), /Return evaluations can only be started from an eligible saved student record/);
+    assert.equal(calls.filter(([name]) => name === 'createUnlinked').length, 0,
+      'retired route does not invoke unlinked service creation');
 
     const unlinkedDetail = await fetch(`${baseUrl}/registrar/records/return-evaluations/${unlinkedEvaluation.id}`, { headers: { cookie } });
     assert.equal(unlinkedDetail.status, 200);
@@ -1342,11 +1364,24 @@ test('return evaluations are searched and reviewed in student records with serve
     documentClearanceService: { async getRegistrarData() { return { financeSummary: { status: 'No finance review', outstanding: null }, requests: [] }; } },
     readmissionService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'database_admin');
+    const historicEvaluation = await fetch(`${baseUrl}/registrar/records/return-evaluations/${unlinkedEvaluation.id}`, { headers: { cookie } });
+    assert.equal(historicEvaluation.status, 200, 'database administrators retain read access to saved unlinked evaluation history');
+    const historicHtml = await historicEvaluation.text();
+    assert.match(historicHtml, /Evaluation history/);
+    assert.match(historicHtml, /id="eval-first"[^>]*value="Alex"/);
+    assert.doesNotMatch(historicHtml, /Save review changes|Accept evaluation|Not accepted/,
+      'historical review remains read-only for database administrators');
     for (const path of ['/registrar/records/return-evaluations/new', '/registrar/records/students/12/return-evaluations/new']) {
       const response = await fetch(`${baseUrl}${path}`, { headers: { cookie } });
       assert.equal(response.status, 403);
       assert.match(await response.text(), /cannot create them/);
     }
+    const records = await fetch(`${baseUrl}/registrar/records`, { headers: { cookie } });
+    const csrfToken = csrfFromHtml(await records.text());
+    const createPost = await postForm(baseUrl, '/registrar/records/return-evaluations', cookie, {
+      _csrf: csrfToken, applicantLrn: '123456789012'
+    });
+    assert.equal(createPost.status, 403, 'database administrators remain read-only on the retired creation POST');
   });
 });
 
@@ -1357,7 +1392,13 @@ test('legacy return-evaluation bookmarks and mutations redirect into the records
     async get(...args) { calls.push(['get', ...args]); return linked; },
     async update(...args) { calls.push(['update', ...args]); return { id: linked.id, version: 2 }; },
     async decide(...args) { calls.push(['decide', ...args]); return { id: linked.id, version: 2 }; },
-    async create(...args) { calls.push(['create', ...args]); return { id: linked.id, version: 1 }; }
+    async create(...args) {
+      calls.push(['create', ...args]);
+      if (args[1]?.applicantLrn === '000000000000') {
+        throw new ReadmissionError('Return evaluations can only be started from an eligible saved student record.', 409, 'SAVED_STUDENT_REQUIRED');
+      }
+      return { id: linked.id, version: 1 };
+    }
   };
   await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment, readmissionService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'registrar');
@@ -1370,6 +1411,9 @@ test('legacy return-evaluation bookmarks and mutations redirect into the records
     const newPage = await fetch(`${baseUrl}/registrar/readmissions/new`, { headers: { cookie }, redirect: 'manual' });
     assert.equal(newPage.status, 303);
     assert.equal(newPage.headers.get('location'), '/registrar/records/return-evaluations/new');
+    const retiredNewPage = await fetch(`${baseUrl}/registrar/readmissions/new`, { headers: { cookie } });
+    assert.equal(retiredNewPage.status, 409);
+    assert.match(await retiredNewPage.text(), /eligible saved student record/);
 
     const login = await fetch(`${baseUrl}/registrar/records` , { headers: { cookie } });
     const csrfToken = csrfFromHtml(await login.text());
@@ -1388,5 +1432,12 @@ test('legacy return-evaluation bookmarks and mutations redirect into the records
     });
     assert.equal(legacyCreate.status, 303);
     assert.equal(legacyCreate.headers.get('location'), `/registrar/records/students/12/return-evaluations/${linked.id}`);
+    const unlinkedLegacyCreate = await postForm(baseUrl, '/registrar/readmissions', cookie, {
+      _csrf: csrfToken, applicantLrn: '000000000000', firstName: 'Unknown', lastName: 'Applicant'
+    });
+    assert.equal(unlinkedLegacyCreate.status, 409);
+    const unlinkedLegacyHtml = await unlinkedLegacyCreate.text();
+    assert.match(unlinkedLegacyHtml, /Saved student record required/);
+    assert.match(unlinkedLegacyHtml, /href="\/registrar\/records">Search student records/);
   });
 });

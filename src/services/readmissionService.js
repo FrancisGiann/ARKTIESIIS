@@ -7,6 +7,7 @@ const { validateName, StudentRecordsError } = require('./studentRecordsService')
 
 const READ_ROLES = new Set(['registrar', 'database_admin']);
 const WRITE_ROLES = new Set(['registrar']);
+const SAVED_STUDENT_REQUIRED = 'Return evaluations can only be started from an eligible saved student record.';
 
 class ReadmissionError extends Error {
   constructor(message, status = 400, code = null) {
@@ -435,7 +436,7 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
     return rows.recordset || [];
   }
 
-  async function createRecord(actorId, raw, { contextStudentId = null, requireUnlinked = false } = {}) {
+  async function createRecord(actorId, raw, { contextStudentId = null } = {}) {
     const id = crypto.randomUUID();
     return transaction(async (tx) => {
       const user = await actor(tx.request(), actorId, WRITE_ROLES);
@@ -450,17 +451,16 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
           middleName: linkedStudent.middle_name, lastName: linkedStudent.last_name, suffix: linkedStudent.suffix });
         studentId = Number(linkedStudent.id);
       } else {
-        values = evaluationInput(raw);
-        const linked = await tx.request().input('lrn', sql.Char(12), values.applicantLrn)
+        const applicantLrn = text(raw?.applicantLrn, 'Applicant LRN', 12, true);
+        if (!/^\d{12}$/.test(applicantLrn)) throw new ReadmissionError('Applicant LRN must contain exactly 12 digits.');
+        const linked = await tx.request().input('lrn', sql.Char(12), applicantLrn)
           .query('SELECT id, lrn, first_name, middle_name, last_name, suffix FROM students WHERE lrn = @lrn FOR UPDATE');
         if (linked.recordset?.length > 1) throw new ReadmissionError('More than one existing student record matches this LRN. Resolve the records first.', 409);
         const linkedStudent = linked.recordset?.[0] || null;
-        if (requireUnlinked && linkedStudent) throw new ReadmissionError('A saved student record matches this LRN. Open that student record to evaluate the return.', 409);
-        if (!requireUnlinked && linkedStudent) {
-          studentId = Number(linkedStudent.id);
-          values = evaluationInput({ ...raw, applicantLrn: linkedStudent.lrn, firstName: linkedStudent.first_name,
-            middleName: linkedStudent.middle_name, lastName: linkedStudent.last_name, suffix: linkedStudent.suffix });
-        }
+        if (!linkedStudent) throw new ReadmissionError(SAVED_STUDENT_REQUIRED, 409, 'SAVED_STUDENT_REQUIRED');
+        studentId = Number(linkedStudent.id);
+        values = evaluationInput({ ...raw, applicantLrn: linkedStudent.lrn, firstName: linkedStudent.first_name,
+          middleName: linkedStudent.middle_name, lastName: linkedStudent.last_name, suffix: linkedStudent.suffix });
       }
       if (studentId) await assertReturnEligibleForStudent(tx, studentId);
       await assertNewSchoolYear(tx, values, studentId);
@@ -490,8 +490,10 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
     return createRecord(actorId, raw, { contextStudentId: studentId });
   }
 
-  async function createUnlinked(actorId, raw = {}) {
-    return createRecord(actorId, raw, { requireUnlinked: true });
+  async function createUnlinked(actorId) {
+    const pool = await getPool();
+    await actor(pool.request(), actorId, WRITE_ROLES);
+    throw new ReadmissionError(SAVED_STUDENT_REQUIRED, 409, 'SAVED_STUDENT_REQUIRED');
   }
 
   async function assertStudentContext(tx, current, studentInput) {

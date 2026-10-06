@@ -19,7 +19,7 @@ const SEED_KEY = 'arktiesiis-demo-students-v2.017';
 const SCHOOL_YEAR_WITH_TERMS = '2026-2027';
 const PRE_ENROLLMENT_YEAR = '2027-2028';
 const EXPECTED_FIXTURE = Object.freeze({ students: 4, studentAccounts: 4, annuals: 4, assessments: 4,
-  preEnrollments: 9, evaluations: 2, verifiedPaperEvents: 0 });
+  preEnrollments: 9, evaluations: 1, verifiedPaperEvents: 0 });
 const SOURCE_IDENTITIES = Object.freeze([
   { suffix: 301, grade: 'Grade 11', voucherCode: 'PUB', financeState: 'unpaid', track: 'Academic Track', cluster: 'ASSH (Arts, Social Science, and Humanities)' },
   { suffix: 302, grade: 'Grade 11', voucherCode: 'ESC', financeState: 'partial', track: 'Tech-Pro Track', cluster: 'ICT Support & Computer Programming' },
@@ -607,13 +607,6 @@ async function runSeed({ args = [], configuration = environment, variables = pro
       || Number(balikPaperSource.readmission_evaluation_version) !== accepted.version) {
       throw new SeedError('The balik-aral paper source does not match its canonical accepted evaluation and student.');
     }
-    const declinedEvaluation = await services.readmissions.create(actors.registrar, evaluationInput(lrnFor(309)));
-    const revisedDeclined = await services.readmissions.update(actors.registrar, declinedEvaluation.id, declinedEvaluation.version,
-      { ...evaluationInput(lrnFor(309)), subjectAvailability: 'unavailable',
-        availabilityNotes: 'The required subject sequence is not available for this fictional case.' });
-    const declined = await services.readmissions.decide(actors.registrar, revisedDeclined.id, revisedDeclined.version,
-      'not_accepted', 'Not accepted because the required subjects are unavailable in the reviewed year.');
-
     const finalCounts = await readCounts(pool);
     for (const [key, expected] of Object.entries(EXPECTED_FIXTURE)) {
       if (Number(finalCounts[key]) !== expected) throw new SeedError(`The final demo inventory does not match the expected ${key} count.`);
@@ -631,7 +624,7 @@ async function runSeed({ args = [], configuration = environment, variables = pro
       serverFingerprint: sha256(JSON.stringify(normalizeServerIdentity(identity))),
       preservedFingerprint: preservedAfter.fingerprint, credentialArtifactSha256, counts: finalCounts,
       academicYear: SCHOOL_YEAR_WITH_TERMS, preEnrollmentYear: PRE_ENROLLMENT_YEAR,
-      readmissionStatuses: { accepted: accepted.status, declined: declined.status },
+      readmissionStatuses: { accepted: accepted.status },
       completedAt: new Date().toISOString()
     };
     await pool.request().input('actorId', queryTypes.Int, actors.database_admin)
