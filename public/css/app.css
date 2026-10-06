@@ -1313,8 +1313,8 @@ label { font-size: 0.84rem; }
 .student-finance-activity-list { padding: 0; margin: 0; list-style: none; border-top: 1px solid var(--line); }
 .student-finance-term { padding: 0.85rem 0; border-bottom: 1px solid var(--line); }
 .student-finance-term__heading {
-  display: flex;
-  align-items: center;
+  display: list-item;
+  padding: 0.55rem 0;
   justify-content: space-between;
   gap: 1rem;
   margin-bottom: 0.65rem;
@@ -2268,4 +2268,145 @@ label { font-size: 0.84rem; }
   .readmissions-filter-bar { grid-template-columns: minmax(0, 1fr); }
   .readmissions-filter-bar > .button { width: 100%; }
   .pre-enrollment-handoff__receipts ul { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Paper-clearance forms keep their reading order and fit inside term tables. */
+.student-clearance-page,
+.student-clearance-page .clearance-year,
+.student-clearance-page .clearance-year .table-scroll,
+.student-clearance-page .clearance-edit-form,
+.student-clearance-page .clearance-items-table,
+.term-clearance-templates .admin-form,
+.term-clearance-templates .clearance-fieldset { min-width: 0; }
+.student-clearance-page .clearance-year .clearance-edit-form { width: 100%; }
+.student-clearance-page .clearance-term-table { table-layout: fixed; }
+.student-clearance-page .clearance-term-summary-row > td:first-child { width: 17%; }
+.student-clearance-page .clearance-term-summary-row > td:nth-child(2) { width: 25%; }
+.student-clearance-page .clearance-term-summary-row > td:nth-child(3) { width: 58%; }
+.student-clearance-page .clearance-requirements-row > td { width: 100%; min-width: 0; }
+.student-clearance-page .clearance-requirements-row { background: #fafcfc; }
+.student-clearance-page .clearance-fieldset,
+.term-clearance-templates .clearance-fieldset {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  min-width: 0;
+  margin: 0;
+}
+.student-clearance-page .clearance-items-table { width: 100%; table-layout: fixed; }
+.student-clearance-page .clearance-items-table td,
+.student-clearance-page .clearance-items-table th { min-width: 0; overflow-wrap: anywhere; }
+.student-clearance-page .clearance-items-table .field { min-width: 0; }
+.student-clearance-page .clearance-items-table input,
+.student-clearance-page .clearance-items-table textarea,
+.student-clearance-page .clearance-items-table select { min-width: 0; max-width: 100%; }
+.student-clearance-page .checkbox-field,
+.term-clearance-templates .checkbox-field { display: flex; align-items: flex-start; gap: 0.65rem; min-width: 0; }
+.student-clearance-page .checkbox-field input,
+.term-clearance-templates .checkbox-field input { flex: 0 0 auto; margin-top: 0.25rem; }
+.student-clearance-page .checkbox-field span,
+.term-clearance-templates .checkbox-field span { min-width: 0; }
+.student-clearance-page .clearance-next-step {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-width: 0;
+  margin: 1rem 0;
+  padding: 0.8rem 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.student-clearance-page .clearance-next-step > div { min-width: 0; }
+.student-clearance-page .clearance-next-step h2 { margin: 0 0 0.2rem; color: var(--accent); font-size: 1rem; }
+.student-clearance-page .clearance-next-step p { margin: 0; color: var(--ink-soft); }
+.student-clearance-page .clearance-next-step .button { flex: 0 0 auto; }
+.student-clearance-page .clearance-details > summary,
+.student-clearance-page .clearance-corrections > summary,
+.student-clearance-page .clearance-reconciliation > summary,
+.student-clearance-page .clearance-history > summary,
+.student-clearance-page .clearance-stale-draft > summary,
+.term-clearance-templates .clearance-template-labs > summary {
+  display: list-item;
+  width: fit-content;
+  min-height: 2.75rem;
+  padding: 0.55rem 0;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 700;
+  text-underline-offset: 0.16em;
+}
+.student-clearance-page .clearance-details > summary:focus-visible,
+.student-clearance-page .clearance-corrections > summary:focus-visible,
+.student-clearance-page .clearance-reconciliation > summary:focus-visible,
+.student-clearance-page .clearance-history > summary:focus-visible,
+.student-clearance-page .clearance-stale-draft > summary:focus-visible,
+.term-clearance-templates .clearance-template-labs > summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 0.2rem;
+}
+.student-clearance-page .clearance-form-intro h3 { margin: 0; font-size: 1rem; }
+.student-clearance-page .clearance-form-intro p { margin: 0.2rem 0 0; color: var(--ink-soft); }
+.student-clearance-page .clearance-form-actions { display: flex; flex-wrap: wrap; gap: 0.65rem; }
+.student-clearance-page .clearance-form-actions .button { min-height: 2.75rem; }
+.student-clearance-page .clearance-stale-draft,
+.student-clearance-page .clearance-corrections,
+.student-clearance-page .clearance-reconciliation,
+.term-clearance-templates .clearance-template-labs { min-width: 0; margin: 0.45rem 0; }
+.student-clearance-page .clearance-stale-draft dl { display: grid; gap: 0.55rem; margin: 0.35rem 0 0; }
+.student-clearance-page .clearance-stale-draft dl > div { min-width: 0; padding-top: 0.4rem; border-top: 1px solid var(--line); }
+.student-clearance-page .clearance-stale-draft dt { color: var(--muted); font-weight: 700; }
+.student-clearance-page .clearance-stale-draft dd { min-width: 0; margin: 0.12rem 0 0; overflow-wrap: anywhere; }
+.student-clearance-page .clearance-template-needed,
+.term-clearance-templates .clearance-template-empty { margin: 0.55rem 0; padding: 0.7rem 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.term-clearance-templates .clearance-template-empty p { margin: 0.35rem 0; }
+.term-clearance-templates .clearance-template-empty a { display: inline-flex; min-height: 2.6rem; align-items: center; }
+.term-clearance-templates .clearance-template-labs { padding-top: 0.55rem; border-top: 1px solid var(--line); }
+.term-clearance-templates .clearance-template-labs > p { margin: 0.3rem 0 0.6rem; }
+.student-clearance-page button,
+.term-clearance-templates button { min-height: 2.65rem; }
+
+@media (max-width: 760px) {
+  .student-clearance-page .clearance-next-step { align-items: flex-start; flex-direction: column; }
+  .student-clearance-page .clearance-next-step .button { width: 100%; }
+  .student-clearance-page .clearance-year .admin-table > tbody > tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+    padding: 0.55rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .student-clearance-page .clearance-year .admin-table > tbody > tr > td {
+    display: block;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    box-sizing: border-box;
+    min-width: 0;
+    padding: 0.5rem 0;
+  }
+  .student-clearance-page .clearance-year .admin-table > tbody > tr > td::before {
+    display: block;
+    margin-bottom: 0.35rem;
+  }
+  .student-clearance-page .clearance-requirements-row > td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .student-clearance-page .clearance-requirements-row > td::before { grid-column: 1 / -1; }
+  .student-clearance-page .clearance-items-table > tbody > tr {
+    display: block;
+    min-width: 0;
+    padding: 0.35rem 0;
+    border-top: 1px solid var(--line);
+  }
+  .student-clearance-page .clearance-items-table > tbody > tr > td {
+    display: block;
+    min-width: 0;
+    padding: 0.45rem 0;
+  }
+  .student-clearance-page .clearance-items-table > tbody > tr > td::before { display: block; margin-bottom: 0.25rem; }
+  .student-clearance-page .clearance-edit-form .admin-form-grid,
+  .term-clearance-templates .admin-form-grid { grid-template-columns: minmax(0, 1fr); min-width: 0; }
 }

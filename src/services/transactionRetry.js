@@ -26,4 +26,4 @@ async function runSerializableTransaction({ getPool, sql, transactionFactory }, 
   throw new Error('The transaction retry limit was exceeded.');
 }
 
-module.exports = { runSerializableTransaction };
+module.exports = { RETRYABLE_TRANSACTION_CODES, runSerializableTransaction };

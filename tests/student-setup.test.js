@@ -318,6 +318,9 @@ test('registrar intake opens the guided annual form and links the roster to fee 
         assert.equal(String(annualId), '71');
         return previewFees(actorId, annualId);
       }
+    },
+    termClearanceService: {
+      async getAnnualPrerequisiteReview() { return { ready: true, kind: 'new_student', terms: [], blockers: [], fingerprint: 'clearance-review-fingerprint' }; }
     }
   }));
   await withServer(app, async (baseUrl) => {
@@ -407,8 +410,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(reviewHtml, /voucher-based assessment/);
     assert.match(reviewHtml, /123456789012/);
     assert.match(reviewHtml, /2008-04-21/);
-    assert.match(reviewHtml, /<dt>Intake type<\/dt><dd>Standard intake<\/dd>/);
-    assert.doesNotMatch(reviewHtml, /<dt>Intake type<\/dt><dd>New student<\/dd>/);
+    assert.match(reviewHtml, /<dt>Intake type<\/dt><dd>New student<\/dd>/);
     assert.match(reviewHtml, /Edit profile or term placements/);
     assert.match(reviewHtml, /Update paper checklist/);
     assert.match(reviewHtml, /Staff checked all copies\./);
@@ -437,7 +439,8 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     const confirmResponse = await fetch(`${baseUrl}/registrar/intake/71/confirm`, {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey,
-        scheduleId: '9', scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64), optionalLineIds: '90' })
+        scheduleId: '9', scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64),
+        clearanceSnapshotFingerprint: 'clearance-review-fingerprint', optionalLineIds: '90' })
     });
     const confirmedHtml = await confirmResponse.text();
     assert.equal(confirmResponse.status, 200);
@@ -455,7 +458,8 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(confirmedHtml, /Open paper requirements checklist/);
     assert.deepEqual(confirmationCall, { actorId: registrar.id, annualId: '71', input: {
       _csrf: csrfToken, idempotencyKey, scheduleId: '9',
-      scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64), optionalLineIds: '90'
+      scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64),
+      clearanceSnapshotFingerprint: 'clearance-review-fingerprint', optionalLineIds: '90'
     } });
 
     const reopened = await fetch(`${baseUrl}/registrar/intake/71/confirmation`);
@@ -685,6 +689,7 @@ test('final review unexpected load failures return a support reference and only 
       }
     },
     physicalChecklistService: { async getStudentChecklist() { throw failure; } },
+    termClearanceService: { async getAnnualPrerequisiteReview() { return { ready: true, kind: 'new_student', terms: [], blockers: [], fingerprint: 'clearance-review-fingerprint' }; } },
     annualFinanceService: { async annualAssessmentPreviewForRegistrar() { return { lines: [], total: '0.00' }; } },
     logger: { error(...args) { errors.push(args); } }
   }));

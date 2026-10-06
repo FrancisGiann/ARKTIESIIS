@@ -19,7 +19,7 @@
           <% if (term.section_id) { %><a href="/registrar/intake/<%= record.parent.annual_enrollment_id %>/fees">Review fees and confirm</a><% } else { %>Assign an entry section first<% } %>
         <% } else if (term.enrollment_status === 'pending_payment' && !record.parent.registrar_confirmation_id) { %>Waiting for entry confirmation
         <% } else if (term.enrollment_status === 'pending_payment' && !term.section_id) { %>Assign a section before activation
-        <% } else if (term.enrollment_status === 'pending_payment') { %><form method="post" action="/registrar/intake/<%= term.enrollment_id %>/finalize"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><button class="table-action table-button" type="submit">Activate term</button></form>
+        <% } else if (term.enrollment_status === 'pending_payment') { %><a class="table-action" href="/registrar/intake/<%= term.enrollment_id %>/activation-review">Review prerequisites and activate</a>
         <% } else { %><%= placementLabels[term.enrollment_status] || 'Status review required' %><% } %>
       </td></tr><% } %>
     </tbody></table></div>

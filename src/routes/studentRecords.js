@@ -11,6 +11,7 @@ const {
 } = require('../services/studentDocumentFinanceClearanceService');
 const { RegistrarGradeOverviewError, createRegistrarGradeOverviewService } = require('../services/registrarGradeOverviewService');
 const { ReadmissionError, createReadmissionService } = require('../services/readmissionService');
+const { TermClearanceError, createTermClearanceService } = require('../services/termClearanceService');
 const {
   StudentRecordsError,
   createStudentRecordsService,
@@ -142,7 +143,89 @@ function lastRecordedEnrollment(enrollments = [], eligibility = null) {
   return latestTermRows.length === 1 ? latestTermRows[0] : null;
 }
 
-function createStudentRecordsRouter({ getPool, sql, studentRecordsService, academicRecordsService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService } = {}) {
+function repeatedFields(body, fieldName) {
+  const value = body?.[fieldName];
+  return value == null ? [] : (Array.isArray(value) ? value : [value]).map((item) => typeof item === 'string' ? item.slice(0, 500) : '');
+}
+
+function paperTeacherRowsFromBody(body) {
+  const codes = repeatedFields(body, 'paperSubjectCode');
+  const names = repeatedFields(body, 'paperSubjectName');
+  return Array.from({ length: Math.max(codes.length, names.length) }, (_, index) => ({
+    subjectCode: codes[index] || '', subjectName: names[index] || ''
+  })).filter((row) => row.subjectCode.trim() || row.subjectName.trim());
+}
+
+function clearanceItemsFromBody(body) {
+  const ids = new Set();
+  for (const key of Object.keys(body || {})) {
+    const match = /^item_(\d+)_applicabilityStatus$/.exec(key);
+    if (match && match[1].length <= 10 && ids.size < 180) ids.add(match[1]);
+  }
+  return [...ids].map((rawId) => ({
+    itemId: rawId,
+    signaturePresent: body[`item_${rawId}_signaturePresent`] === '1',
+    signerName: typeof body[`item_${rawId}_signerName`] === 'string' ? body[`item_${rawId}_signerName`] : '',
+    paperSignedOn: typeof body[`item_${rawId}_paperSignedOn`] === 'string' ? body[`item_${rawId}_paperSignedOn`] : '',
+    signerContextReason: typeof body[`item_${rawId}_signerContextReason`] === 'string' ? body[`item_${rawId}_signerContextReason`] : '',
+    applicabilityStatus: body[`item_${rawId}_applicabilityStatus`],
+    applicabilityReason: typeof body[`item_${rawId}_applicabilityReason`] === 'string' ? body[`item_${rawId}_applicabilityReason`] : ''
+  }));
+}
+
+function boundedString(body, key, maxLength) {
+  return typeof body?.[key] === 'string' ? body[key].slice(0, maxLength) : '';
+}
+
+function safeClearanceFormValues(body = {}) {
+  const token = boundedString(body, 'idempotencyKey', 36);
+  const itemsById = Object.fromEntries(clearanceItemsFromBody(body).slice(0, 180).map((item) => [item.itemId, {
+    applicabilityStatus: ['required', 'not_applicable', 'unreviewed'].includes(item.applicabilityStatus) ? item.applicabilityStatus : '',
+    applicabilityReason: item.applicabilityReason.slice(0, 1000), signaturePresent: item.signaturePresent,
+    signerName: item.signerName.slice(0, 160), paperSignedOn: item.paperSignedOn.slice(0, 10),
+    signerContextReason: item.signerContextReason.slice(0, 1000)
+  }]));
+  return {
+    idempotencyKey: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token) ? token : crypto.randomUUID(),
+    expectedVersion: /^\d{1,10}$/.test(boundedString(body, 'expectedVersion', 10)) ? body.expectedVersion : '',
+    scopeStatus: ['attended', 'not_attended'].includes(body.scopeStatus) ? body.scopeStatus : '',
+    scopeReason: boundedString(body, 'scopeReason', 1000),
+    templateId: /^\d{1,10}$/.test(boundedString(body, 'templateId', 10)) ? body.templateId : '',
+    templateSelectionReason: boundedString(body, 'templateSelectionReason', 1000),
+    correctionReason: boundedString(body, 'correctionReason', 1000),
+    inspectedOn: boundedString(body, 'inspectedOn', 10),
+    clearanceAction: body.clearanceAction === 'attest' ? 'attest' : 'progress',
+    rosterReviewed: body.rosterReviewed === '1',
+    rosterReconciliationReason: boundedString(body, 'rosterReconciliationReason', 1000),
+    paperTeacherRows: paperTeacherRowsFromBody(body).slice(0, 8).map((row) => ({
+      subjectCode: row.subjectCode.slice(0, 50), subjectName: row.subjectName.slice(0, 200)
+    })),
+    itemsById
+  };
+}
+
+function safeClearanceTemplateValues(body = {}) {
+  const token = boundedString(body, 'idempotencyKey', 36);
+  return {
+    idempotencyKey: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token) ? token : crypto.randomUUID(),
+    gradeLevel: ['Grade 11', 'Grade 12'].includes(body.gradeLevel) ? body.gradeLevel : '',
+    trackLabel: boundedString(body, 'trackLabel', 80),
+    registrarLabel: boundedString(body, 'registrarLabel', 120),
+    guidanceLabel: boundedString(body, 'guidanceLabel', 120),
+    financeLabel: boundedString(body, 'financeLabel', 120),
+    paperFormConfirmed: body.paperFormConfirmed === '1',
+    teacherRosterConfirmed: body.teacherRosterConfirmed === '1',
+    laboratoryRowsConfirmed: body.laboratoryRowsConfirmed === '1',
+    laboratoryLabels: repeatedFields(body, 'laboratoryLabel').slice(0, 8).map((label) => label.slice(0, 120))
+  };
+}
+
+function clearanceFormAttempt(body, kind, rawRecordId) {
+  const recordId = normalizeRecordId(rawRecordId);
+  return recordId ? { kind, recordId, values: safeClearanceFormValues(body) } : null;
+}
+
+function createStudentRecordsRouter({ getPool, sql, studentRecordsService, academicRecordsService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService, termClearanceService } = {}) {
   const router = express.Router();
   const service = studentRecordsService || createStudentRecordsService({ getPool, sql });
   const academics = academicRecordsService || createAcademicRecordsService({ getPool, sql });
@@ -152,6 +235,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
   const documentClearance = documentClearanceService || createStudentDocumentFinanceClearanceService({ getPool, sql });
   const gradeOverview = gradeOverviewService || createRegistrarGradeOverviewService({ getPool, sql });
   const readmissions = readmissionService || createReadmissionService({ getPool, sql });
+  const termClearances = termClearanceService || createTermClearanceService({ getPool, sql });
 
   async function loadWorkspace(search = '', termId = '', page = 1) {
     return service.listWorkspace(search, termId, page);
@@ -290,6 +374,52 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       });
     } catch {
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The student record could not be loaded.' });
+    }
+  }
+
+  async function renderTermClearance(req, res, studentIdInput, {
+    status = 200, error = null, formAttempt = null, staleAttempt = null
+  } = {}) {
+    const studentId = normalizeRecordId(studentIdInput);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      const data = await termClearances.getStudentClearance(req.authUser.id, studentId);
+      for (const term of data.terms) {
+        term.createToken = crypto.randomUUID();
+        term.updateToken = crypto.randomUUID();
+        if (formAttempt?.kind === 'create' && Number(formAttempt.recordId) === Number(term.enrollment_id)) {
+          term.createAttempt = formAttempt;
+          term.createToken = formAttempt.values.idempotencyKey;
+        }
+        if (formAttempt?.kind === 'update' && Number(formAttempt.recordId) === Number(term.clearance_id)) {
+          term.updateAttempt = formAttempt;
+          term.updateToken = formAttempt.values.idempotencyKey;
+        }
+        if (staleAttempt && ((staleAttempt.kind === 'create' && Number(staleAttempt.recordId) === Number(term.enrollment_id))
+          || (staleAttempt.kind === 'update' && Number(staleAttempt.recordId) === Number(term.clearance_id)))) term.staleDraft = staleAttempt;
+      }
+      return res.status(status).set('Cache-Control', 'private, no-store').render('records/student-clearance', {
+        title: 'Paper clearance', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        student: data.student, terms: data.terms, templates: data.templates, error, staleAttempt: Boolean(staleAttempt),
+        notice: req.query?.notice === 'saved' ? 'Paper-clearance record saved and history recorded.' : null
+      });
+    } catch (loadError) {
+      if (loadError instanceof TermClearanceError) return res.status(loadError.status).render('error', { title: 'Paper clearance unavailable', message: loadError.message });
+      return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'Student paper-clearance records could not be loaded.' });
+    }
+  }
+
+  async function renderClearanceTemplates(req, res, { status = 200, error = null, values = {}, recoveryNotice = null } = {}) {
+    try {
+      const data = await termClearances.listTemplates(req.authUser.id);
+      return res.status(status).set('Cache-Control', 'private, no-store').render('records/term-clearance-templates', {
+        title: 'Paper-clearance templates', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        templates: data.templates, values, error, recoveryNotice, idempotencyKey: values.idempotencyKey || crypto.randomUUID(),
+        notice: req.query?.notice === 'saved' ? 'A new approved template version was saved.' : null
+      });
+    } catch (loadError) {
+      if (loadError instanceof TermClearanceError) return res.status(loadError.status).render('error', { title: 'Paper-clearance templates unavailable', message: loadError.message });
+      return res.status(503).render('error', { title: 'Paper-clearance templates unavailable', message: 'Approved paper-clearance templates could not be loaded.' });
     }
   }
 
@@ -493,6 +623,65 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
   router.get('/students/new', (req, res) => req.authUser.role === 'registrar'
     ? res.redirect(303, '/registrar/intake/new')
     : renderStudentForm(req, res));
+
+  router.get('/clearance/templates', (req, res) => renderClearanceTemplates(req, res));
+  router.post('/clearance/templates', async (req, res) => {
+    if (req.authUser.role !== 'registrar') return res.status(403).render('error', { title: 'Forbidden', message: 'Only registrars can change paper-clearance templates.' });
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    const values = safeClearanceTemplateValues(req.body);
+    const input = { ...req.body, laboratoryLabels: repeatedFields(req.body, 'laboratoryLabel').filter((label) => label.trim()) };
+    try {
+      await termClearances.createTemplateVersion(req.authUser.id, input);
+      return res.redirect(303, '/registrar/records/clearance/templates?notice=saved');
+    } catch (error) {
+      if (error instanceof TermClearanceError) {
+        const tokenConflict = error.status === 409;
+        const recoveredValues = tokenConflict ? { ...values, idempotencyKey: crypto.randomUUID() } : values;
+        return renderClearanceTemplates(req, res, { status: error.status, error: error.message, values: recoveredValues,
+          recoveryNotice: tokenConflict ? 'This template was not saved because the form token was already used for different details. Review the saved versions, then submit again with the refreshed form.' : null });
+      }
+      return res.status(503).render('error', { title: 'Paper-clearance templates unavailable', message: 'The template version could not be saved.' });
+    }
+  });
+
+  router.get('/students/:id/clearance', (req, res) => renderTermClearance(req, res, req.params.id));
+  router.post('/students/:id/clearance/terms/:enrollmentId', async (req, res) => {
+    if (req.authUser.role !== 'registrar') return res.status(403).render('error', { title: 'Forbidden', message: 'Only registrars can record paper-clearance applicability.' });
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    const input = { ...req.body, paperTeacherRows: paperTeacherRowsFromBody(req.body),
+      rosterReviewed: req.body?.rosterReviewed === '1' };
+    try {
+      await termClearances.createTermClearance(req.authUser.id, req.params.enrollmentId, input, req.params.id);
+      return res.redirect(303, `/registrar/records/students/${encodeURIComponent(req.params.id)}/clearance?notice=saved`);
+    } catch (error) {
+      if (error instanceof TermClearanceError) {
+        const attempt = clearanceFormAttempt(req.body, 'create', req.params.enrollmentId);
+        return renderTermClearance(req, res, req.params.id, { status: error.status, error: error.message,
+          formAttempt: error.status === 409 ? null : attempt, staleAttempt: error.status === 409 ? attempt : null });
+      }
+      return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'The term applicability review could not be saved.' });
+    }
+  });
+  router.post('/students/:id/clearance/records/:clearanceId', async (req, res) => {
+    if (req.authUser.role !== 'registrar') return res.status(403).render('error', { title: 'Forbidden', message: 'Only registrars can update paper-clearance records.' });
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    const input = { ...req.body, items: clearanceItemsFromBody(req.body),
+      paperTeacherRows: paperTeacherRowsFromBody(req.body),
+      rosterReviewed: req.body?.rosterReviewed === '1',
+      paperInspected: req.body?.clearanceAction === 'attest',
+      attestPaperInspected: req.body?.clearanceAction === 'attest' };
+    try {
+      await termClearances.updateTermClearance(req.authUser.id, req.params.clearanceId, input, req.params.id);
+      return res.redirect(303, `/registrar/records/students/${encodeURIComponent(req.params.id)}/clearance?notice=saved`);
+    } catch (error) {
+      if (error instanceof TermClearanceError) {
+        const attempt = clearanceFormAttempt(req.body, 'update', req.params.clearanceId);
+        return renderTermClearance(req, res, req.params.id, { status: error.status, error: error.message,
+          formAttempt: error.status === 409 ? null : attempt, staleAttempt: error.status === 409 ? attempt : null });
+      }
+      return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'The paper signature review could not be saved.' });
+    }
+  });
 
   router.get('/students/:id', (req, res) => renderStudentOverview(req, res, {
     view: ['history', 'requests'].includes(req.query.view) ? req.query.view : 'overview'

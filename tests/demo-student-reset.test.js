@@ -44,14 +44,22 @@ test('reset scope covers student operations while preserving every listed school
   assert.equal(new Set(RESET_TABLES).size, RESET_TABLES.length, 'delete order has no duplicate tables');
   assert.ok(RESET_TABLES.indexOf('annual_enrollments') < RESET_TABLES.indexOf('pre_enrollments'));
   assert.ok(RESET_TABLES.indexOf('pre_enrollments') < RESET_TABLES.indexOf('readmission_evaluations'));
+  assert.ok(RESET_TABLES.indexOf('student_term_clearance_events') < RESET_TABLES.indexOf('student_term_clearances'));
+  assert.ok(RESET_TABLES.indexOf('student_term_clearance_items') < RESET_TABLES.indexOf('student_term_clearances'));
+  assert.ok(RESET_TABLES.indexOf('student_term_clearances') < RESET_TABLES.indexOf('enrollments'));
+  assert.ok(RESET_TABLES.indexOf('annual_term_finalizations') < RESET_TABLES.indexOf('enrollments'));
+  assert.ok(RESET_TABLES.indexOf('annual_continuity_source_events') < RESET_TABLES.indexOf('annual_enrollments'));
   assert.ok(RESET_TABLES.indexOf('students') === RESET_TABLES.length - 1);
-  for (const table of ['audit_logs', 'documents', 'annual_enrollments', 'pre_enrollments', 'readmission_evaluations',
+  for (const table of ['audit_logs', 'documents', 'student_term_clearance_events', 'student_term_clearance_items',
+    'student_term_clearances', 'annual_term_finalizations', 'annual_continuity_source_events',
+    'annual_enrollments', 'pre_enrollments', 'readmission_evaluations',
     'teacher_grade_submissions', 'finance_payments', 'assessed_charges', 'financial_accounts', 'students']) {
     assert.ok(RESET_TABLES.includes(table), `${table} is included in the deliberate student reset scope`);
   }
   for (const table of ['academic_terms', 'sections', 'subjects', 'teacher_assignments', 'class_schedules',
     'finance_schedules', 'finance_schedule_lines', 'school_year_term_order', 'school_year_term_order_reviews',
-    'physical_requirement_definitions', 'staff_profiles', 'application_locks', 'schema_migrations']) {
+    'physical_requirement_definitions', 'term_clearance_templates', 'term_clearance_template_items',
+    'staff_profiles', 'application_locks', 'schema_migrations']) {
     assert.ok(PRESERVED_TABLES.includes(table), `${table} remains preserved`);
     assert.ok(!RESET_TABLES.includes(table), `${table} is never deleted`);
   }
@@ -61,7 +69,7 @@ test('reset scope covers student operations while preserving every listed school
 
 test('the approved inventory binds the same schema and rows to the configured endpoint', () => {
   const common = {
-    databaseName: 'demo', schemaVersion: 'v2.016', counts: { students: 226 }, students: 226,
+    databaseName: 'demo', schemaVersion: 'v2.017', counts: { students: 226 }, students: 226,
     studentUsers: 7, staffUsers: 9, fileReferences: [], fileSnapshot: [],
     serverIdentity: { databaseName: 'demo', hostname: 'db-a', port: 3306, serverId: 7, version: '11.8.9' }
   };

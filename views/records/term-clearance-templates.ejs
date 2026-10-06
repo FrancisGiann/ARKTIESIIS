@@ -1,0 +1,47 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page records-page term-clearance-templates" id="main-content">
+  <a class="context-back" href="/registrar/records">Back to Student Records</a>
+  <section class="dashboard-heading">
+    <div><h1>Printed paper forms</h1><p>Set up the sign-off labels that match the school’s existing paper form.</p></div>
+  </section>
+  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <% if (recoveryNotice) { %><p class="muted-copy" role="status"><%= recoveryNotice %></p><% } %>
+  <section class="admin-section" aria-labelledby="template-list-title">
+    <div class="admin-section__heading"><div><h2 id="template-list-title">Saved form versions</h2><p>Past student reviews keep the form version originally selected for that paper copy.</p></div></div>
+    <% if (templates.length) { %><div class="table-scroll" tabindex="0" aria-label="Saved paper form versions"><table class="admin-table"><thead><tr><th scope="col">Grade and track</th><th scope="col">Version</th><th scope="col">Status</th><th scope="col">Printed form sign-off labels</th><th scope="col">Created</th></tr></thead><tbody>
+      <% for (const template of templates) { %><tr><td data-label="Grade and track"><strong><%= template.grade_level %></strong><br><%= template.track_label %></td><td data-label="Version"><%= template.version_no %></td><td data-label="Status"><%= template.status === 'approved' ? 'Approved for new reviews' : 'Older version · saved reviews retained' %></td><td data-label="Printed form sign-off labels"><ul><% for (const label of String(template.item_labels || '').split('\n')) { if (label) { %><li><%= label %></li><% } } %></ul></td><td data-label="Created"><%= new Date(template.created_at).toLocaleDateString('en-PH', { timeZone: 'Asia/Manila' }) %></td></tr><% } %>
+    </tbody></table></div><% } else { %><div class="clearance-template-empty"><p><strong>No paper form versions are set up yet.</strong> An attended term cannot be marked complete until a registrar records the labels from the printed form. The registrar can still record that a student did not attend when school records show this.</p><% if (currentUser.role === 'registrar') { %><p><a class="table-action" href="#template-create-title">Set up the first paper form</a></p><% } else { %><p>Ask the registrar to set up the matching paper form.</p><% } %></div><% } %>
+  </section>
+  <% if (currentUser.role === 'registrar') { %>
+    <section class="admin-section" aria-labelledby="template-create-title">
+      <div class="admin-section__heading"><div><h2 id="template-create-title">Set up a form version</h2><p>Compare every label with the school’s printed form. Choose its grade and track; do not infer the track from a section name.</p></div></div>
+      <form class="admin-form" method="post" action="/registrar/records/clearance/templates">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <input type="hidden" name="idempotencyKey" value="<%= idempotencyKey %>">
+        <div class="admin-form-grid">
+          <div class="field"><label for="template-grade">Grade level</label><select id="template-grade" name="gradeLevel" required><option value="">Choose grade</option><% for (const grade of ['Grade 11', 'Grade 12']) { %><option value="<%= grade %>" <%= values.gradeLevel === grade ? 'selected' : '' %>><%= grade %></option><% } %></select></div>
+          <div class="field"><label for="template-track">Track label on the school form</label><input id="template-track" name="trackLabel" maxlength="80" value="<%= values.trackLabel || '' %>" required></div>
+          <div class="field"><label for="template-registrar">Registrar sign-off label</label><input id="template-registrar" name="registrarLabel" maxlength="120" value="<%= values.registrarLabel || '' %>" required></div>
+          <div class="field"><label for="template-guidance">Guidance sign-off label</label><input id="template-guidance" name="guidanceLabel" maxlength="120" value="<%= values.guidanceLabel || '' %>" required></div>
+          <div class="field"><label for="template-finance">Finance sign-off label</label><input id="template-finance" name="financeLabel" maxlength="120" value="<%= values.financeLabel || '' %>" required></div>
+        </div>
+        <fieldset class="clearance-fieldset">
+          <legend>Confirm the paper form and subject roster rule</legend>
+          <label class="checkbox-field"><input type="checkbox" name="paperFormConfirmed" value="1" <%= values.paperFormConfirmed ? 'checked' : '' %> required><span>I compared these labels with the approved printed form used by the school.</span></label>
+          <label class="checkbox-field"><input type="checkbox" name="teacherRosterConfirmed" value="1" <%= values.teacherRosterConfirmed ? 'checked' : '' %> required><span>Each subject in the term roster requires its own teacher signature row.</span></label>
+          <label class="checkbox-field"><input type="checkbox" name="laboratoryRowsConfirmed" value="1" <%= values.laboratoryRowsConfirmed ? 'checked' : '' %> required><span>I checked every laboratory sign-off on the paper form. An empty list means none apply on this form.</span></label>
+        </fieldset>
+        <% const laboratoryLabels = Array.isArray(values.laboratoryLabels) ? values.laboratoryLabels : values.laboratoryLabels ? [values.laboratoryLabels] : []; %>
+        <details class="clearance-template-labs" <%= laboratoryLabels.some((label) => label) ? 'open' : '' %>>
+          <summary>Enter printed laboratory sign-off labels</summary>
+          <p class="muted-copy">List only lab lines printed on this form. Each line is reviewed separately when recording a student’s paper signatures.</p>
+          <div class="admin-form-grid"><% for (let index = 0; index < 8; index += 1) { %><div class="field"><label for="template-lab-<%= index %>">Laboratory sign-off <%= index + 1 %></label><input id="template-lab-<%= index %>" name="laboratoryLabel" maxlength="120" value="<%= laboratoryLabels[index] || '' %>"></div><% } %></div>
+        </details>
+        <p class="muted-copy">The form is saved only when all required labels and confirmations are complete. Saving makes this the current version for new reviews; earlier reviews stay as entered.</p>
+        <button class="button button--primary" type="submit">Save paper form version</button>
+      </form>
+    </section>
+  <% } else { %><p class="muted-copy">Database administrators can review saved templates. Only registrars can create an approved version.</p><% } %>
+</main>
+<%- include('../partials/foot') %>

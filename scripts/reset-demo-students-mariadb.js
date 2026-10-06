@@ -12,7 +12,9 @@ const RESET_TABLES = Object.freeze([
   'audit_logs', 'document_decision_events', 'document_review_events', 'document_validations',
   'form137_status_events', 'previous_school_report_card_status_events', 'documents', 'student_document_claim_slips',
   'student_document_clearance_events', 'student_document_request_events', 'student_document_requests',
-  'student_physical_checklist_events', 'student_profile_revisions', 'grade_import_preview_grades',
+  'student_physical_checklist_events', 'student_profile_revisions', 'student_term_clearance_events',
+  'student_term_clearance_items', 'student_term_clearances', 'annual_term_finalizations',
+  'annual_continuity_source_events', 'grade_import_preview_grades',
   'teacher_grade_submission_grades', 'grade_import_preview_rows', 'teacher_grade_submission_events',
   'teacher_grade_submission_rows', 'grade_import_previews', 'teacher_grade_submissions', 'grades',
   'finance_payment_allocation_releases', 'finance_payment_allocations', 'finance_allocation_batches',
@@ -33,7 +35,8 @@ const RESET_TABLES = Object.freeze([
 const PRESERVED_TABLES = Object.freeze([
   'academic_terms', 'sections', 'subjects', 'teacher_assignments', 'class_schedules', 'finance_schedules',
   'finance_schedule_lines', 'school_year_term_order', 'school_year_term_order_reviews',
-  'physical_requirement_definitions', 'staff_profiles', 'application_locks', 'schema_migrations'
+  'physical_requirement_definitions', 'term_clearance_templates', 'term_clearance_template_items',
+  'staff_profiles', 'application_locks', 'schema_migrations'
 ]);
 const STUDENT_AUTH_TABLES = Object.freeze(['two_factor_codes', 'two_factor_auth_limits', 'password_reset_tokens', 'pending_email_changes']);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -194,7 +197,7 @@ async function readPlan(connection, databaseName, { storageRoot, target } = {}) 
   if (String(serverIdentity.databaseName || '') !== databaseName) throw new ResetError('Connected database does not match the allowlisted target.');
   const [versions] = await connection.query('SELECT version FROM schema_migrations ORDER BY version');
   const schemaVersion = String(versions.at(-1)?.version || '');
-  if (schemaVersion !== 'v2.016') throw new ResetError('The reset helper requires the v2.016 schema.');
+  if (schemaVersion !== 'v2.017') throw new ResetError('The reset helper requires the v2.017 schema.');
   await checkUnexpectedReferences(connection, databaseName);
   const tables = [...new Set([...RESET_TABLES, ...PRESERVED_TABLES, ...STUDENT_AUTH_TABLES, 'users'])];
   const counts = {};
@@ -426,6 +429,7 @@ async function performDelete(connection, databaseName, actorId, plan, storageRoo
     await connection.query('UPDATE teacher_grade_submissions SET previous_submission_id = NULL WHERE previous_submission_id IS NOT NULL');
     await connection.query('UPDATE finance_payments SET reverses_payment_id = NULL WHERE reverses_payment_id IS NOT NULL');
     await connection.query('UPDATE finance_charge_adjustments SET reverses_adjustment_id = NULL WHERE reverses_adjustment_id IS NOT NULL');
+    await connection.query('UPDATE annual_enrollments SET continuity_source_annual_enrollment_id = NULL WHERE continuity_source_annual_enrollment_id IS NOT NULL');
 
     for (const table of RESET_TABLES) {
       if (table === 'users' || table === 'two_factor_codes' || table === 'two_factor_auth_limits'

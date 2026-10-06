@@ -35,14 +35,14 @@ test('demo seed replay is bound to the completed schema, configured endpoint and
   const database = { database: 'ark_demo_students', host: 'localhost', port: 3307 };
   const target = { transport: 'tcp', endpoint: 'localhost:3307' };
   const identity = normalizeServerIdentity({ databaseName: database.database, hostname: 'local-fixture', port: 3307, serverId: 44, version: '11.8.9-MariaDB' });
-  const manifest = { databaseName: database.database, schemaVersion: 'v2.016', status: 'completed', target,
+  const manifest = { databaseName: database.database, schemaVersion: 'v2.017', status: 'completed', target,
     serverIdentity: identity, fileMode: 'local-exact', files: [] };
   assert.doesNotThrow(() => assertManifestTarget(manifest, { database, target, identity }));
-  assert.throws(() => assertManifestTarget({ ...manifest, status: 'pending_host_files' }, { database, target, identity }), /completed v2.016 reset manifest/);
+  assert.throws(() => assertManifestTarget({ ...manifest, status: 'pending_host_files' }, { database, target, identity }), /completed v2.017 reset manifest/);
   assert.throws(() => assertManifestTarget(manifest, { database, target: { ...target, endpoint: 'other:3307' }, identity }), /different database endpoint/);
   assert.throws(() => assertManifestTarget(manifest, { database, target, identity: { ...identity, serverId: '45' } }), /server identity differs/);
   assert.notEqual(scenarioFingerprint(), '');
-  assert.equal(SEED_KEY, 'arktiesiis-demo-students-v2.016');
+  assert.equal(SEED_KEY, 'arktiesiis-demo-students-v2.017');
 });
 
 test('fixture profiles include complete required paper identity, both address records and receipt-only quantities', () => {

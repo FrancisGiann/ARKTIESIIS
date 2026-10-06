@@ -117,7 +117,8 @@ test('student pages are separate, read-only destinations bound to the authentica
       assert.equal(studentId, 55);
       assert.equal(access, 'student');
       return studentFinanceLedger;
-    } }
+    } },
+    termClearanceService: { async getOwnStudentProgress(userId) { assert.equal(userId, 7); return { terms: [] }; } }
   };
 
   await withServer(createApp({ databasePool: authPool('student'), environment, ...services }), async (baseUrl) => {
@@ -235,7 +236,8 @@ test('unlinked student accounts receive clear empty states on every self-service
     },
     classScheduleService: { async getOwnStudentSchedule(userId) { calls.push(['schedule', userId]); return []; } },
     academicRecordsService: { async getOwnGrades(userId) { calls.push(['grades', userId]); return []; } },
-    financeService: { async getOwnStudentAccount(userId) { calls.push(['finance', userId]); return { student: null, account: null, transactions: [] }; } }
+    financeService: { async getOwnStudentAccount(userId) { calls.push(['finance', userId]); return { student: null, account: null, transactions: [] }; } },
+    termClearanceService: { async getOwnStudentProgress(userId) { calls.push(['paper-clearance', userId]); return { terms: [] }; } }
   };
   await withServer(createApp({ databasePool: authPool('student'), environment, ...services }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'student');

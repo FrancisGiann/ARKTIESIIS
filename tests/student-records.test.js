@@ -695,7 +695,8 @@ test('student overview and profile page resolve only the session-owned profile a
   await withServer(createApp({
     databasePool: makeAuthPool('student'), environment, studentRecordsService, academicRecordsService,
     financeService: { async getOwnStudentAccount() { return { account: null, transactions: [] }; } },
-    classScheduleService: { async getOwnStudentSchedule() { return []; } }
+    classScheduleService: { async getOwnStudentSchedule() { return []; } },
+    termClearanceService: { async getOwnStudentProgress() { return { terms: [] }; } }
   }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'student');
     const dashboard = await fetch(`${baseUrl}/student?studentId=999`, { headers: { cookie } });

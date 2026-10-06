@@ -5,6 +5,7 @@ const { createAcademicRecordsService } = require('../services/academicRecordsSer
 const { createFinanceService } = require('../services/financeService');
 const { createAnnualFinanceService } = require('../services/annualFinanceService');
 const { createClassScheduleService } = require('../services/classScheduleService');
+const { createTermClearanceService } = require('../services/termClearanceService');
 const { createStatementProjection, createStudentFinanceProjection } = require('../utils/financeStatementProjection');
 const { formatFinanceDateTime } = require('../utils/financeDateTime');
 
@@ -91,13 +92,14 @@ function makeGradeSelection(grades, enrollments, requestedSemester, requestedPer
   };
 }
 
-function createStudentPortalRouter({ getPool, sql, studentRecordsService, academicRecordsService, financeService, annualFinanceService, classScheduleService } = {}) {
+function createStudentPortalRouter({ getPool, sql, studentRecordsService, academicRecordsService, financeService, annualFinanceService, classScheduleService, termClearanceService } = {}) {
   const router = express.Router();
   const records = studentRecordsService || createStudentRecordsService({ getPool, sql });
   const academics = academicRecordsService || createAcademicRecordsService({ getPool, sql });
   const finances = financeService || createFinanceService({ getPool, sql });
   const annualFinances = annualFinanceService || createAnnualFinanceService({ getPool, sql });
   const schedules = classScheduleService || createClassScheduleService({ getPool, sql });
+  const termClearances = termClearanceService || createTermClearanceService({ getPool, sql });
 
   router.use(requireRole('student'));
 
@@ -193,9 +195,12 @@ function createStudentPortalRouter({ getPool, sql, studentRecordsService, academ
     }
   });
 
-  router.get('/records', (req, res) => renderOwnPage(req, res, 'student/records', 'My profile and enrollment history', async (userId) => ({
-    ownRecords: await records.getOwnStudentRecord(userId)
-  })));
+  router.get('/records', (req, res) => renderOwnPage(req, res, 'student/records', 'My profile and enrollment history', async (userId) => {
+    const [ownRecords, paperClearanceProgress] = await Promise.all([
+      records.getOwnStudentRecord(userId), termClearances.getOwnStudentProgress(userId)
+    ]);
+    return { ownRecords, paperClearanceProgress };
+  }));
 
   return router;
 }

@@ -6,7 +6,8 @@ const { ADDRESS_DEFINITIONS } = require('../utils/studentAddress');
 const { allocateStudentNumber, StudentNumberAllocationError } = require('./studentNumberAllocator');
 const { normalizeIntakeChecklistUpdates } = require('./physicalChecklistService');
 const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
-const { runSerializableTransaction } = require('./transactionRetry');
+const { RETRYABLE_TRANSACTION_CODES, runSerializableTransaction } = require('./transactionRetry');
+const { TermClearanceError } = require('./termClearanceService');
 const { REVIEWABLE_PROFILE_FIELDS, PROFILE_REVIEW_GROUPS, profileReviewFingerprint } = require('../utils/studentProfileReview');
 
 const BCRYPT_ROUNDS = 12;
@@ -21,6 +22,13 @@ class AnnualEnrollmentError extends Error {
     this.name = 'AnnualEnrollmentError';
     this.status = status;
   }
+}
+
+function safeClearanceGateError(error) {
+  if (error instanceof TermClearanceError) return new AnnualEnrollmentError(error.message, error.status);
+  const safeError = new AnnualEnrollmentError('Paper-clearance prerequisites could not be verified. No enrollment changes were saved.', 503);
+  if (RETRYABLE_TRANSACTION_CODES.has(error?.code)) safeError.code = error.code;
+  return safeError;
 }
 
 function printable(value, label, maxLength, { required = false } = {}) {
@@ -173,7 +181,8 @@ function createAnnualEnrollmentService({
   hashPassword = bcrypt.hash,
   createPassword = () => crypto.randomBytes(18).toString('hex'),
   physicalChecklistService = null,
-  annualFinanceService = null
+  annualFinanceService = null,
+  termClearanceService = null
 } = {}) {
   const debtRevisions = createFinanceDebtRevisionService({ getPool, sql, transactionFactory });
 
@@ -207,6 +216,17 @@ function createAnnualEnrollmentService({
       .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify(details))
       .query(`INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details_json)
         VALUES (@actorId, @action, @entityType, @entityId, @detailsJson)`);
+  }
+
+  async function assertClearanceGate(transaction, methodName, args) {
+    if (!termClearanceService || typeof termClearanceService[methodName] !== 'function') {
+      throw new AnnualEnrollmentError('Paper-clearance prerequisite review is unavailable. No enrollment changes were saved.', 503);
+    }
+    try {
+      return await termClearanceService[methodName](transaction, args);
+    } catch (error) {
+      throw safeClearanceGateError(error);
+    }
   }
 
   async function loadIntakeOptions(actorInput) {
@@ -888,6 +908,7 @@ function createAnnualEnrollmentService({
       let actualIntakeKind;
       let activateOnFirstTerm = false;
       let activationSourceAnnualId = null;
+      let continuitySourceAnnualId = null;
       if (entry.isReturning) {
         const studentResult = await transaction.request()
           .input('studentNo', sql.NVarChar(50), entry.studentNo)
@@ -1013,7 +1034,7 @@ function createAnnualEnrollmentService({
         const targetYear = Number(String(entry.schoolYear).slice(0, 4));
         const history = await transaction.request().input('studentId', sql.Int, student.id)
           .input('schoolYear', sql.NVarChar(20), entry.schoolYear)
-          .query(`SELECT annual.school_year, annual.intake_status,
+          .query(`SELECT annual.id, annual.school_year, annual.grade_level, annual.intake_status,
               EXISTS(SELECT 1 FROM finance_departure_cases AS departure
                 WHERE departure.annual_enrollment_id = annual.id) AS has_departure
             FROM annual_enrollments AS annual
@@ -1021,7 +1042,10 @@ function createAnnualEnrollmentService({
             ORDER BY annual.school_year DESC, annual.id DESC FOR UPDATE`);
         const priorRows = history.recordset || [];
         const latest = priorRows[0] || null;
+        const gradeProgressionValid = latest && (latest.grade_level === entry.gradeLevel
+          || latest.grade_level === 'Grade 11' && entry.gradeLevel === 'Grade 12');
         const continuous = Boolean(latest && latest.school_year === `${targetYear - 1}-${targetYear}`
+          && gradeProgressionValid
           && ['enrolled', 'legacy'].includes(latest.intake_status)
           && !(latest.has_departure === true || latest.has_departure === 1));
         if (continuous) {
@@ -1030,6 +1054,7 @@ function createAnnualEnrollmentService({
           }
           if (preEnrollment.readmission_evaluation_id) throw new AnnualEnrollmentError('Continuous progression does not use a return evaluation.', 409);
           actualIntakeKind = 'continuing';
+          continuitySourceAnnualId = Number(latest.id);
         } else {
           if (preEnrollment.applicant_kind !== 'readmission' || !preEnrollment.readmission) {
             throw new AnnualEnrollmentError('This existing student has a break in prior participation. An accepted return evaluation is required.', 409);
@@ -1145,6 +1170,7 @@ function createAnnualEnrollmentService({
         .input('entryTermNumber', sql.TinyInt, entry.entryTermNumber)
         .input('enrollmentStartDate', sql.Date, entry.enrollmentStartDate)
         .input('activationPending', sql.Bit, activateOnFirstTerm)
+        .input('continuitySourceAnnualEnrollmentId', sql.Int, continuitySourceAnnualId)
         .input('actorId', sql.Int, actor.id)
         .input('preEnrollmentId', sql.Char(36), sourceId)
         .input('readmissionEvaluationId', sql.Char(36), preEnrollment.readmission_evaluation_id || null)
@@ -1154,10 +1180,10 @@ function createAnnualEnrollmentService({
         .query(`INSERT INTO annual_enrollments
             (student_id, school_year, grade_level, voucher_code, voucher_category, intake_kind, entry_term_number,
               enrollment_start_date, account_activation_pending, created_by, pre_enrollment_id, readmission_evaluation_id,
-              readmission_evaluation_version, idempotency_key, request_fingerprint)
+              readmission_evaluation_version, idempotency_key, request_fingerprint, continuity_source_annual_enrollment_id)
           VALUES (@studentId, @schoolYear, @gradeLevel, @voucherCode, NULL, @intakeKind, @entryTermNumber,
             @enrollmentStartDate, @activationPending, @actorId, @preEnrollmentId, @readmissionEvaluationId,
-            @readmissionEvaluationVersion, @idempotencyKey, @requestFingerprint)`);
+            @readmissionEvaluationVersion, @idempotencyKey, @requestFingerprint, @continuitySourceAnnualEnrollmentId)`);
       const annualEnrollmentId = annualResult.insertId;
       if (!Number.isSafeInteger(annualEnrollmentId) || annualEnrollmentId < 1) throw new Error('Annual enrollment insert returned no identifier.');
       if (activationSourceAnnualId) {
@@ -1589,11 +1615,51 @@ function createAnnualEnrollmentService({
     };
   }
 
-  async function finalizeAnnualTerm(actorInput, enrollmentInput) {
+  async function finalizeAnnualTerm(actorInput, enrollmentInput, input = {}) {
     const enrollmentId = normalizeId(enrollmentInput, 'enrollment');
+    const idempotencyKey = normalizeUuid(input.idempotencyKey, 'term activation');
+    const clearanceSnapshotFingerprint = input.clearanceSnapshotFingerprint;
+    if (typeof clearanceSnapshotFingerprint !== 'string' || !/^[0-9a-f]{64}$/i.test(clearanceSnapshotFingerprint)) {
+      throw new AnnualEnrollmentError('Reload the annual enrollment list to review paper-clearance prerequisites before activation.', 409);
+    }
+    const inputFingerprint = crypto.createHash('sha256').update(JSON.stringify({ enrollmentId,
+      clearanceSnapshotFingerprint: clearanceSnapshotFingerprint.toLowerCase() })).digest('hex');
+    const pool = await getPool();
+    const ownerResult = await pool.request().input('enrollmentId', sql.Int, enrollmentId)
+      .query('SELECT student_id FROM enrollments WHERE id = @enrollmentId');
+    const owner = ownerResult.recordset?.[0];
+    if (!owner) throw new AnnualEnrollmentError('Annual term placement not found.', 404);
     return runTransaction(async (transaction) => {
       const actor = await requireRegistrar(transaction.request(), actorInput);
-      return finalizePlacementInTransaction(transaction, actor, enrollmentId);
+      const student = await debtRevisions.lockStudent(transaction, Number(owner.student_id));
+      if (!student) throw new AnnualEnrollmentError('Student record not found.', 404);
+      const priorResult = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
+        .query(`SELECT enrollment_id, input_fingerprint, clearance_snapshot_fingerprint, result_json
+          FROM annual_term_finalizations WHERE idempotency_key = @idempotencyKey FOR UPDATE`);
+      const prior = priorResult.recordset?.[0];
+      if (prior) {
+        if (Number(prior.enrollment_id) !== enrollmentId || prior.input_fingerprint !== inputFingerprint
+          || prior.clearance_snapshot_fingerprint !== clearanceSnapshotFingerprint.toLowerCase()) {
+          throw new AnnualEnrollmentError('This activation token was already used for different enrollment or prerequisite details.', 409);
+        }
+        return { ...JSON.parse(prior.result_json), alreadyFinalized: true };
+      }
+      const existingResult = await transaction.request().input('enrollmentId', sql.Int, enrollmentId)
+        .query('SELECT id FROM annual_term_finalizations WHERE enrollment_id = @enrollmentId FOR UPDATE');
+      if (existingResult.recordset?.length) throw new AnnualEnrollmentError('This term was already finalized under a different activation token.', 409);
+      await assertClearanceGate(transaction, 'assertTermPrerequisitesInTransaction', {
+        actorId: actor.id, enrollmentId, expectedFingerprint: clearanceSnapshotFingerprint.toLowerCase()
+      });
+      const finalized = await finalizePlacementInTransaction(transaction, actor, enrollmentId);
+      const savedResult = { ...finalized, temporaryPassword: null };
+      await transaction.request().input('enrollmentId', sql.Int, enrollmentId).input('studentId', sql.Int, Number(owner.student_id))
+        .input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey).input('inputFingerprint', sql.Char(64), inputFingerprint)
+        .input('clearanceFingerprint', sql.Char(64), clearanceSnapshotFingerprint.toLowerCase())
+        .input('resultJson', sql.NVarChar(sql.MAX), JSON.stringify(savedResult)).input('actorId', sql.Int, actor.id)
+        .query(`INSERT INTO annual_term_finalizations
+          (enrollment_id, student_id, idempotency_key, input_fingerprint, clearance_snapshot_fingerprint, result_json, finalized_by)
+          VALUES (@enrollmentId, @studentId, @idempotencyKey, @inputFingerprint, @clearanceFingerprint, @resultJson, @actorId)`);
+      return finalized;
     });
   }
 
@@ -1613,8 +1679,15 @@ function createAnnualEnrollmentService({
     if (new Set(optionalLineIds).size !== optionalLineIds.length) throw new AnnualEnrollmentError('An optional fee was selected more than once.');
     optionalLineIds.sort((left, right) => left - right);
     const expectedAssessmentId = input.assessmentId ? normalizeId(input.assessmentId, 'assessment') : null;
-    const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ annualEnrollmentId, scheduleId, scheduleVersion,
+    const clearanceSnapshotFingerprint = input.clearanceSnapshotFingerprint == null || input.clearanceSnapshotFingerprint === ''
+      ? null : typeof input.clearanceSnapshotFingerprint === 'string' && /^[0-9a-f]{64}$/i.test(input.clearanceSnapshotFingerprint)
+        ? input.clearanceSnapshotFingerprint.toLowerCase() : (() => { throw new AnnualEnrollmentError('Reload the fee and paper-clearance review before confirming enrollment.', 409); })();
+    const confirmationPayload = { annualEnrollmentId, scheduleId, scheduleVersion, voucherCode, expectedAssessmentId, optionalLineIds,
+      assessmentSnapshotFingerprint: input.snapshotFingerprint || null, clearanceSnapshotFingerprint };
+    const inputFingerprint = crypto.createHash('sha256').update(JSON.stringify(confirmationPayload)).digest('hex');
+    const legacyFingerprint = crypto.createHash('sha256').update(JSON.stringify({ annualEnrollmentId, scheduleId, scheduleVersion,
       voucherCode, expectedAssessmentId, optionalLineIds, assessmentSnapshotFingerprint: input.snapshotFingerprint || null })).digest('hex');
+    const requestFingerprint = crypto.createHash('sha256').update(JSON.stringify({ inputFingerprint, clearanceSnapshotFingerprint })).digest('hex');
     const pool = await getPool();
     const ownerResult = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
       .query('SELECT student_id FROM annual_enrollments WHERE id = @annualEnrollmentId');
@@ -1627,11 +1700,15 @@ function createAnnualEnrollmentService({
       if (!student) throw new AnnualEnrollmentError('Student record not found.', 404);
       if (student.status === 'archived') throw new AnnualEnrollmentError('Archived students cannot receive new enrollments.', 409);
       const priorResult = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
-        .query(`SELECT id, annual_enrollment_id, request_fingerprint, assessment_id, payable_total
+        .query(`SELECT id, annual_enrollment_id, request_fingerprint, input_fingerprint, clearance_snapshot_fingerprint,
+            assessment_id, payable_total
           FROM annual_registrar_confirmations WHERE idempotency_key = @idempotencyKey FOR UPDATE`);
       const prior = priorResult.recordset?.[0];
       if (prior) {
-        if (Number(prior.annual_enrollment_id) !== annualEnrollmentId || prior.request_fingerprint !== fingerprint) {
+        const priorMatches = prior.input_fingerprint
+          ? prior.input_fingerprint === inputFingerprint && prior.clearance_snapshot_fingerprint === clearanceSnapshotFingerprint
+          : clearanceSnapshotFingerprint === null && prior.request_fingerprint === legacyFingerprint;
+        if (Number(prior.annual_enrollment_id) !== annualEnrollmentId || !priorMatches) {
           throw new AnnualEnrollmentError('This confirmation token was already used for different fee or enrollment choices.', 409);
         }
         const saved = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
@@ -1654,10 +1731,14 @@ function createAnnualEnrollmentService({
           sectionName: row.section_name, assessmentId: Number(prior.assessment_id), total: String(prior.payable_total),
           temporaryPassword: null, alreadyConfirmed: true };
       }
+      if (!clearanceSnapshotFingerprint) {
+        throw new AnnualEnrollmentError('Reload the final review and confirm the paper-clearance prerequisite summary before enrollment.', 409);
+      }
       const parentResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
         .input('studentId', sql.Int, ownerStudentId)
         .query(`SELECT annual.id, annual.student_id, annual.school_year, annual.grade_level, annual.voucher_code,
             annual.pre_enrollment_id, annual.readmission_evaluation_id, annual.readmission_evaluation_version, annual.intake_kind,
+            annual.continuity_source_annual_enrollment_id,
             annual.entry_term_number, annual.intake_status, annual.enrollment_start_date, student.status AS student_status,
             assessment.id AS existing_assessment_id, assessment.schedule_id AS existing_schedule_id,
             assessment.schedule_version AS existing_schedule_version, assessment.voucher_code_snapshot,
@@ -1722,6 +1803,9 @@ function createAnnualEnrollmentService({
         : linkedSource.applicant_kind === 'readmission' || linkedSource.readmission_evaluation_id) {
         throw new AnnualEnrollmentError('The paper source classification no longer matches this enrollment.', 409);
       }
+      await assertClearanceGate(transaction, 'assertAnnualEntryPrerequisitesInTransaction', {
+        actorId: actor.id, annualId: annualEnrollmentId, expectedFingerprint: clearanceSnapshotFingerprint
+      });
       if (parent.entry_status !== 'pending_payment' || parent.entry_finalized_at || parent.term_scope_status !== 'applicable' || !parent.valid_section_id) {
         throw new AnnualEnrollmentError('Assign a valid section to the entry term before confirming enrollment.', 409);
       }
@@ -1757,12 +1841,16 @@ function createAnnualEnrollmentService({
         .input('assessmentSnapshotFingerprint', sql.Char(64), assessmentSnapshotFingerprint)
         .input('actorId', sql.Int, actor.id)
         .input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
-        .input('requestFingerprint', sql.Char(64), fingerprint)
+        .input('requestFingerprint', sql.Char(64), requestFingerprint)
+        .input('inputFingerprint', sql.Char(64), inputFingerprint)
+        .input('clearanceSnapshotFingerprint', sql.Char(64), clearanceSnapshotFingerprint)
         .query(`INSERT INTO annual_registrar_confirmations
           (annual_enrollment_id, student_id, school_year, grade_level, assessment_id, schedule_id, schedule_version, voucher_code_snapshot,
-              payable_total, selection_json, assessment_snapshot_fingerprint, confirmed_by, idempotency_key, request_fingerprint, entry_enrollment_id)
+              payable_total, selection_json, assessment_snapshot_fingerprint, confirmed_by, idempotency_key, request_fingerprint,
+              entry_enrollment_id, input_fingerprint, clearance_snapshot_fingerprint)
           VALUES (@annualEnrollmentId, @studentId, @schoolYear, @gradeLevel, @assessmentId, @scheduleId, @scheduleVersion, @voucherCode,
-            @payableTotal, @selectionJson, @assessmentSnapshotFingerprint, @actorId, @idempotencyKey, @requestFingerprint, @entryEnrollmentId)`);
+            @payableTotal, @selectionJson, @assessmentSnapshotFingerprint, @actorId, @idempotencyKey, @requestFingerprint, @entryEnrollmentId,
+            @inputFingerprint, @clearanceSnapshotFingerprint)`);
       if (!Number.isSafeInteger(inserted.insertId) || inserted.insertId < 1) throw new Error('Annual confirmation insert returned no identifier.');
       const enrollment = await finalizePlacementInTransaction(transaction, actor, Number(parent.entry_enrollment_id));
       await writeAudit(transaction, actor, 'annual_enrollment_confirmed', annualEnrollmentId, {
@@ -1912,6 +2000,7 @@ function createAnnualEnrollmentService({
 
 module.exports = {
   AnnualEnrollmentError,
+  safeClearanceGateError,
   createAnnualEnrollmentService,
   normalizeAnnualInput,
   normalizeAnnualAdministrationDetails,

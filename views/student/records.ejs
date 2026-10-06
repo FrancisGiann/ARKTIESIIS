@@ -27,6 +27,13 @@
         </ol>
       <% } else { %><p class="empty-state">No enrollment history is available on your profile yet.</p><% } %>
     </section>
+    <section class="student-section" aria-labelledby="paper-clearance-progress-title">
+      <div class="student-section-heading"><div><h2 id="paper-clearance-progress-title">Paper clearance progress</h2><p>Read-only status from the registrar’s inspection of the printed school form.</p></div></div>
+      <% if (paperClearanceProgress?.terms?.length) { %><div class="table-scroll" tabindex="0" aria-label="Paper clearance progress"><table class="portal-table"><thead><tr><th scope="col">School year and grade</th><th scope="col">Term</th><th scope="col">Progress</th></tr></thead><tbody>
+        <% for (const item of paperClearanceProgress.terms) { %><tr><td data-label="School year and grade"><%= item.schoolYear %> · <%= item.gradeLevel %></td><td data-label="Term"><%= item.term %></td><td data-label="Progress"><% if (item.status === 'complete') { %>Complete<% if (item.requirementCount) { %> · <%= item.signedCount %> of <%= item.requirementCount %> required signatures recorded<% } %><% } else if (item.status === 'not_attended') { %>Registrar recorded that this term was not attended<% } else if (item.status === 'not_applicable') { %>No clearance required for this term<% } else if (item.awaitingConfirmation) { %>All recorded signatures are present · waiting for registrar confirmation<% } else if (item.status === 'incomplete') { %><%= item.signedCount %> of <%= item.requirementCount %> required signatures recorded · registrar review pending<% } else { %>Registrar review pending<% } %></td></tr><% } %>
+      </tbody></table></div><% } else { %><p class="empty-state">No paper-clearance progress is available yet.</p><% } %>
+      <p class="muted-copy">This page does not show staff notes or signer details. Contact the registrar if a status needs review.</p>
+    </section>
   <% } %>
 </main>
 <%- include('../partials/foot') %>

@@ -6,6 +6,7 @@ const { inflateRawSync } = require('node:zlib');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { StudentSetupError, MAX_BULK_ROWS, createStudentSetupService } = require('../services/studentSetupService');
 const { AnnualEnrollmentError, createAnnualEnrollmentService } = require('../services/annualEnrollmentService');
+const { TermClearanceError, createTermClearanceService } = require('../services/termClearanceService');
 const { PreEnrollmentError, RECEIPT_REQUIREMENTS } = require('../services/preEnrollmentService');
 const { AnnualFinanceError } = require('../services/annualFinanceService');
 const { PhysicalChecklistError, createPhysicalChecklistService } = require('../services/physicalChecklistService');
@@ -532,11 +533,13 @@ function createAnnualConfirmationRouter({ annualEnrollmentService, annualFinance
   return router;
 }
 
-function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService, annualFinanceService, physicalChecklistService, preEnrollmentService, logger = console } = {}) {
+function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService, annualFinanceService, physicalChecklistService, preEnrollmentService, termClearanceService, logger = console } = {}) {
   const router = express.Router();
   const feeService = annualFinanceService || null;
   const checklistService = physicalChecklistService || (getPool ? createPhysicalChecklistService({ getPool, sql }) : null);
-  const service = annualEnrollmentService || createAnnualEnrollmentService({ getPool, sql, physicalChecklistService: checklistService, annualFinanceService: feeService });
+  const clearanceService = termClearanceService || (getPool ? createTermClearanceService({ getPool, sql }) : null);
+  const service = annualEnrollmentService || createAnnualEnrollmentService({ getPool, sql, physicalChecklistService: checklistService,
+    annualFinanceService: feeService, termClearanceService: clearanceService });
   registerAnnualConfirmationGet(router, { annualEnrollmentService: service, annualFinanceService: feeService, logger });
 
   async function renderList(req, res, { status = 200, error = null, notice = null } = {}) {
@@ -662,25 +665,35 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       if (!feeService?.annualAssessmentPreviewForRegistrar || !checklistService?.getStudentChecklist) {
         throw new AnnualEnrollmentError('The final review is unavailable until student and checklist records can be loaded.', 503);
       }
+      if (!clearanceService?.getAnnualPrerequisiteReview) {
+        throw new AnnualEnrollmentError('The paper-clearance prerequisite review is unavailable. Enrollment confirmation is blocked.', 503);
+      }
       const record = await service.getAnnualManagementRecord(req.authUser.id, annualId);
-      const [checklist, preview] = await Promise.all([
+      const [checklist, preview, prerequisiteReview] = await Promise.all([
         checklistService.getStudentChecklist(req.authUser.id, record.parent.student_id),
-        feeService.annualAssessmentPreviewForRegistrar(req.authUser.id, annualId, values.optionalLineIds ?? req.query?.optionalLineIds ?? [])
+        feeService.annualAssessmentPreviewForRegistrar(req.authUser.id, annualId, values.optionalLineIds ?? req.query?.optionalLineIds ?? []),
+        record.parent.registrar_confirmation_id
+          ? Promise.resolve({ ready: true, kind: 'already_confirmed', terms: [], blockers: [], fingerprint: null })
+          : clearanceService.getAnnualPrerequisiteReview(req.authUser.id, annualId)
       ]);
+      const sourceOptions = prerequisiteReview.kind === 'continuing_source' && !prerequisiteReview.sourceAnnualId
+        ? await clearanceService.getContinuitySourceOptions(req.authUser.id, annualId) : null;
       const submittedKey = values.idempotencyKey || req.query?.idempotencyKey;
       const idempotencyKey = typeof submittedKey === 'string' && INTAKE_IDEMPOTENCY_KEY.test(submittedKey)
         ? submittedKey : crypto.randomUUID();
       return setPrivateHeaders(res).status(status).render('records/annual-intake-review', {
         title: 'Review enrollment details', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
-        annualId, record, checklist, preview, error, values: { idempotencyKey },
+        annualId, record, checklist, preview, prerequisiteReview, sourceOptions, error,
+        values: { idempotencyKey, sourceBindingIdempotencyKey: crypto.randomUUID() },
         confirmationComplete: Boolean(record.parent.registrar_confirmation_id)
       });
     } catch (loadError) {
-      if (loadError instanceof AnnualEnrollmentError || loadError instanceof AnnualFinanceError || loadError instanceof PhysicalChecklistError) {
+      if (loadError instanceof AnnualEnrollmentError || loadError instanceof AnnualFinanceError || loadError instanceof PhysicalChecklistError || loadError instanceof TermClearanceError) {
         return setPrivateHeaders(res).status(loadError.status).render('records/annual-intake-review', {
           title: 'Review enrollment details', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
           annualId, record: null, checklist: null, preview: null, error: loadError.message,
-          values: { idempotencyKey: values.idempotencyKey || req.query?.idempotencyKey || crypto.randomUUID() },
+          prerequisiteReview: null, sourceOptions: null,
+          values: { idempotencyKey: crypto.randomUUID(), sourceBindingIdempotencyKey: crypto.randomUUID() },
           confirmationComplete: false
         });
       }
@@ -694,6 +707,32 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       } catch { /* Logging must not replace the safe user response. */ }
       return setPrivateHeaders(res).status(503).render('error', {
         title: 'Final review unavailable', message: `Student, paper checklist, and fee details could not be loaded for final review. Support reference: ${incidentId}.`
+      });
+    }
+  }
+
+  async function renderActivationReview(req, res, enrollmentId, { status = 200, error = null } = {}) {
+    try {
+      if (!clearanceService?.getTermActivationReview) {
+        throw new TermClearanceError('The paper-clearance prerequisite review is unavailable. Term activation is blocked.', 503);
+      }
+      const review = await clearanceService.getTermActivationReview(req.authUser.id, enrollmentId);
+      return setPrivateHeaders(res).status(status).render('records/annual-term-activation-review', {
+        title: 'Review term activation', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        review, error, idempotencyKey: crypto.randomUUID()
+      });
+    } catch (loadError) {
+      if (loadError instanceof TermClearanceError || loadError instanceof AnnualEnrollmentError) {
+        return setPrivateHeaders(res).status(loadError.status).render('records/annual-term-activation-review', {
+          title: 'Review term activation', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+          review: null, error: error || loadError.message, idempotencyKey: crypto.randomUUID()
+        });
+      }
+      const incidentId = crypto.randomUUID();
+      try { logger.error('Term activation review load failed', { incidentId, operation: 'registrar.term_activation_review.load', ...safeErrorDiagnostics(loadError) }); }
+      catch { /* Logging must not replace the safe user response. */ }
+      return setPrivateHeaders(res).status(503).render('error', {
+        title: 'Term activation review unavailable', message: `Term prerequisites could not be loaded. Support reference: ${incidentId}.`
       });
     }
   }
@@ -755,6 +794,19 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
   });
   router.get('/:annualId/fees', (req, res) => renderFeeReview(req, res, req.params.annualId));
   router.get('/:annualId/review', (req, res) => renderFinalReview(req, res, req.params.annualId));
+  router.get('/:enrollmentId/activation-review', (req, res) => renderActivationReview(req, res, req.params.enrollmentId));
+  router.post('/:annualId/continuity-source', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    try {
+      if (!clearanceService?.bindContinuitySource) throw new TermClearanceError('Continuing source review is unavailable. Enrollment confirmation is blocked.', 503);
+      await clearanceService.bindContinuitySource(req.authUser.id, req.params.annualId, req.body?.sourceAnnualId,
+        { reason: req.body?.reason, idempotencyKey: req.body?.idempotencyKey });
+      return res.redirect(303, `/registrar/intake/${encodeURIComponent(req.params.annualId)}/review`);
+    } catch (error) {
+      if (error instanceof TermClearanceError) return renderFinalReview(req, res, req.params.annualId, { status: error.status, error: error.message });
+      return res.status(503).render('error', { title: 'Source review unavailable', message: 'The preceding-year source was not bound.' });
+    }
+  });
   router.post('/:annualId/confirm', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     try {
@@ -911,10 +963,10 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
   router.post('/:enrollmentId/finalize', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     try {
-      const enrollment = await service.finalizeAnnualTerm(req.authUser.id, req.params.enrollmentId);
+      const enrollment = await service.finalizeAnnualTerm(req.authUser.id, req.params.enrollmentId, req.body || {});
       return setPrivateHeaders(res).render('records/enrollment-print', { title: 'Enrollment Form', enrollment, printedAt: new Date() });
     } catch (error) {
-      if (error instanceof AnnualEnrollmentError) return renderList(req, res, { status: error.status, error: error.message });
+      if (error instanceof AnnualEnrollmentError || error instanceof TermClearanceError) return renderActivationReview(req, res, req.params.enrollmentId, { status: error.status, error: error.message });
       return res.status(503).render('error', { title: 'Annual Intake Unavailable', message: 'The term placement could not be finalized.' });
     }
   });

@@ -11,6 +11,7 @@ const { PoolFacade, Transaction, sql } = require('../src/config/database');
 const { createPreEnrollmentService } = require('../src/services/preEnrollmentService');
 const { createReadmissionService } = require('../src/services/readmissionService');
 const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
+const { createTermClearanceService } = require('../src/services/termClearanceService');
 const { createAcademicRecordsService } = require('../src/services/academicRecordsService');
 const { RegistrarGradeOverviewError, createRegistrarGradeOverviewService } = require('../src/services/registrarGradeOverviewService');
 const { createStudentRecordsRouter } = require('../src/routes/studentRecords');
@@ -155,6 +156,11 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     await admin.query('INSERT INTO schema_migrations (version) VALUES (?)', ['v2.016']);
     const [upgrade016] = await admin.execute('SELECT version FROM schema_migrations WHERE version = ?', ['v2.016']);
     assert.equal(upgrade016.length, 1, 'v2.015 upgrade applies the forward-only profile/readmission migration');
+    const migration017 = readForwardMigrations().find(({ version }) => version === 'v2.017');
+    await applyStatements(admin, migration017.statements);
+    await admin.query('INSERT INTO schema_migrations (version) VALUES (?)', ['v2.017']);
+    const [upgrade017] = await admin.execute('SELECT version FROM schema_migrations WHERE version = ?', ['v2.017']);
+    assert.equal(upgrade017.length, 1, 'the upgrade path applies the forward-only paper-clearance migration');
 
     // Fresh database exercises the inline column-level baseline CHECK replacement path.
     await createSchema(admin, freshName, 'v2.015');
@@ -168,6 +174,10 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     await admin.query('INSERT INTO schema_migrations (version) VALUES (?)', ['v2.016']);
     const [fresh016] = await admin.execute('SELECT version FROM schema_migrations WHERE version = ?', ['v2.016']);
     assert.equal(fresh016.length, 1, 'fresh setup applies migration v2.016 after v2.015');
+    await applyStatements(admin, migration017.statements);
+    await admin.query('INSERT INTO schema_migrations (version) VALUES (?)', ['v2.017']);
+    const [fresh017] = await admin.execute('SELECT version FROM schema_migrations WHERE version = ?', ['v2.017']);
+    assert.equal(fresh017.length, 1, 'fresh setup applies migration v2.017 after v2.016');
     await admin.query(`USE ${quoteDatabase(upgradeName)}`);
 
     rawPool = mysql.createPool({ socketPath, user: os.userInfo().username, database: upgradeName,
@@ -175,6 +185,8 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
       dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'], multipleStatements: false });
     const pool = new PoolFacade(rawPool);
     const users = await createUsers(rawPool);
+    const termClearanceService = createTermClearanceService({ getPool: async () => pool, sql,
+      transactionFactory: (currentPool) => new Transaction(currentPool) });
     const preEnrollments = createPreEnrollmentService({ getPool: async () => pool, sql,
       transactionFactory: (currentPool) => new Transaction(currentPool) });
     const baselineSideEffects = await queryOne(rawPool, `SELECT
@@ -263,11 +275,11 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     const sourceConversion = await convertInput(conversionSource.id, readyVersion, { intakeKind: 'transferee' });
     await assert.rejects(createAnnualEnrollmentService({ getPool: async () => pool, sql,
       transactionFactory: (currentPool) => new Transaction(currentPool), hashPassword: async () => 'integration-only-hash',
-      createPassword: () => 'integration-only-password' }).createAnnualIntake(users.front_desk, sourceConversion), { status: 403 },
+      createPassword: () => 'integration-only-password', termClearanceService }).createAnnualIntake(users.front_desk, sourceConversion), { status: 403 },
     'front desk cannot directly invoke annual conversion, even with a valid guessed source id');
     const annualService = createAnnualEnrollmentService({ getPool: async () => pool, sql,
       transactionFactory: (currentPool) => new Transaction(currentPool), hashPassword: async () => 'integration-only-hash',
-      createPassword: () => 'integration-only-password' });
+      createPassword: () => 'integration-only-password', termClearanceService });
     await assert.rejects(annualService.createAnnualIntake(users.database_admin, sourceConversion), { status: 403 });
     await assert.rejects(annualService.createAnnualIntake(users.registrar,
       { ...sourceConversion, preEnrollmentVersion: readyVersion + 1 }), { status: 409 }, 'a stale source version is rejected');
@@ -310,7 +322,7 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     };
     const barrierAnnualService = createAnnualEnrollmentService({ getPool: async () => pool, sql,
       transactionFactory: barrierTransactionFactory, hashPassword: async () => 'integration-only-hash',
-      createPassword: () => 'integration-only-password' });
+      createPassword: () => 'integration-only-password', termClearanceService });
     let conversionPromise;
     let sourceLockTimeout;
     try {
@@ -381,7 +393,7 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     const failingAnnualService = createAnnualEnrollmentService({ getPool: async () => pool, sql,
       transactionFactory: (currentPool) => new Transaction(currentPool), hashPassword: async () => 'integration-only-hash',
       createPassword: () => 'integration-only-password',
-      physicalChecklistService: { recordIntakeUpdatesInTransaction() { throw new Error('intentional rollback probe'); } }
+      physicalChecklistService: { recordIntakeUpdatesInTransaction() { throw new Error('intentional rollback probe'); } }, termClearanceService
     });
     const rollbackBefore = await queryOne(rawPool, `SELECT
       (SELECT COUNT(*) FROM users WHERE email = 'rollback@integration.invalid') AS users,
@@ -814,9 +826,10 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     let staleEvaluationFeeCalls = 0;
     const staleConfirmationService = createAnnualEnrollmentService({ getPool: async () => pool, sql,
       transactionFactory: (currentPool) => new Transaction(currentPool),
+      termClearanceService,
       annualFinanceService: { async confirmAnnualAssessmentInTransaction() { staleEvaluationFeeCalls += 1; throw new Error('fee finalization must remain behind the evaluation gate'); } } });
     await assert.rejects(staleConfirmationService.confirmAnnualEnrollment(users.registrar, balikConversion.annualEnrollmentId, {
-      idempotencyKey: uuid(), scheduleId: '1', scheduleVersion: '1', voucherCode: 'PUB'
+      idempotencyKey: uuid(), scheduleId: '1', scheduleVersion: '1', voucherCode: 'PUB', clearanceSnapshotFingerprint: 'b'.repeat(64)
     }), (error) => error.status === 409 && /evaluation changed or is no longer accepted/i.test(error.message),
     'first confirmation revalidates the evaluation revision and accepted decision');
     assert.equal(staleEvaluationFeeCalls, 0, 'a stale evaluation is rejected before fees, activation, or confirmation writes');

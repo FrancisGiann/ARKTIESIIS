@@ -12,9 +12,10 @@ const { RECEIPT_REQUIREMENTS } = require('../src/services/preEnrollmentService')
 const { createReadmissionService } = require('../src/services/readmissionService');
 const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
 const { createAnnualFinanceService } = require('../src/services/annualFinanceService');
+const { createTermClearanceService } = require('../src/services/termClearanceService');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
-const SEED_KEY = 'arktiesiis-demo-students-v2.016';
+const SEED_KEY = 'arktiesiis-demo-students-v2.017';
 const SCHOOL_YEAR_WITH_TERMS = '2026-2027';
 const PRE_ENROLLMENT_YEAR = '2027-2028';
 const EXPECTED_FIXTURE = Object.freeze({ students: 4, studentAccounts: 4, annuals: 4, assessments: 4,
@@ -62,8 +63,8 @@ function normalizeServerIdentity(row = {}) {
 }
 
 function assertManifestTarget(manifest, { database, target, identity }) {
-  if (manifest.databaseName !== database.database || manifest.schemaVersion !== 'v2.016' || manifest.status !== 'completed') {
-    throw new SeedError('A completed v2.016 reset manifest for this exact database is required.');
+  if (manifest.databaseName !== database.database || manifest.schemaVersion !== 'v2.017' || manifest.status !== 'completed') {
+    throw new SeedError('A completed v2.017 reset manifest for this exact database is required.');
   }
   if (manifest.target?.transport !== target.transport || manifest.target?.endpoint !== target.endpoint) {
     throw new SeedError('The completed reset manifest belongs to a different database endpoint.');
@@ -336,7 +337,7 @@ async function runSeed({ args = [], configuration = environment, variables = pro
     const identity = identityResult.recordset?.[0] || {};
     assertManifestTarget(manifest, { database, target, identity });
     const versionResult = await pool.request().query('SELECT version FROM schema_migrations ORDER BY version');
-    if (String(versionResult.recordset?.at(-1)?.version || '') !== 'v2.016') throw new SeedError('Demo seeding requires schema v2.016.');
+    if (String(versionResult.recordset?.at(-1)?.version || '') !== 'v2.017') throw new SeedError('Demo seeding requires schema v2.017.');
 
     const counts = await readCounts(pool);
     if (Number(counts.staffUsers) !== expectedStaffCount(variables)) {
@@ -378,7 +379,7 @@ async function runSeed({ args = [], configuration = environment, variables = pro
       throw new SeedError('The credential artifact path already exists without a matching seed marker; choose a new private path or reset the target.');
     }
     if (options.mode === 'dry-run') {
-      const result = { mode: 'dry-run', databaseName, schemaVersion: 'v2.016',
+      const result = { mode: 'dry-run', databaseName, schemaVersion: 'v2.017',
         serverIdentity: normalizeServerIdentity(identity), target: { transport: target.transport,
           endpointFingerprint: sha256(target.endpoint) }, counts, preservedFingerprint: preservedBefore.fingerprint,
         resetStatus: manifest.status, seedScenarioKey: SEED_KEY };
@@ -431,10 +432,12 @@ async function runSeed({ args = [], configuration = environment, variables = pro
       const preEnrollments = createPreEnrollmentService(options);
       const readmissions = createReadmissionService(options);
       const annualFinance = createAnnualFinanceService(options);
+      const termClearance = createTermClearanceService(options);
       const annualEnrollments = createAnnualEnrollmentService({ ...options, annualFinanceService: annualFinance,
+        termClearanceService: termClearance,
         hashPassword: (password, rounds) => bcrypt.hash(password, rounds),
         createPassword: () => crypto.randomBytes(24).toString('base64url') });
-      return { preEnrollments, readmissions, annualFinance, annualEnrollments };
+      return { preEnrollments, readmissions, annualFinance, termClearance, annualEnrollments };
     });
     const services = getServices({ getPool, sql: queryTypes, transactionFactory: (currentPool) => new Transaction(currentPool) });
     const credentials = [];
@@ -458,9 +461,14 @@ async function runSeed({ args = [], configuration = environment, variables = pro
       const annual = await services.annualEnrollments.createAnnualIntake(actors.registrar, input);
       const preview = await services.annualFinance.annualAssessmentPreviewForRegistrar(actors.registrar, annual.annualEnrollmentId, []);
       if (!preview.lines.length || preview.total === '0.00') throw new SeedError('An expected assessed fee schedule returned no payable charges.');
+      if (!services.termClearance || typeof services.termClearance.getAnnualPrerequisiteReview !== 'function') {
+        throw new SeedError('The paper-clearance prerequisite review is unavailable for annual confirmation.');
+      }
+      const clearanceReview = await services.termClearance.getAnnualPrerequisiteReview(actors.registrar, annual.annualEnrollmentId);
       const confirmed = await services.annualEnrollments.confirmAnnualEnrollment(actors.registrar, annual.annualEnrollmentId, {
         idempotencyKey: crypto.randomUUID(), scheduleId: String(preview.scheduleId), scheduleVersion: String(preview.scheduleVersion),
-        voucherCode: preview.voucherCode, optionalLineIds: [], snapshotFingerprint: preview.snapshotFingerprint, assessmentId: null
+        voucherCode: preview.voucherCode, optionalLineIds: [], snapshotFingerprint: preview.snapshotFingerprint, assessmentId: null,
+        clearanceSnapshotFingerprint: clearanceReview.fingerprint
       });
       if (!confirmed.temporaryPassword) throw new SeedError('The new fictional student login was not activated through annual confirmation.');
       credentials.push({ email: source.email, studentNo: confirmed.studentNo,
@@ -615,7 +623,7 @@ async function runSeed({ args = [], configuration = environment, variables = pro
     }
     const preservedAfter = await preservedFingerprints(pool);
     if (preservedAfter.fingerprint !== preservedBefore.fingerprint) throw new SeedError('A staff credential or retained setup row changed during seeding.');
-    const credentialArtifact = { generatedAt: new Date().toISOString(), purpose: 'Fictional v2.016 demonstration student credentials',
+    const credentialArtifact = { generatedAt: new Date().toISOString(), purpose: 'Fictional v2.017 demonstration student credentials',
       database: databaseName, seedKey: SEED_KEY, credentials };
     const credentialArtifactSha256 = await writePrivateCredentials(credentialPath, credentialArtifact);
     const marker = {
