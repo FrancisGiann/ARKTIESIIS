@@ -765,11 +765,11 @@ function createAnnualEnrollmentService({
             || Number(bound.version) !== Number(preEnrollment.readmission_evaluation_version)
             || bound.applicant_lrn !== preEnrollment.lrn || bound.school_year !== preEnrollment.school_year
             || bound.target_grade_level !== preEnrollment.target_grade_level) {
-            throw new AnnualEnrollmentError('The linked balik-aral evaluation is no longer accepted for this LRN, school year, grade, and revision.', 409);
+            throw new AnnualEnrollmentError('The linked return evaluation is no longer accepted for this LRN, school year, grade, and revision.', 409);
           }
           preEnrollment.readmission = bound;
         } else if (preEnrollment.readmission_evaluation_id || preEnrollment.readmission_evaluation_version) {
-          throw new AnnualEnrollmentError('Only a balik-aral source can carry a readmission evaluation.', 409);
+          throw new AnnualEnrollmentError('Only an applicant returning after a break can carry a return evaluation.', 409);
         }
         entry.email = normalizeEmail(preEnrollment.email);
         if (!entry.email) throw new AnnualEnrollmentError('A valid email must be saved to the front-desk record before enrollment can start.', 409);
@@ -1028,14 +1028,14 @@ function createAnnualEnrollmentService({
           if (preEnrollment.applicant_kind !== 'continuing') {
             throw new AnnualEnrollmentError('Previous-year participation shows continuous progression. Correct the front-desk applicant classification before continuing.', 409);
           }
-          if (preEnrollment.readmission_evaluation_id) throw new AnnualEnrollmentError('Continuous progression does not use a balik-aral evaluation.', 409);
+          if (preEnrollment.readmission_evaluation_id) throw new AnnualEnrollmentError('Continuous progression does not use a return evaluation.', 409);
           actualIntakeKind = 'continuing';
         } else {
           if (preEnrollment.applicant_kind !== 'readmission' || !preEnrollment.readmission) {
-            throw new AnnualEnrollmentError('This existing student has no uninterrupted previous-year participation. An accepted balik-aral evaluation is required.', 409);
+            throw new AnnualEnrollmentError('This existing student has a break in prior participation. An accepted return evaluation is required.', 409);
           }
           if (Number(preEnrollment.readmission.student_id || 0) !== Number(student.id)) {
-            throw new AnnualEnrollmentError('The accepted balik-aral evaluation is not linked to the selected existing student. Reopen and re-accept the evaluation.', 409);
+            throw new AnnualEnrollmentError('The accepted return evaluation is not linked to the selected existing student. Reopen and re-accept the evaluation.', 409);
           }
           actualIntakeKind = 'readmission';
         }
@@ -1715,7 +1715,7 @@ function createAnnualEnrollmentService({
           || evaluation.applicant_lrn !== linkedSource.lrn || evaluation.school_year !== parent.school_year
           || evaluation.target_grade_level !== parent.grade_level
           || (evaluation.student_id != null && Number(evaluation.student_id) !== Number(parent.student_id))) {
-          throw new AnnualEnrollmentError('The balik-aral evaluation changed or is no longer accepted for this enrollment. Reopen it for registrar review.', 409);
+          throw new AnnualEnrollmentError('The return evaluation changed or is no longer accepted for this enrollment. Reopen it for registrar review.', 409);
         }
       } else if (parent.intake_kind === 'continuing'
         ? linkedSource.applicant_kind !== 'continuing' || linkedSource.readmission_evaluation_id

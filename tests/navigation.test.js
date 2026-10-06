@@ -185,6 +185,23 @@ test('student section navigation uses real server pages with path-specific curre
   assert.equal(buildNavigation('registrar', '//').currentPage, null, 'malformed network-path input does not make navigation throw');
 });
 
+test('return evaluations keep Student records selected for both staff roles', () => {
+  const contexts = [
+    '/registrar/records/return-evaluations/new',
+    '/registrar/records/return-evaluations/123e4567-e89b-12d3-a456-426614174000',
+    '/registrar/records/students/22/return-evaluations/new',
+    '/registrar/records/students/22/return-evaluations/123e4567-e89b-12d3-a456-426614174000'
+  ];
+  for (const role of ['registrar', 'database_admin']) {
+    for (const path of contexts) {
+      const navigation = buildNavigation(role, path);
+      assert.equal(navigation.currentPage, 'students', `${role} at ${path} remains in Student records`);
+      assert.deepEqual(navigation.items.filter((item) => item.id === 'students').map((item) => item.current), [true]);
+      assert.ok(!navigation.items.some((item) => item.id === 'readmissions'));
+    }
+  }
+});
+
 test('finance navigation keeps roster selected for annual accounts, statements, and historic confirmations', () => {
   const contexts = [
     ['/finance/overview', 'finance-overview', '/finance/overview'],
@@ -212,8 +229,8 @@ test('finance navigation keeps roster selected for annual accounts, statements, 
 
 test('authenticated navigation only exposes destinations available to each role', async () => {
   const cases = [
-    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Pre-enrollment records', 'Balik-aral evaluations', 'Audit activity', 'Documents', 'Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/pre-enrollments', '/registrar/readmissions', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: [] },
-    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollment intake', 'Pre-enrollment records', 'Balik-aral evaluations', 'Document review', 'Grade review', 'Class schedules', 'Subject catalog', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
+    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Pre-enrollment records', 'Audit activity', 'Documents', 'Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/pre-enrollments', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: [] },
+    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollment intake', 'Pre-enrollment records', 'Document review', 'Grade review', 'Class schedules', 'Subject catalog', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
     { role: 'front_desk', path: '/pre-enrollments', labels: ['Pre-enrollment records'], hrefs: ['/pre-enrollments'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/documents', '/admin'] },
     { role: 'teacher', path: '/teacher', labels: ['My classes', 'Submit grades'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/admin'] },
     { role: 'finance', path: '/finance', labels: ['Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: ['/registrar/records', '/documents', '/admin'] },

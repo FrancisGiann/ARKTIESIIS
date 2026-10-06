@@ -1,7 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page readmissions-page" id="main-content">
-  <header class="dashboard-heading"><div><h1>Balik-aral evaluations</h1><p>Registrar-led human review for applicants with an interrupted secondary-school path. Evaluation notes are staff-only.</p></div>
-    <% if (currentUser.role === 'registrar') { %><a class="button button--primary" href="/registrar/readmissions/new">Start evaluation</a><% } %>
+  <header class="dashboard-heading"><div><h1>Return evaluations</h1><p>Registrar-led human review for students returning after a break. Continuing students follow their usual enrollment path.</p></div>
+    <% if (currentUser.role === 'registrar') { %><a class="button button--primary" href="/registrar/records/return-evaluations/new">Evaluate return</a><% } %>
   </header>
   <form class="filter-bar readmissions-filter-bar" method="get" action="/registrar/readmissions">
     <div class="field"><label for="readmission-search">Name or LRN</label><input id="readmission-search" name="search" maxlength="100" value="<%= typeof query !== 'undefined' ? query.search || '' : '' %>"></div>
@@ -9,7 +9,7 @@
     <button class="button button--primary" type="submit">Filter</button>
   </form>
   <% if (!rows.length) { %><section class="empty-state"><h2>No evaluations match these filters</h2><p>Start an evaluation only for a learner returning after an interruption. Continuous progression to Grade 12 does not use this review.</p></section><% } else { %>
-    <div class="table-wrap readmissions-table-wrap" role="region" aria-label="Balik-aral evaluations" tabindex="0"><table class="data-table readmissions-table"><thead><tr><th scope="col">Applicant</th><th scope="col">LRN</th><th scope="col">School year</th><th scope="col">Target grade</th><th scope="col">Status</th><th scope="col">Revision</th><th scope="col"><span class="sr-only">Action</span></th></tr></thead><tbody>
+    <div class="table-wrap readmissions-table-wrap" role="region" aria-label="Return evaluations" tabindex="0"><table class="data-table readmissions-table"><thead><tr><th scope="col">Applicant</th><th scope="col">LRN</th><th scope="col">School year</th><th scope="col">Target grade</th><th scope="col">Status</th><th scope="col">Revision</th><th scope="col"><span class="sr-only">Action</span></th></tr></thead><tbody>
       <% for (const row of rows) { const statusClass = row.status === 'accepted' ? 'readmission-status--accepted' : row.status === 'not_accepted' ? 'readmission-status--declined' : 'readmission-status--review'; %><tr><th scope="row" data-label="Applicant"><%= [row.first_name,row.middle_name,row.last_name,row.suffix].filter(Boolean).join(' ') %></th><td data-label="LRN"><%= row.applicant_lrn %></td><td data-label="School year"><%= row.school_year %></td><td data-label="Target grade"><%= row.target_grade_level %></td><td data-label="Status"><span class="status-chip readmission-status <%= statusClass %>"><%= ({under_review:'Under review',accepted:'Accepted',not_accepted:'Not accepted'})[row.status] || 'Under review' %></span></td><td data-label="Revision"><%= row.version %></td><td data-label="Action"><a class="table-action" href="/registrar/readmissions/<%= encodeURIComponent(row.id) %>">Review</a></td></tr><% } %>
     </tbody></table></div>
   <% } %>

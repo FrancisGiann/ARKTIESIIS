@@ -58,8 +58,8 @@
   const canAccept = curriculumState === 'resolved' && availabilityState === 'available';
 %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/registrar/readmissions">Back to balik-aral evaluations</a>
-  <header class="dashboard-heading"><div><h1><%= evaluation ? 'Balik-aral evaluation' : 'New balik-aral evaluation' %></h1><p>Use this review only for a student returning after an interruption. A registrar makes the decision after reviewing evidence and curriculum needs.</p></div>
+  <a class="context-back" href="/registrar/records">Back to student records</a>
+  <header class="dashboard-heading"><div><h1><%= evaluation ? 'Return evaluation' : 'Evaluate return' %></h1><p>Use this review only for a student returning after a break. Continuing students follow their usual enrollment path.</p></div>
     <% if (evaluation) { %><p class="status-pill"><%= ({under_review:'Under review',accepted:'Accepted',not_accepted:'Not accepted'})[evaluation.status] || evaluation.status %> · revision <%= evaluation.version %></p><% } %>
   </header>
   <% if (error) { %><p class="form-alert" role="alert" tabindex="-1"><%= error %></p><% } %>

@@ -167,7 +167,7 @@ function normalizeRecord(input = {}, { actorName = '', current = null } = {}) {
   }
   result.email = normalizeEmail(input.email);
   result.applicantKind = input.applicantKind === undefined || input.applicantKind === '' ? 'new' : input.applicantKind;
-  if (!['new', 'continuing', 'readmission'].includes(result.applicantKind)) throw new PreEnrollmentError('Choose New, Continuing, or Balik-aral.');
+  if (!['new', 'continuing', 'readmission'].includes(result.applicantKind)) throw new PreEnrollmentError('Choose New, Continuing, or Returning after a break.');
   const sex = printable(input.sex || '', 'Gender', 20);
   result.sex = sex ? ({ male: 'Male', female: 'Female', other: 'Other' }[sex.toLowerCase()] || null) : null;
   if (sex && !result.sex) throw new PreEnrollmentError('Choose Male, Female, or Other for gender.');
@@ -197,14 +197,14 @@ function normalizeRecord(input = {}, { actorName = '', current = null } = {}) {
   let evaluationVersion = input.readmissionEvaluationVersion;
   if (typeof input.readmissionEvaluationBinding === 'string' && input.readmissionEvaluationBinding) {
     const match = input.readmissionEvaluationBinding.match(/^([0-9a-f-]{36})@(\d{1,10})$/i);
-    if (!match) throw new PreEnrollmentError('Choose a valid accepted balik-aral evaluation.');
+    if (!match) throw new PreEnrollmentError('Choose a valid accepted return evaluation.');
     evaluationId = match[1];
     evaluationVersion = match[2];
   }
   result.readmissionEvaluationId = evaluationId ? normalizeUuid(evaluationId, 'readmission evaluation') : null;
   result.readmissionEvaluationVersion = evaluationVersion === '' || evaluationVersion == null ? null : Number(evaluationVersion);
   if (result.readmissionEvaluationVersion !== null && (!Number.isSafeInteger(result.readmissionEvaluationVersion) || result.readmissionEvaluationVersion < 1)) {
-    throw new PreEnrollmentError('Reload the readmission evaluation before saving this paper record.', 409);
+    throw new PreEnrollmentError('Reload the return evaluation before saving this paper record.', 409);
   }
   result.receivedBy = result.receivedBy || null;
   result.receivedDate = result.receivedDate || null;
@@ -240,14 +240,14 @@ function normalizeRecord(input = {}, { actorName = '', current = null } = {}) {
   }
   if (result.status === 'ready_for_registrar' && result.applicantKind === 'readmission'
     && (!result.readmissionEvaluationId || !result.readmissionEvaluationVersion)) {
-    throw new PreEnrollmentError('An accepted, current balik-aral evaluation is required before this record can be ready.', 409);
+    throw new PreEnrollmentError('An accepted, current return evaluation is required before this record can be ready.', 409);
   }
   if (result.applicantKind !== 'readmission' && (result.readmissionEvaluationId || result.readmissionEvaluationVersion)) {
-    throw new PreEnrollmentError('Only a balik-aral applicant may be linked to a readmission evaluation.');
+    throw new PreEnrollmentError('Only an applicant returning after a break may be linked to a return evaluation.');
   }
   if (result.applicantKind === 'readmission' && (!/^\d{12}$/.test(result.lrn || '')
     || !result.readmissionEvaluationId || !result.readmissionEvaluationVersion)) {
-    throw new PreEnrollmentError('A complete LRN and accepted, current balik-aral evaluation are required for this applicant.');
+    throw new PreEnrollmentError('A complete LRN and accepted, current return evaluation are required for this applicant.');
   }
   result.missingRequired = missing;
   result.receipts = receipts;
@@ -318,7 +318,7 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
       || Number(evaluation.version) !== record.readmissionEvaluationVersion
       || evaluation.applicant_lrn !== record.lrn || evaluation.school_year !== record.schoolYear
       || evaluation.target_grade_level !== record.targetGradeLevel) {
-      throw new PreEnrollmentError('The linked balik-aral evaluation is not accepted for this LRN, school year, grade, and revision.', 409);
+      throw new PreEnrollmentError('The linked return evaluation is not accepted for this LRN, school year, grade, and revision.', 409);
     }
     return evaluation;
   }
@@ -360,12 +360,12 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
       && !(latest.has_departure === true || latest.has_departure === 1));
     if (continuous) {
       if (record.applicantKind !== 'continuing' || record.readmissionEvaluationId) {
-        throw new PreEnrollmentError('Previous-year participation shows continuous progression. Use Continuing and remove any balik-aral evaluation.', 409);
+        throw new PreEnrollmentError('Previous-year participation shows continuous progression. Use Continuing and remove any return evaluation.', 409);
       }
       return;
     }
     if (record.applicantKind !== 'readmission' || !evaluation || Number(evaluation.student_id || 0) !== studentId) {
-      throw new PreEnrollmentError('This applicant needs an accepted balik-aral evaluation before a paper record can proceed.', 409);
+      throw new PreEnrollmentError('This applicant needs an accepted return evaluation before a paper record can proceed.', 409);
     }
   }
 
@@ -526,7 +526,7 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
         LEFT JOIN staff_profiles AS staff ON staff.user_id = actor.id
         WHERE revision.pre_enrollment_id = @recordId ORDER BY revision.created_at DESC, revision.id DESC`),
       record.readmission_evaluation_id
-        ? pool.request().input('evaluationId', sql.Char(36), record.readmission_evaluation_id).query(`SELECT status, version,
+        ? pool.request().input('evaluationId', sql.Char(36), record.readmission_evaluation_id).query(`SELECT student_id, status, version,
             school_year, target_grade_level, applicant_lrn
           FROM readmission_evaluations WHERE id = @evaluationId`)
         : Promise.resolve({ recordset: [] })

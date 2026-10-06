@@ -1,51 +1,51 @@
 'use strict';
 
 const express = require('express');
-const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
+const { hasValidCsrfToken } = require('../middleware/auth');
 const { ReadmissionError, createReadmissionService } = require('../services/readmissionService');
 
 function createReadmissionRouter({ getPool, sql, readmissionService } = {}) {
   const router = express.Router();
   const service = readmissionService || createReadmissionService({ getPool, sql });
+  const recordsPath = '/registrar/records';
   const privateHeaders = (res) => res.set('Cache-Control', 'private, no-store, max-age=0').set('Pragma', 'no-cache');
   const renderError = (res, error) => {
-    if (error instanceof ReadmissionError) return res.status(error.status).render('error', { title: 'Balik-aral evaluation', message: error.message });
-    return res.status(503).render('error', { title: 'Balik-aral evaluation unavailable', message: 'Readmission information could not be loaded or saved.' });
+    if (error instanceof ReadmissionError) return res.status(error.status).render('error', { title: 'Return evaluation', message: error.message });
+    return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The evaluation could not be loaded or saved.' });
   };
 
-  router.get('/', async (req, res) => {
-    try {
-      const rows = await service.list(req.authUser.id, req.query || {});
-      return privateHeaders(res).render('readmissions/index', {
-        title: 'Balik-aral evaluations', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), rows,
-        filterStatus: req.query?.status || '', query: req.query || {}
-      });
-    } catch (error) { return renderError(res, error); }
+  function evaluationPath(evaluation) {
+    if (evaluation.student_id) {
+      return `${recordsPath}/students/${encodeURIComponent(evaluation.student_id)}/return-evaluations/${encodeURIComponent(evaluation.id)}`;
+    }
+    return `${recordsPath}/return-evaluations/${encodeURIComponent(evaluation.id)}`;
+  }
+
+  router.get('/', (req, res) => {
+    const query = new URLSearchParams();
+    if (typeof req.query?.search === 'string' && req.query.search.trim()) query.set('search', req.query.search.slice(0, 100));
+    if (typeof req.query?.status === 'string' && ['under_review', 'accepted', 'not_accepted'].includes(req.query.status)) {
+      query.set('returnStatus', req.query.status);
+    }
+    const suffix = query.toString();
+    return privateHeaders(res).redirect(303, `${recordsPath}${suffix ? `?${suffix}` : ''}`);
   });
 
-  router.get('/new', (req, res) => {
-    if (req.authUser.role !== 'registrar') return res.status(403).render('error', { title: 'Read-only access', message: 'Database administrators can review evaluations but cannot create them.' });
-    return privateHeaders(res).render('readmissions/form', {
-      title: 'New balik-aral evaluation', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), evaluation: null,
-      values: { schoolYear: '', targetGradeLevel: '', subjectAvailability: 'unresolved' }, error: null
-    });
-  });
+  router.get('/new', (req, res) => privateHeaders(res).redirect(303, `${recordsPath}/return-evaluations/new`));
 
   router.post('/', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload and try again.' });
     try {
       const result = await service.create(req.authUser.id, req.body || {});
-      return res.redirect(303, `/registrar/readmissions/${encodeURIComponent(result.id)}`);
+      const evaluation = await service.get(req.authUser.id, result.id);
+      return privateHeaders(res).redirect(303, evaluationPath(evaluation));
     } catch (error) { return renderError(res, error); }
   });
 
   router.get('/:id', async (req, res) => {
     try {
       const evaluation = await service.get(req.authUser.id, req.params.id);
-      return privateHeaders(res).render('readmissions/form', {
-        title: 'Balik-aral evaluation', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), evaluation,
-        values: {}, error: null
-      });
+      return privateHeaders(res).redirect(303, evaluationPath(evaluation));
     } catch (error) { return renderError(res, error); }
   });
 
@@ -53,7 +53,8 @@ function createReadmissionRouter({ getPool, sql, readmissionService } = {}) {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload and try again.' });
     try {
       await service.update(req.authUser.id, req.params.id, req.body?.version, req.body || {});
-      return res.redirect(303, `/registrar/readmissions/${encodeURIComponent(req.params.id)}`);
+      const evaluation = await service.get(req.authUser.id, req.params.id);
+      return privateHeaders(res).redirect(303, evaluationPath(evaluation));
     } catch (error) { return renderError(res, error); }
   });
 
@@ -61,7 +62,8 @@ function createReadmissionRouter({ getPool, sql, readmissionService } = {}) {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload and try again.' });
     try {
       await service.decide(req.authUser.id, req.params.id, req.body?.version, req.body?.decision, req.body?.decisionReason);
-      return res.redirect(303, `/registrar/readmissions/${encodeURIComponent(req.params.id)}`);
+      const evaluation = await service.get(req.authUser.id, req.params.id);
+      return privateHeaders(res).redirect(303, evaluationPath(evaluation));
     } catch (error) { return renderError(res, error); }
   });
 

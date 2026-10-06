@@ -11,6 +11,7 @@ const { PoolFacade, Transaction, sql } = require('../src/config/database');
 const { createPreEnrollmentService } = require('../src/services/preEnrollmentService');
 const { createReadmissionService } = require('../src/services/readmissionService');
 const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
+const { createAcademicRecordsService } = require('../src/services/academicRecordsService');
 const { RegistrarGradeOverviewError, createRegistrarGradeOverviewService } = require('../src/services/registrarGradeOverviewService');
 const { createStudentRecordsRouter } = require('../src/routes/studentRecords');
 const { requireRole } = require('../src/middleware/roles');
@@ -559,7 +560,7 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
       emergency_contact_address: 'Saved legacy emergency address', emergency_contact_address_block_lot_street_purok: null
     }, 'an unrelated approved name correction does not replace either legacy address');
 
-    // Balik-aral evaluation is human-reviewed and linked to an interrupted student's exact LRN/year/grade.
+    // Return evaluation is human-reviewed and linked to an interrupted student's exact LRN/year/grade.
     const interruptedLrn = '012345678910';
     const [interruptedInsert] = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name)
       VALUES ('BALIK-TEST', ?, 'Ari', 'Santos')`, [interruptedLrn]);
@@ -570,7 +571,131 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     [interruptedStudentId, users.registrar, uuid()]);
     const readmissions = createReadmissionService({ getPool: async () => pool, sql,
       transactionFactory: (currentPool) => new Transaction(currentPool) });
+    await assert.rejects(readmissions.createUnlinked(users.registrar,
+      readmissionInput('012345678919', { firstName: '' })), { status: 400 },
+    'missing required applicant names are rejected by service validation before an insert');
+    await assert.rejects(readmissions.getStudentReturnEligibility(users.front_desk, interruptedStudentId), { status: 403 },
+      'return eligibility is visible only to registrar and database administrator');
+    const recordedDepartureEligibility = await readmissions.getStudentReturnEligibility(users.registrar, interruptedStudentId);
+    assert.equal(recordedDepartureEligibility.eligible, true);
+    assert.equal(recordedDepartureEligibility.basis, 'recorded_departure');
+
+    const makeEligibilityStudent = async (studentNo, lrn, schoolYear, intakeStatus) => {
+      const [insertedStudent] = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name)
+        VALUES (?, ?, 'Return', 'Applicant')`, [studentNo, lrn]);
+      const [insertedAnnual] = await rawPool.execute(`INSERT INTO annual_enrollments
+        (student_id, school_year, grade_level, voucher_code, intake_status, created_by, idempotency_key)
+        VALUES (?, ?, 'Grade 11', 'PUB', ?, ?, ?)`,
+      [insertedStudent.insertId, schoolYear, intakeStatus, users.registrar, uuid()]);
+      return { studentId: Number(insertedStudent.insertId), annualId: Number(insertedAnnual.insertId) };
+    };
+    const continuousStudent = await makeEligibilityStudent('RETURN-CONTINUOUS', '012345678920', '2026-2027', 'enrolled');
+    assert.equal((await readmissions.getStudentReturnEligibility(users.registrar, continuousStudent.studentId)).eligible, false,
+      'confirmed participation in the prior configured year does not expose Evaluate return');
+    const pendingStudent = await makeEligibilityStudent('RETURN-PENDING', '012345678921', '2027-2028', 'pending');
+    assert.equal((await readmissions.getStudentReturnEligibility(users.registrar, pendingStudent.studentId)).eligible, false,
+      'a pending annual record in the configured current year does not imply interruption');
+    const gapStudent = await makeEligibilityStudent('RETURN-GAP', '012345678922', '2025-2026', 'enrolled');
+    const gapEligibility = await readmissions.getStudentReturnEligibility(users.registrar, gapStudent.studentId);
+    assert.equal(gapEligibility.eligible, true);
+    assert.equal(gapEligibility.basis, 'school_year_gap');
+    await assert.rejects(readmissions.createForStudent(users.database_admin, gapStudent.studentId,
+      readmissionInput('012345678922')), { status: 403 }, 'database administrators remain read-only for linked evaluation creation');
+    await assert.rejects(readmissions.createForStudent(users.registrar, continuousStudent.studentId,
+      readmissionInput('012345678920', { schoolYear: '2028-2029' })), { status: 409 },
+    'a forged future target school year cannot bypass current-history eligibility');
+
+    const departureStudent = await makeEligibilityStudent('RETURN-DEPARTURE-TERM', '012345678924', '2026-2027', 'enrolled');
+    const departureTerms = [];
+    for (const [index, termName] of ['Term 1', 'Term 2', 'Term 3'].entries()) {
+      const [termInsert] = await rawPool.execute('INSERT INTO academic_terms (school_year, term, is_current) VALUES (?, ?, 0)',
+        ['2026-2027', termName]);
+      const termId = Number(termInsert.insertId);
+      departureTerms.push(termId);
+      await rawPool.execute(`INSERT INTO school_year_term_order (school_year, term_number, academic_term_id, configured_by)
+        VALUES ('2026-2027', ?, ?, ?)`, [index + 1, termId, users.registrar]);
+    }
+    const departureEnrollments = [];
+    for (const [index, termId] of departureTerms.entries()) {
+      const [enrollmentInsert] = await rawPool.execute(`INSERT INTO enrollments
+        (student_id, annual_enrollment_id, academic_term_id, annual_term_number, enrollment_status)
+        VALUES (?, ?, ?, ?, ?)`, [departureStudent.studentId, departureStudent.annualId, termId, index + 1,
+        index === 0 ? 'enrolled' : 'transferred']);
+      departureEnrollments.push(Number(enrollmentInsert.insertId));
+    }
+    const [departureCaseInsert] = await rawPool.execute(`INSERT INTO finance_departure_cases
+      (annual_enrollment_id, effective_enrollment_id, effective_date, departure_type, reason, recorded_by,
+        idempotency_key, request_fingerprint)
+      VALUES (?, ?, '2027-01-10', 'transferred', 'Integration fixture', ?, ?, ?)`,
+    [departureStudent.annualId, departureEnrollments[1], users.registrar, uuid(), 'a'.repeat(64)]);
+    const departureCaseId = Number(departureCaseInsert.insertId);
+    for (const enrollmentId of departureEnrollments.slice(1)) {
+      await rawPool.execute(`INSERT INTO finance_departure_case_terms
+        (departure_case_id, enrollment_id, academic_activity_review_required) VALUES (?, ?, 0)`,
+      [departureCaseId, enrollmentId]);
+    }
+    const effectiveDeparture = await readmissions.getStudentReturnEligibility(users.registrar, departureStudent.studentId);
+    assert.equal(effectiveDeparture.eligible, true,
+      'a confirmed departure remains a human-review basis even though annual intake_status is still enrolled');
+    assert.equal(effectiveDeparture.departure.termNumber, 2);
+    assert.equal(effectiveDeparture.departure.term, 'Term 2',
+      'affected future term 3 does not replace the case effective enrollment');
+    assert.equal(effectiveDeparture.departure.effectiveEnrollmentId, departureEnrollments[1]);
+    await rawPool.execute("UPDATE enrollments SET enrollment_status = 'enrolled' WHERE id = ?", [departureEnrollments[1]]);
+    assert.equal((await readmissions.getStudentReturnEligibility(users.registrar, departureStudent.studentId)).eligible, false,
+      'active participation at the effective departure term suppresses a new evaluation');
+
+    const supersededDeparture = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name)
+      VALUES ('RETURN-SUPERSEDED', '012345678923', 'Return', 'Applicant')`);
+    const supersededStudentId = Number(supersededDeparture[0].insertId);
+    for (const [schoolYear, intakeStatus] of [['2024-2025', 'transferred'], ['2026-2027', 'enrolled']]) {
+      await rawPool.execute(`INSERT INTO annual_enrollments
+        (student_id, school_year, grade_level, voucher_code, intake_status, created_by, idempotency_key)
+        VALUES (?, ?, 'Grade 11', 'PUB', ?, ?, ?)`, [supersededStudentId, schoolYear, intakeStatus, users.registrar, uuid()]);
+    }
+    assert.equal((await readmissions.getStudentReturnEligibility(users.registrar, supersededStudentId)).eligible, false,
+      'a later continuing record suppresses an old departure signal');
+
     const evaluationDraft = await readmissions.create(users.registrar, readmissionInput(interruptedLrn, { subjectAvailability: 'unresolved' }));
+    const forgedLinkedEvaluation = await readmissions.createForStudent(users.registrar, interruptedStudentId,
+      readmissionInput(interruptedLrn, { applicantLrn: '012345678999', firstName: 'Forged', lastName: 'Identity', schoolYear: '2028-2029' }));
+    const linkedContext = await readmissions.getForStudent(users.registrar, interruptedStudentId, forgedLinkedEvaluation.id);
+    assert.equal(linkedContext.student_id, interruptedStudentId);
+    assert.equal(linkedContext.applicant_lrn, interruptedLrn);
+    assert.equal(linkedContext.first_name, 'Ari', 'linked create derives applicant identity from the saved student record');
+    const otherContextLrn = crypto.randomInt(0, 1_000_000_000_000).toString().padStart(12, '0');
+    const [otherContextInsert] = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name)
+      VALUES ('OTHER-CONTEXT', ?, 'Other', 'Student')`, [otherContextLrn]);
+    const otherContextStudentId = Number(otherContextInsert.insertId);
+    await assert.rejects(readmissions.getForStudent(users.registrar, otherContextStudentId, forgedLinkedEvaluation.id), { status: 404 },
+      'a linked evaluation cannot be opened through another student route');
+    await assert.rejects(readmissions.update(users.registrar, forgedLinkedEvaluation.id, 1,
+      readmissionInput(interruptedLrn, { schoolYear: '2028-2029' }), otherContextStudentId), { status: 404 },
+    'a linked evaluation cannot be edited through another student route');
+    const scopedUpdate = await readmissions.update(users.registrar, forgedLinkedEvaluation.id, 1,
+      readmissionInput('012345678999', { schoolYear: '2028-2029', firstName: 'Tampered', lastName: 'Identity', priorProgress: 'Updated from the linked record.' }), interruptedStudentId);
+    const afterScopedUpdate = await readmissions.getForStudent(users.registrar, interruptedStudentId, scopedUpdate.id);
+    assert.equal(afterScopedUpdate.applicant_lrn, interruptedLrn);
+    assert.equal(afterScopedUpdate.first_name, 'Ari');
+    assert.equal(afterScopedUpdate.last_name, 'Santos');
+    assert.equal(afterScopedUpdate.prior_progress, 'Updated from the linked record.');
+    const legacyProtectedUpdate = await readmissions.update(users.registrar, forgedLinkedEvaluation.id, scopedUpdate.version,
+      readmissionInput('012345678999', { schoolYear: '2028-2029', firstName: 'Legacy Tamper', lastName: 'Identity' }));
+    const afterLegacyUpdate = await readmissions.get(users.registrar, legacyProtectedUpdate.id);
+    assert.equal(afterLegacyUpdate.applicant_lrn, interruptedLrn);
+    assert.equal(afterLegacyUpdate.first_name, 'Ari', 'legacy writes preserve identity for a linked evaluation');
+    await assert.rejects(readmissions.update(users.registrar, forgedLinkedEvaluation.id, afterLegacyUpdate.version,
+      readmissionInput(interruptedLrn, { schoolYear: '2028-2029' }), null, true), { status: 409 },
+    'an evaluation posted to the unlinked canonical endpoint cannot be edited after it is linked');
+    await assert.rejects(readmissions.decide(users.registrar, forgedLinkedEvaluation.id, afterLegacyUpdate.version,
+      'not_accepted', 'Decision on unlinked endpoint.', null, true), { status: 409 },
+    'an evaluation posted to the unlinked canonical endpoint cannot be decided after it is linked');
+    assert.equal((await readmissions.get(users.registrar, forgedLinkedEvaluation.id)).version, afterLegacyUpdate.version,
+      'unlinked endpoint guards reject before mutation');
+
+    await assert.rejects(readmissions.createUnlinked(users.registrar,
+      readmissionInput(interruptedLrn, { schoolYear: '2028-2029' })), { status: 409 },
+    'an unlinked creation path cannot accept an LRN that belongs to a saved student');
     await assert.rejects(readmissions.create(users.database_admin, readmissionInput('012345678911')), { status: 403 },
       'database administrators may review, but cannot create, evaluations');
     await assert.rejects(readmissions.update(users.database_admin, evaluationDraft.id, 1, readmissionInput(interruptedLrn)), { status: 403 });
@@ -722,9 +847,15 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     'an evaluation cannot authorize same-year reactivation after a prior-year paper decision');
 
     const lateSameYearLrn = '012345678917';
-    const lateBoundEvaluation = await readmissions.create(users.registrar, readmissionInput(lateSameYearLrn));
+    const lateBoundEvaluation = await readmissions.createUnlinked(users.registrar, readmissionInput(lateSameYearLrn));
     const [lateSameYearStudent] = await rawPool.execute(`INSERT INTO students (student_no, lrn, first_name, last_name)
       VALUES ('SAME-YEAR-LATE-TEST', ?, 'Late', 'Year')`, [lateSameYearLrn]);
+    const lateStudentId = Number(lateSameYearStudent.insertId);
+    const lateContextEvaluation = await readmissions.getForStudent(users.registrar, lateStudentId, lateBoundEvaluation.id);
+    assert.equal(lateContextEvaluation.student_id, null, 'a matching unlinked review is discoverable in the student context without implicit binding');
+    assert.ok((await readmissions.listForStudent(users.registrar, lateStudentId)).some((row) => row.id === lateBoundEvaluation.id));
+    await assert.rejects(readmissions.getForStudent(users.registrar, otherContextStudentId, lateBoundEvaluation.id), { status: 404 },
+      'an unlinked evaluation only opens in context when its stored LRN matches');
     await rawPool.execute(`INSERT INTO annual_enrollments
       (student_id, school_year, grade_level, voucher_code, intake_status, created_by, idempotency_key)
       VALUES (?, '2027-2028', 'Grade 11', 'PUB', 'enrolled', ?, ?)`,
@@ -737,8 +868,21 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
 
     // A non-existent historic master may be evaluated, but is allocated only by annual conversion.
     const noMasterLrn = '012345678914';
-    const noMasterEvaluation = await readmissions.create(users.registrar, readmissionInput(noMasterLrn));
-    const noMasterAccepted = await readmissions.decide(users.registrar, noMasterEvaluation.id, noMasterEvaluation.version,
+    const noMasterEvaluation = await readmissions.createUnlinked(users.registrar, readmissionInput(noMasterLrn));
+    assert.equal(noMasterEvaluation.status, 'under_review');
+    const unlinkedSearch = await readmissions.searchUnlinkedMatches(users.registrar, 'Santos');
+    assert.ok(unlinkedSearch.some((row) => row.id === noMasterEvaluation.id), 'unlinked applicants are searchable by saved evaluation name');
+    const correctedNoMaster = await readmissions.update(users.registrar, noMasterEvaluation.id, noMasterEvaluation.version,
+      readmissionInput(noMasterLrn, { firstName: 'Arianna' }));
+    const correctionHistory = await readmissions.get(users.registrar, correctedNoMaster.id);
+    assert.equal(correctionHistory.first_name, 'Arianna', 'an unlinked applicant name can be corrected with a revision');
+    assert.equal(correctionHistory.version, 2);
+    await assert.rejects(readmissions.update(users.registrar, correctedNoMaster.id, correctedNoMaster.version,
+      readmissionInput(interruptedLrn)), { status: 409 }, 'unlinked corrections cannot move an evaluation onto a saved student');
+    const rejectedLinkedCorrection = await readmissions.get(users.registrar, correctedNoMaster.id);
+    assert.equal(rejectedLinkedCorrection.applicant_lrn, noMasterLrn);
+    assert.equal(rejectedLinkedCorrection.version, correctedNoMaster.version);
+    const noMasterAccepted = await readmissions.decide(users.registrar, noMasterEvaluation.id, correctedNoMaster.version,
       'accepted', 'Reviewed available history supplied by the applicant.');
     const noMasterSource = await preEnrollments.create(users.front_desk, readyPaper(uuid(), { lrn: noMasterLrn,
       email: 'no-master-readmission@integration.invalid',
@@ -766,6 +910,24 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
       [studentSubjectId, 'Term 1', 0, users.registrar]);
     await rawPool.execute('INSERT INTO grades (student_subject_id, grading_period, grade_value, recorded_by) VALUES (?, ?, ?, ?)',
       [studentSubjectId, 'Term 2', null, users.registrar]);
+
+    const academicRecordService = createAcademicRecordsService({ getPool: async () => pool, sql });
+    const academicRecord = await academicRecordService.getStudentAcademicRecord(studentId);
+    const termOneAcademic = academicRecord.enrollments.find((row) => Number(row.id) === Number(firstEnrollment.id));
+    assert.equal(Number(termOneAcademic.term_number), 1);
+    assert.equal(termOneAcademic.term_scope_status, 'applicable');
+    const mathRecord = termOneAcademic.subjects.find((subject) => subject.subjectCode === 'MTH101');
+    assert.ok(mathRecord);
+    assert.deepEqual(Object.keys(mathRecord).sort(), ['grades', 'id', 'subjectCode', 'subjectId', 'subjectName', 'units']);
+    assert.deepEqual(mathRecord.grades.map((grade) => ({
+      gradingPeriod: grade.gradingPeriod,
+      gradeValue: grade.gradeValue === null ? null : Number(grade.gradeValue),
+      remarks: grade.remarks
+    })), [
+      { gradingPeriod: 'Term 1', gradeValue: 0, remarks: null },
+      { gradingPeriod: 'Term 2', gradeValue: null, remarks: null }
+    ]);
+
     const [assignmentInsert] = await rawPool.execute(`INSERT INTO teacher_assignments
       (teacher_id, academic_term_id, section_id, subject_id, assigned_by) VALUES (?, ?, ?, ?, ?)`,
       [users.teacher, terms[0], sections[0], subjectId, users.registrar]);

@@ -2,8 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const bcrypt = require('bcrypt');
-const { createApp } = require('../src/app');
+const { createApp: createApplication } = require('../src/app');
+const { lastRecordedEnrollment } = require('../src/routes/studentRecords');
 const { StudentDocumentRequestError } = require('../src/services/studentDocumentRequestService');
+const { ReadmissionError, deriveReturnEligibility } = require('../src/services/readmissionService');
 const {
   StudentRecordsError,
   createStudentRecordsService,
@@ -89,6 +91,83 @@ const environment = {
   devPasswordOnlyLogin: true,
   sessionSecret: 'phase-five-student-records-test-session-secret'
 };
+
+const emptyReadmissionService = {
+  async listForStudent() { return []; },
+  async searchUnlinkedMatches() { return []; },
+  async getStudentReturnEligibility() { return { eligible: false, basis: null, departure: null }; }
+};
+
+test('return eligibility requires current configured departure or an evidenced school-year gap', () => {
+  const derive = (currentSchoolYear, annualEnrollments = [], enrollments = []) =>
+    deriveReturnEligibility({ currentSchoolYear, annualEnrollments, enrollments });
+  assert.equal(derive('2027-2028', [{ school_year: '2026-2027', intake_status: 'enrolled' }]).eligible, false,
+    'confirmed participation in the previous school year remains continuous');
+  assert.equal(derive('2027-2028', [{ school_year: '2027-2028', intake_status: 'pending' }]).eligible, false,
+    'a pending current-year annual record does not imply interruption');
+  assert.equal(derive('2027-2028', [], [{ school_year: '2027-2028', enrollment_status: 'pending_payment', term_number: 1 }]).eligible, false,
+    'pending term participation in the configured current year blocks the gap path');
+  assert.equal(derive('2027-2028', [{ school_year: '2025-2026', intake_status: 'enrolled' }]).eligible, true,
+    'a prior confirmed annual record followed by an established year gap is eligible');
+  assert.equal(derive(null, [{ school_year: '2024-2025', intake_status: 'enrolled' }]).eligible, false,
+    'a gap is not inferred when there is no configured current school year');
+  assert.equal(derive('2027-2028').eligible, false, 'missing history is not an interruption');
+  assert.equal(derive('2027-2028', [
+    { school_year: '2025-2026', intake_status: 'transferred' },
+    { school_year: '2026-2027', intake_status: 'enrolled' }
+  ]).eligible, false, 'an old departure is superseded by later continuous participation');
+
+  const departure = derive('2027-2028', [{ school_year: '2026-2027', intake_status: 'enrolled',
+    departure_case_id: 8, departure_type: 'transferred', effective_date: '2027-01-10',
+    departure_term_number: 2, departure_term: 'Term 2' }], [
+    { school_year: '2026-2027', term: 'Term 1', term_number: 1, enrollment_status: 'enrolled' },
+    { school_year: '2026-2027', term: 'Term 2', term_number: 2, enrollment_status: 'transferred',
+      departure_case_id: 8, departure_term_number: 2, departure_term: 'Term 2' },
+    { school_year: '2026-2027', term: 'Term 3', term_number: 3, enrollment_status: 'transferred',
+      departure_case_id: 8, departure_term_number: 2, departure_term: 'Term 2' }
+  ]);
+  assert.equal(departure.eligible, true);
+  assert.equal(departure.basis, 'recorded_departure');
+  assert.equal(departure.departure.termNumber, 2,
+    'future placements changed by one departure case do not replace its effective term');
+  assert.equal(departure.departure.term, 'Term 2');
+
+  assert.equal(derive('2027-2028', [], [
+    { school_year: '2026-2027', term: 'Term 2', term_number: 2, enrollment_status: 'transferred' },
+    { school_year: '2026-2027', term: 'Term 3', term_number: 3, enrollment_status: 'enrolled' }
+  ]).eligible, false, 'a newer active term suppresses an earlier dropped/transferred term');
+  assert.equal(derive('2027-2028', [{ school_year: '2026-2027', intake_status: 'enrolled',
+    departure_case_id: 9, departure_type: 'dropped', departure_term_number: 2 }], [
+    { school_year: '2026-2027', term: 'Term 2', term_number: 2, enrollment_status: 'enrolled' },
+    { school_year: '2026-2027', term: 'Term 3', term_number: 3, enrollment_status: 'dropped',
+      departure_case_id: 9, departure_term_number: 2 }
+  ]).eligible, false, 'active or pending participation at the effective departure term also blocks new evaluation');
+  assert.equal(derive('2027-2028', [], [
+    { school_year: '2026-2027', enrollment_status: 'transferred' },
+    { school_year: '2026-2027', enrollment_status: 'pending_payment' }
+  ]).eligible, false, 'unknown term order fails safely when newer participation cannot be excluded');
+});
+
+test('last recorded enrollment respects saved year/order and does not promote uncertain or superseded departure rows', () => {
+  const rows = [
+    { id: 99, school_year: '2024-2025', term: 'Term 3', term_number: 3, is_current: true, enrollment_status: 'transferred' },
+    { id: 2, school_year: '2026-2027', term: 'Term 1', term_number: 1, is_current: false, enrollment_status: 'enrolled' }
+  ];
+  assert.equal(lastRecordedEnrollment(rows, { basis: null, departure: {
+    schoolYear: '2024-2025', effectiveEnrollmentId: 99
+  } }).id, 2, 'later participation is live context even when an older row is marked current or has a larger id');
+  assert.equal(lastRecordedEnrollment([
+    { id: 1, school_year: '2026-2027', term: 'Term 1', term_number: 1, enrollment_status: 'enrolled' },
+    { id: 2, school_year: '2026-2027', term: 'Term 2', term_number: null, enrollment_status: 'enrolled' }
+  ], null), null, 'a missing order on any same-year candidate prevents a guessed latest term');
+  assert.equal(lastRecordedEnrollment(rows, { basis: 'recorded_departure', departure: {
+    schoolYear: '2024-2025', effectiveEnrollmentId: 99
+  } }).id, 2, 'an older departure does not replace a later current participation summary');
+});
+
+function createApp(options = {}) {
+  return createApplication({ readmissionService: emptyReadmissionService, ...options });
+}
 
 function getCookie(response) {
   const cookie = response.headers.get('set-cookie');
@@ -1008,5 +1087,305 @@ test('archived student profiles explain that retained academic and finance histo
     assert.match(html, /<fieldset disabled>/);
     assert.doesNotMatch(html, /authorized staff can continue maintaining/);
     assert.doesNotMatch(html, /action="\/registrar\/records\/enrollments"/);
+  });
+});
+
+test('return evaluations are searched and reviewed in student records with server-bound context', async () => {
+  const student = { id: 12, lrn: '123456789012', student_no: 'S-12', first_name: 'Jamie', middle_name: '', last_name: 'Lee', suffix: '', status: 'active' };
+  const evaluation = {
+    id: '11111111-1111-4111-8111-111111111111', student_id: 12, applicant_lrn: student.lrn,
+    first_name: student.first_name, middle_name: '', last_name: student.last_name, suffix: '',
+    school_year: '2027-2028', target_grade_level: 'Grade 11', prior_progress: 'Grade 10 completed',
+    evidence_reviewed: 'Report card reviewed', form137_supporting: 1, curriculum_comparison: 'Compared',
+    curriculum_review_status: 'resolved', required_subjects: 'Core subjects', subject_availability: 'available',
+    availability_notes: '', decision_reason: '', status: 'under_review', version: 3, enrollment_started: false,
+    events: [{ event_type: 'updated', evaluation_version: 3, created_at: new Date('2026-10-01T08:00:00Z'),
+      first_name: 'Registrar', last_name: 'Staff', details_json: JSON.stringify({ changedFields: ['curriculumReviewStatus'], before: { curriculumReviewStatus: 'unresolved' }, after: { curriculumReviewStatus: 'resolved' } }) }]
+  };
+  const unlinkedEvaluation = { ...evaluation, id: '22222222-2222-4222-8222-222222222222', student_id: null,
+    applicant_lrn: '987654321098', first_name: 'Alex', last_name: 'Applicant', version: 2 };
+  const calls = [];
+  const mutations = [];
+  let failCreate = false;
+  let currentEvaluation = evaluation;
+  let currentEligibility = { eligible: true, basis: 'recorded_departure', latestRecordedSchoolYear: '2024-2025',
+    departure: { schoolYear: '2024-2025', term: 'Term 3', termNumber: 3, departureType: 'transferred',
+      effectiveDate: '2025-02-01', effectiveEnrollmentId: 99 } };
+  const readmissionService = {
+    async listForStudent(...args) { calls.push(['listForStudent', ...args]); return [{ id: evaluation.id, school_year: evaluation.school_year, target_grade_level: evaluation.target_grade_level, status: evaluation.status, version: evaluation.version }]; },
+    async getStudentReturnEligibility(...args) { calls.push(['getStudentReturnEligibility', ...args]); return currentEligibility; },
+    async searchUnlinkedMatches(...args) { calls.push(['searchUnlinkedMatches', ...args]); return [{ id: '22222222-2222-4222-8222-222222222222', applicant_lrn: '987654321098', first_name: 'Alex', last_name: 'Applicant', school_year: '2027-2028', target_grade_level: 'Grade 11', status: 'not_accepted', version: 2 }]; },
+    async get(...args) { calls.push(['get', ...args]); return args[1] === unlinkedEvaluation.id ? unlinkedEvaluation : currentEvaluation; },
+    async getForStudent(...args) { calls.push(['getForStudent', ...args]); return currentEvaluation; },
+    async createForStudent(...args) {
+      calls.push(['createForStudent', ...args]);
+      if (failCreate) throw new ReadmissionError('Curriculum comparison is required.', 400);
+      return { id: evaluation.id, version: 1 };
+    },
+    async createUnlinked(...args) { calls.push(['createUnlinked', ...args]); return { id: unlinkedEvaluation.id, version: 1 }; },
+    async update(...args) {
+      calls.push(['update', ...args]);
+      if (args[5] === true && args[1] === evaluation.id) throw new ReadmissionError('This evaluation is linked to a student record. Open that record to continue.', 409);
+      const latestVersion = args[1] === unlinkedEvaluation.id ? unlinkedEvaluation.version : currentEvaluation.version;
+      if (Number(args[2]) !== Number(latestVersion)) throw new ReadmissionError('This evaluation changed. Reload and review the latest version.', 409);
+      mutations.push(['update', ...args]);
+      return { id: args[1], version: Number(args[2]) + 1 };
+    },
+    async decide(...args) {
+      calls.push(['decide', ...args]);
+      if (args[6] === true && args[1] === evaluation.id) throw new ReadmissionError('This evaluation is linked to a student record. Open that record to continue.', 409);
+      mutations.push(['decide', ...args]);
+      return { id: args[1], version: Number(args[2]) + 1 };
+    }
+  };
+  const studentRecordsService = {
+    async getStudent() { return { student, terms: [], sections: [], enrollments: [] }; },
+    async listStudentProfileRevisions() { return []; },
+    async listWorkspace(search = '') {
+      calls.push(['listWorkspace', search]);
+      return { students: [], terms: [], sections: [], searchTerm: search, academicTermId: null, totalStudents: 0, page: 1, pageSize: 25, totalPages: 1 };
+    }
+  };
+  const app = createApp({
+    databasePool: makeAuthPool('registrar'), environment, studentRecordsService, readmissionService,
+    academicRecordsService: { async getStudentAcademicRecord() { return { enrollments: [
+      {
+        id: 99, school_year: '2024-2025', term: 'Term 3', term_number: 3, is_current: true,
+        grade_level: 'Grade 10', section_name: 'Last Section', enrollment_status: 'transferred', subjects: [
+          { subjectCode: 'MTH10', subjectName: 'Mathematics 10', grades: [
+            { gradingPeriod: 'Term 1', gradeValue: 0, remarks: 'Recorded zero' },
+            { gradingPeriod: 'Final Grade', gradeValue: null, remarks: null }
+          ] },
+          { subjectCode: 'SCI10', subjectName: 'Science 10', grades: [] }
+        ]
+      },
+      { id: 2, school_year: '2026-2027', term: 'Term 1', term_number: 1, is_current: false,
+        grade_level: 'Grade 11', section_name: 'Returned Section', enrollment_status: 'enrolled', subjects: [] }
+    ] }; } },
+    documentRequestService: { async getStudentRequests() { return []; } },
+    documentClearanceService: { async getRegistrarData() { return { financeSummary: { status: 'No finance review', outstanding: null }, requests: [] }; } }
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'registrar');
+    const search = await fetch(`${baseUrl}/registrar/records?search=Alex&returnStatus=not_accepted`, { headers: { cookie } });
+    assert.equal(search.status, 200);
+    const searchHtml = await search.text();
+    assert.match(searchHtml, /Unlinked return evaluations/);
+    assert.match(searchHtml, /Alex Applicant/);
+    assert.match(searchHtml, /href="\/registrar\/records\/return-evaluations\/22222222-2222-4222-8222-222222222222"/);
+    assert.deepEqual(calls.find(([name]) => name === 'searchUnlinkedMatches'), ['searchUnlinkedMatches', 7, 'Alex', 'not_accepted']);
+
+    const unlinkedNew = await fetch(`${baseUrl}/registrar/records/return-evaluations/new`, { headers: { cookie } });
+    assert.equal(unlinkedNew.status, 200);
+    const unlinkedNewHtml = await unlinkedNew.text();
+    assert.match(unlinkedNewHtml, /Saving this review does not create a student profile, account, or enrollment/);
+    assert.match(unlinkedNewHtml, /action="\/registrar\/records\/return-evaluations"/);
+    const unlinkedCsrf = csrfFromHtml(unlinkedNewHtml);
+    const unlinkedCreated = await postForm(baseUrl, '/registrar/records/return-evaluations', cookie, {
+      _csrf: unlinkedCsrf, applicantLrn: unlinkedEvaluation.applicant_lrn, firstName: 'Alex', lastName: 'Applicant'
+    });
+    assert.equal(unlinkedCreated.status, 303);
+    assert.equal(unlinkedCreated.headers.get('location'), `/registrar/records/return-evaluations/${unlinkedEvaluation.id}`);
+    assert.equal(calls.find(([name]) => name === 'createUnlinked')[1], 7);
+
+    const unlinkedDetail = await fetch(`${baseUrl}/registrar/records/return-evaluations/${unlinkedEvaluation.id}`, { headers: { cookie } });
+    assert.equal(unlinkedDetail.status, 200);
+    const unlinkedDetailHtml = await unlinkedDetail.text();
+    assert.match(unlinkedDetailHtml, /name="version" value="2"/);
+    assert.match(unlinkedDetailHtml, /action="\/registrar\/records\/return-evaluations\/22222222-2222-4222-8222-222222222222"/);
+    const canonicalUpdate = await postForm(baseUrl, `/registrar/records/return-evaluations/${unlinkedEvaluation.id}`, cookie, {
+      _csrf: unlinkedCsrf, version: '2', applicantLrn: unlinkedEvaluation.applicant_lrn
+    });
+    assert.equal(canonicalUpdate.status, 303);
+    assert.deepEqual(calls.filter(([name]) => name === 'update').at(-1).slice(1), [7, unlinkedEvaluation.id, '2', {
+      _csrf: unlinkedCsrf, version: '2', applicantLrn: unlinkedEvaluation.applicant_lrn
+    }, null, true]);
+    const canonicalDecision = await postForm(baseUrl, `/registrar/records/return-evaluations/${unlinkedEvaluation.id}/decision`, cookie, {
+      _csrf: unlinkedCsrf, version: '2', decision: 'not_accepted', decisionReason: 'Reviewed'
+    });
+    assert.equal(canonicalDecision.status, 303);
+    assert.deepEqual(calls.find(([name]) => name === 'decide').slice(1), [7, unlinkedEvaluation.id, '2', 'not_accepted', 'Reviewed', null, true]);
+
+    const mutationsBeforeLinkedUnlinkedPath = mutations.length;
+    const linkedOnUnlinkedPath = await postForm(baseUrl, `/registrar/records/return-evaluations/${evaluation.id}`, cookie, {
+      _csrf: unlinkedCsrf, version: '3', applicantLrn: evaluation.applicant_lrn
+    });
+    assert.equal(linkedOnUnlinkedPath.status, 303);
+    assert.equal(linkedOnUnlinkedPath.headers.get('location'), `/registrar/records/students/12/return-evaluations/${evaluation.id}`);
+    const linkedDecisionOnUnlinkedPath = await postForm(baseUrl, `/registrar/records/return-evaluations/${evaluation.id}/decision`, cookie, {
+      _csrf: unlinkedCsrf, version: '3', decision: 'not_accepted', decisionReason: 'Reviewed'
+    });
+    assert.equal(linkedDecisionOnUnlinkedPath.status, 303);
+    assert.equal(linkedDecisionOnUnlinkedPath.headers.get('location'), `/registrar/records/students/12/return-evaluations/${evaluation.id}`);
+    assert.equal(mutations.length, mutationsBeforeLinkedUnlinkedPath,
+      'linked evaluation submitted on the unlinked update or decision endpoint is not written');
+
+    const newPage = await fetch(`${baseUrl}/registrar/records/students/12/return-evaluations/new`, { headers: { cookie } });
+    assert.equal(newPage.status, 200);
+    const newHtml = await newPage.text();
+    assert.match(newHtml, /class="student-record-navigation"/);
+    assert.match(newHtml, /Open full academic history and grades/);
+    assert.match(newHtml, /Last recorded enrollment/);
+    assert.match(newHtml, /2026-2027 · Term 1/);
+    assert.match(newHtml, /Returned Section/);
+    assert.doesNotMatch(newHtml, /<h4 id="return-last-enrollment-title">Last recorded enrollment<\/h4>\s*<p><strong>2024-2025/,
+      'the latest live academic context follows school year and configured term order, not current flags or row IDs');
+    assert.match(newHtml, /MTH10/);
+    assert.match(newHtml, /Mathematics 10/);
+    assert.match(newHtml, /Term 1: 0 · Recorded zero/);
+    assert.match(newHtml, /Final Grade: No grade recorded/);
+    assert.match(newHtml, /No grades recorded/);
+    assert.match(newHtml, /Recorded departure on file:[\s\S]*Transferred[\s\S]*2024-2025[\s\S]*Term 3/);
+    assert.match(newHtml, /may include enrollment after this evaluation/);
+    assert.doesNotMatch(newHtml, /<strong>Completed subjects<\/strong>|class="subject-status[^\"]*completed/i);
+    assert.match(newHtml, /recorded subject assignments and marks[\s\S]*A mark does not by itself establish subject completion/i);
+    assert.match(newHtml, /action="\/registrar\/records\/students\/12\/return-evaluations"/);
+    assert.match(newHtml, /name="applicantLrn"[^>]*readonly value="123456789012"/);
+    assert.match(newHtml, /name="firstName"[^>]*readonly value="Jamie"/);
+    assert.doesNotMatch(newHtml, /name="studentId"/);
+    const csrfToken = csrfFromHtml(newHtml);
+
+    currentEligibility = { eligible: false, basis: null, latestRecordedSchoolYear: '2026-2027', departure: null };
+    const continuingOverview = await fetch(`${baseUrl}/registrar/records/students/12`, { headers: { cookie } });
+    const continuingHtml = await continuingOverview.text();
+    assert.equal(continuingOverview.status, 200);
+    assert.doesNotMatch(continuingHtml, />Evaluate return</);
+    assert.match(continuingHtml, /Open evaluation/,
+      'prior evaluation history remains visible after continuity suppresses the new action');
+    const blockedNewPage = await fetch(`${baseUrl}/registrar/records/students/12/return-evaluations/new`, { headers: { cookie } });
+    assert.equal(blockedNewPage.status, 409);
+    assert.match(await blockedNewPage.text(), /A return evaluation can be started only after a recorded departure/);
+    const createCountBeforeBlockedPost = calls.filter(([name]) => name === 'createForStudent').length;
+    const blockedCreate = await postForm(baseUrl, '/registrar/records/students/12/return-evaluations', cookie, {
+      _csrf: csrfToken, applicantLrn: student.lrn, firstName: student.first_name, lastName: student.last_name
+    });
+    assert.equal(blockedCreate.status, 409);
+    assert.equal(calls.filter(([name]) => name === 'createForStudent').length, createCountBeforeBlockedPost,
+      'the route does not call linked creation for an ineligible continuing student');
+
+    currentEligibility = { eligible: true, basis: 'recorded_departure', latestRecordedSchoolYear: '2024-2025',
+      departure: { schoolYear: '2024-2025', term: 'Term 3', termNumber: 3, departureType: 'transferred',
+        effectiveDate: '2025-02-01', effectiveEnrollmentId: 99 } };
+
+    failCreate = true;
+    const invalidCreate = await postForm(baseUrl, '/registrar/records/students/12/return-evaluations', cookie, {
+      _csrf: csrfToken, applicantLrn: '999999999999', firstName: 'Forged', lastName: 'Identity', studentId: '99', schoolYear: '2027-2028'
+    });
+    assert.equal(invalidCreate.status, 400);
+    const invalidHtml = await invalidCreate.text();
+    assert.match(invalidHtml, /Curriculum comparison is required/);
+    assert.match(invalidHtml, /name="applicantLrn"[^>]*readonly value="123456789012"/);
+    assert.match(invalidHtml, /name="firstName"[^>]*readonly value="Jamie"/);
+    assert.doesNotMatch(invalidHtml, /value="999999999999"|value="Forged"/);
+
+    failCreate = false;
+    const created = await postForm(baseUrl, '/registrar/records/students/12/return-evaluations', cookie, {
+      _csrf: csrfToken, applicantLrn: '999999999999', firstName: 'Forged', lastName: 'Identity', studentId: '99', schoolYear: '2027-2028'
+    });
+    assert.equal(created.status, 303);
+    assert.equal(created.headers.get('location'), `/registrar/records/students/12/return-evaluations/${evaluation.id}`);
+    const createCall = calls.find(([name]) => name === 'createForStudent');
+    assert.equal(createCall[1], 7);
+    assert.equal(createCall[2], 12);
+    assert.equal(createCall[3].studentId, '99');
+
+    const detail = await fetch(`${baseUrl}/registrar/records/students/12/return-evaluations/${evaluation.id}`, { headers: { cookie } });
+    assert.equal(detail.status, 200);
+    const detailHtml = await detail.text();
+    assert.match(detailHtml, /Return evaluation/);
+    assert.match(detailHtml, /Under review · revision 3/);
+    assert.match(detailHtml, /Evaluation history/);
+    assert.match(detailHtml, /Curriculum comparison status/);
+    assert.match(detailHtml, /href="\/registrar\/records\/students\/12\/academic"/);
+    assert.match(detailHtml, /href="\/registrar\/records\/students\/12" aria-current="page">Overview/);
+
+    currentEvaluation = { ...evaluation, version: 4, prior_progress: 'Latest saved progress' };
+    const stale = await postForm(baseUrl, `/registrar/records/students/12/return-evaluations/${evaluation.id}`, cookie, {
+      _csrf: csrfToken, version: '3', priorProgress: 'My stale edit', studentId: '99', applicantLrn: '000000000000'
+    });
+    assert.equal(stale.status, 409);
+    const staleHtml = await stale.text();
+    assert.match(staleHtml, /This evaluation changed\. Reload and review the latest version\./);
+    assert.match(staleHtml, /name="version" value="3"/);
+    assert.match(staleHtml, /Latest saved progress/);
+    assert.doesNotMatch(staleHtml, /My stale edit|000000000000/);
+
+    currentEvaluation = evaluation;
+    const update = await postForm(baseUrl, `/registrar/records/students/12/return-evaluations/${evaluation.id}`, cookie, {
+      _csrf: csrfToken, version: '3', studentId: '99', applicantLrn: '000000000000'
+    });
+    assert.equal(update.status, 303);
+    assert.deepEqual(calls.filter(([name]) => name === 'update').at(-1).slice(1, 6), [7, evaluation.id, '3', {
+      _csrf: csrfToken, version: '3', studentId: '99', applicantLrn: '000000000000'
+    }, 12]);
+    const decision = await postForm(baseUrl, `/registrar/records/students/12/return-evaluations/${evaluation.id}/decision`, cookie, {
+      _csrf: csrfToken, version: '3', decision: 'not_accepted', decisionReason: 'Reviewed'
+    });
+    assert.equal(decision.status, 303);
+    const decideCall = calls.filter(([name]) => name === 'decide').at(-1);
+    assert.deepEqual(decideCall.slice(1), [7, evaluation.id, '3', 'not_accepted', 'Reviewed', 12]);
+
+    const noLrnStudent = { ...student, id: 13, lrn: null, first_name: 'Taylor' };
+    studentRecordsService.getStudent = async (id) => ({ student: Number(id) === 13 ? noLrnStudent : student, terms: [], sections: [], enrollments: [] });
+    const noLrn = await fetch(`${baseUrl}/registrar/records/students/13/return-evaluations/new`, { headers: { cookie } });
+    assert.equal(noLrn.status, 200);
+    const noLrnHtml = await noLrn.text();
+    assert.match(noLrnHtml, /needs a valid 12-digit LRN before a return evaluation can be started/);
+    assert.match(noLrnHtml, /href="\/registrar\/records\/students\/13\/edit"/);
+    assert.doesNotMatch(noLrnHtml, /name="applicantLrn"/);
+  });
+
+  await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, studentRecordsService,
+    academicRecordsService: { async getStudentAcademicRecord() { return { enrollments: [] }; } },
+    documentClearanceService: { async getRegistrarData() { return { financeSummary: { status: 'No finance review', outstanding: null }, requests: [] }; } },
+    readmissionService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'database_admin');
+    for (const path of ['/registrar/records/return-evaluations/new', '/registrar/records/students/12/return-evaluations/new']) {
+      const response = await fetch(`${baseUrl}${path}`, { headers: { cookie } });
+      assert.equal(response.status, 403);
+      assert.match(await response.text(), /cannot create them/);
+    }
+  });
+});
+
+test('legacy return-evaluation bookmarks and mutations redirect into the records context', async () => {
+  const linked = { id: '44444444-4444-4444-8444-444444444444', student_id: 12 };
+  const calls = [];
+  const readmissionService = {
+    async get(...args) { calls.push(['get', ...args]); return linked; },
+    async update(...args) { calls.push(['update', ...args]); return { id: linked.id, version: 2 }; },
+    async decide(...args) { calls.push(['decide', ...args]); return { id: linked.id, version: 2 }; },
+    async create(...args) { calls.push(['create', ...args]); return { id: linked.id, version: 1 }; }
+  };
+  await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment, readmissionService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'registrar');
+    const list = await fetch(`${baseUrl}/registrar/readmissions?search=Jamie&status=accepted`, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(list.status, 303);
+    assert.equal(list.headers.get('location'), '/registrar/records?search=Jamie&returnStatus=accepted');
+    const bookmark = await fetch(`${baseUrl}/registrar/readmissions/${linked.id}`, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(bookmark.status, 303);
+    assert.equal(bookmark.headers.get('location'), `/registrar/records/students/12/return-evaluations/${linked.id}`);
+    const newPage = await fetch(`${baseUrl}/registrar/readmissions/new`, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(newPage.status, 303);
+    assert.equal(newPage.headers.get('location'), '/registrar/records/return-evaluations/new');
+
+    const login = await fetch(`${baseUrl}/registrar/records` , { headers: { cookie } });
+    const csrfToken = csrfFromHtml(await login.text());
+    const update = await postForm(baseUrl, `/registrar/readmissions/${linked.id}`, cookie, { _csrf: csrfToken, version: '1', applicantLrn: 'tampered' });
+    assert.equal(update.status, 303);
+    assert.equal(update.headers.get('location'), `/registrar/records/students/12/return-evaluations/${linked.id}`);
+    assert.deepEqual(calls.find(([name]) => name === 'update').slice(1), [7, linked.id, '1', { _csrf: csrfToken, version: '1', applicantLrn: 'tampered' }]);
+    const decision = await postForm(baseUrl, `/registrar/readmissions/${linked.id}/decision`, cookie, {
+      _csrf: csrfToken, version: '2', decision: 'accepted', decisionReason: 'Reviewed'
+    });
+    assert.equal(decision.status, 303);
+    assert.equal(decision.headers.get('location'), `/registrar/records/students/12/return-evaluations/${linked.id}`);
+    assert.deepEqual(calls.find(([name]) => name === 'decide').slice(1), [7, linked.id, '2', 'accepted', 'Reviewed']);
+    const legacyCreate = await postForm(baseUrl, '/registrar/readmissions', cookie, {
+      _csrf: csrfToken, applicantLrn: '123456789012', firstName: 'Jamie', lastName: 'Lee'
+    });
+    assert.equal(legacyCreate.status, 303);
+    assert.equal(legacyCreate.headers.get('location'), `/registrar/records/students/12/return-evaluations/${linked.id}`);
   });
 });

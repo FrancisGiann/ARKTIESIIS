@@ -2,10 +2,11 @@
 <main class="page-shell dashboard-page records-page student-record-overview" id="main-content">
   <a class="context-back" href="/registrar/records">Back to student search</a>
   <%- include('../partials/student-record-navigation', { student, activeStudentView: studentView }) %>
-  <h2 class="student-record-view-title"><%= ({ overview: 'Overview', history: 'Profile revision history', requests: 'Document requests' })[studentView] %></h2>
+  <h2 class="student-record-view-title"><%= ({ overview: 'Overview', history: 'Profile revision history', requests: 'Document requests', 'return-evaluation': 'Return evaluation' })[studentView] %></h2>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (requestError) { %><p class="form-alert" role="alert"><%= requestError %></p><% } %>
+  <% if (returnEvaluationError) { %><p class="form-alert" role="alert" tabindex="-1"><%= returnEvaluationError %></p><% } %>
 
   <% if (studentView === 'overview') { %>
   <section class="student-record-status-grid" aria-label="Student record status">
@@ -43,6 +44,62 @@
       <a class="text-link" href="/registrar/records/students/<%= student.id %>?view=requests">Review document requests</a>
     </article>
   </section>
+  <% if (returnEligibility?.eligible || returnEvaluations.length) { %><section class="admin-section" aria-labelledby="return-evaluations-title">
+    <div class="admin-section__heading"><div><h2 id="return-evaluations-title">Return evaluations</h2><p>Use this review only when a student returns after a break. Continuing students keep the usual enrollment path. The action appears when a recorded departure or school-year gap is on file.</p></div>
+      <% if (currentUser.role === 'registrar' && returnEligibility?.eligible && /^\d{12}$/.test(String(student.lrn || ''))) { %><a class="button button--secondary" href="/registrar/records/students/<%= student.id %>/return-evaluations/new">Evaluate return</a><% } else if (currentUser.role === 'registrar' && returnEligibility?.eligible) { %><a class="text-link" href="/registrar/records/students/<%= student.id %>/edit">Add a valid 12-digit LRN in the saved profile before starting an evaluation.</a><% } %>
+    </div>
+    <% if (returnEvaluations.length) { %><div class="table-scroll" tabindex="0" aria-label="Return evaluation history"><table class="admin-table"><thead><tr><th scope="col">School year</th><th scope="col">Target grade</th><th scope="col">Status</th><th scope="col">Revision</th><th scope="col"><span class="visually-hidden">Action</span></th></tr></thead><tbody>
+      <% for (const item of returnEvaluations) { %><tr><td data-label="School year"><%= item.school_year %></td><td data-label="Target grade"><%= item.target_grade_level %></td><td data-label="Status"><%= ({under_review:'Under review',accepted:'Accepted',not_accepted:'Not accepted'})[item.status] || item.status %></td><td data-label="Revision"><%= item.version %></td><td data-label="Action"><a class="table-action" href="/registrar/records/students/<%= student.id %>/return-evaluations/<%= encodeURIComponent(item.id) %>">Open evaluation</a></td></tr><% } %>
+    </tbody></table></div><% } else { %><p class="empty-state">No return evaluations are recorded for this student.</p><% } %>
+  </section><% } %>
+  <% } %>
+
+  <% if (studentView === 'return-evaluation') { %>
+    <section class="admin-section" aria-labelledby="return-review-context-title">
+      <h3 id="return-review-context-title">Current academic record context</h3>
+      <p>This is the student's live saved academic history and may include enrollment after this evaluation. The evaluation's prior-progress findings and revision history remain separate.</p>
+      <p><a class="text-link" href="/registrar/records/students/<%= student.id %>/academic">Open full academic history and grades</a></p>
+      <% if (returnEligibility?.departure) { const departureDate = returnEligibility.departure.effectiveDate instanceof Date ? returnEligibility.departure.effectiveDate.toISOString().slice(0, 10) : String(returnEligibility.departure.effectiveDate || '').slice(0, 10); %>
+        <p><strong>Recorded departure on file:</strong> <%= returnEligibility.departure.departureType === 'transferred' ? 'Transferred' : returnEligibility.departure.departureType === 'dropped' ? 'Dropped' : String(returnEligibility.departure.departureType || 'Departure recorded').replaceAll('_', ' ') %><% if (returnEligibility.departure.schoolYear) { %> during <%= returnEligibility.departure.schoolYear %><% } %><% if (returnEligibility.departure.term) { %>, <%= returnEligibility.departure.term %><% } %><% if (departureDate) { %> · effective <%= departureDate %><% } %>.</p>
+      <% } else if (returnEligibility?.basis === 'school_year_gap') { %>
+        <p><strong>Eligibility context:</strong> the latest saved participation is in <%= returnEligibility.latestRecordedSchoolYear || 'an earlier school year' %>; no departure case is recorded.</p>
+      <% } %>
+      <% if (lastEnrollment) { %>
+        <article class="academic-enrollment" aria-labelledby="return-last-enrollment-title">
+          <h4 id="return-last-enrollment-title">Last recorded enrollment</h4>
+          <p><strong><%= lastEnrollment.school_year %> · <%= lastEnrollment.term %></strong> · <%= formatStudentPlacement(lastEnrollment.grade_level, lastEnrollment.section_name) || 'Section not assigned' %> · Status: <%= String(lastEnrollment.enrollment_status || 'not recorded').replaceAll('_', ' ') %></p>
+          <p class="muted-copy">This identifies a saved enrollment record and does not by itself establish when or why the student stopped attending.</p>
+        </article>
+      <% } else if (enrollments.length) { %>
+        <p class="notice-panel" role="status">Saved enrollments are listed below. A single latest term cannot be established from the available configured order.</p>
+      <% } %>
+      <% if (enrollments.length) { %>
+        <div class="records-request-list" aria-label="Saved academic enrollments">
+          <% for (const enrollment of enrollments) { %>
+            <article class="academic-enrollment" aria-labelledby="return-enrollment-<%= enrollment.id %>">
+              <h4 id="return-enrollment-<%= enrollment.id %>">Recorded enrollment · <%= enrollment.school_year %> · <%= enrollment.term %></h4>
+              <p><%= formatStudentPlacement(enrollment.grade_level, enrollment.section_name) || 'Section not assigned' %> · Status: <%= String(enrollment.enrollment_status || 'not recorded').replaceAll('_', ' ') %></p>
+              <% if (enrollment.subjects?.length) { %>
+                <div class="table-scroll" tabindex="0" aria-label="Recorded subjects and grades for <%= enrollment.school_year %> <%= enrollment.term %>"><table class="admin-table">
+                  <thead><tr><th scope="col">Subject code</th><th scope="col">Subject name</th><th scope="col">Recorded grades and remarks</th></tr></thead>
+                  <tbody><% for (const subject of enrollment.subjects) { %><tr>
+                    <td data-label="Subject code"><%= subject.subjectCode || 'Not recorded' %></td><td data-label="Subject name"><%= subject.subjectName || 'Not recorded' %></td>
+                    <td data-label="Recorded grades and remarks"><% if (subject.grades?.length) { %><ul><% for (const grade of subject.grades) { %><li><%= grade.gradingPeriod || 'Period not recorded' %>: <%= grade.gradeValue ?? 'No grade recorded' %><% if (grade.remarks) { %> · <%= grade.remarks %><% } %></li><% } %></ul><% } else { %>No grades recorded<% } %></td>
+                  </tr><% } %></tbody>
+                </table></div>
+                <p class="muted-copy">These are recorded subject assignments and marks. A mark does not by itself establish subject completion.</p>
+              <% } else { %><p class="empty-state">No subject assignments are recorded for this enrollment.</p><% } %>
+            </article>
+          <% } %>
+        </div>
+      <% } else { %><p class="empty-state">No academic enrollment history is recorded.</p><% } %>
+    </section>
+    <% if (returnEvaluation) { %><p class="status-pill"><%= ({under_review:'Under review',accepted:'Accepted',not_accepted:'Not accepted'})[returnEvaluation.status] || returnEvaluation.status %> · revision <%= returnEvaluation.version %></p><% } %>
+    <% if (!returnEvaluation && currentUser.role === 'registrar' && !/^\d{12}$/.test(String(student.lrn || ''))) { %>
+      <p class="notice-panel" role="status">This student record needs a valid 12-digit LRN before a return evaluation can be started. <a class="text-link" href="/registrar/records/students/<%= student.id %>/edit">Review the student profile</a>.</p>
+    <% } else { %>
+      <%- include('../partials/return-evaluation-form', { student, evaluation: returnEvaluation, returnEvaluationValues, error: returnEvaluationError, csrfToken, currentUser, expectedVersion: returnEvaluationExpectedVersion }) %>
+    <% } %>
   <% } %>
 
   <% if (studentView === 'requests') { %>

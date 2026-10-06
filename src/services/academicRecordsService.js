@@ -190,13 +190,16 @@ function createAcademicRecordsService({
 
     const [enrollmentResult, subjects, assignmentResult] = await Promise.all([
       pool.request().input('studentId', sql.Int, studentId).query(`
-        SELECT e.id, e.academic_term_id, e.section_id, e.enrollment_status, e.enrolled_at,
-          t.school_year, t.term, t.is_current, s.name AS section_name, s.grade_level
+        SELECT e.id, e.academic_term_id, e.section_id, e.enrollment_status, e.term_scope_status, e.enrolled_at,
+          t.school_year, t.term, t.is_current, COALESCE(term_order.term_number, e.annual_term_number) AS term_number,
+          s.name AS section_name, s.grade_level
         FROM enrollments AS e
         INNER JOIN academic_terms AS t ON t.id = e.academic_term_id
         LEFT JOIN sections AS s ON s.id = e.section_id AND s.academic_term_id = e.academic_term_id
+        LEFT JOIN school_year_term_order AS term_order ON term_order.academic_term_id = t.id
         WHERE e.student_id = @studentId
-        ORDER BY t.is_current DESC, t.id DESC, e.id DESC`),
+        ORDER BY t.school_year DESC, COALESCE(term_order.term_number, e.annual_term_number) DESC,
+          t.is_current DESC, e.enrolled_at DESC`),
       listSubjects(),
       pool.request().input('studentId', sql.Int, studentId).query(`
         SELECT ss.id AS student_subject_id, ss.enrollment_id,

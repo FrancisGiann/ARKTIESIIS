@@ -47,7 +47,7 @@
   const statusClass = record.status === 'ready_for_registrar'
     ? 'pre-enrollment-status--ready'
     : record.status === 'enrollment_started' ? 'pre-enrollment-status--started' : 'pre-enrollment-status--draft';
-  const applicantKindLabels = { new: 'New applicant', continuing: 'Continuing student', readmission: 'Balik-aral applicant' };
+  const applicantKindLabels = { new: 'New applicant', continuing: 'Continuing student', readmission: 'Returning after a break' };
 %>
 <main class="page-shell dashboard-page admin-page records-page pre-enrollment-page pre-enrollment-detail-page" id="main-content">
   <a class="context-back" href="/pre-enrollments">Back to pre-enrollment records</a>
@@ -127,10 +127,10 @@
       </section>
       <% if (record.applicant_kind === 'readmission') { %>
         <section class="pre-enrollment-detail-group" aria-labelledby="pre-readmission-heading">
-          <h3 id="pre-readmission-heading">Balik-aral review link</h3>
+          <h3 id="pre-readmission-heading">Return evaluation</h3>
           <% if (record.readmission_evaluation) { %>
             <p class="muted-copy">Bound to LRN <%= record.readmission_evaluation.applicant_lrn %>, <%= record.readmission_evaluation.school_year %>, <%= record.readmission_evaluation.target_grade_level %>. Saved revision <%= record.readmission_evaluation_version %> · current revision <%= record.readmission_evaluation.version %> · <%= record.readmission_evaluation.status === 'accepted' ? 'Accepted' : record.readmission_evaluation.status === 'under_review' ? 'Under review' : 'Not accepted' %><% if (Number(record.readmission_evaluation.version) !== Number(record.readmission_evaluation_version) || record.readmission_evaluation.status !== 'accepted') { %> · paper binding needs a registrar review<% } %></p>
-            <% if (['registrar','database_admin'].includes(currentUser.role)) { %><a class="text-link" href="/registrar/readmissions/<%= encodeURIComponent(record.readmission_evaluation_id) %>">Open registrar evaluation</a><% } %>
+            <% if (['registrar','database_admin'].includes(currentUser.role)) { const evaluationHref = record.readmission_evaluation.student_id ? `/registrar/records/students/${encodeURIComponent(record.readmission_evaluation.student_id)}/return-evaluations/${encodeURIComponent(record.readmission_evaluation_id)}` : `/registrar/records/return-evaluations/${encodeURIComponent(record.readmission_evaluation_id)}`; %><a class="text-link" href="<%= evaluationHref %>">Open return evaluation</a><% } %>
           <% } else { %><p class="muted-copy">Evaluation link <%= record.readmission_evaluation_id || 'not saved' %> · revision <%= record.readmission_evaluation_version || '—' %></p><% } %>
         </section>
       <% } %>

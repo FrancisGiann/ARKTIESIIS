@@ -9,11 +9,103 @@ const READ_ROLES = new Set(['registrar', 'database_admin']);
 const WRITE_ROLES = new Set(['registrar']);
 
 class ReadmissionError extends Error {
-  constructor(message, status = 400) {
+  constructor(message, status = 400, code = null) {
     super(message);
     this.name = 'ReadmissionError';
     this.status = status;
+    this.code = code;
   }
+}
+
+function schoolYearStart(value) {
+  if (typeof value !== 'string' || !/^(\d{4})-(\d{4})$/.test(value)) return null;
+  const [, start, end] = value.match(/^(\d{4})-(\d{4})$/);
+  const startYear = Number(start);
+  return Number(end) === startYear + 1 ? startYear : null;
+}
+
+function positiveTermNumber(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
+}
+
+function deriveReturnEligibility({ currentSchoolYear = null, annualEnrollments = [], enrollments = [] } = {}) {
+  const currentYear = schoolYearStart(currentSchoolYear);
+  const annualRows = Array.isArray(annualEnrollments) ? annualEnrollments : [];
+  const enrollmentRows = Array.isArray(enrollments) ? enrollments : [];
+  const yearOf = (row) => schoolYearStart(row.school_year || row.enrollment_school_year);
+  const relevantAnnuals = annualRows.map((row) => ({ ...row, year: yearOf(row) })).filter((row) => row.year !== null);
+  const relevantEnrollments = enrollmentRows.map((row) => ({ ...row, year: yearOf(row) }))
+    .filter((row) => row.year !== null && row.term_scope_status !== 'not_applicable');
+  const allYears = [...relevantAnnuals.map((row) => row.year), ...relevantEnrollments.map((row) => row.year)];
+  const latestYear = allYears.length ? Math.max(...allYears) : null;
+
+  const latestDeparture = [...relevantAnnuals.flatMap((row) => {
+    const hasCase = Boolean(row.departure_case_id);
+    const directlyDeparted = ['dropped', 'transferred'].includes(row.intake_status);
+    return hasCase || directlyDeparted ? [{
+      schoolYear: row.school_year,
+      year: row.year,
+      departureType: row.departure_type || row.intake_status,
+      effectiveDate: row.effective_date || null,
+      termNumber: positiveTermNumber(row.departure_term_number),
+      term: row.departure_term || null,
+      effectiveEnrollmentId: Number(row.effective_enrollment_id) || null,
+      departureCaseId: row.departure_case_id || null
+    }] : [];
+  }), ...relevantEnrollments.filter((row) => ['dropped', 'transferred'].includes(row.enrollment_status)).map((row) => ({
+    schoolYear: row.school_year || row.enrollment_school_year,
+    year: row.year,
+    departureType: row.departure_type || row.enrollment_status,
+    effectiveDate: row.effective_date || null,
+    termNumber: positiveTermNumber(row.departure_case_id ? row.departure_term_number : row.term_number),
+    term: row.departure_case_id ? row.departure_term : row.term,
+    effectiveEnrollmentId: Number(row.effective_enrollment_id || row.enrollment_id) || null,
+    departureCaseId: row.departure_case_id || null
+  }))].sort((left, right) => right.year - left.year || (Number(right.termNumber) || 0) - (Number(left.termNumber) || 0))[0] || null;
+
+  let eligible = false;
+  let basis = null;
+  if (latestYear !== null && latestDeparture && latestDeparture.year === latestYear
+    && (currentYear === null || latestYear <= currentYear)) {
+    const departureTermNumber = positiveTermNumber(latestDeparture.termNumber);
+    const laterOngoingTerm = relevantEnrollments.some((row) => {
+      if (row.year !== latestYear || !['pending_payment', 'enrolled'].includes(row.enrollment_status)) return false;
+      const activityTermNumber = positiveTermNumber(row.term_number);
+      return departureTermNumber === null || activityTermNumber === null || activityTermNumber >= departureTermNumber;
+    });
+    if (!laterOngoingTerm) {
+      eligible = true;
+      basis = 'recorded_departure';
+    }
+  }
+
+  if (!eligible && currentYear !== null && latestYear !== null
+    && latestYear <= currentYear - 2 && latestYear < currentYear) {
+    const hasCurrentYearRecord = relevantAnnuals.some((row) => row.year === currentYear)
+      || relevantEnrollments.some((row) => row.year === currentYear);
+    const latestConfirmedParticipation = Math.max(-Infinity,
+      ...relevantAnnuals.filter((row) => ['enrolled', 'legacy'].includes(row.intake_status)).map((row) => row.year),
+      ...relevantEnrollments.filter((row) => row.enrollment_status === 'enrolled').map((row) => row.year));
+    const newerUnresolvedRecord = latestYear > latestConfirmedParticipation;
+    const latestYearHasPendingParticipation = relevantAnnuals.some((row) => row.year === latestYear && row.intake_status === 'pending')
+      || relevantEnrollments.some((row) => row.year === latestYear && row.enrollment_status === 'pending_payment');
+    if (!hasCurrentYearRecord && latestYear === latestConfirmedParticipation && !newerUnresolvedRecord
+      && !latestYearHasPendingParticipation) {
+      eligible = true;
+      basis = 'school_year_gap';
+    }
+  }
+
+  return {
+    eligible,
+    basis,
+    currentSchoolYear: currentYear === null ? null : currentSchoolYear,
+    latestRecordedSchoolYear: latestYear === null ? null : [...relevantAnnuals, ...relevantEnrollments]
+      .find((row) => row.year === latestYear)?.school_year || [...relevantEnrollments].find((row) => row.year === latestYear)?.enrollment_school_year || null,
+    departure: latestDeparture
+  };
 }
 
 function text(value, label, maxLength, required = false, allowNewlines = false) {
@@ -56,9 +148,9 @@ function evaluationInput(input = {}) {
   let lastName;
   let suffix;
   try {
-    firstName = validateName(input.firstName, 'First name');
+    firstName = validateName(input.firstName, 'First name', { required: true });
     middleName = validateName(input.middleName, 'Middle name');
-    lastName = validateName(input.lastName, 'Last name');
+    lastName = validateName(input.lastName, 'Last name', { required: true });
     suffix = validateName(input.suffix, 'Suffix', { maxLength: 20 });
   } catch (error) {
     if (error instanceof StudentRecordsError) throw new ReadmissionError(error.message);
@@ -91,7 +183,7 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
     const result = await request.input('actorId', sql.Int, userId)
       .query('SELECT id, role FROM users WHERE id = @actorId AND is_active = 1');
     const row = result.recordset?.[0];
-    if (!row || !allowed.has(row.role)) throw new ReadmissionError('You cannot access readmission evaluations.', 403);
+    if (!row || !allowed.has(row.role)) throw new ReadmissionError('You cannot access return evaluations.', 403);
     return row;
   }
 
@@ -111,8 +203,55 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
       .input('schoolYear', sql.NVarChar(20), schoolYear)
       .query('SELECT id FROM annual_enrollments WHERE student_id = @studentId AND school_year = @schoolYear FOR UPDATE');
     if (currentYear.recordset?.length) {
-      throw new ReadmissionError('Same-year reactivation is not available in the balik-aral evaluation workflow.', 409);
+      throw new ReadmissionError('Same-year reactivation is not available in the return evaluation workflow.', 409);
     }
+  }
+
+  async function loadStudentReturnEligibility(request, studentId, lockRows = false) {
+    const lockClause = lockRows ? ' FOR UPDATE' : '';
+    const currentTerm = await request().query(`SELECT school_year FROM academic_terms WHERE is_current = 1 LIMIT 1${lockClause}`);
+    const annualResult = await request().input('studentId', sql.Int, studentId)
+      .query(`SELECT annual.id, annual.school_year, annual.intake_status,
+          departure.id AS departure_case_id, departure.effective_enrollment_id,
+          departure.departure_type, departure.effective_date,
+          departure_order.term_number AS departure_term_number, effective_term.term AS departure_term
+        FROM annual_enrollments AS annual
+        LEFT JOIN finance_departure_cases AS departure ON departure.annual_enrollment_id = annual.id
+        LEFT JOIN enrollments AS effective_enrollment ON effective_enrollment.id = departure.effective_enrollment_id
+        LEFT JOIN school_year_term_order AS departure_order ON departure_order.academic_term_id = effective_enrollment.academic_term_id
+        LEFT JOIN academic_terms AS effective_term ON effective_term.id = effective_enrollment.academic_term_id
+        WHERE annual.student_id = @studentId
+        ORDER BY annual.school_year DESC${lockClause}`);
+    const enrollmentResult = await request().input('studentId', sql.Int, studentId)
+        .query(`SELECT enrollment.id AS enrollment_id, term.school_year, term.term, enrollment.enrollment_status, enrollment.term_scope_status,
+          COALESCE(term_order.term_number, enrollment.annual_term_number) AS term_number,
+          annual.intake_status, departure.id AS departure_case_id, departure.effective_enrollment_id,
+          departure.departure_type, departure.effective_date,
+          departure_order.term_number AS departure_term_number, departure_term.term AS departure_term
+        FROM enrollments AS enrollment
+        INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
+        LEFT JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
+        LEFT JOIN finance_departure_cases AS departure ON departure.annual_enrollment_id = annual.id
+        LEFT JOIN school_year_term_order AS term_order ON term_order.academic_term_id = term.id
+        LEFT JOIN enrollments AS effective_enrollment ON effective_enrollment.id = departure.effective_enrollment_id
+        LEFT JOIN school_year_term_order AS departure_order ON departure_order.academic_term_id = effective_enrollment.academic_term_id
+        LEFT JOIN academic_terms AS departure_term ON departure_term.id = effective_enrollment.academic_term_id
+        WHERE enrollment.student_id = @studentId
+        ORDER BY term.school_year DESC, term_order.term_number DESC, enrollment.enrolled_at DESC${lockClause}`);
+    const currentSchoolYear = currentTerm.recordset?.[0]?.school_year || null;
+    return deriveReturnEligibility({
+      currentSchoolYear,
+      annualEnrollments: annualResult.recordset || [],
+      enrollments: enrollmentResult.recordset || []
+    });
+  }
+
+  async function assertReturnEligibleForStudent(transactionHandle, studentId) {
+    const eligibility = await loadStudentReturnEligibility(() => transactionHandle.request(), studentId, true);
+    if (!eligibility.eligible) {
+      throw new ReadmissionError('A return evaluation can be started only after a recorded departure or an established school-year break.', 409, 'RETURN_INELIGIBLE');
+    }
+    return eligibility;
   }
 
   function snapshot(values, status, studentId = null) {
@@ -185,13 +324,19 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
       .input('decisionReason', sql.NVarChar(sql.MAX), values.decisionReason);
   }
 
-  async function get(actorId, id) {
-    const pool = await getPool();
-    await actor(pool.request(), actorId, READ_ROLES);
-    const result = await pool.request().input('evaluationId', sql.Char(36), id)
+  async function loadEvaluation(pool, id, studentId = null) {
+    const request = pool.request().input('evaluationId', sql.Char(36), id);
+    const scopeClause = studentId === null ? '' : `AND (evaluation.student_id = @studentId
+      OR (evaluation.student_id IS NULL AND EXISTS (
+        SELECT 1 FROM students AS context_student
+        WHERE context_student.id = @studentId AND context_student.lrn = evaluation.applicant_lrn)))`;
+    if (studentId !== null) request.input('studentId', sql.Int, studentId);
+    const result = await request
       .query(`SELECT evaluation.*, student.student_no,
-          EXISTS(SELECT 1 FROM annual_enrollments AS annual
-            WHERE annual.readmission_evaluation_id = evaluation.id AND annual.intake_status = 'enrollment_started') AS enrollment_started,
+          (EXISTS(SELECT 1 FROM pre_enrollments AS source
+              WHERE source.readmission_evaluation_id = evaluation.id AND source.status = 'enrollment_started')
+            OR EXISTS(SELECT 1 FROM annual_enrollments AS annual
+              WHERE annual.readmission_evaluation_id = evaluation.id)) AS enrollment_started,
           creator.first_name AS creator_first_name, creator.last_name AS creator_last_name,
           updater.first_name AS updater_first_name, updater.last_name AS updater_last_name,
           decider.first_name AS decider_first_name, decider.last_name AS decider_last_name
@@ -200,14 +345,75 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
         LEFT JOIN staff_profiles AS creator ON creator.user_id = evaluation.created_by
         LEFT JOIN staff_profiles AS updater ON updater.user_id = evaluation.updated_by
         LEFT JOIN staff_profiles AS decider ON decider.user_id = evaluation.decided_by
-        WHERE evaluation.id = @evaluationId`);
+        WHERE evaluation.id = @evaluationId ${scopeClause}`);
     const evaluation = result.recordset?.[0];
-    if (!evaluation) throw new ReadmissionError('Readmission evaluation not found.', 404);
+    if (!evaluation) throw new ReadmissionError('Return evaluation not found.', 404);
     const history = await pool.request().input('evaluationId', sql.Char(36), id)
       .query(`SELECT event.*, staff.first_name, staff.last_name FROM readmission_evaluation_events AS event
         LEFT JOIN staff_profiles AS staff ON staff.user_id = event.actor_id
         WHERE event.evaluation_id = @evaluationId ORDER BY event.created_at DESC, event.id DESC`);
     return { ...evaluation, events: history.recordset || [] };
+  }
+
+  async function get(actorId, id) {
+    const pool = await getPool();
+    await actor(pool.request(), actorId, READ_ROLES);
+    return loadEvaluation(pool, id);
+  }
+
+  async function getForStudent(actorId, studentInput, id) {
+    const studentId = positiveId(String(studentInput), 'student record');
+    const pool = await getPool();
+    await actor(pool.request(), actorId, READ_ROLES);
+    return loadEvaluation(pool, id, studentId);
+  }
+
+  async function getStudentReturnEligibility(actorId, studentInput) {
+    const studentId = positiveId(String(studentInput), 'student record');
+    const pool = await getPool();
+    await actor(pool.request(), actorId, READ_ROLES);
+    const student = await pool.request().input('studentId', sql.Int, studentId)
+      .query('SELECT id FROM students WHERE id = @studentId');
+    if (!student.recordset?.[0]) throw new ReadmissionError('Student record not found.', 404);
+    return loadStudentReturnEligibility(() => pool.request(), studentId);
+  }
+
+  async function listForStudent(actorId, studentInput) {
+    const studentId = positiveId(String(studentInput), 'student record');
+    const pool = await getPool();
+    await actor(pool.request(), actorId, READ_ROLES);
+    const result = await pool.request().input('studentId', sql.Int, studentId)
+      .query(`SELECT evaluation.id, evaluation.student_id, evaluation.applicant_lrn,
+          evaluation.first_name, evaluation.middle_name, evaluation.last_name, evaluation.suffix,
+          evaluation.school_year, evaluation.target_grade_level, evaluation.status, evaluation.version,
+          evaluation.updated_at
+        FROM readmission_evaluations AS evaluation
+        JOIN students AS context_student ON context_student.id = @studentId
+        WHERE evaluation.student_id = @studentId
+          OR (evaluation.student_id IS NULL AND evaluation.applicant_lrn = context_student.lrn)
+        ORDER BY evaluation.updated_at DESC, evaluation.id DESC`);
+    return result.recordset || [];
+  }
+
+  async function searchUnlinkedMatches(actorId, searchInput, statusInput = '') {
+    const search = text(searchInput || '', 'Search', 100) || '';
+    const status = statusInput || '';
+    if (status && !['under_review', 'accepted', 'not_accepted'].includes(status)) throw new ReadmissionError('Choose a valid evaluation status.');
+    const pool = await getPool();
+    await actor(pool.request(), actorId, READ_ROLES);
+    if (!search) return [];
+    const escapedSearch = search.replace(/[~%_]/g, '~$&');
+    const rows = await pool.request().input('status', sql.VarChar(24), status).input('search', sql.NVarChar(100), escapedSearch)
+      .query(`SELECT evaluation.id, evaluation.applicant_lrn, evaluation.first_name, evaluation.middle_name,
+          evaluation.last_name, evaluation.suffix, evaluation.school_year, evaluation.target_grade_level,
+          evaluation.status, evaluation.version, evaluation.updated_at
+        FROM readmission_evaluations AS evaluation
+        WHERE evaluation.student_id IS NULL
+          AND (@status = '' OR evaluation.status = @status)
+          AND (evaluation.applicant_lrn LIKE CONCAT('%', @search, '%') ESCAPE '~'
+            OR CONCAT_WS(' ', evaluation.first_name, evaluation.middle_name, evaluation.last_name) LIKE CONCAT('%', @search, '%') ESCAPE '~')
+        ORDER BY evaluation.updated_at DESC, evaluation.id DESC LIMIT 100`);
+    return rows.recordset || [];
   }
 
   async function list(actorId, filters = {}) {
@@ -229,15 +435,34 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
     return rows.recordset || [];
   }
 
-  async function create(actorId, raw = {}) {
-    const values = evaluationInput(raw);
+  async function createRecord(actorId, raw, { contextStudentId = null, requireUnlinked = false } = {}) {
     const id = crypto.randomUUID();
     return transaction(async (tx) => {
       const user = await actor(tx.request(), actorId, WRITE_ROLES);
-      const linked = await tx.request().input('lrn', sql.Char(12), values.applicantLrn)
-        .query('SELECT id FROM students WHERE lrn = @lrn FOR UPDATE');
-      if (linked.recordset?.length > 1) throw new ReadmissionError('More than one existing student record matches this LRN. Resolve the records first.', 409);
-      const studentId = linked.recordset?.[0]?.id || null;
+      let values;
+      let studentId = null;
+      if (contextStudentId !== null) {
+        const student = await tx.request().input('studentId', sql.Int, contextStudentId)
+          .query('SELECT id, lrn, first_name, middle_name, last_name, suffix FROM students WHERE id = @studentId FOR UPDATE');
+        const linkedStudent = student.recordset?.[0];
+        if (!linkedStudent) throw new ReadmissionError('Student record not found.', 404);
+        values = evaluationInput({ ...raw, applicantLrn: linkedStudent.lrn, firstName: linkedStudent.first_name,
+          middleName: linkedStudent.middle_name, lastName: linkedStudent.last_name, suffix: linkedStudent.suffix });
+        studentId = Number(linkedStudent.id);
+      } else {
+        values = evaluationInput(raw);
+        const linked = await tx.request().input('lrn', sql.Char(12), values.applicantLrn)
+          .query('SELECT id, lrn, first_name, middle_name, last_name, suffix FROM students WHERE lrn = @lrn FOR UPDATE');
+        if (linked.recordset?.length > 1) throw new ReadmissionError('More than one existing student record matches this LRN. Resolve the records first.', 409);
+        const linkedStudent = linked.recordset?.[0] || null;
+        if (requireUnlinked && linkedStudent) throw new ReadmissionError('A saved student record matches this LRN. Open that student record to evaluate the return.', 409);
+        if (!requireUnlinked && linkedStudent) {
+          studentId = Number(linkedStudent.id);
+          values = evaluationInput({ ...raw, applicantLrn: linkedStudent.lrn, firstName: linkedStudent.first_name,
+            middleName: linkedStudent.middle_name, lastName: linkedStudent.last_name, suffix: linkedStudent.suffix });
+        }
+      }
+      if (studentId) await assertReturnEligibleForStudent(tx, studentId);
       await assertNewSchoolYear(tx, values, studentId);
       const request = bindValues(tx.request(), values).input('id', sql.Char(36), id).input('studentId', sql.Int, studentId)
         .input('actorId', sql.Int, user.id).input('status', sql.VarChar(24), 'under_review');
@@ -256,8 +481,32 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
     });
   }
 
-  async function update(actorId, id, expectedVersion, raw = {}) {
-    const values = evaluationInput(raw);
+  async function create(actorId, raw = {}) {
+    return createRecord(actorId, raw);
+  }
+
+  async function createForStudent(actorId, studentInput, raw = {}) {
+    const studentId = positiveId(String(studentInput), 'student record');
+    return createRecord(actorId, raw, { contextStudentId: studentId });
+  }
+
+  async function createUnlinked(actorId, raw = {}) {
+    return createRecord(actorId, raw, { requireUnlinked: true });
+  }
+
+  async function assertStudentContext(tx, current, studentInput) {
+    const studentId = positiveId(String(studentInput), 'student record');
+    const result = await tx.request().input('studentId', sql.Int, studentId)
+      .query('SELECT id, lrn, first_name, middle_name, last_name, suffix FROM students WHERE id = @studentId FOR UPDATE');
+    const student = result.recordset?.[0];
+    if (!student) throw new ReadmissionError('Student record not found.', 404);
+    const linkedToRequestedStudent = Number(current.student_id || 0) === studentId;
+    const unlinkedForRequestedStudent = current.student_id == null && String(current.applicant_lrn || '') === String(student.lrn || '');
+    if (!linkedToRequestedStudent && !unlinkedForRequestedStudent) throw new ReadmissionError('Return evaluation not found.', 404);
+    return student;
+  }
+
+  async function update(actorId, id, expectedVersion, raw = {}, contextStudentInput = null, requireUnlinked = false) {
     const version = positiveId(expectedVersion, 'evaluation version');
     return transaction(async (tx) => {
       const user = await actor(tx.request(), actorId, WRITE_ROLES);
@@ -270,12 +519,27 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
       const currentResult = await tx.request().input('id', sql.Char(36), id)
         .query('SELECT * FROM readmission_evaluations WHERE id = @id FOR UPDATE');
       const current = currentResult.recordset?.[0];
-      if (!current) throw new ReadmissionError('Readmission evaluation not found.', 404);
+      if (!current) throw new ReadmissionError('Return evaluation not found.', 404);
+      if (requireUnlinked && current.student_id != null) throw new ReadmissionError('This evaluation is linked to a student record. Open that record to continue.', 409);
       if (Number(current.version) !== version) throw new ReadmissionError('This evaluation changed. Reload and review the latest version.', 409);
-      const linked = await tx.request().input('lrn', sql.Char(12), values.applicantLrn)
-        .query('SELECT id FROM students WHERE lrn = @lrn FOR UPDATE');
-      if (linked.recordset?.length > 1) throw new ReadmissionError('More than one existing student record matches this LRN. Resolve the records first.', 409);
-      const studentId = linked.recordset?.[0]?.id || null;
+      const contextualStudent = contextStudentInput === null ? null : await assertStudentContext(tx, current, contextStudentInput);
+      let values;
+      let studentId = current.student_id == null ? null : Number(current.student_id);
+      if (studentId) {
+        values = evaluationInput({ ...raw, applicantLrn: current.applicant_lrn,
+          firstName: current.first_name, middleName: current.middle_name, lastName: current.last_name, suffix: current.suffix });
+      } else if (contextualStudent) {
+        values = evaluationInput({ ...raw, applicantLrn: contextualStudent.lrn,
+          firstName: contextualStudent.first_name, middleName: contextualStudent.middle_name,
+          lastName: contextualStudent.last_name, suffix: contextualStudent.suffix });
+      } else {
+        values = evaluationInput(raw);
+        if (values.applicantLrn !== current.applicant_lrn) {
+          const linked = await tx.request().input('lrn', sql.Char(12), values.applicantLrn)
+            .query('SELECT id FROM students WHERE lrn = @lrn FOR UPDATE');
+          if (linked.recordset?.length) throw new ReadmissionError('This LRN belongs to a saved student record. Open that record to continue the evaluation.', 409);
+        }
+      }
       await assertNewSchoolYear(tx, values, studentId);
       const request = bindValues(tx.request(), values).input('id', sql.Char(36), id).input('studentId', sql.Int, studentId)
         .input('version', sql.Int, version + 1).input('actorId', sql.Int, user.id);
@@ -301,7 +565,7 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
     });
   }
 
-  async function decide(actorId, id, expectedVersion, decision, reason) {
+  async function decide(actorId, id, expectedVersion, decision, reason, contextStudentInput = null, requireUnlinked = false) {
     const version = positiveId(expectedVersion, 'evaluation version');
     if (!['accepted', 'not_accepted'].includes(decision)) throw new ReadmissionError('Choose Accepted or Not accepted.');
     const normalizedReason = text(reason, 'Decision reason', 4000, true, true);
@@ -309,17 +573,22 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
       const user = await actor(tx.request(), actorId, WRITE_ROLES);
       const result = await tx.request().input('id', sql.Char(36), id).query('SELECT * FROM readmission_evaluations WHERE id = @id FOR UPDATE');
       const current = result.recordset?.[0];
-      if (!current) throw new ReadmissionError('Readmission evaluation not found.', 404);
+      if (!current) throw new ReadmissionError('Return evaluation not found.', 404);
+      if (requireUnlinked && current.student_id != null) throw new ReadmissionError('This evaluation is linked to a student record. Open that record to continue.', 409);
       if (Number(current.version) !== version) throw new ReadmissionError('This evaluation changed. Reload and review the latest version.', 409);
       if (current.status !== 'under_review') throw new ReadmissionError('Only an evaluation under review can receive a decision.', 409);
+      const contextualStudent = contextStudentInput === null ? null : await assertStudentContext(tx, current, contextStudentInput);
       let linkedStudentId = current.student_id == null ? null : Number(current.student_id);
       if (decision === 'accepted') {
-        if (!linkedStudentId) {
+        if (!linkedStudentId && contextualStudent) {
+          linkedStudentId = Number(contextualStudent.id);
+        } else if (!linkedStudentId) {
           const linked = await tx.request().input('lrn', sql.Char(12), current.applicant_lrn)
             .query('SELECT id FROM students WHERE lrn = @lrn FOR UPDATE');
           if (linked.recordset?.length > 1) throw new ReadmissionError('More than one existing student record matches this LRN. Resolve the records first.', 409);
           linkedStudentId = linked.recordset?.[0]?.id || null;
         }
+        if (linkedStudentId) await assertReturnEligibleForStudent(tx, linkedStudentId);
         await assertNewSchoolYear(tx, current, linkedStudentId);
       }
       if (decision === 'accepted' && (current.subject_availability !== 'available'
@@ -348,7 +617,7 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
     });
   }
 
-  return { list, get, create, update, decide };
+  return { list, get, getForStudent, getStudentReturnEligibility, listForStudent, searchUnlinkedMatches, create, createForStudent, createUnlinked, update, decide };
 }
 
-module.exports = { ReadmissionError, evaluationInput, createReadmissionService };
+module.exports = { ReadmissionError, evaluationInput, deriveReturnEligibility, createReadmissionService };

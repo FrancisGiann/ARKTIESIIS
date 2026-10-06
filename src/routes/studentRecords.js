@@ -10,6 +10,7 @@ const {
   createStudentDocumentFinanceClearanceService
 } = require('../services/studentDocumentFinanceClearanceService');
 const { RegistrarGradeOverviewError, createRegistrarGradeOverviewService } = require('../services/registrarGradeOverviewService');
+const { ReadmissionError, createReadmissionService } = require('../services/readmissionService');
 const {
   StudentRecordsError,
   createStudentRecordsService,
@@ -110,7 +111,38 @@ function isUniqueStudentConflict(error) {
   return normalizeUniqueConflict(error);
 }
 
-function createStudentRecordsRouter({ getPool, sql, studentRecordsService, academicRecordsService, documentRequestService, documentClearanceService, gradeOverviewService } = {}) {
+function academicYearStart(value) {
+  if (typeof value !== 'string' || !/^(\d{4})-(\d{4})$/.test(value)) return null;
+  const [, start, end] = value.match(/^(\d{4})-(\d{4})$/);
+  const year = Number(start);
+  return Number(end) === year + 1 ? year : null;
+}
+
+function lastRecordedEnrollment(enrollments = [], eligibility = null) {
+  const rows = (Array.isArray(enrollments) ? enrollments : [])
+    .filter((row) => row.term_scope_status !== 'not_applicable' && academicYearStart(row.school_year) !== null);
+  if (!rows.length) return null;
+  const latestYear = Math.max(...rows.map((row) => academicYearStart(row.school_year)));
+  const latestYearRows = rows.filter((row) => academicYearStart(row.school_year) === latestYear);
+  const departure = eligibility?.departure;
+  if (eligibility?.basis === 'recorded_departure' && departure
+    && academicYearStart(departure.schoolYear) === latestYear && departure.effectiveEnrollmentId) {
+    const effective = latestYearRows.find((row) => Number(row.id) === departure.effectiveEnrollmentId);
+    if (effective) return effective;
+  }
+  const participation = latestYearRows.filter((row) => ['enrolled', 'pending_payment'].includes(row.enrollment_status));
+  const candidates = participation.length ? participation
+    : latestYearRows.filter((row) => ['dropped', 'transferred'].includes(row.enrollment_status));
+  if (candidates.length === 1) return candidates[0];
+  if (candidates.some((row) => !(Number.isSafeInteger(Number(row.term_number)) && Number(row.term_number) > 0))) return null;
+  const ordered = candidates.filter((row) => Number.isSafeInteger(Number(row.term_number)) && Number(row.term_number) > 0);
+  if (!ordered.length) return null;
+  const latestTermNumber = Math.max(...ordered.map((row) => Number(row.term_number)));
+  const latestTermRows = ordered.filter((row) => Number(row.term_number) === latestTermNumber);
+  return latestTermRows.length === 1 ? latestTermRows[0] : null;
+}
+
+function createStudentRecordsRouter({ getPool, sql, studentRecordsService, academicRecordsService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService } = {}) {
   const router = express.Router();
   const service = studentRecordsService || createStudentRecordsService({ getPool, sql });
   const academics = academicRecordsService || createAcademicRecordsService({ getPool, sql });
@@ -119,12 +151,13 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     : createStudentDocumentRequestService({ getPool, sql }));
   const documentClearance = documentClearanceService || createStudentDocumentFinanceClearanceService({ getPool, sql });
   const gradeOverview = gradeOverviewService || createRegistrarGradeOverviewService({ getPool, sql });
+  const readmissions = readmissionService || createReadmissionService({ getPool, sql });
 
   async function loadWorkspace(search = '', termId = '', page = 1) {
     return service.listWorkspace(search, termId, page);
   }
 
-  async function renderDashboard(req, res, { status = 200, error = null, notice = null, search = '', termId = '', page = 1, openForm = null, formValues = {}, view = 'records' } = {}) {
+  async function renderDashboard(req, res, { status = 200, error = null, notice = null, search = '', termId = '', page = 1, openForm = null, formValues = {}, view = 'records', returnStatus = '' } = {}) {
     try {
       if (view === 'setup') {
         const navigation = buildNavigation(req.authUser.role, '/registrar/records?view=setup');
@@ -133,6 +166,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         res.locals.currentPage = navigation.currentPage;
       }
       const workspace = await loadWorkspace(search, termId, page);
+      const unlinkedEvaluations = view === 'records' && String(search || '').trim()
+        ? await readmissions.searchUnlinkedMatches(req.authUser.id, search, returnStatus) : [];
       const setupTerms = workspace.terms || [];
       const setupSections = workspace.sections || [];
       const requestedOpenForm = ['term', 'section'].includes(req.query?.openForm) ? req.query.openForm : null;
@@ -150,6 +185,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         notice,
         error,
         view,
+        unlinkedEvaluations,
+        returnStatus,
         openForm: openForm || requestedOpenForm || (view === 'setup' ? defaultOpenForm : null),
         formValues: { ...formValues, ...(formSectionTermId ? { academicTermId: formSectionTermId } : {}) },
         ...workspace,
@@ -215,19 +252,23 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
 
   async function renderStudentOverview(req, res, {
     status = 200, error = null, view = 'overview', requestForm = null, requestId = null,
-    requestValues = {}, requestIdempotencyKey = null
+    requestValues = {}, requestIdempotencyKey = null, returnEvaluation = null, returnEvaluationValues = {},
+    returnEvaluationError = null, returnEvaluationExpectedVersion = null
   } = {}) {
     const studentId = normalizeRecordId(req.params.id);
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
     try {
-      const [record, academicRecord, documentRequestRows, revisions, clearanceData] = await Promise.all([
+      const [record, academicRecord, documentRequestRows, revisions, clearanceData, returnEvaluations, returnEligibility] = await Promise.all([
         service.getStudent(studentId),
         academics.getStudentAcademicRecord(studentId),
         documentRequests.getStudentRequests ? documentRequests.getStudentRequests(req.authUser.id, studentId) : [],
         service.listStudentProfileRevisions ? service.listStudentProfileRevisions(req.authUser.id, studentId) : [],
-        documentClearance.getRegistrarData(req.authUser.id, studentId)
+        documentClearance.getRegistrarData(req.authUser.id, studentId),
+        readmissions.listForStudent ? readmissions.listForStudent(req.authUser.id, studentId) : [],
+        readmissions.getStudentReturnEligibility ? readmissions.getStudentReturnEligibility(req.authUser.id, studentId) : { eligible: false }
       ]);
       if (!record || !academicRecord) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+      const lastEnrollment = lastRecordedEnrollment(academicRecord.enrollments, returnEligibility);
       const requestIdempotencyKeys = Object.fromEntries(documentRequestRows.map((request) => [request.id, crypto.randomUUID()]));
       const correctionIdempotencyKeys = Object.fromEntries(documentRequestRows.map((request) => [request.id, crypto.randomUUID()]));
       const claimSlipIdempotencyKeys = Object.fromEntries(documentRequestRows.map((request) => [request.id, crypto.randomUUID()]));
@@ -239,8 +280,9 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       return res.status(status).set('Cache-Control', 'private, no-store').render('records/student-overview', {
         title: 'Student record overview', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
         studentView: view, notice: notices[req.query.notice] || null, requestError: error,
+        returnEvaluationError, returnEvaluation, returnEvaluationValues, returnEvaluationExpectedVersion, returnEvaluations, returnEligibility,
         requestForm, requestFormId: requestId, requestFormValues: requestValues,
-        student: record.student, enrollments: academicRecord.enrollments,
+        student: record.student, enrollments: academicRecord.enrollments, lastEnrollment,
         documentRequests: documentRequestRows, profileRevisions: revisions,
         financeSummary: clearanceData.financeSummary, requestClearanceData,
         newDocumentRequestKey: requestIdempotencyKey || crypto.randomUUID(), requestIdempotencyKeys, correctionIdempotencyKeys,
@@ -256,8 +298,175 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     termId: req.query.termId === undefined ? '' : req.query.termId,
     page: req.query.page === undefined ? 1 : req.query.page,
     view: req.query.view === 'setup' ? 'setup' : 'records',
+    returnStatus: typeof req.query.returnStatus === 'string' ? req.query.returnStatus : '',
     notice: notices[req.query.notice] || null
   }));
+
+  function renderUnlinkedEvaluation(req, res, { evaluation = null, values = {}, error = null, status = 200, expectedVersion = null } = {}) {
+    return res.status(status).set('Cache-Control', 'private, no-store').render('records/unlinked-return-evaluation', {
+      title: evaluation ? 'Return evaluation' : 'New return evaluation', currentUser: req.authUser,
+      csrfToken: ensureCsrfToken(req), evaluation, values, error, expectedVersion
+    });
+  }
+
+  async function renderStudentEvaluation(req, res, { status = 200, evaluationId = null, values = {}, error = null, expectedVersion = null } = {}) {
+    const studentId = normalizeRecordId(req.params.id);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    let returnEvaluation = null;
+    if (evaluationId) {
+      try {
+        returnEvaluation = await readmissions.getForStudent(req.authUser.id, studentId, evaluationId);
+      } catch (loadError) {
+        const message = loadError instanceof ReadmissionError ? loadError.message : 'The return evaluation could not be loaded.';
+        return res.status(loadError instanceof ReadmissionError ? loadError.status : 503).render('error', { title: 'Return evaluation unavailable', message });
+      }
+    }
+    return renderStudentOverview(req, res, {
+      status, view: 'return-evaluation', returnEvaluation, returnEvaluationValues: values,
+      returnEvaluationError: error, returnEvaluationExpectedVersion: expectedVersion
+    });
+  }
+
+  router.get('/return-evaluations/new', (req, res) => req.authUser.role === 'registrar'
+    ? renderUnlinkedEvaluation(req, res)
+    : res.status(403).render('error', { title: 'Read-only access', message: 'Database administrators can review return evaluations but cannot create them.' }));
+
+  router.post('/return-evaluations', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload and try again.' });
+    try {
+      const result = await readmissions.createUnlinked(req.authUser.id, req.body || {});
+      return res.redirect(303, `/registrar/records/return-evaluations/${encodeURIComponent(result.id)}`);
+    } catch (error) {
+      if (error instanceof ReadmissionError) return renderUnlinkedEvaluation(req, res, {
+        values: req.body || {}, error: error.message, status: error.status
+      });
+      return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The evaluation could not be saved.' });
+    }
+  });
+
+  router.get('/return-evaluations/:evaluationId', async (req, res) => {
+    try {
+      const evaluation = await readmissions.get(req.authUser.id, req.params.evaluationId);
+      if (evaluation.student_id) return res.redirect(303, `/registrar/records/students/${encodeURIComponent(evaluation.student_id)}/return-evaluations/${encodeURIComponent(evaluation.id)}`);
+      return renderUnlinkedEvaluation(req, res, { evaluation });
+    } catch (error) {
+      if (error instanceof ReadmissionError) return res.status(error.status).render('error', { title: 'Return evaluation unavailable', message: error.message });
+      return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The evaluation could not be loaded.' });
+    }
+  });
+
+  router.post('/return-evaluations/:evaluationId', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload and try again.' });
+    try {
+      await readmissions.update(req.authUser.id, req.params.evaluationId, req.body?.version, req.body || {}, null, true);
+      return res.redirect(303, `/registrar/records/return-evaluations/${encodeURIComponent(req.params.evaluationId)}`);
+    } catch (error) {
+      if (error instanceof ReadmissionError) {
+        try {
+          const evaluation = await readmissions.get(req.authUser.id, req.params.evaluationId);
+          if (evaluation.student_id) return res.redirect(303, `/registrar/records/students/${encodeURIComponent(evaluation.student_id)}/return-evaluations/${encodeURIComponent(evaluation.id)}`);
+          return renderUnlinkedEvaluation(req, res, {
+            evaluation, values: error.status === 409 ? {} : req.body || {}, expectedVersion: req.body?.version,
+            error: error.message, status: error.status
+          });
+        } catch { return res.status(error.status).render('error', { title: 'Return evaluation unavailable', message: error.message }); }
+      }
+      return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The evaluation could not be saved.' });
+    }
+  });
+
+  router.post('/return-evaluations/:evaluationId/decision', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload and try again.' });
+    try {
+      await readmissions.decide(req.authUser.id, req.params.evaluationId, req.body?.version, req.body?.decision, req.body?.decisionReason, null, true);
+      return res.redirect(303, `/registrar/records/return-evaluations/${encodeURIComponent(req.params.evaluationId)}`);
+    } catch (error) {
+      if (error instanceof ReadmissionError) {
+        try {
+          const evaluation = await readmissions.get(req.authUser.id, req.params.evaluationId);
+          if (evaluation.student_id) return res.redirect(303, `/registrar/records/students/${encodeURIComponent(evaluation.student_id)}/return-evaluations/${encodeURIComponent(evaluation.id)}`);
+          return renderUnlinkedEvaluation(req, res, { evaluation, expectedVersion: req.body?.version, error: error.message, status: error.status });
+        } catch { return res.status(error.status).render('error', { title: 'Return evaluation unavailable', message: error.message }); }
+      }
+      return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The decision could not be saved.' });
+    }
+  });
+
+  router.get('/students/:id/return-evaluations/new', async (req, res) => {
+    if (req.authUser.role !== 'registrar') {
+      return res.status(403).render('error', { title: 'Read-only access', message: 'Database administrators can review return evaluations but cannot create them.' });
+    }
+    const studentId = normalizeRecordId(req.params.id);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      const eligibility = await readmissions.getStudentReturnEligibility(req.authUser.id, studentId);
+      if (!eligibility.eligible) return renderStudentOverview(req, res, {
+        status: 409, view: 'overview', error: 'A return evaluation can be started only after a recorded departure or an established school-year break.'
+      });
+      return renderStudentEvaluation(req, res);
+    } catch (error) {
+      if (error instanceof ReadmissionError) return res.status(error.status).render('error', { title: 'Return evaluation unavailable', message: error.message });
+      return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The student history could not be checked.' });
+    }
+  });
+
+  router.post('/students/:id/return-evaluations', async (req, res) => {
+    if (req.authUser.role !== 'registrar') return res.status(403).render('error', {
+      title: 'Read-only access', message: 'Database administrators can review return evaluations but cannot create them.'
+    });
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload and try again.' });
+    const studentId = normalizeRecordId(req.params.id);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      const eligibility = await readmissions.getStudentReturnEligibility(req.authUser.id, studentId);
+      if (!eligibility.eligible) return renderStudentOverview(req, res, {
+        status: 409, view: 'overview', error: 'A return evaluation can be started only after a recorded departure or an established school-year break.'
+      });
+      const result = await readmissions.createForStudent(req.authUser.id, studentId, req.body || {});
+      return res.redirect(303, `/registrar/records/students/${studentId}/return-evaluations/${encodeURIComponent(result.id)}`);
+    } catch (error) {
+      if (error instanceof ReadmissionError && error.code === 'RETURN_INELIGIBLE') return renderStudentOverview(req, res, {
+        status: error.status, view: 'overview', error: error.message
+      });
+      if (error instanceof ReadmissionError) return renderStudentEvaluation(req, res, {
+        status: error.status, values: error.status === 409 ? {} : req.body || {}, expectedVersion: req.body?.version, error: error.message
+      });
+      return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The evaluation could not be saved.' });
+    }
+  });
+
+  router.get('/students/:id/return-evaluations/:evaluationId', async (req, res) => renderStudentEvaluation(req, res, { evaluationId: req.params.evaluationId }));
+
+  router.post('/students/:id/return-evaluations/:evaluationId', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload and try again.' });
+    const studentId = normalizeRecordId(req.params.id);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      await readmissions.update(req.authUser.id, req.params.evaluationId, req.body?.version, req.body || {}, studentId);
+      return res.redirect(303, `/registrar/records/students/${studentId}/return-evaluations/${encodeURIComponent(req.params.evaluationId)}`);
+    } catch (error) {
+      if (error instanceof ReadmissionError) return renderStudentEvaluation(req, res, {
+        status: error.status, evaluationId: req.params.evaluationId, values: error.status === 409 ? {} : req.body || {},
+        expectedVersion: req.body?.version, error: error.message
+      });
+      return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The evaluation could not be saved.' });
+    }
+  });
+
+  router.post('/students/:id/return-evaluations/:evaluationId/decision', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload and try again.' });
+    const studentId = normalizeRecordId(req.params.id);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      await readmissions.decide(req.authUser.id, req.params.evaluationId, req.body?.version, req.body?.decision, req.body?.decisionReason, studentId);
+      return res.redirect(303, `/registrar/records/students/${studentId}/return-evaluations/${encodeURIComponent(req.params.evaluationId)}`);
+    } catch (error) {
+      if (error instanceof ReadmissionError) return renderStudentEvaluation(req, res, {
+        status: error.status, evaluationId: req.params.evaluationId, expectedVersion: req.body?.version, error: error.message
+      });
+      return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The decision could not be saved.' });
+    }
+  });
 
   router.get('/grades/missing', async (req, res) => {
     try {
@@ -487,4 +696,4 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
   return router;
 }
 
-module.exports = { createStudentRecordsRouter, studentValues, valuesFromStudent };
+module.exports = { createStudentRecordsRouter, studentValues, valuesFromStudent, lastRecordedEnrollment };

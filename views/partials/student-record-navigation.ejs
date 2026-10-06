@@ -15,6 +15,6 @@
     ['history', 'History', `/registrar/records/students/${student.id}?view=history`]
   ]; %>
   <% for (const [view, label, href] of studentRecordLinks) { %>
-    <a href="<%= href %>" <% if (activeStudentView === view || (activeStudentView === 'requests' && view === 'documents')) { %>aria-current="page"<% } %>><%= label %></a>
+    <a href="<%= href %>" <% if (activeStudentView === view || (activeStudentView === 'requests' && view === 'documents') || (activeStudentView === 'return-evaluation' && view === 'overview')) { %>aria-current="page"<% } %>><%= label %></a>
   <% } %>
 </nav>

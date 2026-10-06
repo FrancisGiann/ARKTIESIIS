@@ -55,8 +55,8 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
     if (['front_desk', 'registrar'].includes(req.authUser.role) && service.listAcceptedReadmissionChoices) {
       try { acceptedReadmissionChoices = await service.listAcceptedReadmissionChoices(req.authUser.id, values.schoolYear || record?.school_year || ''); }
       catch (loadError) {
-        if (loadError instanceof PreEnrollmentError) return res.status(loadError.status).render('error', { title: 'Readmission choices', message: loadError.message });
-        return res.status(503).render('error', { title: 'Readmission choices', message: 'Accepted readmission evaluations could not be loaded.' });
+        if (loadError instanceof PreEnrollmentError) return res.status(loadError.status).render('error', { title: 'Return evaluation choices', message: loadError.message });
+        return res.status(503).render('error', { title: 'Return evaluation choices', message: 'Accepted return evaluations could not be loaded.' });
       }
     }
     return privateHeaders(res).status(status).render('pre-enrollments/form', {
