@@ -7,6 +7,7 @@ const { createFinanceRouter } = require('../src/routes/finance');
 const { AnnualFinanceError, createAnnualFinanceService } = require('../src/services/annualFinanceService');
 const { FinanceReportsError } = require('../src/services/annualFinanceReportsService');
 const { formatMoney } = require('../src/utils/formatMoney');
+const { createStatementProjection } = require('../src/utils/financeStatementProjection');
 
 const viewsDirectory = path.join(__dirname, '../views/finance');
 
@@ -75,7 +76,7 @@ test('finance account and reports load failures return support references withou
   const accountResponse = responseRecorder();
   await routeHandler('/students/:id/annual')({ params: { id: '102' }, query: { view: 'payments' }, authUser: { id: 7 } }, accountResponse);
   assert.equal(accountResponse.statusCode, 503);
-  assert.match(accountResponse.locals.message, /annual student account could not be loaded\. Support reference: [a-f0-9-]+/i);
+  assert.match(accountResponse.locals.message, /student account could not be loaded\. Support reference: [a-f0-9-]+/i);
   assert.equal(diagnostics[0][1].operation, 'finance.annual_student.load');
   assert.equal(diagnostics[0][1].dependency, 'student_ledger');
   assert.equal(diagnostics[0][1].errorCode, 'ER_QUERY_FAILURE');
@@ -110,7 +111,7 @@ test('finance account and reports load failures return support references withou
   const rosterResponse = responseRecorder();
   await routeHandler('/')({ query: {}, authUser: { id: 7 } }, rosterResponse);
   assert.equal(rosterResponse.statusCode, 503);
-  assert.match(rosterResponse.locals.message, /annual finance roster is temporarily unavailable\. Support reference: [a-f0-9-]+/i);
+  assert.match(rosterResponse.locals.message, /student accounts are temporarily unavailable\. Support reference: [a-f0-9-]+/i);
   assert.equal(diagnostics[2][1].operation, 'finance.roster.load');
   assert.equal(diagnostics[2][1].queryPhase, 'count');
   assert.equal(diagnostics[2][1].errorCode, 'ER_INVALID_GROUP_FUNC_USE');
@@ -129,6 +130,34 @@ test('finance account and reports load failures return support references withou
   assert.doesNotMatch(logged, /sensitive|102|studentId|raw sql|query detail/i);
   assert.doesNotMatch(logged, /finance-browse-layout\.test\.js|\/home\//i);
   assert.match(logged, /ER_QUERY_FAILURE/);
+});
+
+test('annual account route passes authoritative fee projection values to the finance view', async () => {
+  const ledger = {
+    student: { id: 22, first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null, student_no: 'S-22' },
+    summary: { unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00' },
+    charges: [{ charge_id: 81, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1',
+      line_name: 'Tuition', fee_category: 'tuition', installment: 'Whole term', amount: '100.00',
+      waived_amount: '10.00', allocated: '15.00', remaining_due: '75.00' }],
+    terms: [], availablePayments: [], events: [], adjustments: [], legacyCredits: [],
+    allocationHistory: [], legacyReconciliationHistory: [], payments: [], feeComments: []
+  };
+  const router = createFinanceRouter({
+    annualFinanceService: { async getStudentLedger() { return ledger; }, async listSchedules() { return []; } },
+    financeCasesService: { async getStudentCases() { return { exemptions: [], specialSubjects: [], departures: [] }; } }
+  });
+  const handler = router.stack.find((layer) => layer.route?.path === '/students/:id/annual').route.stack[0].handle;
+  const response = responseRecorder();
+  await handler({ params: { id: '22' }, query: { view: 'overview' }, authUser: { id: 7 }, session: {} }, response);
+  assert.equal(response.view, 'finance/annual-student');
+  assert.equal(response.locals.annualFeeBalance, '75.00');
+  assert.equal(response.locals.hasEarlierAccountBalance, false);
+  assert.equal(response.locals.hasPreviouslyConfirmedBalance, false);
+  assert.equal(response.locals.chargeBreakdown[0].assessed_amount, '100.00');
+  assert.equal(response.locals.chargeBreakdown[0].coverage_amount, '10.00');
+  assert.equal(response.locals.chargeBreakdown[0].other_adjustments, '0.00');
+  assert.equal(response.locals.chargeBreakdown[0].applied_amount, '15.00');
+  assert.equal(response.locals.chargeBreakdown[0].due_amount, '75.00');
 });
 
 test('annual roster tags the default count query phase and omits an unused finance classification CTE', async () => {
@@ -388,13 +417,14 @@ test('finance annual roster separates page data, classification, and balances in
     error: null
   });
   const summary = html.match(/<details class="finance-roster-record[^\"]*">\s*<summary>([\s\S]*?)<\/summary>/)?.[1] || '';
-  assert.match(summary, /Annual balance[\s\S]*₱12,345\.67/);
+  assert.match(summary, /School-year balance[\s\S]*₱12,345\.67/);
   assert.match(summary, /Voucher review[\s\S]*Required/);
   assert.match(summary, /Voucher type ESC · 2 term placements/);
   assert.doesNotMatch(summary, /Category A|voucher category/i);
   assert.doesNotMatch(summary, /Legacy balance|Opening liability/);
-  assert.match(html, /Legacy balance<\/dt><dd>₱0\.00/);
-  assert.match(html, /Opening liability<\/dt><dd>₱0\.00/);
+  assert.match(html, /Earlier account balance<\/dt><dd>₱0\.00/);
+  assert.match(html, /Confirmed previous balance<\/dt><dd>₱0\.00/);
+  assert.match(html, /account for a school year/);
   assert.doesNotMatch(summary, /No review flag/);
   assert.match(html, /Pending activation/);
   assert.doesNotMatch(html, /Term 1 · Term 1|pending payment/);
@@ -407,8 +437,8 @@ test('finance annual roster separates page data, classification, and balances in
     terms: [{
       annual_enrollment_id: 10, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC',
       voucher_category: 'A', intake_status: 'active', assessment_id: null, schedule_version: 2,
-      term: 'Term 1', annual_term_number: 1, enrollment_id: 81, enrollment_status: 'enrolled',
-      term_scope_status: 'applicable', outstanding: '30.00', signed_clearance_status: null, is_current: '1',
+      term: 'Term 2', annual_term_number: 2, enrollment_id: 81, enrollment_status: 'enrolled',
+      term_scope_status: 'applicable', outstanding: '40.00', signed_clearance_status: null, is_current: '1',
       voucher_review_required: false, section_name: 'Grade 11 ABM A'
     }]
   };
@@ -418,9 +448,13 @@ test('finance annual roster separates page data, classification, and balances in
       summary: {
         annualBalanceSchoolYear: '2026-2027', annualBalance: '40.00', allYearsAnnualBalance: '125.00',
         annualWaivedAmount: '10.00', unattributedLegacyBalance: '15.00', openingLiabilityDue: '20.00',
-        totalBalance: '160.00', currentTermOutstanding: '30.00', priorTermYearDebt: '25.00', availableCredit: '50.00'
+        totalBalance: '160.00', currentTermOutstanding: '40.00', priorTermYearDebt: '85.00', availableCredit: '50.00'
       },
-      terms: legacyAnnualRecord.terms, openingLiabilities: [], charges: [], availablePayments: [],
+      terms: legacyAnnualRecord.terms, openingLiabilities: [], charges: [
+        { charge_id: 81, school_year: '2026-2027', annual_term_number: 2, term: 'Term 2', line_name: 'Tuition', fee_category: 'tuition', installment: 'Whole term', amount: '40.00', waived_amount: '10.00', allocated: '0.00', remaining_due: '30.00' },
+        { charge_id: 82, school_year: '2026-2027', annual_term_number: 2, term: 'Term 2', line_name: 'Activity fee', fee_category: 'activity', installment: 'Whole term', amount: '10.00', waived_amount: '0.00', allocated: '0.00', remaining_due: '10.00' },
+        { charge_id: 83, school_year: '2025-2026', annual_term_number: 1, term: 'Term 1', line_name: 'Earlier tuition', fee_category: 'tuition', installment: 'Whole term', amount: '100.00', waived_amount: '0.00', allocated: '15.00', remaining_due: '85.00' }
+      ], availablePayments: [],
       legacyCredits: [], payments: [], adjustments: [], events: [], privateClearances: [],
       allocationHistory: [], legacyReconciliationHistory: [], feeComments: [], financeHandbookNumbers: [], financeHandbookHistory: []
     },
@@ -432,19 +466,42 @@ test('finance annual roster separates page data, classification, and balances in
       { view: 'history', label: 'History' }
     ],
     backHref: '/finance?schoolYear=2026-2027&termId=1',
-    schedules: [], tokens: { payment: 'test-payment-token', assessment: 'test-assessment-token' },
+    schedules: [], tokens: { payment: 'test-payment-token', assessment: 'test-assessment-token', 'adjustment:81': 'test-adjustment-token', 'feeComment:81': 'test-comment-token' },
     csrfToken: 'test-csrf-token', notice: null, error: null, preview: null, openingPreview: null
   };
+  const accountProjection = createStatementProjection(accountLocals.ledger);
+  accountLocals.annualFeeBalance = accountProjection.summary.annualFeeBalance;
+  accountLocals.hasEarlierAccountBalance = accountProjection.summary.showPreviousAccountBalance;
+  accountLocals.hasPreviouslyConfirmedBalance = accountProjection.summary.showPreviouslyConfirmedBalance;
+  accountLocals.chargeBreakdown = accountProjection.charges;
   const accountHtml = await renderFinanceView('annual-student', accountLocals);
+  assert.match(accountHtml, /aria-current="page">Overview<\/a>/);
+  assert.doesNotMatch(accountHtml, /aria-current=(?:&#34;|&quot;)page(?:&#34;|&quot;)/);
   assert.match(accountHtml, /Grade 11 · Voucher type ESC/);
   assert.doesNotMatch(accountHtml, /Category A|voucher category/i);
   const balancePanel = accountHtml.match(/<section class="finance-panel" aria-labelledby="annual-balance-heading"[\s\S]*?<\/section>/)?.[0] || '';
   const visibleBalance = balancePanel.split('<details class="finance-balance-summary-details"')[0];
   assert.match(visibleBalance, /Account balance[\s\S]*?₱<strong>160\.00<\/strong>/);
-  assert.match(visibleBalance, /Current term balance[\s\S]*?Term 1 · 2026-2027[\s\S]*?₱30\.00/);
-  assert.match(visibleBalance, /Previous term\/year balance[\s\S]*?₱25\.00/);
-  assert.match(visibleBalance, /Payment credit[\s\S]*?₱50\.00/);
-  assert.match(balancePanel, /<summary>Balance details<\/summary>[\s\S]*?All school years[\s\S]*?₱125\.00[\s\S]*?Total waived[\s\S]*?₱10\.00[\s\S]*?Legacy balance not assigned to a school year[\s\S]*?₱15\.00[\s\S]*?Verified opening balance[\s\S]*?₱20\.00/);
+  assert.match(visibleBalance, /School-year fees due · all years[\s\S]*?₱125\.00/);
+  assert.match(visibleBalance, /Earlier account balance[\s\S]*?₱15\.00/);
+  assert.match(visibleBalance, /Confirmed previous balance[\s\S]*?₱20\.00/);
+  assert.match(visibleBalance, /Unused payment credit[\s\S]*?₱50\.00/);
+  assert.match(balancePanel, /<summary>Term balance context<\/summary>[\s\S]*?already included[\s\S]*?Latest school-year balance · 2026-2027[\s\S]*?₱40\.00[\s\S]*?Current term · Term 2 · 2026-2027[\s\S]*?₱40\.00[\s\S]*?Earlier terms and school years[\s\S]*?₱85\.00/);
+
+  const feeBreakdown = accountHtml.match(/<section class="finance-panel" aria-labelledby="charge-history-title" data-finance-view="overview charges">[\s\S]*?<\/section>/)?.[0] || '';
+  assert.match(feeBreakdown, /Fee breakdown[\s\S]*?assessed amount − approved coverage \+ other adjustments − payments applied = remaining due/);
+  assert.match(feeBreakdown, /Tuition · Whole term[\s\S]*?₱40\.00[\s\S]*?₱10\.00[\s\S]*?₱0\.00[\s\S]*?₱0\.00[\s\S]*?₱30\.00/);
+  assert.match(feeBreakdown, /Earlier tuition · Whole term[\s\S]*?₱100\.00[\s\S]*?₱0\.00[\s\S]*?₱0\.00[\s\S]*?₱15\.00[\s\S]*?₱85\.00/);
+  assert.doesNotMatch(feeBreakdown, /<th>Action<\/th>|name="_csrf"/, 'overview shows the breakdown without edit forms');
+
+  const chargesLocals = structuredClone(accountLocals);
+  chargesLocals.accountView = 'charges';
+  const chargesHtml = await renderFinanceView('annual-student', chargesLocals);
+  const chargesBreakdown = chargesHtml.match(/<section class="finance-panel" aria-labelledby="charge-history-title" data-finance-view="overview charges">[\s\S]*?<\/section>/)?.[0] || '';
+  assert.match(chargesBreakdown, /<th>Action<\/th>/);
+  assert.match(chargesBreakdown, /name="_csrf" value="test-csrf-token"/);
+  assert.match(chargesBreakdown, /name="idempotencyKey" value="test-adjustment-token"/);
+  assert.match(chargesBreakdown, /name="idempotencyKey" value="test-comment-token"/);
 
   const zeroLocals = structuredClone(accountLocals);
   zeroLocals.ledger.summary = {
@@ -452,27 +509,34 @@ test('finance annual roster separates page data, classification, and balances in
     annualWaivedAmount: '0.00', unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00',
     totalBalance: '0.00', currentTermOutstanding: '0.00', priorTermYearDebt: '0.00', availableCredit: '0.00'
   };
+  zeroLocals.annualFeeBalance = '0.00';
+  zeroLocals.hasEarlierAccountBalance = false;
+  zeroLocals.hasPreviouslyConfirmedBalance = false;
+  zeroLocals.chargeBreakdown = [];
   const zeroAccountHtml = await renderFinanceView('annual-student', zeroLocals);
   const zeroPanel = zeroAccountHtml.match(/<section class="finance-panel" aria-labelledby="annual-balance-heading"[\s\S]*?<\/section>/)?.[0] || '';
   const visibleZeroBalance = zeroPanel.split('<details class="finance-balance-summary-details"')[0];
   assert.match(visibleZeroBalance, /Account balance[\s\S]*?₱<strong>0\.00<\/strong>/);
-  assert.match(visibleZeroBalance, /Current term balance[\s\S]*?₱0\.00/);
-  assert.doesNotMatch(visibleZeroBalance, /Previous term\/year balance|Payment credit/);
+  assert.doesNotMatch(visibleZeroBalance, /<dt>Unused payment credit<\/dt>/);
   assert.doesNotMatch(zeroPanel, /<details class="finance-balance-summary-details" open/);
+  const zeroBreakdown = zeroAccountHtml.match(/<section class="finance-panel" aria-labelledby="charge-history-title" data-finance-view="overview charges">[\s\S]*?<\/section>/)?.[0] || '';
+  assert.match(zeroBreakdown, /No annual fees have been assessed/);
 
   const noCurrentTermLocals = structuredClone(zeroLocals);
   noCurrentTermLocals.ledger.terms[0].is_current = '0';
   const noCurrentTermHtml = await renderFinanceView('annual-student', noCurrentTermLocals);
   const noCurrentTermPanel = noCurrentTermHtml.match(/<section class="finance-panel" aria-labelledby="annual-balance-heading"[\s\S]*?<\/section>/)?.[0] || '';
   const visibleNoCurrentTermBalance = noCurrentTermPanel.split('<details class="finance-balance-summary-details"')[0];
-  assert.doesNotMatch(visibleNoCurrentTermBalance, /Current term balance/);
+  assert.doesNotMatch(noCurrentTermPanel, /Current term ·/);
 
   const paymentDetails = accountHtml.match(/<section class="finance-payment-wizard__panel" data-payment-step="details"[\s\S]*?<\/section>/)?.[0] || '';
   const paymentAllocations = accountHtml.match(/<section class="finance-payment-wizard__panel" data-payment-step="allocations"[\s\S]*?<\/section>/)?.[0] || '';
   assert.match(accountHtml, /data-payment-step="details"[\s\S]*?<\/section>\s*<section class="finance-payment-wizard__panel" data-payment-step="allocations"/);
   assert.match(paymentDetails, /name="amount"[^>]*required/);
   assert.match(paymentAllocations, /Suggest oldest balances/);
-  assert.match(paymentAllocations, /name="allocationMode" value="credit">Keep all as unallocated credit/);
+  assert.match(paymentAllocations, /name="allocationMode" value="credit">Leave full amount as unused credit/);
+  assert.match(paymentAllocations, /Applying it here does not record another payment/);
+  assert.match(paymentAllocations, /Amount to apply \(PHP\)/);
   assert.doesNotMatch(paymentDetails + paymentAllocations, /\shidden(?:\s|>)/, 'both steps stay available without JavaScript');
   assert.match(accountHtml, /src="\/js\/finance-payment-wizard\.js"/);
 });
@@ -506,6 +570,7 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
   assert.match(reportHtml, /₱0\.01/);
   assert.match(reportHtml, /₱2,500\.00/);
   assert.doesNotMatch(reportHtml, /<details class="finance-term-progress-group" open/);
+  assert.match(reportHtml, /aria-current="page">Term balances<\/a>/);
   const tabsIndex = reportHtml.indexOf('<nav class="finance-report-tabs"');
   const controlsIndex = reportHtml.indexOf('<section class="finance-panel finance-report-controls"');
   const formIndex = reportHtml.indexOf('<form class="finance-report-date-form"');
@@ -514,6 +579,9 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
   assert.ok(controlsIndex < formIndex && formIndex < quickDateIndex, 'date submission and shortcuts share one controls panel');
   assert.match(reportHtml, /name="view" value="term-balances"/);
   assert.match(reportHtml, /href="\/finance\/reports\?view=term-balances&amp;fromDate=2026-09-28&amp;toDate=2026-10-04">This week/);
+  assert.match(reportHtml, /href="\/finance\/reports\?view=collections[^\"]*">Payments received<\/a>/);
+  assert.match(reportHtml, /href="\/finance\/reports\?view=allocations[^\"]*">Payments applied<\/a>/);
+  assert.doesNotMatch(reportHtml, />Collections<\/a>|>Allocations<\/a>/);
   const appCss = readFileSync(path.join(__dirname, '../public/css/app.css'), 'utf8');
   assert.match(appCss, /\.finance-reports-page \.finance-report-tabs\s*\{/);
   assert.match(appCss, /\.finance-report-date-form\s*\{/);
@@ -542,6 +610,7 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
     ]
   });
   assert.doesNotMatch(scheduleHtml, /<details class="finance-schedule-create" open/);
+  assert.match(scheduleHtml, /aria-current="page">ESC<span>2 version groups<\/span><\/a>/);
   assert.match(scheduleHtml, /Current approved amounts/);
   assert.match(scheduleHtml, /Active version 2/);
   assert.match(scheduleHtml, /Previous versions · 2026-2027 · Grade 11 · ESC/);

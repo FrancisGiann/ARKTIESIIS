@@ -144,10 +144,10 @@ function createStudentPortalRouter({ getPool, sql, studentRecordsService, academ
         ? createStudentFinanceProjection(await annualFinances.getStudentLedger(req.authUser.id, finance.student.id, 'student'))
         : null;
       return res.set('Cache-Control', 'private, no-store').render('student/finance', {
-        title: 'My finance account', currentUser: req.authUser, finance, annualLedger
+        title: 'Fees and payments', currentUser: req.authUser, finance, annualLedger
       });
     } catch {
-      return res.status(503).render('error', { title: 'Student finance unavailable', message: 'Your finance account could not be loaded right now.' });
+      return res.status(503).render('error', { title: 'Fees and payments unavailable', message: 'Your fees and payment history could not be loaded right now.' });
     }
   });
 

@@ -32,22 +32,22 @@
     <% } %>
 
   <% if (draft.preview.cashAmount) { %>
-      <ol class="finance-payment-wizard__steps finance-payment-wizard__steps--review" aria-label="Payment steps"><li>1. Details</li><li>2. Allocations</li><li aria-current="step">3. Review</li><li>4. Saved</li></ol>
+      <ol class="finance-payment-wizard__steps finance-payment-wizard__steps--review" aria-label="Payment steps"><li>1. Details</li><li>2. Apply payment</li><li aria-current="step">3. Review</li><li>4. Saved</li></ol>
       <dl class="finance-review-totals">
-        <div><dt>Cash recorded</dt><dd>₱<%= draft.preview.cashAmount %></dd></div>
+        <div><dt>Payment amount</dt><dd>₱<%= draft.preview.cashAmount %></dd></div>
         <div><dt>Applied to balances</dt><dd>₱<%= draft.preview.appliedAmount || '0.00' %></dd></div>
-        <div><dt>Unallocated credit remaining</dt><dd>₱<%= draft.preview.unallocatedCredit || '0.00' %></dd></div>
+        <div><dt>Unused payment credit remaining</dt><dd>₱<%= draft.preview.unallocatedCredit || '0.00' %></dd></div>
       </dl>
     <% } %>
 
     <% if (draft.preview.allocationRows?.length) { %>
-      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Reviewed payment allocations">
-        <table class="admin-table"><caption>Payment allocation destinations</caption><thead><tr><th>Destination</th><th>Fee context</th><th>Applied</th><th>Due after</th></tr></thead>
-          <tbody><% for (const row of draft.preview.allocationRows) { %><tr><td data-label="Destination"><%= row.targetReference %></td><td data-label="Fee context"><%= row.feeContext %></td><td data-label="Applied">₱<%= row.amount %></td><td data-label="Due after">₱<%= row.dueAfter %></td></tr><% } %></tbody>
+      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Reviewed payment applications">
+        <table class="admin-table"><caption>Balances receiving this payment</caption><thead><tr><th>Fee or balance</th><th>School year and term</th><th>Amount applied</th><th>Due after</th></tr></thead>
+          <tbody><% for (const row of draft.preview.allocationRows) { %><tr><td data-label="Fee or balance"><%= row.targetReference %></td><td data-label="School year and term"><%= row.feeContext %></td><td data-label="Amount applied">₱<%= row.amount %></td><td data-label="Due after">₱<%= row.dueAfter %></td></tr><% } %></tbody>
         </table>
       </div>
     <% } else if (draft.actionType === 'annual_payment') { %>
-      <p class="dashboard-empty">No allocation is currently selected. Any unallocated amount remains payment credit.</p>
+      <p class="dashboard-empty">No balance is selected. Any amount not applied remains as unused payment credit.</p>
     <% } %>
 
     <% if (draft.preview.schedule?.lines?.length) { %>

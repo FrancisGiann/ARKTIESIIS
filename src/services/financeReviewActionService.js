@@ -13,8 +13,8 @@ const SAFE_ACTIONS = Object.freeze([
   { type: 'document_clearance_decision', label: 'Document clearance decision', pattern: /^\/document-clearance\/([0-9a-f-]{36})\/decision$/, ids: ['requestId'] },
   { type: 'schedule_create', label: 'Create fee schedule version', pattern: /^\/schedules$/, ids: [] },
   { type: 'annual_assessment', label: 'Post annual assessment', pattern: /^\/annual\/(\d{1,10})\/assessment$/, ids: ['annualId'] },
-  { type: 'annual_payment', label: 'Record payment and allocations', pattern: /^\/students\/(\d{1,10})\/annual\/payments$/, ids: ['studentId'] },
-  { type: 'annual_credit_allocation', label: 'Allocate existing payment credit', pattern: /^\/students\/(\d{1,10})\/annual\/credits\/(\d{1,18})\/allocate$/, ids: ['studentId', 'paymentId'] },
+  { type: 'annual_payment', label: 'Record payment and apply it to balances', pattern: /^\/students\/(\d{1,10})\/annual\/payments$/, ids: ['studentId'] },
+  { type: 'annual_credit_allocation', label: 'Apply unused payment credit', pattern: /^\/students\/(\d{1,10})\/annual\/credits\/(\d{1,18})\/allocate$/, ids: ['studentId', 'paymentId'] },
   { type: 'annual_adjustment', label: 'Adjust an assessed charge', pattern: /^\/students\/(\d{1,10})\/annual\/charges\/(\d{1,18})\/adjustments$/, ids: ['studentId', 'chargeId'] },
   { type: 'annual_handbook_reference', label: 'Update finance handbook reference', pattern: /^\/students\/(\d{1,10})\/annual\/(\d{1,10})\/handbook-number$/, ids: ['studentId', 'annualId'] },
   { type: 'annual_fee_comment', label: 'Add private fee comment', pattern: /^\/students\/(\d{1,10})\/annual\/charges\/(\d{1,18})\/comments$/, ids: ['studentId', 'chargeId'] },
@@ -24,11 +24,11 @@ const SAFE_ACTIONS = Object.freeze([
   { type: 'departure_review', label: 'Review departure charges', pattern: /^\/departure-cases\/(\d{1,10})\/review$/, ids: ['caseId'] },
   { type: 'annual_payment_reversal', label: 'Reverse recorded payment', pattern: /^\/students\/(\d{1,10})\/annual\/payments\/(\d{1,18})\/reverse$/, ids: ['studentId', 'paymentId'] },
   { type: 'annual_adjustment_reversal', label: 'Reverse charge adjustment', pattern: /^\/students\/(\d{1,10})\/annual\/adjustments\/(\d{1,18})\/reverse$/, ids: ['studentId', 'adjustmentId'] },
-  { type: 'legacy_payment_reconciliation', label: 'Reconcile legacy payment', pattern: /^\/students\/(\d{1,10})\/annual\/legacy-payments\/(\d{1,18})\/reconcile$/, ids: ['studentId', 'transactionId'] },
-  { type: 'annual_allocation_release', label: 'Release payment allocation', pattern: /^\/students\/(\d{1,10})\/annual\/allocations\/(\d{1,18})\/release$/, ids: ['studentId', 'allocationId'] },
-  { type: 'legacy_reconciliation_release', label: 'Release legacy reconciliation', pattern: /^\/students\/(\d{1,10})\/annual\/legacy-reconciliations\/(\d{1,18})\/release$/, ids: ['studentId', 'reconciliationId'] },
+  { type: 'legacy_payment_reconciliation', label: 'Apply earlier payment to a balance', pattern: /^\/students\/(\d{1,10})\/annual\/legacy-payments\/(\d{1,18})\/reconcile$/, ids: ['studentId', 'transactionId'] },
+  { type: 'annual_allocation_release', label: 'Remove payment application', pattern: /^\/students\/(\d{1,10})\/annual\/allocations\/(\d{1,18})\/release$/, ids: ['studentId', 'allocationId'] },
+  { type: 'legacy_reconciliation_release', label: 'Remove earlier payment application', pattern: /^\/students\/(\d{1,10})\/annual\/legacy-reconciliations\/(\d{1,18})\/release$/, ids: ['studentId', 'reconciliationId'] },
   { type: 'annual_payment_metadata', label: 'Update payment reference or receipt status', pattern: /^\/students\/(\d{1,10})\/annual\/payments\/(\d{1,18})\/metadata$/, ids: ['studentId', 'paymentId'] },
-  { type: 'legacy_opening_transfer', label: 'Transfer verified legacy opening balance', pattern: /^\/students\/(\d{1,10})\/annual\/legacy-opening\/transfer$/, ids: ['studentId'] },
+  { type: 'legacy_opening_transfer', label: 'Confirm previous balance', pattern: /^\/students\/(\d{1,10})\/annual\/legacy-opening\/transfer$/, ids: ['studentId'] },
   { type: 'term_finance_approval', label: 'Approve term finance status', pattern: /^\/annual\/terms\/(\d{1,10})\/approval$/, ids: ['enrollmentId'] },
   { type: 'voucher_review_resolution', label: 'Resolve voucher review', pattern: /^\/annual\/(\d{1,10})\/voucher-review-resolution$/, ids: ['annualId'] },
   { type: 'term_clearance', label: 'Record signed term clearance', pattern: /^\/annual\/terms\/(\d{1,10})\/clearance$/, ids: ['enrollmentId'] }
@@ -514,10 +514,10 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       [['paymentId', sql.BigInt, context.paymentId], ['studentId', sql.Int, context.studentId]]);
     }
     if (context.allocationId) {
-      await row('Payment allocation', `SELECT CONCAT(DATE_FORMAT(payment.payment_date, '%Y-%m-%d'), ' payment · ',
+      await row('Payment application', `SELECT CONCAT(DATE_FORMAT(payment.payment_date, '%Y-%m-%d'), ' payment · ',
           COALESCE(CONCAT(annual.school_year, ' · Term ', enrollment.annual_term_number, ' · ', charge.line_name,
             CASE WHEN LOWER(charge.line_name) = 'tuition' THEN CONCAT(' · ', charge.installment) ELSE '' END),
-            CONCAT('Verified prior balance · ', opening.source_label)),
+            CONCAT('Confirmed previous balance · ', opening.source_label)),
           ' · original ₱', CAST(allocation.amount AS CHAR(40)), ' · currently applied ₱', CAST(net.net_amount AS CHAR(40))) AS target
         FROM finance_payment_allocations AS allocation INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
         INNER JOIN v_finance_net_payment_allocations AS net ON net.allocation_id = allocation.id
@@ -795,7 +795,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
             INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
             WHERE charge.id IN (${names.join(', ')})`)
           : await req.query(`SELECT opening.id, opening.source_label,
-              CONCAT('Verified prior balance · ', opening.source_label) AS target_label,
+              CONCAT('Confirmed previous balance · ', opening.source_label) AS target_label,
               CAST(due.amount_due AS CHAR(40)) AS amount_due
             FROM finance_legacy_opening_charges AS opening INNER JOIN v_finance_opening_liability_due AS due ON due.opening_charge_id = opening.id
             WHERE opening.id IN (${names.join(', ')})`);
@@ -820,7 +820,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
         const currentDue = target?.amount_due ? (() => { const [units, cents = ''] = String(target.amount_due).split('.'); return BigInt(units) * 100n + BigInt(cents.padEnd(2, '0')); })() : 0n;
         const dueAfter = currentDue > amountCents ? currentDue - amountCents : 0n;
         const feeContext = target?.line_name ? `${target.school_year} · Term ${target.annual_term_number} · ${target.line_name} · ${target.installment}`
-          : target?.source_label ? `Verified legacy opening · ${target.source_label}` : 'Target requires review';
+          : target?.source_label ? `Confirmed previous balance · ${target.source_label}` : 'Balance requires review';
         return { targetReference: target ? String(target.target_label) : 'Balance no longer available',
           feeContext, amount: `${amountCents / 100n}.${String(amountCents % 100n).padStart(2, '0')}`,
           dueBefore: target?.amount_due || '0.00', dueAfter: `${dueAfter / 100n}.${String(dueAfter % 100n).padStart(2, '0')}` };

@@ -7,11 +7,11 @@
     <div><dt>School-year balance · <%= ledger.summary.annualBalanceSchoolYear || 'current year' %></dt><dd>₱<%= formatMoney(ledger.summary.annualBalance) %></dd></div>
     <div><dt>All school-year fees due</dt><dd>₱<%= formatMoney(ledger.summary.allYearsAnnualBalance) %></dd></div>
     <% if (currentUser.role !== 'student' || ledger.summary.showPreviousAccountBalance) { %><div><dt>Earlier account balance</dt><dd>₱<%= formatMoney(ledger.summary.unattributedLegacyBalance) %></dd></div><% } %>
-    <% if (currentUser.role !== 'student' || ledger.summary.showPreviouslyConfirmedBalance) { %><div><dt>Previously confirmed balance</dt><dd>₱<%= formatMoney(ledger.summary.openingLiabilityDue) %></dd></div><% } %>
+    <% if (currentUser.role !== 'student' || ledger.summary.showPreviouslyConfirmedBalance) { %><div><dt>Confirmed previous balance</dt><dd>₱<%= formatMoney(ledger.summary.openingLiabilityDue) %></dd></div><% } %>
     <div><dt>Combined account balance</dt><dd>₱<%= formatMoney(ledger.summary.totalBalance) %></dd></div>
     <div><dt>Current term due</dt><dd>₱<%= formatMoney(ledger.summary.currentTermOutstanding) %></dd></div>
     <div><dt>Earlier term/year due</dt><dd>₱<%= formatMoney(ledger.summary.priorTermYearDebt) %></dd></div>
-    <div><dt>Available credit</dt><dd>₱<%= formatMoney(ledger.summary.availableCredit) %></dd></div>
+    <div><dt>Unused payment credit</dt><dd>₱<%= formatMoney(ledger.summary.availableCredit) %></dd></div>
   </dl></section>
   <section class="finance-panel" aria-labelledby="statement-term-balances-title"><h2 id="statement-term-balances-title">Required, applied, and due by term and installment</h2>
     <% if ((ledger.termBalances || []).length) { %><div class="table-scroll"><table class="admin-table"><thead><tr><th>Year · term</th><th>Installment</th><th>Required</th><th>Applied</th><th>Due now</th></tr></thead><tbody>

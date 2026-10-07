@@ -78,11 +78,11 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     const labels = {
       amount: 'Amount', paymentDate: 'Payment date', referenceNo: 'Official receipt/reference (manually entered)',
       receiptIssued: 'Receipt marked issued', privateRemarks: 'Private Finance note', remarks: 'Private Finance note',
-      reason: 'Reason', description: 'Description', transactionType: 'Transaction type',
+      reason: 'Reason', description: 'Description', transactionType: 'Transaction type', allocations: 'Balances receiving payment',
       schoolYear: 'School year', gradeLevel: 'Grade level', voucherCode: 'Voucher',
       lineName: 'Fee name', feeCategory: 'Fee category', installment: 'Installment', termNumber: 'Term',
       isOptional: 'Optional line', approvedAmount: 'Approved amount', isFullCoverage: 'Full coverage',
-      chargeId: 'Assessed charge', openingLiabilityId: 'Verified legacy opening balance',
+      chargeId: 'Assessed charge', openingLiabilityId: 'Confirmed previous balance',
       enrollmentId: 'Enrollment', paymentTransactionId: 'Recorded payment', clearEnrollmentId: 'Enrollment to clear',
       expectedStudentId: 'Student account', handbookNumber: 'Finance handbook number', financeHandbookNumber: 'Finance handbook number',
       optionalLineId: 'Optional schedule line', scheduleId: 'Reviewed schedule', scheduleVersion: 'Reviewed schedule version',
@@ -132,7 +132,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
             .filter((key) => !/Id$/.test(key) && key !== 'target_id');
           const targetOptions = name === 'adjustments' ? options.departureCharges : name === 'allocations' ? options.allocationTargets : null;
           fields.push({ name, label: reviewFieldLabel(name), kind: 'rows', rows, properties: properties.map((key) => ({
-            key, label: key === 'target' ? 'Balance or charge' : reviewFieldLabel(key), options: key === 'target' ? targetOptions : null
+            key, label: key === 'target' ? 'Fee or balance' : name === 'allocations' && key === 'amount' ? 'Amount to apply (PHP)' : reviewFieldLabel(key), options: key === 'target' ? targetOptions : null
           })) });
         } else {
           fields.push({ name, label: reviewFieldLabel(name), kind: 'list', values: value, options: fieldOptions(name) });
@@ -548,13 +548,13 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         : await annual.listRoster(req.authUser.id, req.query);
       const rows = result.rows;
       return res.status(status).set('Cache-Control', 'private, no-store').render('finance/annual-roster', {
-        title: 'Annual finance roster', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        title: 'Student accounts', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
         rows, filters: req.query, schoolYears: result.options.schoolYears, terms: result.options.terms, sections: result.options.sections,
         pagination: result.pagination || null,
         error, notice: req.query.notice === 'saved' ? 'Finance update saved.' : null
       });
     } catch (loadError) {
-      if (loadError instanceof AnnualFinanceError) return res.status(loadError.status).render('error', { title: 'Finance roster', message: loadError.message });
+      if (loadError instanceof AnnualFinanceError) return res.status(loadError.status).render('error', { title: 'Student accounts', message: loadError.message });
       const supportReference = crypto.randomUUID().slice(0, 12);
       logger.error?.('Finance roster request failed.', {
         supportReference,
@@ -564,7 +564,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         ...safeErrorDiagnostics(loadError)
       });
       return res.status(503).set('Cache-Control', 'private, no-store').render('error', {
-        title: 'Service Unavailable', message: `The annual finance roster is temporarily unavailable. Support reference: ${supportReference}.`
+        title: 'Service Unavailable', message: `Student accounts are temporarily unavailable. Support reference: ${supportReference}.`
       });
     }
   }
@@ -624,6 +624,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         load('fee_schedules', () => annual.listSchedules(req.authUser.id)),
         load('finance_cases', () => cases.getStudentCases(req.authUser.id, studentId))
       ]);
+      const accountProjection = createStatementProjection(ledger);
       const tokens = { payment: crypto.randomUUID(), assessment: crypto.randomUUID(), ...tokenOverrides };
       for (const payment of ledger.availablePayments) tokens[`allocation:${payment.payment_id}`] = crypto.randomUUID();
       for (const payment of ledger.events.filter((event) => event.event_type === 'payment')) {
@@ -658,20 +659,24 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       }
       const accountTabs = accountViews.map((view) => ({ view, label: ({ overview: 'Overview', payments: 'Payments', charges: 'Charges & coverage', clearance: 'Clearance & reviews', history: 'History' })[view] }));
       return res.status(status).set('Cache-Control', 'private, no-store').render('finance/annual-student', {
-        title: 'Annual student account', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), ledger, schedules,
+        title: 'Student account', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), ledger,
+        annualFeeBalance: accountProjection.summary.annualFeeBalance,
+        hasEarlierAccountBalance: accountProjection.summary.showPreviousAccountBalance,
+        hasPreviouslyConfirmedBalance: accountProjection.summary.showPreviouslyConfirmedBalance,
+        chargeBreakdown: accountProjection.charges, schedules,
         financeCases, preview, openingPreview, tokens, error, paymentValues, preservedValues, failedAction, notice: req.query.notice || null,
         accountView, accountTabs, backHref: `/finance${backParams.size ? `?${backParams.toString()}` : ''}`
       });
     } catch (loadError) {
-      if (loadError instanceof AnnualFinanceError) return res.status(loadError.status).render('error', { title: 'Annual student account', message: loadError.message });
-      if (loadError instanceof FinanceCasesError) return res.status(loadError.status).render('error', { title: 'Annual student account', message: loadError.message });
+      if (loadError instanceof AnnualFinanceError) return res.status(loadError.status).render('error', { title: 'Student account', message: loadError.message });
+      if (loadError instanceof FinanceCasesError) return res.status(loadError.status).render('error', { title: 'Student account', message: loadError.message });
       const supportReference = crypto.randomUUID().slice(0, 12);
       logger.error?.('Annual student account load failed.', {
         supportReference, operation: 'finance.annual_student.load', dependency: failedDependency || 'account_render',
         ...safeErrorDiagnostics(loadError)
       });
       return res.status(503).set('Cache-Control', 'private, no-store').render('error', {
-        title: 'Service Unavailable', message: `The annual student account could not be loaded. Support reference: ${supportReference}.`
+        title: 'Service Unavailable', message: `The student account could not be loaded. Support reference: ${supportReference}.`
       });
     }
   }
@@ -755,7 +760,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
   });
   router.get('/', (req, res) => renderAnnualRoster(req, res));
   router.get('/legacy', (_req, res) => res.status(410).set('Cache-Control', 'private, no-store').render('error', {
-    title: 'Legacy account history retired', message: 'The legacy account history workspace has been retired. Open the Finance roster to review student accounts.'
+    title: 'Earlier account history retired', message: 'The earlier account history workspace has been retired. Open Student accounts to review balances and payments.'
   }));
   router.get('/schedules', (req, res) => renderScheduleWorkspace(req, res));
   router.get('/reports', async (req, res) => {

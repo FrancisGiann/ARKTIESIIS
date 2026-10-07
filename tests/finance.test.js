@@ -819,7 +819,7 @@ test('annual finance correction routes stay student-bound, CSRF-protected, and r
     const preview = await post(`/finance/students/${studentId}/annual/legacy-opening/preview`, {});
     assert.equal(preview.status, 200);
     const previewHtml = await preview.text();
-    assert.match(previewHtml, /Confirm reviewed opening liability/);
+    assert.match(previewHtml, /Confirm previous balance/);
     assert.match(previewHtml, /name="expectedAmount" value="100\.00"/);
     await reviewed(`/finance/students/${studentId}/annual/legacy-opening/transfer`, { expectedAmount: '100.00', sourceLabel: 'Reviewed account', reason: 'Reviewed statement', idempotencyKey });
     await reviewed(`/finance/students/${studentId}/annual/23/exemptions`, { reason: 'Approved', idempotencyKey, ruleTerm: '1', ruleCategory: 'tuition', ruleAmount: '50.00' });
@@ -926,7 +926,7 @@ test('finance routes retire legacy account entry and preserve annual account acc
     const workspace = await fetch(`${baseUrl}/finance`, { headers: { cookie } });
     assert.equal(workspace.status, 200);
     const workspaceHtml = await workspace.text();
-    assert.match(workspaceHtml, /Annual finance roster/);
+    assert.match(workspaceHtml, /Student accounts/);
     assert.ok(calls.some(([name]) => name === 'annualRoster'));
 
     const legacyWorkspace = await fetch(`${baseUrl}/finance/legacy`, { headers: { cookie }, redirect: 'manual' });

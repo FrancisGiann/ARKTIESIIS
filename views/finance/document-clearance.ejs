@@ -1,7 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page" id="main-content">
   <header class="dashboard-heading">
-    <div><h1>Document request finance clearance</h1><p>Review a student’s all-years annual and legacy outstanding balance before a registrar starts document processing.</p></div>
+    <div><h1>Document request finance clearance</h1><p>Review a student’s fees across all school years and earlier account balances before a registrar starts document processing.</p></div>
     <a class="button button--secondary" href="/finance/overview">Finance overview</a>
   </header>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
@@ -27,7 +27,7 @@
   </section>
 
   <section class="finance-panel" aria-labelledby="document-clearance-results-title">
-    <div class="admin-section__heading"><div><h2 id="document-clearance-results-title">Finance review queue</h2><p>All displayed totals combine outstanding annual assessments for every school year, verified opening liabilities, and legacy balances. Unallocated annual payment credit is not subtracted.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="document-clearance-results-title">Finance review queue</h2><p>Displayed totals combine unpaid fees for every school year and earlier account balances. Unused payment credit is not subtracted.</p></div></div>
     <% if (!queue.rows.length) { %><p class="empty-state">No requests match these filters.</p><% } else { %>
       <div class="finance-roster-record-list">
         <% for (const row of queue.rows) { %>
@@ -61,7 +61,7 @@
                         <div class="field"><label for="clearance-arrangement-<%= row.id %>">Payment arrangement</label><textarea id="clearance-arrangement-<%= row.id %>" name="paymentArrangement" maxlength="1000" required><%= failedForRow.decision === 'approve' ? failedForRow.paymentArrangement || '' : '' %></textarea></div>
                       <% } %>
                       <div class="field"><label for="clearance-note-<%= row.id %>">Private finance note (finance staff only, optional)</label><textarea id="clearance-note-<%= row.id %>" name="financeNote" maxlength="1000"><%= failedForRow.decision === 'approve' ? failedForRow.financeNote || '' : '' %></textarea></div>
-                      <label class="check-row"><input type="checkbox" name="ledgerReviewConfirmed" value="1" <%= failedForRow.decision === 'approve' && (failedForRow.ledgerReviewConfirmed === '1' || failedForRow.ledgerReviewConfirmed === true) ? 'checked' : '' %> required> I reviewed the complete all-years annual and legacy balance shown above.</label>
+                      <label class="check-row"><input type="checkbox" name="ledgerReviewConfirmed" value="1" <%= failedForRow.decision === 'approve' && (failedForRow.ledgerReviewConfirmed === '1' || failedForRow.ledgerReviewConfirmed === true) ? 'checked' : '' %> required> I reviewed the complete balance across all school-year fees and earlier account balances shown above.</label>
                       <button class="button button--primary" type="submit">Approve clearance</button>
                     </form>
                   <% } %>

@@ -59,7 +59,7 @@ test('student pages are separate, read-only destinations bound to the authentica
   }));
   let studentFinanceLedger = {
     summary: { annualBalanceSchoolYear: '2026-2027', annualBalance: '4990.00', allYearsAnnualBalance: '4990.00',
-      unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00', totalBalance: '4990.00', currentTermOutstanding: '1000.00',
+      unattributedLegacyBalance: '120.00', openingLiabilityDue: '80.00', totalBalance: '5190.00', currentTermOutstanding: '1000.00',
       priorTermYearDebt: '3990.00', availableCredit: '500.00' },
     charges: [
       { school_year: '2026-2027', annual_term_number: 2, term: 'Term 2', line_name: 'Tuition', installment: 'Term 2',
@@ -125,9 +125,9 @@ test('student pages are separate, read-only destinations bound to the authentica
     const cookie = await signIn(baseUrl, 'student');
     const destinations = [
       ['/student?studentId=999&userId=888', /Today's classes/, /href="\/student\/schedule"/],
-      ['/student/schedule?studentId=999', /<h1>My schedule<\/h1>/, /08:00–09:00/],
+      ['/student/schedule?studentId=999', /<h1>My class schedule<\/h1>/, /08:00–09:00/],
       ['/student/grades?studentId=999', /<h1>My grades<\/h1>/, /92/],
-      ['/student/finance?studentId=999', /<h1>My finance account<\/h1>/, /₱4,990\.00/],
+      ['/student/finance?studentId=999', /<h1>Fees and payments<\/h1>/, /₱4,990\.00/],
       ['/student/records?studentId=999', /<h1>My profile and enrollment history<\/h1>/, /2026-2027 · First/]
     ];
     for (const [path, heading, content] of destinations) {
@@ -147,22 +147,26 @@ test('student pages are separate, read-only destinations bound to the authentica
     const financeResponse = await fetch(`${baseUrl}/student/finance`, { headers: { cookie } });
     const financeHtml = await financeResponse.text();
     assert.equal(financeResponse.status, 200);
-    assert.match(financeHtml, /Combined account balance[\s\S]*?₱4,990\.00/);
-    assert.match(financeHtml, /Available payment credit[\s\S]*?₱500\.00[\s\S]*?until it is applied to a fee/);
-    assert.match(financeHtml, /Latest assessed year · 2026-2027/);
-    assert.match(financeHtml, /All school-year fees due[\s\S]*?₱4,990\.00/);
-    assert.match(financeHtml, /Fees and payments by school year/);
-    assert.match(financeHtml, /Fee amount[\s\S]*?₱1,500\.00[\s\S]*?Coverage[\s\S]*?−₱200\.00[\s\S]*?Other changes[\s\S]*?−₱50\.00[\s\S]*?Payments applied[\s\S]*?−₱250\.00[\s\S]*?Remaining due[\s\S]*?₱1,000\.00/);
+    assert.match(financeHtml, /Account balance[\s\S]*?₱5,190\.00/);
+    assert.match(financeHtml, /School-year fees due · all years[\s\S]*?₱4,990\.00/);
+    assert.match(financeHtml, /Earlier account balance[\s\S]*?₱120\.00/);
+    assert.match(financeHtml, /Confirmed previous balance[\s\S]*?₱80\.00/);
+    assert.match(financeHtml, /Unused payment credit[\s\S]*?₱500\.00[\s\S]*?not included in the account balance/);
+    assert.match(financeHtml, /Term balance context[\s\S]*?already included in school-year fees due above[\s\S]*?Latest school-year balance · 2026-2027/);
+    assert.match(financeHtml, /Fee breakdown[\s\S]*?assessed amount − approved coverage \+ other adjustments − payments applied = remaining due/);
+    assert.match(financeHtml, /Assessed amount[\s\S]*?₱1,500\.00[\s\S]*?Approved coverage[\s\S]*?−₱200\.00[\s\S]*?Other adjustments[\s\S]*?−₱50\.00[\s\S]*?Payments applied[\s\S]*?−₱250\.00[\s\S]*?Remaining due[\s\S]*?₱1,000\.00/);
+    assert.doesNotMatch(financeHtml, /Combined account balance|Available payment credit|Latest assessed year|Fees and payments by school year/);
     assert.match(financeHtml, /2026-2027 · Term 1[\s\S]*?Remaining due[\s\S]*?₱3,990\.00/);
-    assert.match(financeHtml, /Paid materials fee[\s\S]*?Coverage<\/dt><dd>₱0\.00[\s\S]*?Payments applied<\/dt><dd>−₱100\.00/);
-    assert.match(financeHtml, /Covered activity fee[\s\S]*?Coverage<\/dt><dd>−₱100\.00[\s\S]*?Payments applied<\/dt><dd>₱0\.00/);
+    assert.match(financeHtml, /Paid materials fee[\s\S]*?Approved coverage<\/dt><dd>₱0\.00[\s\S]*?Payments applied<\/dt><dd>−₱100\.00/);
+    assert.match(financeHtml, /Covered activity fee[\s\S]*?Approved coverage<\/dt><dd>−₱100\.00[\s\S]*?Payments applied<\/dt><dd>₱0\.00/);
     assert.doesNotMatch(financeHtml, /−₱0\.00/, 'zero deductions are shown as zero, without an apparent negative amount');
     assert.doesNotMatch(financeHtml, /\blegacy\b/i, 'student-facing labels use plain language');
-    assert.match(financeHtml, /Current term due[\s\S]*?₱1,000\.00/);
+    assert.match(financeHtml, /Current term · Term 2 · 2026-2027[\s\S]*?₱1,000\.00/);
     assert.match(financeHtml, /Current term/);
     assert.match(financeHtml, /Confirmed by registrar/);
-    assert.match(financeHtml, /Signed clearance[\s\S]*?Signed/);
-    assert.match(financeHtml, /does not change the outstanding amount shown here/);
+    assert.match(financeHtml, /Finance clearance[\s\S]*?Signed/);
+    assert.match(financeHtml, /Finance clearance is separate from paper enrollment clearance and does not change the amount due/);
+    assert.doesNotMatch(financeHtml, /<form[^>]+action="\/finance\/students\/|Add adjustment|Append comment|Private staff note/);
     const recentActivity = financeHtml.match(/<ol class="student-finance-activity-list">([\s\S]*?)<\/ol>/)?.[1];
     assert.ok(recentActivity, 'recent activity preview is present');
     assert.ok(recentActivity.indexOf('Finance activity 124') < recentActivity.indexOf('Finance activity 123'));
@@ -174,7 +178,7 @@ test('student pages are separate, read-only destinations bound to the authentica
     assert.match(financeHtml, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
     const completeHistory = financeHtml.match(/<details class="student-finance-history">([\s\S]*?)<\/details>/)?.[1];
     assert.ok(completeHistory, 'complete history is reachable in a native disclosure');
-    assert.match(completeHistory, /View complete finance history · 125 entries/);
+    assert.match(completeHistory, /View complete account history · 125 entries/);
     assert.equal((completeHistory.match(/<tr>/g) || []).length, 126, 'all 125 history rows remain available');
     assert.match(completeHistory, /REF-000/);
     assert.match(completeHistory, /REF-124/);
@@ -184,6 +188,7 @@ test('student pages are separate, read-only destinations bound to the authentica
     const statementHtml = await statementResponse.text();
     assert.equal(statementResponse.status, 200);
     assert.match(statementHtml, /All school-year fees due[\s\S]*?₱4,990\.00/);
+    assert.match(statementHtml, /Combined account balance[\s\S]*?₱5,190\.00/);
     assert.match(statementHtml, /Fee breakdown[\s\S]*?Coverage[\s\S]*?₱0\.00[\s\S]*?Payments applied[\s\S]*?₱0\.00/);
     assert.doesNotMatch(statementHtml, /−₱0\.00|\blegacy\b/i, 'student statement omits zero negative-looking deductions and old account terminology');
 
@@ -196,16 +201,47 @@ test('student pages are separate, read-only destinations bound to the authentica
     const emptyFinanceResponse = await fetch(`${baseUrl}/student/finance`, { headers: { cookie } });
     const emptyFinanceHtml = await emptyFinanceResponse.text();
     assert.equal(emptyFinanceResponse.status, 200);
-    assert.match(emptyFinanceHtml, /Latest assessed year · none recorded/);
-    assert.match(emptyFinanceHtml, /No school-year fees have been assessed yet/);
-    assert.match(emptyFinanceHtml, /No term finance activity has been posted yet/);
-    assert.match(emptyFinanceHtml, /No finance entries have been recorded/);
-    assert.match(emptyFinanceHtml, /View complete finance history · 0 entries/);
+    assert.match(emptyFinanceHtml, /No fees have been assessed for any school year yet/);
+    assert.match(emptyFinanceHtml, /No enrollment terms are available yet/);
+    assert.match(emptyFinanceHtml, /No account activity has been recorded/);
+    assert.match(emptyFinanceHtml, /View complete account history · 0 entries/);
+    assert.doesNotMatch(emptyFinanceHtml, /Latest school-year balance|Current term ·|Term balance context/);
+
+    studentFinanceLedger = {
+      summary: { annualBalanceSchoolYear: null, annualBalance: '0.00', allYearsAnnualBalance: '0.00',
+        unattributedLegacyBalance: '10.00', openingLiabilityDue: '5.00', totalBalance: '15.00', currentTermOutstanding: '0.00',
+        priorTermYearDebt: '0.00', availableCredit: '0.00' },
+      charges: [], terms: [], events: []
+    };
+    const priorBalanceOnlyResponse = await fetch(`${baseUrl}/student/finance`, { headers: { cookie } });
+    const priorBalanceOnlyHtml = await priorBalanceOnlyResponse.text();
+    assert.equal(priorBalanceOnlyResponse.status, 200);
+    assert.match(priorBalanceOnlyHtml, /Account balance[\s\S]*?₱15\.00/);
+    assert.match(priorBalanceOnlyHtml, /School-year fees due · all years[\s\S]*?₱0\.00/);
+    assert.match(priorBalanceOnlyHtml, /Earlier account balance[\s\S]*?₱10\.00/);
+    assert.match(priorBalanceOnlyHtml, /Confirmed previous balance[\s\S]*?₱5\.00/);
+    assert.match(priorBalanceOnlyHtml, /No fees have been assessed for any school year yet\. Your account balance may still include earlier balances shown above\./);
+    assert.doesNotMatch(priorBalanceOnlyHtml, /Latest school-year balance|Current term ·|Term balance context/);
+
+    studentFinanceLedger = {
+      summary: { annualBalanceSchoolYear: '2026-2027', annualBalance: '-2.00', allYearsAnnualBalance: '-2.00',
+        unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00', totalBalance: '-2.00', currentTermOutstanding: '0.00',
+        priorTermYearDebt: '0.00', availableCredit: '0.00' },
+      charges: [{ school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', line_name: 'Adjustment credit', installment: 'Whole term',
+        amount: '100.00', waived_amount: '0.00', adjustments: '-102.00', allocated: '0.00', remaining_due: '-2.00' }],
+      terms: [], events: []
+    };
+    const negativeDueResponse = await fetch(`${baseUrl}/student/finance`, { headers: { cookie } });
+    const negativeDueHtml = await negativeDueResponse.text();
+    assert.equal(negativeDueResponse.status, 200);
+    assert.match(negativeDueHtml, /Account balance[\s\S]*?−₱2\.00/);
+    assert.match(negativeDueHtml, /Remaining due[\s\S]*?−₱2\.00/);
+    assert.doesNotMatch(negativeDueHtml, /−₱0\.00/);
     assert.deepEqual(calls.records, [7, 7, 7, 7]);
     assert.deepEqual(calls.summaries, [], 'student home does not load a document summary used only by removed shortcuts');
     assert.deepEqual(calls.schedules, [7, 7]);
     assert.deepEqual(calls.grades, [7]);
-    assert.deepEqual(calls.finance, [7, 7, 7, 7]);
+    assert.deepEqual(calls.finance, [7, 7, 7, 7, 7, 7]);
   });
 });
 
@@ -314,7 +350,7 @@ test('unlinked student accounts receive clear empty states on every self-service
       const html = await response.text();
       assert.match(html, /student profile is not linked yet/i, path);
       if (path === '/student/finance') {
-        assert.match(html, /Statement of Account/);
+        assert.doesNotMatch(html, /href="\/student\/finance\/statement"/);
         assert.doesNotMatch(html, /student-finance-ledger|finance-history/);
       }
     }

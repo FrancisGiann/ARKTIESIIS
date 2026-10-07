@@ -205,7 +205,7 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     assert.match(overviewHtml, /Needs review/);
     assert.match(overviewHtml, /Tuition tracking/);
     assert.match(overviewHtml, /Departure reviews/);
-    assert.match(overviewHtml, /Unallocated credit stays separate\./);
+    assert.match(overviewHtml, /Unused payment credit stays separate from fees due until applied\./);
     assert.match(overviewHtml, /Previous account balances/);
     assert.doesNotMatch(overviewHtml, /Legacy account history|href="\/finance\/legacy/);
     assert.equal([...overviewHtml.matchAll(/<a class="finance-queue-link"/g)].length, 3);
@@ -216,7 +216,7 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     const zeroCountCard = cardAnchors.find(([, status]) => status === 'fully_paid');
     assert.ok(zeroCountCard, 'zero-count statuses remain linked');
     assert.match(zeroCountCard[3], /<strong>0<\/strong>/);
-    assert.match(zeroCountCard[3], /Open matching roster/);
+    assert.match(zeroCountCard[3], /View matching accounts/);
     const zeroCountQuery = new URLSearchParams(zeroCountCard[2].split('?')[1].replace(/&amp;/g, '&'));
     assert.equal(zeroCountQuery.get('financeStatus'), 'fully_paid');
     assert.equal(zeroCountQuery.get('gradeLevel'), 'Grade 11');
@@ -230,7 +230,7 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     const rosterResponse = await fetch(`${baseUrl}/finance`, { headers: { cookie } });
     const rosterHtml = await rosterResponse.text();
     assert.equal(rosterResponse.status, 200);
-    assert.match(rosterHtml, /<h2 id="annual-roster-filter-title">Find annual accounts<\/h2>/);
+    assert.match(rosterHtml, /<h2 id="annual-roster-filter-title">Find student accounts<\/h2>/);
     assert.match(rosterHtml, /href="\/finance" aria-current="page"/);
   });
 });

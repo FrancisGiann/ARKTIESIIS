@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-departures-page" id="main-content">
-  <a class="context-back" href="/finance">Back to annual finance roster</a>
+  <a class="context-back" href="/finance">Back to student accounts</a>
   <header class="dashboard-heading"><div><h1>Departure finance review</h1><p>Review affected charges after the registrar records a drop or transfer. Academic history and remaining account debt stay on record.</p></div></header>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
@@ -26,7 +26,7 @@
           <p><strong>Registrar reason:</strong> <%= departure.reason %></p>
           <form class="form-stack" method="post" action="/finance/departure-cases/<%= departure.departure_case_id %>/review">
             <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= departure.idempotencyKey %>">
-            <div class="admin-section__heading"><div><h3>Affected term placements and charge corrections</h3><p>Enter an amount only for a correction Finance approves. Blank rows stay unchanged. Corrections above the unpaid amount release prior allocations back to account credit.</p></div></div>
+            <div class="admin-section__heading"><div><h3>Affected term placements and charge corrections</h3><p>Enter an amount only for a correction Finance approves. Blank rows stay unchanged. Corrections above the unpaid amount return prior payments to unused account credit.</p></div></div>
             <div class="finance-departure-terms">
               <% for (const term of departure.terms) { %>
                 <% if (!term.charges.length) { %>

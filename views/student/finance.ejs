@@ -3,10 +3,10 @@
   <a class="context-back" href="/student">Back to my school day</a>
   <header class="page-heading student-finance-heading">
     <div>
-      <h1>My finance account</h1>
+      <h1>Fees and payments</h1>
       <p>See the fees on your account, payments applied, and what remains due.</p>
     </div>
-    <a class="button button--secondary" href="/student/finance/statement">Statement of Account</a>
+    <% if (finance.student) { %><a class="button button--secondary" href="/student/finance/statement">Statement of Account</a><% } %>
   </header>
 
   <% if (!finance.student) { %>
@@ -18,11 +18,13 @@
     <% const summary = annualLedger.summary; %>
     <% const pesoAmount = (amount) => { const text = String(amount ?? '0.00'); const negative = text.startsWith('-'); const value = formatMoney(negative ? text.slice(1) : text); return negative ? `−₱${value}` : `₱${value}`; }; %>
     <% const deductionAmount = (amount) => { const value = String(amount ?? '0.00'); return /^-?0(?:\.0{1,2})?$/.test(value) ? `₱${formatMoney('0.00')}` : `−₱${formatMoney(value.replace(/^-/, ''))}`; }; %>
+    <% const currentTermPlacement = annualLedger.terms.find((term) => term.is_current === true || term.is_current === 1 || term.is_current === '1') || null; %>
+    <% const showTermBalanceContext = Boolean(summary.annualBalanceSchoolYear || currentTermPlacement || Number(summary.priorTermYearDebt) > 0); %>
     <% const recentFinanceEvents = annualLedger.events.slice(-5).reverse(); %>
     <section class="student-finance-ledger" aria-labelledby="finance-ledger-title">
       <div class="student-finance-ledger__heading">
         <div>
-          <h2 id="finance-ledger-title">Account ledger</h2>
+          <h2 id="finance-ledger-title">Account balance and activity</h2>
           <p><%= [finance.student.first_name, finance.student.middle_name, finance.student.last_name, finance.student.suffix].filter(Boolean).join(' ') %> · <%= finance.student.student_no %></p>
         </div>
         <p class="student-finance-ledger__note">This account is read-only. Contact the finance office about a balance or payment record.</p>
@@ -31,38 +33,34 @@
       <section class="student-finance-summary" aria-label="Balance summary">
         <div class="student-finance-summary__lead">
           <div>
-            <h3>Combined account balance</h3>
-            <p>Includes fee balances across all school years and any separately recorded earlier balance. Positive amounts are owed.</p>
+            <h3>Account balance</h3>
+            <p>Includes school-year fees due across all years and any earlier account balances. Unused payment credit stays separate until applied to a fee.</p>
           </div>
           <p class="student-finance-summary__amount"><%= pesoAmount(summary.totalBalance) %></p>
         </div>
-        <div class="student-finance-summary__credit">
-          <h3>Available payment credit</h3>
-          <p class="student-finance-summary__amount"><%= pesoAmount(summary.availableCredit) %></p>
-          <p>Shown separately until it is applied to a fee.</p>
-        </div>
-      </section>
-
-      <section class="student-finance-details" aria-labelledby="finance-details-title">
-        <h3 id="finance-details-title">Balance details</h3>
-        <dl class="student-finance-details__list">
-          <div>
-            <dt><%= summary.annualBalanceSchoolYear ? `Latest assessed year · ${summary.annualBalanceSchoolYear}` : 'Latest assessed year · none recorded' %></dt>
-            <dd><%= pesoAmount(summary.annualBalance) %></dd>
-          </div>
-          <div><dt>All school-year fees due</dt><dd><%= pesoAmount(summary.annualFeeBalance) %></dd></div>
+        <dl class="student-finance-balance-breakdown">
+          <div><dt>School-year fees due · all years</dt><dd><%= pesoAmount(summary.annualFeeBalance) %></dd></div>
           <% if (summary.showPreviousAccountBalance) { %><div><dt>Earlier account balance</dt><dd><%= pesoAmount(summary.unattributedLegacyBalance) %></dd></div><% } %>
-          <% if (summary.showPreviouslyConfirmedBalance) { %><div><dt>Previously confirmed balance</dt><dd><%= pesoAmount(summary.openingLiabilityDue) %></dd></div><% } %>
-          <div><dt>Current term due</dt><dd><%= pesoAmount(summary.currentTermOutstanding) %></dd></div>
-          <div><dt>Earlier term/year due</dt><dd><%= pesoAmount(summary.priorTermYearDebt) %></dd></div>
+          <% if (summary.showPreviouslyConfirmedBalance) { %><div><dt>Confirmed previous balance</dt><dd><%= pesoAmount(summary.openingLiabilityDue) %></dd></div><% } %>
+          <% if (Number(summary.availableCredit) > 0) { %><div class="student-finance-balance-breakdown__credit"><dt>Unused payment credit</dt><dd><%= pesoAmount(summary.availableCredit) %><span class="student-finance-balance-breakdown__note">Payments already recorded but not yet applied to fees. This amount is not included in the account balance.</span></dd></div><% } %>
         </dl>
       </section>
+
+      <% if (showTermBalanceContext) { %><details class="student-finance-term-context">
+        <summary>Term balance context</summary>
+        <p>These term figures are already included in school-year fees due above. They are reference views and are not added again.</p>
+        <dl class="student-finance-term-context__list">
+          <% if (summary.annualBalanceSchoolYear) { %><div><dt>Latest school-year balance · <%= summary.annualBalanceSchoolYear %></dt><dd><%= pesoAmount(summary.annualBalance) %></dd></div><% } %>
+          <% if (currentTermPlacement) { %><div><dt>Current term · <%= [currentTermPlacement.term, currentTermPlacement.school_year].filter(Boolean).join(' · ') %></dt><dd><%= pesoAmount(summary.currentTermOutstanding) %></dd></div><% } %>
+          <% if (Number(summary.priorTermYearDebt) > 0) { %><div><dt>Earlier terms and school years</dt><dd><%= pesoAmount(summary.priorTermYearDebt) %></dd></div><% } %>
+        </dl>
+      </details><% } %>
 
       <section class="student-finance-charges" aria-labelledby="finance-charges-title">
         <div class="student-finance-section-heading">
           <div>
-            <h3 id="finance-charges-title">Fees and payments by school year</h3>
-            <p>Each fee shows its assessed amount, coverage, other changes, payments applied, and remaining amount due. Unapplied payment credit is listed above.</p>
+            <h3 id="finance-charges-title">Fee breakdown</h3>
+            <p>For each fee: assessed amount − approved coverage + other adjustments − payments applied = remaining due. Adjustments can increase or reduce a fee.</p>
           </div>
         </div>
         <% if (annualLedger.chargeGroups?.length) { %>
@@ -73,11 +71,11 @@
                 <ul class="student-finance-charge-list">
                   <% for (const charge of group.charges) { %>
                     <li class="student-finance-charge">
-                      <h5><%= charge.line_name %><% if (charge.installment) { %> · <%= charge.installment %><% } %></h5>
+                      <h5><%= charge.line_name %><% if (charge.installment) { %> · <%= charge.installment %><% } %><% if (charge.fee_category) { %><span class="student-finance-charge__category"><%= charge.fee_category %></span><% } %></h5>
                       <dl class="student-finance-charge__details">
-                        <div><dt>Fee amount</dt><dd><%= pesoAmount(charge.assessed_amount) %></dd></div>
-                        <div><dt>Coverage</dt><dd><%= deductionAmount(charge.coverage_amount) %></dd></div>
-                        <div><dt>Other changes</dt><dd><%= pesoAmount(charge.other_adjustments) %></dd></div>
+                        <div><dt>Assessed amount</dt><dd><%= pesoAmount(charge.assessed_amount) %></dd></div>
+                        <div><dt>Approved coverage</dt><dd><%= deductionAmount(charge.coverage_amount) %></dd></div>
+                        <div><dt>Other adjustments</dt><dd><%= pesoAmount(charge.other_adjustments) %></dd></div>
                         <div><dt>Payments applied</dt><dd><%= deductionAmount(charge.applied_amount) %></dd></div>
                         <div class="student-finance-charge__due"><dt>Remaining due</dt><dd><%= pesoAmount(charge.due_amount) %></dd></div>
                       </dl>
@@ -88,15 +86,15 @@
             <% } %>
           </div>
         <% } else { %>
-          <p class="student-finance-empty">No school-year fees have been assessed yet.</p>
+          <p class="student-finance-empty">No fees have been assessed for any school year yet. Your account balance may still include earlier balances shown above.</p>
         <% } %>
       </section>
 
       <section class="student-finance-placements" aria-labelledby="finance-placements-title">
         <div class="student-finance-section-heading">
           <div>
-            <h3 id="finance-placements-title">Term placements</h3>
-            <p>Each placement shows its outstanding amount, registrar confirmation, and signed clearance separately.</p>
+            <h3 id="finance-placements-title">Enrollment by term</h3>
+            <p>Term balances are already included in school-year fees above. Finance clearance is separate from paper enrollment clearance and does not change the amount due.</p>
           </div>
         </div>
         <% if (annualLedger.terms.length) { %>
@@ -110,13 +108,13 @@
                     <% if (isCurrentTerm) { %><span class="student-finance-current">Current term</span><% } %>
                   </div>
                   <div class="student-finance-term__outstanding">
-                    <span>Outstanding</span>
+                  <span>Remaining due</span>
                   <strong><%= pesoAmount(term.outstanding) %></strong>
                   </div>
                 </div>
                 <dl class="student-finance-term__details">
                   <div>
-                    <dt>Placement</dt>
+                    <dt>Enrollment status</dt>
                     <dd><%= term.enrollment_status ? term.enrollment_status.replaceAll('_', ' ') : 'Not recorded' %></dd>
                   </div>
                   <div>
@@ -124,7 +122,7 @@
                     <dd><%= term.term_scope_status === 'not_applicable' ? 'Not applicable before entry term' : term.registrar_confirmation_id ? 'Confirmed by registrar' : 'Awaiting registrar confirmation' %></dd>
                   </div>
                   <div>
-                    <dt>Signed clearance</dt>
+                    <dt>Finance clearance</dt>
                     <dd><%= term.signed_clearance_status === 'signed' ? 'Signed' : 'Not signed' %></dd>
                   </div>
                 </dl>
@@ -132,15 +130,14 @@
             <% } %>
           </ol>
         <% } else { %>
-          <p class="student-finance-empty">No term finance activity has been posted yet.</p>
+          <p class="student-finance-empty">No enrollment terms are available yet.</p>
         <% } %>
-        <p class="student-finance-clearance-note">A signed clearance is a separate record and does not change the outstanding amount shown here.</p>
       </section>
 
       <section class="student-finance-activity" aria-labelledby="finance-activity-title">
         <div class="student-finance-section-heading">
           <div>
-            <h3 id="finance-activity-title">Recent finance activity</h3>
+            <h3 id="finance-activity-title">Recent account activity</h3>
             <p><%= annualLedger.events.length %> total entries in your account history.</p>
           </div>
         </div>
@@ -163,13 +160,13 @@
             <% } %>
           </ol>
         <% } else { %>
-          <p class="student-finance-empty">No finance entries have been recorded.</p>
+          <p class="student-finance-empty">No account activity has been recorded.</p>
         <% } %>
 
         <details class="student-finance-history">
-          <summary>View complete finance history · <%= annualLedger.events.length %> entries</summary>
+          <summary>View complete account history · <%= annualLedger.events.length %> entries</summary>
           <% if (annualLedger.events.length) { %>
-            <div class="table-scroll student-finance-history__scroll" tabindex="0" aria-label="Complete finance history, oldest entries first">
+            <div class="table-scroll student-finance-history__scroll" tabindex="0" aria-label="Complete account history, oldest entries first">
               <table class="portal-table student-finance-history__table">
                 <thead><tr><th scope="col">Date</th><th scope="col">Entry</th><th scope="col">Details</th><th scope="col">Reference</th><th scope="col">Recorded amount</th></tr></thead>
                 <tbody>
@@ -187,7 +184,7 @@
               </table>
             </div>
           <% } else { %>
-            <p class="student-finance-empty">No finance entries have been recorded.</p>
+            <p class="student-finance-empty">No account activity has been recorded.</p>
           <% } %>
         </details>
       </section>

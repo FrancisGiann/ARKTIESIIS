@@ -787,7 +787,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     );
     assert.equal(accountResponse.statusCode, 200, `annual account destination renders (${accountResponse.view || 'no view'}): ${String(accountResponse.html || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 260)}`);
     assert.equal(accountResponse.view, 'finance/annual-student');
-    assert.match(accountResponse.html, /Annual student account/);
+    assert.match(accountResponse.html, /Student account/);
     assert.match(accountResponse.html, /backInstallment=whole/);
     for (const view of ['overview', 'payments', 'charges', 'clearance', 'history']) {
       const tabResponse = responseCapture();

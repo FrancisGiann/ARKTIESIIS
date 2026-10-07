@@ -1,8 +1,8 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-overview-page" id="main-content">
   <header class="dashboard-heading">
-    <div><p class="eyebrow">Finance · Current work</p><h1>Finance overview</h1><p>Choose a term and payment view, then open a matching student list.</p></div>
-    <div class="dashboard-heading__actions"><a class="button button--primary" href="/finance">Open roster</a></div>
+    <div><p class="eyebrow">Finance · Current work</p><h1>Finance overview</h1><p>Choose a term and payment view, then open matching student accounts.</p></div>
+    <div class="dashboard-heading__actions"><a class="button button--primary" href="/finance">Student accounts</a></div>
   </header>
 
   <nav class="finance-queue-links" aria-label="Finance work queues">
@@ -13,7 +13,7 @@
 
   <section class="finance-overview" aria-labelledby="finance-overview-heading">
     <div class="finance-overview__top">
-      <div><h2 id="finance-overview-heading">Term payment status</h2><p>Each active placement appears once in the selected view. Unallocated credit stays separate.</p></div>
+      <div><h2 id="finance-overview-heading">Term payment status</h2><p>Each active placement appears once in the selected view. Unused payment credit stays separate from fees due until applied.</p></div>
       <% if (overview.schoolYears.length) { %>
         <form class="dashboard-filter dashboard-filter--finance" method="get" action="/finance/overview">
           <div class="finance-overview-filter-primary">
@@ -42,17 +42,17 @@
       <p class="dashboard-empty" role="status">No active applicable enrollments match this term and these filters.</p>
     <% } else { %>
       <p class="finance-overview-context"><strong><%= overview.selectedTerm.term %></strong> · <%= overview.selectedSchoolYear %> · <%= ({whole:'Whole term',dp:'DP',prelim:'Prelim',midterm:'Midterm',finals:'Finals'})[overview.selectedInstallment] %><%= overview.selectedGrade ? ` · ${overview.selectedGrade}` : '' %><%= overview.selectedVoucher ? ` · ${overview.selectedVoucher}` : '' %><% const selectedSection = overview.sections.find((section) => section.id === String(overview.selectedSectionId)); %><%= selectedSection ? ` · ${selectedSection.name}` : '' %> · <%= overview.totalEligible.toLocaleString('en-US') %> students</p>
-      <nav class="finance-status-cards" aria-label="Filter roster by payment status">
+      <nav class="finance-status-cards" aria-label="Filter student accounts by payment status">
         <% for (const item of overview.statusCounts) { const params = new URLSearchParams({ schoolYear: overview.selectedSchoolYear, termId: overview.selectedTermId, installment: overview.selectedInstallment, financeStatus: item.status }); if (overview.selectedGrade) params.set('gradeLevel', overview.selectedGrade); if (overview.selectedVoucher) params.set('voucherCode', overview.selectedVoucher); if (overview.selectedSectionId) params.set('sectionId', overview.selectedSectionId); %>
           <a class="finance-status-card finance-status-card--<%= item.status %>" href="/finance?<%= params.toString() %>">
-            <span><%= item.label %></span><strong><%= item.count.toLocaleString('en-US') %></strong><span class="finance-status-card__action">Open matching roster <span aria-hidden="true">→</span></span>
+            <span><%= item.label %></span><strong><%= item.count.toLocaleString('en-US') %></strong><span class="finance-status-card__action">View matching accounts <span aria-hidden="true">→</span></span>
           </a>
         <% } %>
       </nav>
     <% } %>
     <details class="finance-overview-method">
       <summary>How Finance status is assigned</summary>
-      <p>Term balances include recorded charges and adjustments after released allocations, reversals, and reconciliations. Whole-term view works with existing whole-term assessments. An installment view needs one assessed DP, Prelim, Midterm, and Finals tuition line; missing or ambiguous lines and missing staff confirmation need review. Previous account balances and unallocated credits are shown separately and are not assigned to a term.</p>
+      <p>Term balances include recorded charges and adjustments after payment applications, reversals, and reconciliation changes. Whole-term view works with existing whole-term assessments. An installment view needs one assessed DP, Prelim, Midterm, and Finals tuition line; missing or ambiguous lines and missing staff confirmation need review. Previous account balances and unused payment credit are shown separately and are not assigned to a term.</p>
     </details>
   </section>
 </main>

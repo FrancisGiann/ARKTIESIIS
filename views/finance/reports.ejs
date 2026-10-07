@@ -1,12 +1,12 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-reports-page" id="main-content">
-  <a class="context-back" href="/finance">Back to annual finance roster</a>
-  <header class="dashboard-heading"><div><h1>Finance reports</h1><p>Choose one Finance task. Date filters apply to cash, corrections, or allocation activity; term balances show today’s account snapshot.</p></div></header>
+  <a class="context-back" href="/finance">Back to student accounts</a>
+  <header class="dashboard-heading"><div><h1>Finance reports</h1><p>Choose one Finance task. Date filters apply to payments recorded, payment applications, or corrections; term balances show today’s account snapshot.</p></div></header>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
-  <% const reportViews = [['collections','Collections'],['allocations','Allocations'],['corrections','Corrections'],['term-balances','Term balances']]; %>
+  <% const reportViews = [['collections','Payments received'],['allocations','Payments applied'],['corrections','Corrections'],['term-balances','Term balances']]; %>
   <nav class="finance-report-tabs" aria-label="Finance report views">
     <% for (const [view, label] of reportViews) { const params = new URLSearchParams({ view, fromDate: filters.fromDate, toDate: filters.toDate }); %>
-      <a class="finance-report-tab<%= filters.view === view ? ' is-current' : '' %>" href="/finance/reports?<%= params.toString() %>"<%= filters.view === view ? ' aria-current="page"' : '' %>><%= label %></a>
+      <a class="finance-report-tab<%= filters.view === view ? ' is-current' : '' %>" href="/finance/reports?<%= params.toString() %>"<% if (filters.view === view) { %> aria-current="page"<% } %>><%= label %></a>
     <% } %>
   </nav>
   <section class="finance-panel finance-report-controls" aria-labelledby="report-range-title">
@@ -27,11 +27,11 @@
   <% if (report) { %>
     <% if (filters.view === 'collections') { %>
     <section class="finance-panel" aria-labelledby="daily-collections-title">
-      <div class="admin-section__heading"><div><h2 id="daily-collections-title">Valid collections by payment date · <%= report.fromDate %> to <%= report.toDate %></h2><p>Reversed entries are excluded from valid collections.</p></div></div>
-      <dl class="finance-report-summary"><div><dt>Distinct payers in range</dt><dd><%= report.collectionSummary.distinct_payers %></dd></div><div><dt>Valid collection amount</dt><dd>₱<%= formatMoney(report.collectionSummary.valid_collection_amount) %></dd></div><div><dt>Payment records</dt><dd><%= report.collectionSummary.payment_count %></dd></div></dl>
+      <div class="admin-section__heading"><div><h2 id="daily-collections-title">Payments received by payment date · <%= report.fromDate %> to <%= report.toDate %></h2><p>Reversed payments are excluded. This shows payment amounts recorded on each date.</p></div></div>
+      <dl class="finance-report-summary"><div><dt>Students who paid</dt><dd><%= report.collectionSummary.distinct_payers %></dd></div><div><dt>Payment amount</dt><dd>₱<%= formatMoney(report.collectionSummary.valid_collection_amount) %></dd></div><div><dt>Payment records</dt><dd><%= report.collectionSummary.payment_count %></dd></div></dl>
       <% if (!report.dailyCollections.length) { %><p class="empty-state">No non-reversed payments in this date range.</p><% } else { %>
-        <div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Payment date</th><th>Distinct payers</th><th>Payment records</th><th>Collected</th></tr></thead><tbody>
-          <% for (const row of report.dailyCollections) { const params = new URLSearchParams({ kind: 'collections', fromDate: row.collection_date, toDate: row.collection_date }); %><tr><td data-label="Payment date"><%= row.collection_date %></td><td data-label="Distinct payers"><%= row.distinct_payers %></td><td data-label="Payment records"><a href="/finance/reports/details?<%= params.toString() %>"><%= row.payment_count %> records</a></td><td data-label="Collected">₱<%= formatMoney(row.collected_amount) %></td></tr><% } %>
+        <div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Payment date</th><th>Students who paid</th><th>Payment records</th><th>Amount received</th></tr></thead><tbody>
+          <% for (const row of report.dailyCollections) { const params = new URLSearchParams({ kind: 'collections', fromDate: row.collection_date, toDate: row.collection_date }); %><tr><td data-label="Payment date"><%= row.collection_date %></td><td data-label="Students who paid"><%= row.distinct_payers %></td><td data-label="Payment records"><a href="/finance/reports/details?<%= params.toString() %>"><%= row.payment_count %> records</a></td><td data-label="Amount received">₱<%= formatMoney(row.collected_amount) %></td></tr><% } %>
         </tbody></table></div>
       <% } %>
     </section>
@@ -49,13 +49,13 @@
     <% } %>
     <% if (filters.view === 'allocations') { %>
     <section class="finance-panel" aria-labelledby="allocation-reports-title">
-      <div class="admin-section__heading"><div><h2 id="allocation-reports-title">Allocations by academic and fee context</h2><p>Distinct payers are counted once per displayed group. One payment split across charges appears in each target context.</p></div></div>
-      <p>Range-wide allocations: <%= report.allocationSummary.distinct_payers %> distinct payers · ₱<%= formatMoney(report.allocationSummary.target_allocated_amount) %>. This is allocation activity, not additional collections.</p>
+      <div class="admin-section__heading"><div><h2 id="allocation-reports-title">Payments applied by school year and fee</h2><p>Students are counted once per displayed group. One payment applied to more than one fee appears in each fee’s total.</p></div></div>
+      <p>Payments applied in this range: <%= report.allocationSummary.distinct_payers %> students · ₱<%= formatMoney(report.allocationSummary.target_allocated_amount) %>. These are recorded payments applied to balances, not additional payments received.</p>
       <% const allocationParams = new URLSearchParams({ kind: 'allocations', fromDate: report.fromDate, toDate: report.toDate }); %>
-      <p><a class="button button--secondary" href="/finance/reports/details?<%= allocationParams.toString() %>">Open student and charge details</a></p>
-      <% if (!report.allocationContexts.length) { %><p class="empty-state">No payment allocations in this range.</p><% } else { %>
-        <div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Year · term</th><th>Section · strand</th><th>Voucher</th><th>Fee category</th><th>Distinct payers</th><th>Allocated</th></tr></thead><tbody>
-          <% for (const row of report.allocationContexts) { %><tr><td data-label="Year · term"><%= row.school_year %><%= row.annual_term_number ? ` · Term ${row.annual_term_number}` : '' %></td><td data-label="Section · strand"><%= row.section_name || '—' %><%= row.strand ? ` · ${row.strand}` : '' %></td><td data-label="Voucher"><%= row.voucher_code || '—' %></td><td data-label="Fee category"><%= row.fee_category %></td><td data-label="Distinct payers"><%= row.distinct_payers %></td><td data-label="Allocated">₱<%= formatMoney(row.allocated_amount) %></td></tr><% } %>
+      <p><a class="button button--secondary" href="/finance/reports/details?<%= allocationParams.toString() %>">View student and fee details</a></p>
+      <% if (!report.allocationContexts.length) { %><p class="empty-state">No payments were applied to balances in this date range.</p><% } else { %>
+        <div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Year · term</th><th>Section · strand</th><th>Voucher</th><th>Fee category</th><th>Students</th><th>Payments applied</th></tr></thead><tbody>
+          <% for (const row of report.allocationContexts) { %><tr><td data-label="Year · term"><%= row.school_year %><%= row.annual_term_number ? ` · Term ${row.annual_term_number}` : '' %></td><td data-label="Section · strand"><%= row.section_name || '—' %><%= row.strand ? ` · ${row.strand}` : '' %></td><td data-label="Voucher"><%= row.voucher_code || '—' %></td><td data-label="Fee category"><%= row.fee_category %></td><td data-label="Students"><%= row.distinct_payers %></td><td data-label="Payments applied">₱<%= formatMoney(row.allocated_amount) %></td></tr><% } %>
         </tbody></table></div>
       <% } %>
     </section>

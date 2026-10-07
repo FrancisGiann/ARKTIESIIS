@@ -2,7 +2,7 @@
 <main class="page-shell finance-statement finance-payment-confirmation" id="main-content">
   <% const payment = confirmation.payment; const studentName = [payment.first_name, payment.middle_name, payment.last_name, payment.suffix].filter(Boolean).join(' '); %>
   <header class="statement-heading">
-    <div><p class="eyebrow"><%= kind === 'legacy' ? 'Legacy account payment' : 'Annual account payment' %></p><h1>Payment confirmation</h1>
+    <div><p class="eyebrow"><%= kind === 'legacy' ? 'Earlier account payment' : 'Annual account payment' %></p><h1>Payment confirmation</h1>
       <p><strong><%= studentName %></strong> · Student no. <%= payment.student_no %></p></div>
     <div class="statement-actions">
       <button class="button button--primary" type="button" data-print-statement>Print confirmation</button>
@@ -13,7 +13,7 @@
   <section class="finance-panel" aria-labelledby="payment-confirmation-details">
     <h2 id="payment-confirmation-details">Recorded payment details</h2>
     <dl class="finance-balance-summary">
-      <div><dt>Payment type</dt><dd><%= kind === 'legacy' ? 'Existing legacy account payment' : 'Annual account payment' %></dd></div>
+      <div><dt>Payment type</dt><dd><%= kind === 'legacy' ? 'Earlier account payment' : 'Annual account payment' %></dd></div>
       <% if (kind === 'annual') { %>
         <div><dt>Payment date</dt><dd><%= String(payment.payment_date).slice(0, 10) %></dd></div>
       <% } else { %>
@@ -26,12 +26,12 @@
     </dl>
   </section>
   <section class="finance-panel" aria-labelledby="payment-confirmation-allocations">
-    <h2 id="payment-confirmation-allocations">Original applications and current balances</h2>
+    <h2 id="payment-confirmation-allocations">Payment applications and current balances</h2>
     <% if (confirmation.allocations.length) { %>
-      <div class="table-scroll"><table class="admin-table"><thead><tr><th>Balance or fee</th><th>Originally applied</th><th>Currently applied</th></tr></thead><tbody>
-        <% for (const allocation of confirmation.allocations) { %><tr><td data-label="Balance or fee"><%= allocation.target_label %></td><td data-label="Originally applied">₱<%= formatMoney(allocation.original_amount) %></td><td data-label="Currently applied">₱<%= formatMoney(allocation.current_net_amount) %></td></tr><% } %>
+      <div class="table-scroll"><table class="admin-table"><thead><tr><th>Fee or balance</th><th>Applied when saved</th><th>Applied now</th></tr></thead><tbody>
+        <% for (const allocation of confirmation.allocations) { %><tr><td data-label="Fee or balance"><%= allocation.target_label %></td><td data-label="Applied when saved">₱<%= formatMoney(allocation.original_amount) %></td><td data-label="Applied now">₱<%= formatMoney(allocation.current_net_amount) %></td></tr><% } %>
       </tbody></table></div>
-    <% } else { %><p class="empty-state">No application to an annual assessed fee is recorded for this payment. The amount remains in the original account history.</p><% } %>
+    <% } else { %><p class="empty-state">This payment has not been applied to an assessed fee. The recorded amount remains in the original account history.</p><% } %>
   </section>
 </main>
 <script src="/js/statement-print.js" defer></script>

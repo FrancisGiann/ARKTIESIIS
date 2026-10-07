@@ -83,7 +83,7 @@ test('role dashboards lead with useful work and omit decorative summary strips',
       summary: { active_student_count: 8, archived_student_count: 1, current_enrollment_count: 6, documents_awaiting_review_count: 2, documents_processing_count: 1 }
     },
     {
-      role: 'finance', path: '/finance', label: /<h2 id="annual-roster-filter-title">Find annual accounts<\/h2>/,
+      role: 'finance', path: '/finance', label: /<h2 id="annual-roster-filter-title">Find student accounts<\/h2>/,
       summary: { account_count: 10, accounts_due_count: 4, accounts_settled_count: 5, accounts_credit_count: 1, charge_count: 12, payment_count: 8 }
     },
     {
@@ -162,7 +162,7 @@ test('student ledger currency uses grouped peso display without changing finance
           summary: { annualBalanceSchoolYear: '2026-2027', annualBalance: rawAmounts[0], allYearsAnnualBalance: rawAmounts[0],
             unattributedLegacyBalance: '0.00', totalBalance: rawAmounts[0], currentTermOutstanding: rawAmounts[1],
             priorTermYearDebt: '0.00', availableCredit: '0.00' },
-          terms: [], events: []
+          terms: [{ is_current: true, school_year: '2026-2027', term: 'Term 1', outstanding: rawAmounts[1], enrollment_status: 'active', term_scope_status: 'applicable', registrar_confirmation_id: 1, signed_clearance_status: 'not_signed' }], events: []
         };
       }
     }

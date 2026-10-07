@@ -76,3 +76,45 @@ test('student wrapper preserves public payment details and fails closed on priva
   assert.equal(projected.summary.availableCredit, '25.00', 'unapplied credit remains separately visible');
   assert.doesNotMatch(JSON.stringify(projected.events), /Private adjustment reason|Secret staff note|Unrecognized sensitive detail|PRIVATE-/);
 });
+
+test('student and Finance projections expose the same canonical balances and fee breakdown for a shared ledger', () => {
+  const ledger = {
+    summary: {
+      annualBalanceSchoolYear: '2026-2027', annualBalance: '40.00', allYearsAnnualBalance: '60.00',
+      totalBalance: '75.00', unattributedLegacyBalance: '10.00', openingLiabilityDue: '5.00',
+      currentTermOutstanding: '35.00', priorTermYearDebt: '20.00', availableCredit: '12.00'
+    },
+    charges: [
+      { school_year: '2025-2026', annual_term_number: 1, term: 'Term 1', line_name: 'Tuition', installment: 'DP', amount: '40.00', waived_amount: '5.00', adjustments: '0.00', allocated: '20.00', remaining_due: '20.00' },
+      { school_year: '2025-2026', annual_term_number: 1, term: 'Term 1', line_name: 'Materials', installment: 'Whole term', amount: '20.00', waived_amount: '0.00', adjustments: '0.00', allocated: '20.00', remaining_due: '0.00' },
+      { school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', line_name: 'Tuition', installment: 'Prelim', amount: '50.00', waived_amount: '10.00', adjustments: '-5.00', allocated: '10.00', remaining_due: '35.00' },
+      { school_year: '2026-2027', annual_term_number: 2, term: 'Term 2', line_name: 'Activity', installment: 'Whole term', amount: '10.00', waived_amount: '0.00', adjustments: '0.00', allocated: '15.00', remaining_due: '-5.00' },
+      { school_year: '2026-2027', annual_term_number: 3, term: 'Term 3', line_name: 'Library', installment: 'Whole term', amount: '10.00', waived_amount: '0.00', adjustments: '0.00', allocated: '0.00', remaining_due: '10.00' }
+    ],
+    events: [{ event_type: 'adjustment', details: 'Staff-only adjustment reason', reference_no: 'PRIVATE-REF', amount: '5.00' }]
+  };
+
+  const financeProjection = createStatementProjection(ledger);
+  const studentProjection = createStudentFinanceProjection(ledger);
+  assert.deepEqual(studentProjection.summary, financeProjection.summary);
+  assert.deepEqual(studentProjection.charges, financeProjection.charges);
+  assert.deepEqual(studentProjection.chargeGroups, financeProjection.chargeGroups);
+  assert.deepEqual(studentProjection.termBalances, financeProjection.termBalances);
+  assert.equal(studentProjection.summary.totalBalance, '75.00');
+  assert.equal(studentProjection.summary.annualFeeBalance, '60.00');
+  assert.equal(studentProjection.summary.availableCredit, '12.00', 'unused credit stays separate from the account balance');
+  assert.deepEqual(studentProjection.charges.map(({ due_amount, other_adjustments }) => ({ due_amount, other_adjustments })), [
+    { due_amount: '20.00', other_adjustments: '5.00' },
+    { due_amount: '0.00', other_adjustments: '0.00' },
+    { due_amount: '35.00', other_adjustments: '5.00' },
+    { due_amount: '-5.00', other_adjustments: '0.00' },
+    { due_amount: '10.00', other_adjustments: '0.00' }
+  ]);
+  assert.deepEqual(studentProjection.chargeGroups.map(({ school_year, term, due }) => ({ school_year, term, due })), [
+    { school_year: '2025-2026', term: 'Term 1', due: '20.00' },
+    { school_year: '2026-2027', term: 'Term 1', due: '35.00' },
+    { school_year: '2026-2027', term: 'Term 2', due: '-5.00' },
+    { school_year: '2026-2027', term: 'Term 3', due: '10.00' }
+  ]);
+  assert.doesNotMatch(JSON.stringify(studentProjection), /Staff-only adjustment reason|PRIVATE-REF/);
+});

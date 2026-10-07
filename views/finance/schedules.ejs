@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page" id="main-content">
-  <a class="context-back" href="/finance">Back to annual finance roster</a>
+  <a class="context-back" href="/finance">Back to student accounts</a>
   <header class="dashboard-heading"><div><p class="eyebrow">Finance · Approved student-payable rates</p><h1>Fee schedules</h1><p>Choose the school year, grade, and voucher context. Existing active rates are filled in as a starting point for a new version.</p></div></header>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
@@ -14,7 +14,7 @@
     </form>
     <nav class="finance-schedule-voucher-tabs" aria-label="Voucher schedule tabs">
       <% for (const voucher of scheduleContext.voucherCodes) { const params = new URLSearchParams({ voucherCode: voucher }); if (scheduleContext.schoolYear) params.set('schoolYear', scheduleContext.schoolYear); if (scheduleContext.gradeLevel) params.set('gradeLevel', scheduleContext.gradeLevel); %>
-        <a href="/finance/schedules?<%= params.toString() %>"<%= scheduleContext.voucherCode === voucher ? ' aria-current="page"' : '' %>><%= voucher %><span><%= scheduleContext.voucherCounts[voucher] %> version groups</span></a>
+        <a href="/finance/schedules?<%= params.toString() %>"<% if (scheduleContext.voucherCode === voucher) { %> aria-current="page"<% } %>><%= voucher %><span><%= scheduleContext.voucherCounts[voucher] %> version groups</span></a>
       <% } %>
     </nav>
   </section>
