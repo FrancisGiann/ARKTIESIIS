@@ -267,13 +267,13 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       const summaries = await checklistService.getStudentSummaries(req.authUser.id, workspace.students.map((student) => student.id));
       workspace.students = workspace.students.map((student) => ({ ...student, physicalChecklistSummary: summaries.get(Number(student.id)) || null }));
       return res.render('documents/physical', {
-        title: 'Physical student requirements',
+        title: 'Paper document records',
         currentUser: req.authUser,
         csrfToken: ensureCsrfToken(req),
         ...workspace
       });
     } catch (error) {
-      return renderError(res, error, 'Physical student requirements could not be loaded.');
+      return renderError(res, error, 'Paper document records could not be loaded.');
     }
   }
 

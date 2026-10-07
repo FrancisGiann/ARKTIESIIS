@@ -554,12 +554,12 @@ test('database administrator read matrix permits staff workspaces and denies stu
   await withServer(app, async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'database_admin@example.edu');
     const cases = [
-      ['/admin', 200, /Database Admin Dashboard/],
+      ['/admin', 200, /Admin overview/],
       ['/admin/users?category=staff', 200, /Staff accounts/],
-      ['/admin/audit', 200, /Audit activity/],
+      ['/admin/audit', 200, /Activity log/],
       ['/registrar/records', 200, /Student Records/],
       ['/documents', 200, /Documents/],
-      ['/finance', 200, /Annual finance roster/],
+      ['/finance', 200, /Student accounts/],
       ['/student', 403, null]
     ];
 
@@ -744,6 +744,8 @@ test('audit viewer omits stored detail JSON', async () => {
     const html = await response.text();
     assert.equal(response.status, 200);
     assert.match(html, /Admin · user created/);
+    assert.match(html, /<th scope="col">Performed by<\/th>/);
+    assert.match(html, /<td data-label="Performed by">database_admin@example\.edu<\/td>/);
     assert.match(html, /Date and time · Manila \(PHT\)/);
     assert.match(html, /08:00:03 AM/);
     assert.doesNotMatch(html, /must-not-render/);

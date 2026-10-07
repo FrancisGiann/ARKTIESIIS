@@ -1,6 +1,6 @@
 const financeNavigationItems = [
   { id: 'finance-overview', label: 'Overview', href: '/finance/overview', group: 'Finance' },
-  { id: 'finance-roster', label: 'Roster', href: '/finance', group: 'Finance' },
+  { id: 'finance-roster', label: 'Student accounts', href: '/finance', group: 'Finance' },
   { id: 'finance-schedules', label: 'Fee schedules', href: '/finance/schedules', group: 'Finance' },
   { id: 'finance-reports', label: 'Reports', href: '/finance/reports', group: 'Finance' },
   { id: 'finance-departures', label: 'Departure review', href: '/finance/departures', group: 'Finance' },
@@ -10,22 +10,22 @@ const financeNavigationItems = [
 const navigationByRole = {
   database_admin: [
     { id: 'overview', label: 'Overview', href: '/admin', group: 'Workspace' },
-    { id: 'accounts', label: 'Accounts', href: '/admin/users', group: 'People and records' },
+    { id: 'accounts', label: 'User accounts', href: '/admin/users', group: 'People and records' },
     { id: 'students', label: 'Student records', href: '/registrar/records', group: 'People and records' },
     { id: 'pre-enrollments', label: 'Pre-enrollment records', href: '/pre-enrollments', group: 'People and records' },
-    { id: 'audit', label: 'Audit activity', href: '/admin/audit', group: 'Oversight' },
-    { id: 'documents', label: 'Documents', href: '/documents', group: 'Oversight' },
+    { id: 'audit', label: 'Activity log', href: '/admin/audit', group: 'Activity & documents' },
+    { id: 'documents', label: 'Documents', href: '/documents', group: 'Activity & documents' },
     ...financeNavigationItems
   ],
   registrar: [
     { id: 'overview', label: 'Overview', href: '/registrar', group: 'Workspace' },
     { id: 'students', label: 'Student records', href: '/registrar/records', group: 'Records' },
-    { id: 'intake', label: 'Enrollment intake', href: '/registrar/intake', group: 'Records' },
+    { id: 'intake', label: 'Enrollments', href: '/registrar/intake', group: 'Records' },
     { id: 'pre-enrollments', label: 'Pre-enrollment records', href: '/pre-enrollments', group: 'Records' },
     { id: 'documents', label: 'Document review', href: '/documents', group: 'Records' },
     { id: 'grade-submissions', label: 'Grade review', href: '/registrar/grade-submissions', group: 'Academic work' },
     { id: 'schedules', label: 'Class schedules', href: '/registrar/schedules', group: 'Academic work' },
-    { id: 'subjects', label: 'Subject catalog', href: '/registrar/records/subjects', group: 'Setup' },
+    { id: 'subjects', label: 'Subjects', href: '/registrar/records/subjects', group: 'Setup' },
     { id: 'assignments', label: 'Teacher assignments', href: '/registrar/records/teacher-assignments', group: 'Setup' },
     { id: 'academic-setup', label: 'Academic setup', href: '/registrar/records?view=setup', group: 'Setup' }
   ],
@@ -39,9 +39,9 @@ const navigationByRole = {
   finance: financeNavigationItems,
   student: [
     { id: 'home', label: 'Home', href: '/student', group: 'My school' },
-    { id: 'schedule', label: 'Schedule', href: '/student/schedule', group: 'My school' },
+    { id: 'schedule', label: 'Class schedule', href: '/student/schedule', group: 'My school' },
     { id: 'grades', label: 'Grades', href: '/student/grades', group: 'My school' },
-    { id: 'finance', label: 'Finance', href: '/student/finance', group: 'My school' },
+    { id: 'finance', label: 'Fees & payments', href: '/student/finance', group: 'My school' },
     { id: 'records', label: 'My records', href: '/student/records', group: 'My school' },
     { id: 'documents', label: 'Documents', href: '/documents', group: 'My school' }
   ]
@@ -90,7 +90,7 @@ function buildNavigation(role, currentPath = '') {
   });
 
   const items = [...roleItems, {
-    id: 'account', label: 'Account', href: '/account', group: 'Account',
+    id: 'account', label: 'Account settings', href: '/account', group: 'Account',
     current: path === '/account' || path.startsWith('/account/')
   }];
   const groups = [...new Set(roleItems.map((item) => item.group))].map((label) => ({

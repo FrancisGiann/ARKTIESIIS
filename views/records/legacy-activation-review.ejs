@@ -1,11 +1,11 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="<%= basePath %>">Back to historic pending intakes</a>
-  <section class="dashboard-heading"><div><h1>Historic first-login activation review</h1><p>Existing pre-annual intake rows do not activate accounts automatically. Confirm a first activation only after checking the original intake and student identity.</p></div></section>
-  <% if (notice === 'authorized') { %><p class="form-success" role="status">First-login activation authorized. The login activates only when its cleared enrollment is finalized.</p><% } %>
+  <a class="context-back" href="<%= basePath %>">Back to enrollments</a>
+  <section class="dashboard-heading"><div><h1>Review older student logins</h1><p>Older enrollment records do not activate a login automatically. Confirm first activation only after checking the original enrollment and student identity.</p></div></section>
+  <% if (notice === 'authorized') { %><p class="form-success" role="status">First-login activation approved. The login activates only when its enrollment is finalized.</p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <section class="admin-section" aria-labelledby="candidate-title">
-    <div class="admin-section__heading"><div><h2 id="candidate-title">Cleared historic intake records</h2><p>Accounts with recorded deactivation or password-reset history are excluded.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="candidate-title">Activation candidates</h2><p>Accounts with recorded deactivation or password-reset history are excluded.</p></div></div>
     <% if (candidates.length) { %>
       <div class="table-scroll" tabindex="0" aria-label="Historic first-login activation candidates"><table class="admin-table">
         <thead><tr><th scope="col">Student</th><th scope="col">Term and section</th><th scope="col">Confirmation</th></tr></thead>
@@ -20,7 +20,7 @@
           </form></td>
         </tr><% } %></tbody>
       </table></div>
-    <% } else { %><p class="empty-state">No historic intake needs first-login activation review.</p><% } %>
+    <% } else { %><p class="empty-state">No older enrollment records need first-login activation review.</p><% } %>
   </section>
 </main>
 <%- include('../partials/foot') %>

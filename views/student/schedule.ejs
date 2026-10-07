@@ -3,7 +3,7 @@
   <a class="context-back" href="/student">Back to my school day</a>
   <% const student = ownRecords?.student || null; %>
   <% const currentEnrollment = ownRecords?.enrollments?.find((enrollment) => enrollment.is_current && enrollment.enrollment_status === 'enrolled'); %>
-  <header class="page-heading"><div><h1>My schedule</h1><p><%= currentEnrollment ? `${currentEnrollment.school_year} · ${currentEnrollment.term}` : 'Current classes from your enrolled subjects.' %></p></div></header>
+  <header class="page-heading"><div><h1>My class schedule</h1><p><%= currentEnrollment ? `${currentEnrollment.school_year} · ${currentEnrollment.term}` : 'Current classes from your enrolled subjects.' %></p></div></header>
   <% if (!student) { %>
     <section class="student-unlinked" aria-labelledby="schedule-unlinked-title"><h2 id="schedule-unlinked-title">Your student profile is not linked yet</h2><p>Ask the registrar to connect your account before viewing a personal class schedule.</p></section>
   <% } else if (classSchedule.length) { %>

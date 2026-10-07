@@ -4,7 +4,7 @@
   <a class="context-back" href="/registrar/records">Back to student records</a>
   <section class="dashboard-heading">
     <div>
-      <h1>Subject catalog</h1>
+      <h1>Subjects</h1>
       <p>Maintain the subjects available for student enrollments.</p>
     </div>
     <nav class="admin-heading-actions" aria-label="Academic setup tasks">
@@ -41,7 +41,7 @@
       <% if (search) { %><a class="table-action" href="/registrar/records/subjects">Clear search</a><% } %>
     </form>
     <% if (subjects.length) { %>
-      <ul class="subject-catalog" aria-label="Subjects in the catalog">
+      <ul class="subject-catalog" aria-label="Subject list">
         <% for (const subject of subjects) { %>
           <li class="subject-catalog__item">
             <% if (canManageSubjects) { %>

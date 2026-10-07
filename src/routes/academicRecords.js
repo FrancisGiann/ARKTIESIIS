@@ -36,7 +36,7 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, tea
       const subjects = searchNeedle ? allSubjects.filter((subject) =>
         `${subject.subject_code} ${subject.subject_name}`.toLocaleLowerCase().includes(searchNeedle)) : allSubjects;
       return res.status(status).render('records/subjects', {
-        title: 'Subject Catalog',
+        title: 'Subjects',
         csrfToken: ensureCsrfToken(req),
         currentUser: req.authUser,
         subjects,
@@ -48,7 +48,7 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, tea
         notice: notices[req.query.notice] || null
       });
     } catch {
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The subject catalog could not be loaded.' });
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The subjects list could not be loaded.' });
     }
   }
 

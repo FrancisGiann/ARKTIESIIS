@@ -11,8 +11,8 @@
   <a class="context-back" href="/admin">Back to overview</a>
   <section class="dashboard-heading">
     <div>
-      <h1>Accounts</h1>
-      <p>Search one account group at a time, then open an account to manage access.</p>
+      <h1>User accounts</h1>
+      <p>Search student or staff sign-in accounts, then open one to manage access.</p>
     </div>
     <div class="admin-heading-actions">
       <a class="button button--secondary" href="/admin/student-accounts">Set up student logins</a>
@@ -20,7 +20,7 @@
     </div>
   </section>
 
-  <nav class="admin-directory-tabs" aria-label="Account groups">
+  <nav class="admin-directory-tabs" aria-label="User account groups">
     <a href="<%= accountHref('students') %>"<% if (filters.category === 'students') { %> aria-current="page"<% } %>>Students</a>
     <a href="<%= accountHref('staff') %>"<% if (filters.category === 'staff') { %> aria-current="page"<% } %>>Staff</a>
   </nav>
@@ -66,7 +66,7 @@
       <% if (pagination.totalRecords) { %>Showing <%= pagination.from %>–<%= pagination.to %> of <%= pagination.totalRecords %> <%= categoryName %> account<%= pagination.totalRecords === 1 ? '' : 's' %>.<% } else { %>0 matching <%= categoryName %> accounts.<% } %>
     </p>
     <% if (users.length) { %>
-      <div class="table-scroll" tabindex="0" aria-label="Scrollable <%= categoryName %> accounts table">
+      <div class="table-scroll" tabindex="0" aria-label="Scrollable <%= categoryName %> user accounts table">
         <table class="admin-table admin-account-table <%= filters.category === 'staff' ? 'admin-account-table--staff' : '' %>">
           <caption class="visually-hidden"><%= categoryName %> account access and status</caption>
           <thead><tr><th scope="col">Name</th><% if (filters.category === 'students') { %><th scope="col">Student number</th><% } else { %><th scope="col">Department</th><% } %><th scope="col">Email</th><% if (filters.category === 'staff') { %><th scope="col">Role</th><% } %><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Account actions</span></th></tr></thead>

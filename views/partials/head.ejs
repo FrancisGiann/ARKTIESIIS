@@ -9,7 +9,7 @@
   <% const stylesheetUrl = typeof assetVersion === 'undefined' ? '/css/app.css' : `/css/app.css?v=${assetVersion}`; %>
   <link rel="stylesheet" href="<%= stylesheetUrl %>">
 </head>
-<body class="<%= typeof currentUser !== 'undefined' && currentUser && typeof navigationItems !== 'undefined' ? `workspace-body${currentUser.role === 'registrar' ? ' workspace-body--registrar' : ''}` : 'public-body' %>">
+<body class="<%= typeof currentUser !== 'undefined' && currentUser && typeof navigationItems !== 'undefined' ? `workspace-body${currentUser.role === 'registrar' ? ' workspace-body--registrar' : ''}${navigationItems.some((item) => item.current && item.id?.startsWith('finance-')) ? ' workspace-body--finance' : ''}` : 'public-body' %>">
 <a class="skip-link" href="#main-content">Skip to main content</a>
 <% if (typeof currentUser !== 'undefined' && currentUser && typeof navigationItems !== 'undefined') { %>
   <% const roleLabels = { database_admin: 'Database administrator', registrar: 'Registrar', front_desk: 'Front desk', teacher: 'Teacher', finance: 'Finance', student: 'Student' }; %>
@@ -38,7 +38,7 @@
       </details>
       <div class="app-header__user">
         <span class="role-label"><%= roleLabels[currentUser.role] || 'School account' %></span>
-        <a class="account-shortcut<%= currentNavItem?.id === 'account' ? ' is-current' : '' %>" href="/account"<% if (currentNavItem?.id === 'account') { %> aria-current="page"<% } %>>Account</a>
+        <a class="account-shortcut<%= currentNavItem?.id === 'account' ? ' is-current' : '' %>" href="/account"<% if (currentNavItem?.id === 'account') { %> aria-current="page"<% } %>>Account settings</a>
         <form method="post" action="/logout">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <button class="sign-out-button" type="submit">Sign out</button>

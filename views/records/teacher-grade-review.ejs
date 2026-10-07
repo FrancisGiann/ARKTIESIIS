@@ -12,7 +12,7 @@
       <div class="table-scroll grade-import-preview__table-scroll" tabindex="0" aria-label="Parsed grade values and review decisions"><table class="admin-table grade-import-preview__table"><caption class="visually-hidden">Teacher workbook matches, grades, and current grade conflicts</caption>
         <thead><tr><th scope="col">Workbook row</th><th scope="col">Student match</th><th scope="col">Workbook name</th><th scope="col">Term 1</th><th scope="col">Term 2</th><th scope="col">Term 3</th><th scope="col">Final</th><th scope="col">Review and include</th></tr></thead><tbody>
           <% for (const row of submission.rows) { %><tr>
-            <td><%= row.sourceRow %></td><td><%= row.studentId ? `${row.studentNo} · ${row.studentName}` : 'No assigned-roster match' %></td><td><%= row.workbookName || '—' %></td>
+            <td><%= row.sourceRow %></td><td><%= row.studentId ? `${row.studentNo} · ${row.studentName}` : 'No matching student in this class' %></td><td><%= row.workbookName || '—' %></td>
             <% for (const grade of row.grades) { const key = grade.gradingPeriod === 'Term 1' ? 'term1' : grade.gradingPeriod === 'Term 2' ? 'term2' : grade.gradingPeriod === 'Term 3' ? 'term3' : 'final'; %>
               <td><strong><%= grade.gradeValue ?? '—' %></strong>
                 <% if (grade.gradeValue == null) { %><small class="field-help">Missing cached grade</small>

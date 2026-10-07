@@ -1697,7 +1697,7 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     const studentPage = await fetch(`${baseUrl}/documents`, { headers: { cookie: studentCookie } });
     const studentHtml = await studentPage.text();
     assert.equal(studentPage.status, 200, JSON.stringify(calls));
-    assert.doesNotMatch(studentHtml, /Search physical requirement statuses|Physical student requirements/);
+    assert.doesNotMatch(studentHtml, /Search paper requirement statuses|Paper document records/);
     assert.match(studentHtml, /Good Moral Certificate/);
     assert.match(studentHtml, /report card/i);
     assert.match(studentHtml, /Previous-school report-card paper copy/);
@@ -1705,7 +1705,7 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     assert.doesNotMatch(studentHtml, /Staff-only paper note/);
     assert.doesNotMatch(studentHtml, /Form 137|form137_status|Gemini suggestions/i, 'Form 137 workflow details remain staff-only');
     assert.match(studentHtml, /id="document-file"[^>]*aria-describedby="upload-format-help"/);
-    assert.match(studentHtml, /id="upload-format-help">Accepted file formats: PDF, JPEG, and PNG\. Maximum size: 10 MB\. Good Moral and PSA files receive configured field prechecks/);
+    assert.match(studentHtml, /id="upload-format-help">Accepted formats are PDF, JPEG, and PNG; maximum size is 10 MB\. Good Moral and PSA files receive limited field suggestions/);
     assert.match(studentHtml, /If staff rejects the latest submission, you can start a new original submission; earlier submissions stay in your history/);
     assert.doesNotMatch(studentHtml, /No file is uploaded or processed/);
     assert.match(studentHtml, /option value="psa_birth_certificate"/);
@@ -1895,8 +1895,8 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     const reportCardQueuePage = await fetch(`${baseUrl}/documents`, { headers: { cookie: registrarCookie } });
     const reportCardQueueHtml = await reportCardQueuePage.text();
     assert.equal(reportCardQueuePage.status, 200);
-    assert.match(reportCardQueueHtml, /Physical student requirements/);
-    assert.match(reportCardQueueHtml, /Form 137 physical record/);
+    assert.match(reportCardQueueHtml, /Paper document records/);
+    assert.match(reportCardQueueHtml, /Form 137 paper record/);
     assert.match(reportCardQueueHtml, /href="\/documents\/physical"/);
     assert.match(reportCardQueueHtml, /These filters do not include Form 137 or paper-copy status records/);
     assert.match(reportCardQueueHtml, /Previous-school report-card scans/);
@@ -1908,11 +1908,11 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     const physicalHtml = await physicalPage.text();
     assert.equal(physicalPage.status, 200);
     assert.deepEqual(physicalWorkspaceCalls.at(-1), [2, 'Maria Santos', '2']);
-    assert.match(physicalHtml, /Physical student requirements/);
+    assert.match(physicalHtml, /Paper document records/);
     assert.match(physicalHtml, /Maria Santos/);
     assert.match(physicalHtml, /Student no\. SHS-2026-0321/);
     assert.match(physicalHtml, /LRN 123456789012/);
-    assert.match(physicalHtml, /Form 137 physical record/);
+    assert.match(physicalHtml, /Form 137 paper record/);
     assert.match(physicalHtml, /Previous-school report-card paper copy/);
     assert.match(physicalHtml, /Record or update Form 137 status/);
     assert.match(physicalHtml, /href="\/documents\/students\/44#form137-status-title"/);

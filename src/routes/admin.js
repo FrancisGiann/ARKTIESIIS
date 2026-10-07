@@ -95,7 +95,7 @@ function createAdminRouter({ getPool, sql, adminService } = {}) {
       return res.redirect(303, `/admin/users?category=students${search}`);
     }
     return res.render('dashboards/database-admin', {
-      title: 'Database Admin Dashboard',
+      title: 'Admin overview',
       csrfToken: ensureCsrfToken(req),
       currentUser: req.authUser,
       notice: notices[req.query.notice] || null
@@ -104,7 +104,7 @@ function createAdminRouter({ getPool, sql, adminService } = {}) {
 
   router.get('/users', async (req, res) => {
     const base = {
-      title: 'Accounts',
+      title: 'User accounts',
       csrfToken: ensureCsrfToken(req),
       currentUser: req.authUser,
       users: [],
@@ -119,14 +119,14 @@ function createAdminRouter({ getPool, sql, adminService } = {}) {
       const isInputError = error instanceof AdminServiceError;
       return res.status(isInputError ? error.status : 503).render('admin/accounts', {
         ...base,
-        error: isInputError ? error.message : 'Accounts are temporarily unavailable. Try again shortly.'
+        error: isInputError ? error.message : 'User accounts are temporarily unavailable. Try again shortly.'
       });
     }
   });
 
   router.get('/audit', async (req, res) => {
     const base = {
-      title: 'Audit activity',
+      title: 'Activity log',
       csrfToken: ensureCsrfToken(req),
       currentUser: req.authUser,
       events: [],
@@ -145,7 +145,7 @@ function createAdminRouter({ getPool, sql, adminService } = {}) {
       const isInputError = error instanceof AdminServiceError;
       return res.status(isInputError ? error.status : 503).render('admin/audit', {
         ...base,
-        error: isInputError ? error.message : 'Audit activity is temporarily unavailable. Try again shortly.'
+        error: isInputError ? error.message : 'The activity log is temporarily unavailable. Try again shortly.'
       });
     }
   });

@@ -56,7 +56,7 @@
       <div><dt>Entry term</dt><dd><%= enrollment.term || `Term ${parent.entry_term_number || enrollment.entryTermNumber || ''}` %></dd></div>
       <div><dt>Enrollment start date</dt><dd><%= confirmationDate(parent.enrollment_start_date, true) || 'Not recorded' %></dd></div>
       <div><dt>Entry section</dt><dd><%= enrollment.sectionName || 'Not recorded' %></dd></div>
-      <% if (parent.student_email) { %><div><dt>Student email</dt><dd><%= parent.student_email %></dd></div><% } %>
+      <% if (parent.student_email) { %><div><dt>Email</dt><dd><%= parent.student_email %></dd></div><% } %>
       <% if (parent.phone) { %><div><dt>Contact phone</dt><dd><%= parent.phone %></dd></div><% } %>
       <% if (parent.registrar_confirmed_at) { %><div><dt>Confirmed</dt><dd><%= confirmationDate(parent.registrar_confirmed_at) %> Philippine time</dd></div><% } %>
     </dl>
@@ -124,7 +124,7 @@
     <a class="button button--secondary" href="<%= confirmationUrl %>">View / print saved confirmation</a>
     <% if (enrollment.studentId) { %><a class="button button--secondary" href="/documents/students/<%= enrollment.studentId %>#physical-checklist-title">Open paper requirements checklist</a><% } %>
     <% if (enrollment.annualEnrollmentId) { %><a class="button button--secondary" href="/registrar/intake/<%= enrollment.annualEnrollmentId %>/manage">Open annual student record</a><% } %>
-    <a class="button button--secondary" href="/registrar/intake">Return to annual intake</a>
+    <a class="button button--secondary" href="/registrar/intake">Return to enrollments</a>
   </div>
 </main>
 <%- include('../partials/foot') %>

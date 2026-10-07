@@ -15,17 +15,17 @@
     return `/registrar/intake?${params.toString()}`;
   }; %>
   <section class="dashboard-heading">
-    <div><h1>Annual enrollments</h1><p>Find an existing student’s annual record and review its term placements. New annual enrollments start from a saved front-desk paper record.</p></div>
-    <div class="admin-heading-actions"><a class="button button--secondary" href="/registrar/intake/setup/terms">Configure term order</a><a class="button button--primary" href="/pre-enrollments">Review paper submissions</a></div>
+    <div><h1>Enrollments</h1><p>Each record covers one student and school year, with its term placements. Start new enrollments from a saved front-desk paper form.</p></div>
+    <div class="admin-heading-actions"><a class="button button--secondary" href="/registrar/intake/setup/terms">Set term order</a><a class="button button--primary" href="/pre-enrollments">Review paper forms</a></div>
   </section>
-  <% if (notice === 'annualCreated') { %><p class="form-success" role="status">Annual enrollment saved. Open a learner’s paper requirements checklist from the roster to record submitted originals, photocopies, and pieces.</p><% } %>
+  <% if (notice === 'annualCreated') { %><p class="form-success" role="status">Enrollment saved. Open the student record to note received originals, photocopies, and pieces on the paper checklist.</p><% } %>
   <% if (notice === 'voucherUpdated') { %><p class="form-success" role="status">Voucher type updated. Existing assessed charges remain unchanged and require finance review.</p><% } %>
   <% if (notice === 'termStatusUpdated') { %><p class="form-success" role="status">Term placement status and reason recorded.</p><% } %>
   <% if (notice === 'placementUpdated') { %><p class="form-success" role="status">Term section placement updated.</p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
   <section class="admin-section annual-search-section" aria-labelledby="annual-filter-title">
-    <div class="admin-section__heading"><div><h2 id="annual-filter-title">Find an annual enrollment</h2><p>Search by student name or number, then narrow by school year and term. Finance amounts and private arrangements stay in the finance workspace.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="annual-filter-title">Find an enrollment</h2><p>Search by student name or number, then narrow by school year and term. Finance amounts and private arrangements stay in the finance workspace.</p></div></div>
     <form class="annual-search-form" method="get" action="/registrar/intake">
       <% if (filters.studentStatus === 'active') { %><input type="hidden" name="studentStatus" value="active"><% } %>
       <div class="annual-search-primary">
@@ -51,10 +51,10 @@
   </section>
 
   <section class="admin-section annual-enrollments-section" aria-labelledby="annual-placements-title">
-    <div class="admin-section__heading"><div><h2 id="annual-placements-title">Student annual records</h2><p>Each record keeps its matching term placements together. The entry term is confirmed by the registrar; finance records payments and clearances separately.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="annual-placements-title">Student enrollments</h2><p>Each record keeps that school year's term placements together. The registrar confirms the entry term; finance records payments and clearances separately.</p></div></div>
     <% if (pagination.totalRecords) { %>
       <div class="annual-pagination-summary"><p role="status">Showing <%= pagination.from %>–<%= pagination.to %> of <%= pagination.totalRecords %> annual records.</p>
-        <% if (pagination.totalPages > 1) { %><nav class="annual-pagination" aria-label="Annual enrollment record pages">
+        <% if (pagination.totalPages > 1) { %><nav class="annual-pagination" aria-label="Enrollment pages">
           <% if (pagination.page > 1) { %><a class="button button--secondary" rel="prev" href="<%= annualPageHref(pagination.page - 1) %>">Previous page</a><% } %>
           <span>Page <%= pagination.page %> of <%= pagination.totalPages %></span>
           <% if (pagination.page < pagination.totalPages) { %><a class="button button--secondary" rel="next" href="<%= annualPageHref(pagination.page + 1) %>">Next page</a><% } %>
@@ -142,7 +142,7 @@
           </article>
         <% } %>
       </div>
-    <% } else { %><p class="empty-state">No annual enrollment records match these filters. Change or clear the filters, or start a new annual intake.</p><% } %>
+    <% } else { %><p class="empty-state">No enrollments match these filters. Change or clear the filters, or start a new enrollment from a saved front-desk paper form.</p><% } %>
   </section>
 
   <section class="admin-section annual-counts-section" aria-labelledby="annual-counts-title">
@@ -165,6 +165,6 @@
       <% } else { %><p class="empty-state">No annual enrollment counts match these filters.</p><% } %>
     </details>
   </section>
-  <p class="muted-copy"><a href="/registrar/intake/legacy">Open historic pending intake records</a></p>
+  <p class="muted-copy"><a href="/registrar/intake/legacy">View older pending enrollments</a></p>
 </main>
 <%- include('../partials/foot') %>

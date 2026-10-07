@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page annual-fee-review" id="main-content">
-  <a class="context-back" href="/registrar/intake">Back to annual intake</a>
+  <a class="context-back" href="/registrar/intake">Back to enrollments</a>
   <header class="dashboard-heading fee-review-heading">
     <div>
       <h1>Review fees</h1>
@@ -17,7 +17,7 @@
   <% if (successNotice) { %><p class="form-success" role="status"><%= successNotice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% if (!preview) { %>
-    <section class="admin-section"><p>The fee summary is unavailable. Return to the intake roster and review it again.</p><a class="button button--secondary" href="/registrar/intake">Return to annual intake</a></section>
+    <section class="admin-section"><p>The fee summary is unavailable. Return to the enrollment list and review it again.</p><a class="button button--secondary" href="/registrar/intake">Return to enrollments</a></section>
   <% } else { %>
     <form method="get" action="/registrar/intake/<%= annualId %>/fees" class="fee-optional-choice" aria-label="Review fees and optional charges"
       data-fee-review data-track-optional="<%= !preview.existingAssessment && preview.optionalLines?.length ? 'true' : 'false' %>"

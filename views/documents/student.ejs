@@ -136,7 +136,7 @@
   </div>
 
     <section class="admin-section student-documents-panel" aria-labelledby="form137-status-title" data-section-panel="form137">
-    <div class="admin-section__heading"><div><h2 id="form137-status-title" tabindex="-1">Form 137 physical record</h2><p>Form 137 remains a separate staff-only physical-status workflow. Authorized staff can send a temporary scan to Google Gemini for student-name and possible school-name suggestions. The scan is processed in memory and is not stored by this application as a file or database record. Only the human-recorded status and instruction are saved. Inspect the physical paper before deciding.</p></div></div>
+        <div class="admin-section__heading"><div><h2 id="form137-status-title" tabindex="-1">Form 137 paper record</h2><p>This is a separate staff-only paper-status workflow. Authorized staff can send a temporary scan to Google Gemini for student-name and possible school-name suggestions. The scan is processed in memory and is not stored by this application as a file or database record. Only the human-recorded status and instruction are saved. Inspect the paper original before deciding.</p></div></div>
     <p><strong>Current status:</strong> <%= form137Status.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></p>
     <% if (form137Status.instruction) { %><p class="form-alert" role="status"><%= form137Status.instruction %></p><% } %>
     <% if (form137Status.created_at) { %><p class="muted-copy">Updated <%= new Date(form137Status.created_at).toLocaleString() %></p><% } %>

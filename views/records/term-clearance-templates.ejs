@@ -27,9 +27,9 @@
           <div class="field"><label for="template-finance">Finance sign-off label</label><input id="template-finance" name="financeLabel" maxlength="120" value="<%= values.financeLabel || '' %>" required></div>
         </div>
         <fieldset class="clearance-fieldset">
-          <legend>Confirm the paper form and subject roster rule</legend>
+          <legend>Confirm the paper form and required signatures</legend>
           <label class="checkbox-field"><input type="checkbox" name="paperFormConfirmed" value="1" <%= values.paperFormConfirmed ? 'checked' : '' %> required><span>I compared these labels with the approved printed form used by the school.</span></label>
-          <label class="checkbox-field"><input type="checkbox" name="teacherRosterConfirmed" value="1" <%= values.teacherRosterConfirmed ? 'checked' : '' %> required><span>Each subject in the term roster requires its own teacher signature row.</span></label>
+          <label class="checkbox-field"><input type="checkbox" name="teacherRosterConfirmed" value="1" <%= values.teacherRosterConfirmed ? 'checked' : '' %> required><span>Each subject in the term's subject list needs its own teacher signature row.</span></label>
           <label class="checkbox-field"><input type="checkbox" name="laboratoryRowsConfirmed" value="1" <%= values.laboratoryRowsConfirmed ? 'checked' : '' %> required><span>I checked every laboratory sign-off on the paper form. An empty list means none apply on this form.</span></label>
         </fieldset>
         <% const laboratoryLabels = Array.isArray(values.laboratoryLabels) ? values.laboratoryLabels : values.laboratoryLabels ? [values.laboratoryLabels] : []; %>

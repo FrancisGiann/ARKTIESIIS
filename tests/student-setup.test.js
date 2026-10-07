@@ -840,7 +840,7 @@ test('annual intake error fallback tells staff to check for a committed record b
     });
     const html = await response.text();
     assert.equal(response.status, 503);
-    assert.match(html, /Check the annual intake list before starting a new submission\./);
+    assert.match(html, /Check the enrollments list before starting a new submission\./);
     assert.match(html, new RegExp(`Support reference: ${incident.incidentId}\\.`));
     assert.doesNotMatch(html, /name="idempotencyKey"/);
     assert.equal(optionLoads, 2);
@@ -932,7 +932,7 @@ test('bulk roster template provides a starter file and print control is compatib
     const template = await response.text();
     assert.equal(response.status, 200);
     assert.match(response.headers.get('cache-control'), /no-store/);
-    assert.match(response.headers.get('content-disposition'), /student-login-roster-template\.csv/);
+    assert.match(response.headers.get('content-disposition'), /student-login-accounts-template\.csv/);
     assert.match(template, /Student Number,Email\r\nREPLACE-WITH-EXISTING-STUDENT-NUMBER,student@example\.edu/);
   });
   const printPage = fs.readFileSync(path.join(__dirname, '..', 'views/records/enrollment-print.ejs'), 'utf8');

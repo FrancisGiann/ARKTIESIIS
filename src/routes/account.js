@@ -18,7 +18,7 @@ function createAccountRouter({ accountService, environment } = {}) {
       const account = await accountService.getAccountDetails(req.authUser.id);
       if (!account) return res.status(503).render('error', { title: 'Account Unavailable', message: 'Account details are temporarily unavailable.' });
       return res.status(status).render('account/index', {
-        title: 'Account', account, error,
+        title: 'Account settings', account, error,
         notice: accountNotices[req.query.notice] || null,
         csrfToken: ensureCsrfToken(req)
       });

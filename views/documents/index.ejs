@@ -4,8 +4,8 @@
   <% const availableDocumentTypes = (uploadDocumentTypes || documentTypes).filter(({ value }) => !blockedNewOriginalTypeSet.has(value)); %>
   <section class="dashboard-heading">
     <div>
-      <h1><%= isStaff ? 'Document management' : 'My documents' %></h1>
-      <p><%= isStaff ? 'Search submissions and open a student record to upload or review documents. New previous-school report-card scans receive a limited name and file-format precheck before staff review; older files remain marked as archive.' : 'Upload Good Moral, PSA, or a scan of your previous-school report card for your own linked record. Staff review every digital submission.' %></p>
+      <h1><%= isStaff ? 'Documents' : 'My documents' %></h1>
+      <p><%= isStaff ? 'Find a student record to upload or review documents. New report-card scans receive a limited automated check for visible name and file type before staff review; older files remain marked as archive.' : 'Upload a Good Moral Certificate, PSA birth certificate, or previous-school report-card scan for your own linked record. Staff reviews every submission. Automatic checks do not verify authenticity, signatures, or seals.' %></p>
     </div>
     <% if (['registrar', 'database_admin'].includes(currentUser.role)) { %><a class="button button--primary" href="/registrar/records">Find a student</a><% } %>
   </section>
@@ -15,12 +15,12 @@
 
   <% if (isStaff) { %>
     <section class="admin-section document-physical-entry" aria-labelledby="physical-records-entry-title">
-      <div class="admin-section__heading"><div><h2 id="physical-records-entry-title">Physical student requirements</h2><p>These staff-recorded statuses are separate from uploaded files and digital document filters.</p></div></div>
+      <div class="admin-section__heading"><div><h2 id="physical-records-entry-title">Paper document records</h2><p>These staff-recorded paper statuses are separate from uploaded files.</p></div></div>
       <div class="document-physical-entry__types">
-        <p><strong>Form 137 physical record</strong><span>Track paper receipt and staff review status.</span></p>
+        <p><strong>Form 137 paper record</strong><span>Track paper receipt and staff review status.</span></p>
         <p><strong>Previous-school report-card paper copy</strong><span>Track the paper enrollment requirement separately from a student's digital scan.</span></p>
       </div>
-      <a class="button button--secondary" href="/documents/physical">Search physical requirement statuses</a>
+      <a class="button button--secondary" href="/documents/physical">Search paper document records</a>
     </section>
   <% } %>
 
@@ -33,7 +33,7 @@
       <% if (previousSchoolReportCardPhysicalStatus?.created_at) { %><p class="muted-copy">Updated <%= new Date(previousSchoolReportCardPhysicalStatus.created_at).toLocaleString() %></p><% } %>
     </section>
     <section class="admin-section" aria-labelledby="upload-title">
-      <div class="admin-section__heading"><div><h2 id="upload-title">Upload a document</h2><p id="upload-format-help">Accepted file formats: PDF, JPEG, and PNG. Maximum size: <%= uploadMaxMb %> MB. Good Moral and PSA files receive configured field prechecks. Your previous-school report-card scan receives a limited visible-name and file-format precheck, then staff review for the enrollment requirement. Grades are not extracted or changed. Upload a correction when staff requests one. If staff rejects the latest submission, you can start a new original submission; earlier submissions stay in your history.</p></div></div>
+      <div class="admin-section__heading"><div><h2 id="upload-title">Upload a document</h2><p id="upload-format-help">Accepted formats are PDF, JPEG, and PNG; maximum size is <%= uploadMaxMb %> MB. Good Moral and PSA files receive limited field suggestions. For a report-card scan, the automatic check compares only the visible student name and file type; it does not read grades. Staff reviews each submission. These checks do not verify authenticity, signatures, or seals. Upload a correction when staff requests one. If staff rejects the latest submission, you can start a new original submission; earlier submissions stay in your history.</p></div></div>
       <% if (availableDocumentTypes.length) { %>
       <form class="form-stack document-upload-form" method="post" action="/documents" enctype="multipart/form-data" data-submitting-message="Uploading your document. Please wait.">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">

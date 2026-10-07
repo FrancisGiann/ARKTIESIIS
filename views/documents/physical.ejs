@@ -1,10 +1,10 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page records-page physical-requirements-page" id="main-content">
-  <a class="context-back" href="/documents">Back to document management</a>
+  <a class="context-back" href="/documents">Back to documents</a>
   <header class="dashboard-heading">
     <div>
-      <h1>Physical student requirements</h1>
-      <p>Review Form 137 and paper previous-school report-card status. These physical records are separate from uploaded document files.</p>
+      <h1>Paper document records</h1>
+      <p>Review Form 137 and paper previous-school report-card status. These records are separate from uploaded files.</p>
     </div>
   </header>
 
@@ -33,7 +33,7 @@
             </header>
             <dl class="physical-requirements-statuses">
               <div class="physical-requirement-status">
-                <dt>Form 137 physical record</dt>
+                <dt>Form 137 paper record</dt>
                 <dd><span class="record-document-status"><%= form137Label %></span><% if (student.form137_updated_at) { %><span class="muted-copy">Updated <%= new Date(student.form137_updated_at).toLocaleDateString() %></span><% } %><a class="button button--secondary" href="/documents/students/<%= student.id %>#form137-status-title">Record or update Form 137 status</a></dd>
               </div>
               <div class="physical-requirement-status">
@@ -49,7 +49,7 @@
         <% } %>
       </div>
       <% if (totalPages > 1) { %>
-        <nav class="records-pagination" aria-label="Physical requirements pages">
+        <nav class="records-pagination" aria-label="Paper document record pages">
           <% if (page > 1) { %><a class="button button--secondary" href="/documents/physical?search=<%= encodeURIComponent(searchTerm) %>&amp;page=<%= page - 1 %>">Previous page</a><% } %>
           <span aria-current="page">Page <%= page %> of <%= totalPages %></span>
           <% if (page < totalPages) { %><a class="button button--secondary" href="/documents/physical?search=<%= encodeURIComponent(searchTerm) %>&amp;page=<%= page + 1 %>">Next page</a><% } %>

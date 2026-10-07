@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell admin-page records-page annual-term-activation-review" id="main-content">
-  <a class="context-back" href="/registrar/intake">Back to annual intake</a>
+  <a class="context-back" href="/registrar/intake">Back to enrollments</a>
   <header class="dashboard-heading">
     <div><h1>Review term activation</h1><p>Earlier attended terms need complete paper signatures and registrar confirmation before this term can be activated.</p></div>
   </header>
@@ -33,9 +33,9 @@
           <input type="hidden" name="idempotencyKey" value="<%= idempotencyKey %>">
           <input type="hidden" name="clearanceSnapshotFingerprint" value="<%= review.fingerprint %>">
           <button class="button button--primary" type="submit">Activate term</button>
-          <a class="button button--secondary" href="/registrar/intake">Return to annual intake</a>
+          <a class="button button--secondary" href="/registrar/intake">Return to enrollments</a>
         </form>
-      <% } else { %><p class="form-alert">This term cannot be activated until every paper form item above is resolved.</p><a class="button button--secondary" href="/registrar/intake">Return to annual intake</a><% } %>
+      <% } else { %><p class="form-alert">This term cannot be activated until every paper form item above is resolved.</p><a class="button button--secondary" href="/registrar/intake">Return to enrollments</a><% } %>
     </section>
   <% } %>
 </main>

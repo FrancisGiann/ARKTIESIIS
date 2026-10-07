@@ -35,7 +35,7 @@
     <section class="admin-section grade-import-preview" aria-labelledby="preview-context-title">
       <div class="admin-section__heading"><div><h2 id="preview-context-title">Preview · <%= preview.schoolYear %> · <%= formatStudentPlacement(preview.gradeLevel, preview.sectionName) %></h2><p>Subject: <%= preview.subjectName %>. This preview expires at <%= new Date(preview.expiresAt).toLocaleString() %>.</p></div></div>
       <% if (preview.contextMismatch) { %>
-        <p class="form-alert" role="alert">Workbook context: <%= formatStudentPlacement(preview.workbookGradeLevel, preview.workbookSectionName) %> · <%= preview.workbookSubjectName %>. The selected class context differs. These rows are excluded; correct the roster or workbook and upload it again.</p>
+        <p class="form-alert" role="alert">Workbook context: <%= formatStudentPlacement(preview.workbookGradeLevel, preview.workbookSectionName) %> · <%= preview.workbookSubjectName %>. The selected class context differs. These rows are excluded; correct the student list or workbook and upload it again.</p>
       <% } %>
       <p><%= preview.counts.eligible %> matched rows, <%= preview.counts.unresolved %> excluded rows, and <%= preview.counts.conflicts %> grade conflicts.</p>
       <form class="form-stack" method="post" action="/registrar/records/grade-import/<%= preview.id %>/confirm" data-submitting-message="Saving the selected grades. Please wait.">

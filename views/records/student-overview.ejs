@@ -31,7 +31,7 @@
         <div><dt>PSA birth certificate</dt><dd><span class="record-document-status"><%= documentLabel(student.psa_status) %></span></dd></div>
         <div><dt>Previous-school report card · digital enrollment scan</dt><dd><span class="record-document-status"><%= previousReportCardLabel(student.previous_report_card_status, student.previous_report_card_latest_decision_type) %></span><a class="text-link" href="/documents/students/<%= student.id %>">Review digital submission</a></dd></div>
         <div><dt>Previous-school report card · paper copy (staff only)</dt><dd><span class="record-document-status"><%= previousReportCardPaperLabel(student.previous_school_report_card_physical_status) %></span><a class="text-link" href="/documents/students/<%= student.id %>#previous-school-report-card-status-title">Record paper-copy status</a></dd></div>
-        <div><dt>Form 137 physical record (staff only)</dt><dd><span class="record-document-status"><%= student.form137_status ? student.form137_status.replaceAll('_', ' ') : 'Not recorded' %></span><a class="text-link" href="/documents/students/<%= student.id %>#form137-status-title">Record Form 137 status</a></dd></div>
+        <div><dt>Form 137 paper record (staff only)</dt><dd><span class="record-document-status"><%= student.form137_status ? student.form137_status.replaceAll('_', ' ') : 'Not recorded' %></span><a class="text-link" href="/documents/students/<%= student.id %>#form137-status-title">Record Form 137 status</a></dd></div>
       </dl>
       <p class="muted-copy">The digital scan and paper-copy status are separate enrollment records. Neither writes grades. Form 137 stays in its own staff-only physical-record workflow.</p>
     </article>

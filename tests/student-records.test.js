@@ -753,7 +753,7 @@ test('database administrators can search the master list and open a unified prof
     assert.match(listHtml, /href="\/registrar\/records\/students\/12"/);
     assert.match(listHtml, /Good Moral <strong>Review needed/);
     assert.match(listHtml, /PSA <strong>Missing/);
-    assert.match(listHtml, /Form 137 physical record \(staff only\) <strong>received/);
+    assert.match(listHtml, /Form 137 paper record \(staff only\) <strong>received/);
     const newProfile = await fetch(`${baseUrl}/registrar/records/students/new`, { headers: { cookie } });
     const newProfileHtml = await newProfile.text();
     assert.equal(newProfile.status, 200);
@@ -768,7 +768,7 @@ test('database administrators can search the master list and open a unified prof
     assert.match(detailHtml, /PSA birth certificate/);
     assert.match(detailHtml, /Grade 11 · Mabini/);
     assert.doesNotMatch(detailHtml, /Grade Grade 11/);
-    assert.match(detailHtml, /Form 137 physical record \(staff only\)/);
+    assert.match(detailHtml, /Form 137 paper record \(staff only\)/);
     assert.match(detailHtml, /Previous-school report card · digital enrollment scan/);
     assert.match(detailHtml, /Previous-school report card · paper copy \(staff only\)/);
     assert.match(detailHtml, /href="\/documents\/students\/12#previous-school-report-card-status-title"/);
@@ -830,7 +830,7 @@ test('records mutations reject missing CSRF tokens before calling the service', 
     assert.match(masterListHtml, /Find a student record/);
     assert.match(masterListHtml, /LRN 123456789012/);
     assert.match(masterListHtml, /Good Moral <strong>Review needed/);
-    assert.match(masterListHtml, /Form 137 physical record \(staff only\) <strong>received/);
+    assert.match(masterListHtml, /Form 137 paper record \(staff only\) <strong>received/);
     assert.match(masterListHtml, /records-context-strip--term/);
     assert.match(masterListHtml, /record-status--active">Active/);
     assert.match(masterListHtml, />Edit profile<\/a>/);

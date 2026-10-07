@@ -202,7 +202,7 @@ test('return evaluations keep Student records selected for both staff roles', ()
   }
 });
 
-test('finance navigation keeps roster selected for annual accounts, statements, and historic confirmations', () => {
+test('finance navigation keeps student accounts selected for annual accounts, statements, and historic confirmations', () => {
   const contexts = [
     ['/finance/overview', 'finance-overview', '/finance/overview'],
     ['/finance', 'finance-roster', '/finance'],
@@ -229,12 +229,12 @@ test('finance navigation keeps roster selected for annual accounts, statements, 
 
 test('authenticated navigation only exposes destinations available to each role', async () => {
   const cases = [
-    { role: 'database_admin', path: '/admin', labels: ['Overview', 'Accounts', 'Student records', 'Pre-enrollment records', 'Audit activity', 'Documents', 'Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/pre-enrollments', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: [] },
-    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollment intake', 'Pre-enrollment records', 'Document review', 'Grade review', 'Class schedules', 'Subject catalog', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
+    { role: 'database_admin', path: '/admin', labels: ['Overview', 'User accounts', 'Student records', 'Pre-enrollment records', 'Activity log', 'Documents', 'Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/pre-enrollments', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: [] },
+    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollments', 'Pre-enrollment records', 'Document review', 'Grade review', 'Class schedules', 'Subjects', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
     { role: 'front_desk', path: '/pre-enrollments', labels: ['Pre-enrollment records'], hrefs: ['/pre-enrollments'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/documents', '/admin'] },
     { role: 'teacher', path: '/teacher', labels: ['My classes', 'Submit grades'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/admin'] },
-    { role: 'finance', path: '/finance', labels: ['Overview', 'Roster', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: ['/registrar/records', '/documents', '/admin'] },
-    { role: 'student', path: '/student', labels: ['Home', 'Schedule', 'Grades', 'Finance', 'My records', 'Documents'], forbidden: ['/registrar/records', '/finance', '/admin'] }
+    { role: 'finance', path: '/finance', labels: ['Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: ['/registrar/records', '/documents', '/admin'] },
+    { role: 'student', path: '/student', labels: ['Home', 'Class schedule', 'Grades', 'Fees &amp; payments', 'My records', 'Documents'], forbidden: ['/registrar/records', '/finance', '/admin'] }
   ];
 
   for (const scenario of cases) {
@@ -251,12 +251,17 @@ test('authenticated navigation only exposes destinations available to each role'
       const navigation = html.match(/<aside class="desktop-nav"[\s\S]*?<\/aside>/)[0];
       const desktopGroupLabels = [...navigation.matchAll(/<section class="nav-group">\s*<h2>([^<]+)<\/h2>/g)].map((match) => match[1]);
       assert.ok(desktopGroupLabels.every((label) => !scenario.labels.includes(label)), `${scenario.role} group labels do not repeat destination labels`);
+      if (scenario.role === 'database_admin') assert.deepEqual(desktopGroupLabels, ['Workspace', 'People and records', 'Activity &amp; documents', 'Finance']);
       if (scenario.role === 'registrar') assert.deepEqual(desktopGroupLabels, ['Workspace', 'Records', 'Academic work', 'Setup']);
       const mobileNavigation = html.match(/<details class="mobile-nav">([\s\S]*?)<\/details>/)?.[1];
       assert.ok(mobileNavigation, 'expected the mobile role menu');
       if (scenario.role === 'registrar') {
         const mobileGroupLabels = [...mobileNavigation.matchAll(/<section class="nav-group">\s*<h2>([^<]+)<\/h2>/g)].map((match) => match[1]);
         assert.deepEqual(mobileGroupLabels, ['Workspace', 'Records', 'Academic work', 'Setup']);
+      }
+      if (scenario.role === 'database_admin') {
+        const mobileGroupLabels = [...mobileNavigation.matchAll(/<section class="nav-group">\s*<h2>([^<]+)<\/h2>/g)].map((match) => match[1]);
+        assert.deepEqual(mobileGroupLabels, ['Workspace', 'People and records', 'Activity &amp; documents', 'Finance']);
       }
       const mobileLabels = [...mobileNavigation.matchAll(/class="mobile-nav__link[^\"]*"[^>]*>([\s\S]*?)<\/a>/g)]
         .map((match) => match[1].replace(/<[^>]+>/g, '').trim());
@@ -300,7 +305,7 @@ test('authenticated navigation only exposes destinations available to each role'
       if (scenario.role === 'finance') {
         assert.match(html, /class="finance-panel"/);
         assert.match(html, /id="annual-roster-filter-title"/);
-        assert.match(html, /<h2 id="annual-roster-filter-title">Find annual accounts<\/h2>/);
+        assert.match(html, /<h2 id="annual-roster-filter-title">Find student accounts<\/h2>/);
         const main = html.match(/<main class="page-shell dashboard-page finance-page(?: [^"]*)?"[\s\S]*?<\/main>/)?.[0];
         assert.ok(main, 'finance roster should render');
         assert.doesNotMatch(main, /href="\/finance\/(?:schedules|reports|departures|legacy)"/, 'finance destinations appear once in the shared navigation');
@@ -330,9 +335,9 @@ test('database administrator audit page has its own current navigation destinati
     const html = await response.text();
 
     assert.equal(response.status, 200);
-    assert.match(html, /<h1>Audit activity<\/h1>/);
+    assert.match(html, /<h1>Activity log<\/h1>/);
     assert.match(html, /href="\/admin\/audit" aria-current="page"/);
-    assert.match(html, /No audit events match these filters\./);
+    assert.match(html, /No recorded actions match these filters\./);
     const navigation = html.match(/<aside class="desktop-nav"[\s\S]*?<\/aside>/)[0];
     assert.equal((navigation.match(/aria-current="page"/g) || []).length, 1);
     assert.equal((navigation.match(/href="\/admin\/audit"/g) || []).length, 1);
@@ -362,7 +367,7 @@ test('student overview stays concise while all destinations remain in sidebar an
     assert.match(main, /class="student-quick-links"[\s\S]*href="\/student\/grades"[\s\S]*href="\/documents"[\s\S]*href="\/student\/finance"/);
     assert.doesNotMatch(main, /₱|Approved grades|Enrollment history/);
 
-    const destinations = ['Home', 'Schedule', 'Grades', 'Finance', 'My records', 'Documents'];
+    const destinations = ['Home', 'Class schedule', 'Grades', 'Fees &amp; payments', 'My records', 'Documents'];
     assert.deepEqual(navigationLabels(html), destinations);
     const mobileNavigation = html.match(/<details class="mobile-nav">([\s\S]*?)<\/details>/)?.[1];
     assert.ok(mobileNavigation);
@@ -386,7 +391,7 @@ test('student records use the workspace rail and show a clear no-current-term st
     assert.match(html, /<main class="page-shell dashboard-page admin-page records-page"/);
     assert.match(html, /<h1>Student records<\/h1>/);
     assert.match(html, /No academic term is marked current\./);
-    assert.match(html, /href="\/pre-enrollments">Review paper submissions/);
+    assert.match(html, /href="\/pre-enrollments">Review paper forms/);
     assert.match(html, /href="\/registrar\/records\?view=setup">Academic setup/);
     assert.doesNotMatch(html, /Evaluate return without a saved record/);
     assert.match(html, /Find a student record/);

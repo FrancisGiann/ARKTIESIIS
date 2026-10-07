@@ -199,7 +199,7 @@ function createStudentBulkAccountsRouter({ getPool, sql, studentSetupService } =
 
   router.get('/template.csv', (req, res) => setPrivateHeaders(res)
     .set('Content-Type', 'text/csv; charset=utf-8')
-    .set('Content-Disposition', 'attachment; filename="student-login-roster-template.csv"')
+    .set('Content-Disposition', 'attachment; filename="student-login-accounts-template.csv"')
     .send(`\uFEFFStudent Number,Email\r\nREPLACE-WITH-EXISTING-STUDENT-NUMBER,student@example.edu\r\n`));
 
   router.get('/', (req, res) => {
@@ -260,10 +260,10 @@ function createStudentBulkAccountsRouter({ getPool, sql, studentSetupService } =
     const preview = req.session.studentBulkPreview;
     if (!preview || preview.expiresAt <= Date.now() || preview.id !== req.body?.previewId) {
       delete req.session.studentBulkPreview;
-      return renderBulkPage(req, res, { status: 410, error: 'This roster preview expired. Upload the workbook and preview it again.' });
+      return renderBulkPage(req, res, { status: 410, error: 'This preview expired. Upload the workbook and review it again.' });
     }
     if (!preview.valid || preview.rows.some((row) => row.errors.length)) {
-      return renderBulkPage(req, res, { status: 409, error: 'Correct every roster row before confirming. No accounts were created.', rows: preview.rows, previewId: preview.id });
+      return renderBulkPage(req, res, { status: 409, error: 'Correct every student row before confirming. No accounts were created.', rows: preview.rows, previewId: preview.id });
     }
     try {
       const credentials = await service.createBulkStudentAccounts(req.authUser.id, preview.validRows);
@@ -278,7 +278,7 @@ function createStudentBulkAccountsRouter({ getPool, sql, studentSetupService } =
         return renderBulkPage(req, res, { status: error.status, error: error.message, rows: error.details || preview.rows });
       }
       if (isDuplicateKeyError(error)) {
-        return renderBulkPage(req, res, { status: 409, error: 'A student login conflict occurred. No accounts were created; preview the corrected roster again.' });
+        return renderBulkPage(req, res, { status: 409, error: 'A student login conflict occurred. No accounts were created; review the corrected student list again.' });
       }
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'Student login setup could not be completed.' });
     }
@@ -562,12 +562,12 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         ? { page: 1, pageSize: 20, totalRecords: fallbackCount, totalPages: 1, from: fallbackCount ? 1 : 0, to: fallbackCount }
         : roster.pagination;
       return setPrivateHeaders(res).status(status).render('records/annual-intake-list', {
-        title: 'Annual enrollments', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        title: 'Enrollments', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
         rows, counts, filters, pagination, ...options, error, notice: notice || req.query.notice || null
       });
     } catch (loadError) {
-      if (loadError instanceof AnnualEnrollmentError) return res.status(loadError.status).render('error', { title: 'Annual Intake Unavailable', message: loadError.message });
-      return res.status(503).render('error', { title: 'Annual Intake Unavailable', message: 'Annual enrollment placements could not be loaded.' });
+      if (loadError instanceof AnnualEnrollmentError) return res.status(loadError.status).render('error', { title: 'Enrollments unavailable', message: loadError.message });
+      return res.status(503).render('error', { title: 'Enrollments unavailable', message: 'Student enrollments could not be loaded.' });
     }
   }
 
@@ -589,7 +589,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       });
     } catch {
       return res.status(503).render('error', {
-        title: 'Annual Intake Unavailable', message: fallbackMessage || 'Academic terms and sections could not be loaded.'
+        title: 'Enrollments unavailable', message: fallbackMessage || 'Academic terms and sections could not be loaded.'
       });
     }
   }
@@ -919,7 +919,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       return renderForm(req, res, {
         status: 503,
         error: `The save did not return a confirmation. Your entries are still on this form and can be retried. Support reference: ${incidentId}.`,
-        fallbackMessage: `The save did not return a confirmation. Check the annual intake list before starting a new submission. Support reference: ${incidentId}.`,
+        fallbackMessage: `The save did not return a confirmation. Check the enrollments list before starting a new submission. Support reference: ${incidentId}.`,
         values,
         activeStep: 3,
         preEnrollmentSource
@@ -934,7 +934,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       return res.redirect(303, '/registrar/intake?notice=voucherUpdated');
     } catch (error) {
       if (error instanceof AnnualEnrollmentError) return renderList(req, res, { status: error.status, error: error.message });
-      return res.status(503).render('error', { title: 'Annual Intake Unavailable', message: 'The voucher update could not be saved.' });
+      return res.status(503).render('error', { title: 'Enrollments unavailable', message: 'The voucher update could not be saved.' });
     }
   });
 
@@ -945,7 +945,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       return res.redirect(303, '/registrar/intake?notice=termStatusUpdated');
     } catch (error) {
       if (error instanceof AnnualEnrollmentError) return renderList(req, res, { status: error.status, error: error.message });
-      return res.status(503).render('error', { title: 'Annual Intake Unavailable', message: 'The term status could not be saved.' });
+      return res.status(503).render('error', { title: 'Enrollments unavailable', message: 'The term status could not be saved.' });
     }
   });
 
@@ -956,7 +956,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       return res.redirect(303, '/registrar/intake?notice=placementUpdated');
     } catch (error) {
       if (error instanceof AnnualEnrollmentError) return renderList(req, res, { status: error.status, error: error.message });
-      return res.status(503).render('error', { title: 'Annual Intake Unavailable', message: 'The term placement could not be saved.' });
+      return res.status(503).render('error', { title: 'Enrollments unavailable', message: 'The term placement could not be saved.' });
     }
   });
 
@@ -967,7 +967,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       return setPrivateHeaders(res).render('records/enrollment-print', { title: 'Enrollment Form', enrollment, printedAt: new Date() });
     } catch (error) {
       if (error instanceof AnnualEnrollmentError || error instanceof TermClearanceError) return renderActivationReview(req, res, req.params.enrollmentId, { status: error.status, error: error.message });
-      return res.status(503).render('error', { title: 'Annual Intake Unavailable', message: 'The term placement could not be finalized.' });
+      return res.status(503).render('error', { title: 'Enrollments unavailable', message: 'The term placement could not be finalized.' });
     }
   });
   return router;

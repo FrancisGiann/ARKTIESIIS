@@ -1,10 +1,10 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/registrar/intake">Back to annual enrollment intake</a>
+  <a class="context-back" href="/registrar/intake">Back to enrollments</a>
   <section class="dashboard-heading">
-    <div><h1>Historic pending intake</h1><p>Review pre-annual intake records. New and returning learners enter through annual enrollment.</p></div>
+    <div><h1>Older pending enrollments</h1><p>These records use the earlier enrollment process. Start new enrollments from a saved paper pre-enrollment form.</p></div>
     <div class="admin-heading-actions"><a class="button button--secondary" href="<%= basePath %>/activation">Review first-login activation</a></div>
-    <div class="admin-heading-actions"><a class="button button--primary" href="/pre-enrollments">Review paper submissions</a></div>
+    <div class="admin-heading-actions"><a class="button button--primary" href="/pre-enrollments">Review paper forms</a></div>
   </section>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
@@ -14,10 +14,10 @@
     <% if (pendingIntakes.length) { %>
       <div class="table-scroll" tabindex="0" aria-label="Pending student enrollments">
         <table class="admin-table">
-          <thead><tr><th scope="col">Student</th><th scope="col">Contact email</th><th scope="col">Term and section</th><th scope="col">Finance clearance</th><th scope="col"><span class="visually-hidden">Action</span></th></tr></thead>
+          <thead><tr><th scope="col">Student</th><th scope="col">Email</th><th scope="col">Term and section</th><th scope="col">Finance clearance</th><th scope="col"><span class="visually-hidden">Action</span></th></tr></thead>
           <tbody><% for (const intake of pendingIntakes) { %><tr>
             <td data-label="Student"><strong><%= [intake.first_name, intake.middle_name, intake.last_name, intake.suffix].filter(Boolean).join(' ') %></strong><br><%= intake.student_no %></td>
-            <td data-label="Contact email"><%= intake.email %></td>
+            <td data-label="Email"><%= intake.email %></td>
             <td data-label="Term and section"><%= intake.school_year %> · <%= intake.term %><br><%= intake.section_name || 'No section' %></td>
             <td data-label="Finance clearance"><%= intake.clearance_status === 'cleared' ? 'Cleared' : 'Pending' %></td>
             <td data-label="Action">

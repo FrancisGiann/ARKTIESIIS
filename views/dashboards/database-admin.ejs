@@ -2,8 +2,8 @@
 <main class="page-shell dashboard-page admin-page admin-dashboard-page" id="main-content">
   <section class="dashboard-heading">
     <div>
-      <h1>Database administration</h1>
-      <p>Choose an account group, student records, or an oversight task.</p>
+      <h1>Admin overview</h1>
+      <p>Manage user accounts, search student records, or review the activity log.</p>
     </div>
     <div class="admin-heading-actions">
       <a class="button button--secondary" href="/admin/student-accounts">Set up student logins</a>
@@ -14,10 +14,10 @@
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
 
   <nav class="admin-work-links" aria-label="Administration workspaces">
-    <a href="/admin/users?category=students"><strong>Student accounts</strong><span>Find and manage student sign-in accounts.</span></a>
+    <a href="/admin/users?category=students"><strong>Student logins</strong><span>Find and manage student sign-in accounts.</span></a>
     <a href="/admin/users?category=staff"><strong>Staff accounts</strong><span>Find teachers, registrars, finance staff, and database administrators.</span></a>
     <a href="/registrar/records"><strong>Student records</strong><span>Search student profiles and review enrollment and document status.</span></a>
-    <a href="/admin/audit"><strong>Audit activity</strong><span>Filter the recorded system actions.</span></a>
+    <a href="/admin/audit"><strong>Activity log</strong><span>Search recorded actions by person, action, or record.</span></a>
   </nav>
 </main>
 <%- include('../partials/foot') %>
