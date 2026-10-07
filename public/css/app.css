@@ -2150,7 +2150,57 @@ label { font-size: 0.84rem; }
   accent-color: var(--accent);
 }
 .pre-enrollment-form [data-student-address-copy-preview] { margin-top: 0.35rem; }
-
+.pre-enrollment-form .pre-enrollment-form-check {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.15rem;
+  cursor: pointer;
+}
+.pre-enrollment-form .pre-enrollment-receipts { display: grid; gap: 0; }
+.pre-enrollment-form .pre-enrollment-receipt {
+  min-width: 0;
+  padding: 0.7rem 0 0.8rem;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+}
+.pre-enrollment-form .pre-enrollment-receipt legend { padding: 0; margin-bottom: 0.45rem; font-weight: 750; }
+.pre-enrollment-form .pre-enrollment-receipt-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+.pre-enrollment-form .pre-enrollment-receipt-group {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 11rem) minmax(6.25rem, 7rem);
+  align-items: center;
+  gap: 0.55rem;
+}
+.pre-enrollment-form .pre-enrollment-receipt-check {
+  display: flex;
+  min-width: 0;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.55rem;
+  cursor: pointer;
+}
+.pre-enrollment-form .pre-enrollment-form-check input[type="checkbox"],
+.pre-enrollment-form .pre-enrollment-receipt-check input[type="checkbox"] {
+  flex: 0 0 1.1rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.pre-enrollment-form .pre-enrollment-receipt-check span { min-width: 0; }
+.pre-enrollment-form .pre-enrollment-receipt-quantity { min-width: 0; gap: 0.25rem; }
+.pre-enrollment-form .pre-enrollment-receipt-quantity label { font-size: 0.76rem; }
+.pre-enrollment-form .pre-enrollment-receipt-quantity input { min-width: 0; padding-inline: 0.55rem; }
 .pre-enrollment-detail-heading { align-items: center; gap: 1.25rem; margin-bottom: 1.15rem; }
 .pre-enrollment-detail-heading__copy { min-width: 0; }
 .pre-enrollment-detail-heading h1 { overflow-wrap: anywhere; }
@@ -2213,6 +2263,7 @@ label { font-size: 0.84rem; }
   .pre-enrollment-detail-actions { width: 100%; justify-content: flex-start; }
   .pre-enrollment-filter-bar { grid-template-columns: minmax(0, 1fr); }
   .pre-enrollment-filter-bar > .button { width: 100%; }
+  .pre-enrollment-form .pre-enrollment-receipt-groups { grid-template-columns: minmax(0, 1fr); gap: 0.35rem; }
 }
 
 @media (max-width: 520px) {
