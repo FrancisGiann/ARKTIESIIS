@@ -11,6 +11,7 @@ const { requireRole } = require('../src/middleware/roles');
 const { applyAddressInput } = require('../src/services/studentRecordsService');
 const { normalizeStructuredAddress, StudentAddressError } = require('../src/utils/studentAddress');
 const { comparePreEnrollmentProfile, PROFILE_REVIEW_GROUPS } = require('../src/utils/studentProfileReview');
+const { initialize: initializeAddressCopy } = require('../public/js/pre-enrollment-address-copy');
 
 function readyInput(overrides = {}) {
   return {
@@ -82,6 +83,134 @@ test('structured student and emergency addresses preserve legacy text unless exp
   assert.equal(emergencyReplacement.emergencyContactAddress, 'Purok 1, Gulang-gulang, Lucena, Quezon, 4301');
 });
 
+test('same-address flag copies normalized student address and ignores malformed emergency address fields', () => {
+  const copied = normalizeRecord(readyInput({
+    addressMode: 'replace', addressBlockLotStreetPurok: ' Block 2, Lot 4 ', addressBarangay: 'Ibabang Iyam',
+    addressCity: 'Lucena', addressProvince: 'Quezon', addressZip: '0123',
+    emergencyContactSameAsStudent: '1', emergencyContactAddressMode: ['invalid'],
+    emergencyContactAddress: ['forged legacy text'], emergencyContactAddressBlockLotStreetPurok: ['bad'],
+    emergencyContactAddressBarangay: 'E'.repeat(101), emergencyContactAddressCity: 'Lucena',
+    emergencyContactAddressProvince: 'Quezon', emergencyContactAddressZip: '12',
+    emergencyContactPerson: 'Mae Santos', emergencyContactRelationship: 'Mother', emergencyContactPhone: '09181234567'
+  }));
+  assert.equal(copied.address, 'Block 2, Lot 4, Ibabang Iyam, Lucena, Quezon, 0123');
+  assert.equal(copied.addressZip, '0123');
+  assert.equal(copied.emergencyContactAddress, copied.address);
+  assert.equal(copied.emergencyContactAddressBlockLotStreetPurok, copied.addressBlockLotStreetPurok);
+  assert.equal(copied.emergencyContactAddressBarangay, copied.addressBarangay);
+  assert.equal(copied.emergencyContactAddressCity, copied.addressCity);
+  assert.equal(copied.emergencyContactAddressProvince, copied.addressProvince);
+  assert.equal(copied.emergencyContactAddressZip, '0123');
+  assert.equal(copied.emergencyContactPerson, 'Mae Santos');
+  assert.equal(copied.emergencyContactRelationship, 'Mother');
+  assert.equal(copied.emergencyContactPhone, '09181234567');
+  assert.equal(Object.hasOwn(copied, 'emergencyContactSameAsStudent'), false,
+    'the transient form control is absent from the canonical record');
+  const manualCopy = normalizeRecord(readyInput({
+    addressMode: 'replace', addressBlockLotStreetPurok: 'Block 2, Lot 4', addressBarangay: 'Ibabang Iyam',
+    addressCity: 'Lucena', addressProvince: 'Quezon', addressZip: '0123', emergencyContactSameAsStudent: '0',
+    emergencyContactAddressMode: 'replace', emergencyContactAddressBlockLotStreetPurok: 'Block 2, Lot 4',
+    emergencyContactAddressBarangay: 'Ibabang Iyam', emergencyContactAddressCity: 'Lucena',
+    emergencyContactAddressProvince: 'Quezon', emergencyContactAddressZip: '0123',
+    emergencyContactPerson: 'Mae Santos', emergencyContactRelationship: 'Mother', emergencyContactPhone: '09181234567'
+  }));
+  assert.deepEqual(copied, manualCopy, 'equivalent copy and manual submissions normalize to one canonical record');
+
+  const blank = normalizeRecord(readyInput({ emergencyContactSameAsStudent: 'on' }));
+  assert.equal(blank.emergencyContactAddress, null);
+  assert.equal(blank.emergencyContactAddressZip, null);
+  assert.equal(normalizeRecord(readyInput({ emergencyContactSameAsStudent: '0',
+    emergencyContactAddressMode: 'replace', emergencyContactAddressBlockLotStreetPurok: 'Separate location' })).emergencyContactAddress,
+  'Separate location', 'an unchecked form keeps the independent emergency address');
+  for (const malformed of [['1'], 'yes', 2]) {
+    assert.throws(() => normalizeRecord(readyInput({ emergencyContactSameAsStudent: malformed })), /same address as the student/);
+  }
+});
+
+test('same-address flag resolves saved keep and submitted replace student addresses before copying', () => {
+  const legacyCurrent = {
+    address: '  Legacy address, exactly as saved  ', address_block_lot_street_purok: null,
+    address_barangay: null, address_city: null, address_province: null, address_zip: null,
+    emergency_contact_address: 'Separate emergency legacy', emergency_contact_address_zip: '4301'
+  };
+  const preserved = normalizeRecord(readyInput({
+    addressMode: 'preserve', address: 'spoofed posted legacy', addressBlockLotStreetPurok: 'ignored component',
+    emergencyContactSameAsStudent: 'true', emergencyContactAddressMode: 'replace', emergencyContactAddressZip: 'bad'
+  }), { current: legacyCurrent });
+  assert.equal(preserved.address, '  Legacy address, exactly as saved  ');
+  assert.equal(preserved.emergencyContactAddress, '  Legacy address, exactly as saved  ');
+  assert.equal(preserved.emergencyContactAddressBlockLotStreetPurok, null);
+  assert.equal(preserved.emergencyContactAddressZip, null);
+
+  const replaced = normalizeRecord(readyInput({
+    addressMode: 'replace', addressBlockLotStreetPurok: 'Block 9', addressBarangay: 'Gulang-gulang',
+    addressCity: 'Lucena', addressProvince: 'Quezon', addressZip: '0123', emergencyContactSameAsStudent: true
+  }), { current: { ...legacyCurrent, address: 'Old saved address' } });
+  assert.equal(replaced.address, 'Block 9, Gulang-gulang, Lucena, Quezon, 0123');
+  assert.equal(replaced.emergencyContactAddress, replaced.address);
+  assert.equal(replaced.emergencyContactAddressZip, '0123');
+});
+
+test('address-copy browser behavior tracks student modes and restores the separate emergency draft', () => {
+  function input(value) {
+    const listeners = {};
+    return { value, readOnly: false, listeners, addEventListener(type, listener) { listeners[type] = listener; },
+      dispatch(type) { listeners[type]?.(); } };
+  }
+  function form({ savedStudentAddress = '', checked = false, studentMode = 'replace', studentValues = [], emergencyValues = [] } = {}) {
+    const checkbox = input('1'); checkbox.checked = checked;
+    const mode = input(studentMode);
+    const manualFields = { hidden: false };
+    const preview = { hidden: true };
+    const previewValue = { textContent: '' };
+    const studentComponents = studentValues.map(input);
+    const emergencyComponents = emergencyValues.map(input);
+    const selectors = new Map([
+      ['[data-copy-student-address-checkbox]', checkbox], ['[data-emergency-address-manual-fields]', manualFields],
+      ['[data-student-address-copy-preview]', preview], ['[data-student-address-copy-value]', previewValue],
+      ['[data-student-address-mode]', mode]
+    ]);
+    return { dataset: { savedStudentAddress }, selectors, studentComponents, emergencyComponents,
+      querySelector(selector) { return selectors.get(selector) || null; },
+      querySelectorAll(selector) { return selector === '[data-student-address-component]' ? studentComponents : emergencyComponents; } };
+  }
+
+  const view = form({ savedStudentAddress: 'Legacy student text stays exact', studentValues: ['Block 2', 'Barangay', 'Lucena', 'Quezon', '0123'],
+    emergencyValues: ['Emergency draft', '', '', '', '4301'] });
+  initializeAddressCopy(view);
+  const checkbox = view.selectors.get('[data-copy-student-address-checkbox]');
+  const preview = view.selectors.get('[data-student-address-copy-preview]');
+  const previewValue = view.selectors.get('[data-student-address-copy-value]');
+  const manual = view.selectors.get('[data-emergency-address-manual-fields]');
+  assert.equal(preview.hidden, true);
+  assert.equal(manual.hidden, false);
+  checkbox.checked = true; checkbox.dispatch('change');
+  assert.equal(manual.hidden, true);
+  assert.equal(preview.hidden, false);
+  assert.equal(previewValue.textContent, 'Block 2, Barangay, Lucena, Quezon, 0123');
+  assert.ok(view.emergencyComponents.every((field) => field.readOnly));
+  view.studentComponents[0].value = 'Block 8'; view.studentComponents[0].dispatch('input');
+  assert.match(previewValue.textContent, /^Block 8,/);
+  const mode = view.selectors.get('[data-student-address-mode]');
+  mode.value = 'preserve'; mode.dispatch('change');
+  assert.equal(previewValue.textContent, 'Legacy student text stays exact');
+  view.studentComponents[0].value = 'Ignored while preserving'; view.studentComponents[0].dispatch('input');
+  assert.equal(previewValue.textContent, 'Legacy student text stays exact');
+  checkbox.checked = false; checkbox.dispatch('change');
+  assert.equal(manual.hidden, false);
+  assert.equal(preview.hidden, true);
+  assert.ok(view.emergencyComponents.every((field) => !field.readOnly));
+  assert.deepEqual(view.emergencyComponents.map((field) => field.value), ['Emergency draft', '', '', '', '4301']);
+  assert.equal(mode.value, 'preserve');
+
+  const rerenderedError = form({ savedStudentAddress: 'Saved address', checked: true, studentMode: 'preserve',
+    studentValues: ['draft student component'], emergencyValues: ['separate emergency draft', '', '', '', 'bad'] });
+  initializeAddressCopy(rerenderedError);
+  assert.equal(rerenderedError.selectors.get('[data-student-address-copy-preview]').hidden, false);
+  assert.equal(rerenderedError.selectors.get('[data-student-address-copy-value]').textContent, 'Saved address');
+  assert.deepEqual(rerenderedError.emergencyComponents.map((field) => field.value), ['separate emergency draft', '', '', '', 'bad']);
+});
+
 test('returning address comparison presents one atomic approval per address with components visible', () => {
   const source = {
     address: 'Block 2, Ibabang Iyam, Lucena, Quezon, 0123',
@@ -123,6 +252,17 @@ test('address field component strings stay at five visible fields and enforce co
   assert.match(html, /name="addressZip" maxlength="4" inputmode="numeric" pattern="\[0-9\]\{4\}"[^>]*value="0123"/);
   assert.match(html, /Old free text address/);
   assert.match(html, /name="addressMode"/);
+  assert.doesNotMatch(html, /data-student-address-source|data-student-address-component|emergencyContactSameAsStudent/,
+    'shared profile callers keep the original markup without explicit opt-in');
+
+  const emergencyPartial = path.resolve(__dirname, '../views/records/partials/address-fields.ejs');
+  const optedIn = await ejs.renderFile(emergencyPartial, {
+    prefix: 'emergencyContactAddress', allowEmergencyAddressCopy: true,
+    values: { emergencyContactAddressMode: 'replace', emergencyContactSameAsStudent: '1' }, student: null
+  });
+  assert.match(optedIn, /name="emergencyContactSameAsStudent" value="1"[^>]*checked/);
+  assert.match(optedIn, /data-emergency-address-manual-fields/);
+  assert.match(optedIn, /data-emergency-address-component/);
 });
 
 function detailRecord(id, status = 'ready_for_registrar') {
@@ -194,6 +334,7 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
   const csrfToken = 'c'.repeat(64);
   const calls = [];
   const choicesCalls = [];
+  const updateInputs = [];
   const roleIds = { registrar: 1, front_desk: 2, database_admin: 3, teacher: 4, finance: 5, student: 6 };
   const acceptedChoice = { id: 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261', version: 4, applicant_lrn: '012345678901', first_name: 'Ari', last_name: 'Santos', school_year: '2027-2028', target_grade_level: 'Grade 11' };
   app.set('views', path.resolve(__dirname, '../views'));
@@ -211,7 +352,7 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
       async list(actorId) { calls.push(['list', actorId]); return { rows: [], filters: { search: '', schoolYear: '', status: '' }, pagination: { page: 1, pageSize: 20, totalRecords: 0, totalPages: 1, from: 0, to: 0 } }; },
       async getActorDisplayName(actorId) { calls.push(['display', actorId]); return 'Front Desk'; },
       async create(actorId) { calls.push(['create', actorId]); return { id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261' }; },
-      async update(actorId) { calls.push(['update', actorId]); throw new PreEnrollmentError('The correction needs a current accepted evaluation.', 409); },
+      async update(actorId, id, version, input) { calls.push(['update', actorId]); updateInputs.push(input); throw new PreEnrollmentError('The correction needs a current accepted evaluation.', 409); },
       async listAcceptedReadmissionChoices(actorId, schoolYear) { choicesCalls.push([actorId, schoolYear]); return [acceptedChoice]; },
       async get(actorId, id) { calls.push(['get', actorId]); return detailRecord(id, id === 'b342bc01-2a68-4f19-a7fd-4d5bb1d83261' ? 'enrollment_started' : 'ready_for_registrar'); }
     }
@@ -223,8 +364,22 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     const frontDeskHome = await fetch(`${origin}/front-desk`, { redirect: 'manual' });
     assert.equal(frontDeskHome.status, 303);
     assert.equal(frontDeskHome.headers.get('location'), '/pre-enrollments');
-    assert.equal((await fetch(`${origin}/pre-enrollments`)).status, 200);
-    assert.equal((await fetch(`${origin}/pre-enrollments/new`)).status, 200);
+    const frontDeskList = await fetch(`${origin}/pre-enrollments`);
+    assert.equal(frontDeskList.status, 200);
+    const frontDeskListHtml = await frontDeskList.text();
+    assert.match(frontDeskListHtml, /Copy the details from the student’s paper form/);
+    assert.match(frontDeskListHtml, /Record paper form/);
+    const newFormResponse = await fetch(`${origin}/pre-enrollments/new`);
+    assert.equal(newFormResponse.status, 200);
+    assert.match(newFormResponse.headers.get('cache-control'), /no-store/);
+    const newFormHtml = await newFormResponse.text();
+    assert.match(newFormHtml, /<label for="pre-email">Email<\/label>/);
+    assert.match(newFormHtml, /aria-describedby="pre-email-help"/);
+    assert.match(newFormHtml, /id="pre-email-help">This email will be used for the student’s account\./);
+    assert.match(newFormHtml, /name="emergencyContactSameAsStudent" value="1"[^>]*><span>Same address as student<\/span>/);
+    assert.match(newFormHtml, /src="\/js\/pre-enrollment-address-copy\.js" defer/);
+    assert.doesNotMatch(newFormHtml, /name="emergencyContactSameAsStudent" value="1"[^>]*checked/,
+      'fresh pre-enrollment forms start unchecked');
     const detail = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261`);
     assert.equal(detail.status, 200);
     const detailHtml = await detail.text();
@@ -232,7 +387,7 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     for (const label of ['Student and contact', 'Program and previous school', 'Signature and office record', 'Entered by']) {
       assert.ok(detailHtml.includes(label), `detail presents the grouped ${label} information`);
     }
-    for (const label of ['Contact and sign-in email', 'Gender', 'Birthplace', 'Facebook name', 'Student address',
+    for (const label of ['Email', 'Gender', 'Birthplace', 'Facebook name', 'Student address',
       'Block 2', 'ZIP code', 'Emergency contact', 'Mother’s name', 'Father’s phone', '012345678901, 2027-2028, Grade 11']) {
       assert.ok(detailHtml.includes(label), `detail shows saved profile or evaluation binding ${label}`);
     }
@@ -254,6 +409,8 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     const registrarEdit = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261/edit`, { headers: { 'x-test-role': 'registrar' } });
     const registrarEditHtml = await registrarEdit.text();
     assert.equal(registrarEdit.status, 200);
+    assert.doesNotMatch(registrarEditHtml, /name="emergencyContactSameAsStudent" value="1"[^>]*checked/,
+      'reopened corrections start unchecked because the control is not stored');
     assert.ok(registrarEditHtml.includes('value="c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4" selected'),
       'registrar correction shows the current saved accepted evaluation as an explicit selection');
     assert.ok(choicesCalls.some(([actorId]) => actorId === roleIds.registrar), 'the correction route asks the service for registrar-authorized identity choices');
@@ -262,17 +419,32 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     const csrfCorrection = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261`, {
       method: 'POST', headers: { 'x-test-role': 'registrar', 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ _csrf: csrfToken, version: '2', schoolYear: '2027-2028', applicantKind: 'readmission',
-        readmissionEvaluationBinding: 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4' })
+        readmissionEvaluationBinding: 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4', emergencyContactSameAsStudent: '1',
+        emergencyContactPerson: 'Mae Santos', emergencyContactRelationship: 'Mother', emergencyContactPhone: '09181234567',
+        emergencyContactAddressMode: 'replace', emergencyContactAddressBlockLotStreetPurok: 'Separate emergency draft',
+        emergencyContactAddressZip: 'bad' })
     });
     const correctionHtml = await csrfCorrection.text();
     assert.equal(csrfCorrection.status, 409);
     assert.ok(correctionHtml.includes('value="c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4" selected'),
       'a failed correction rerender retains the explicit evaluation binding and version');
+    assert.match(correctionHtml, /name="emergencyContactSameAsStudent" value="1"[^>]*checked/,
+      'validation-error rerenders retain the transient checkbox');
+    assert.match(correctionHtml, /value="Separate emergency draft"/);
+    assert.match(correctionHtml, /value="bad"/);
+    assert.equal(updateInputs[0].emergencyContactSameAsStudent, '1',
+      'the checked value reaches the service in the ordinary URL-encoded request');
+    assert.equal(updateInputs[0].emergencyContactPerson, 'Mae Santos');
+    assert.equal(updateInputs[0].emergencyContactRelationship, 'Mother');
+    assert.equal(updateInputs[0].emergencyContactPhone, '09181234567');
     const startedDetail = await fetch(`${origin}/pre-enrollments/b342bc01-2a68-4f19-a7fd-4d5bb1d83261`);
     const startedHtml = await startedDetail.text();
     assert.match(startedHtml, /Enrollment started/);
     assert.match(startedHtml, /Read-only after annual enrollment starts/);
     assert.doesNotMatch(startedHtml, /Correct paper record|Start enrollment/);
+    const startedEditHtml = await (await fetch(`${origin}/pre-enrollments/b342bc01-2a68-4f19-a7fd-4d5bb1d83261/edit`)).text();
+    assert.match(startedEditHtml, /Annual enrollment has started\. This paper record is read-only\./);
+    assert.doesNotMatch(startedEditHtml, /emergencyContactSameAsStudent/);
 
     const adminHeaders = { 'x-test-role': 'database_admin' };
     const adminList = await fetch(`${origin}/pre-enrollments`, { headers: adminHeaders });

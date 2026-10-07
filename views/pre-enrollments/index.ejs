@@ -1,7 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page records-page pre-enrollment-page" id="main-content">
   <header class="dashboard-heading">
-    <div><h1>Pre-enrollment records</h1><p>Transcribe paper forms and record only which papers were received.</p></div>
+    <div><h1>Pre-enrollment records</h1><p>Copy the details from the student’s paper form and note which documents were received. Receipt does not mean a document was checked or verified.</p></div>
     <% if (currentUser.role === 'front_desk') { %><a class="button button--primary" href="/pre-enrollments/new">Record paper form</a><% } %>
   </header>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>

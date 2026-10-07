@@ -86,7 +86,7 @@
         <dl class="pre-enrollment-summary">
           <% for (const [label, value, spanTwo] of [
             ['Student name', fullName, true], ['LRN', record.lrn], ['Applicant status', applicantKindLabels[record.applicant_kind] || 'Not recorded'],
-            ['Student contact number', record.student_contact_number], ['Contact and sign-in email', record.email, true],
+            ['Student contact number', record.student_contact_number], ['Email', record.email, true],
             ['Birth date', displayDate(record.birth_date)], ['Gender', record.sex], ['Phone', record.profile_phone],
             ['Birthplace', record.birthplace], ['Facebook name', record.facebook_name, true],
             ['Student address', formatAddress(record.address, record.address_block_lot_street_purok, record.address_barangay, record.address_city, record.address_province, record.address_zip), true],

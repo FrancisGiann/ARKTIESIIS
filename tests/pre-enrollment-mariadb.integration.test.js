@@ -243,10 +243,31 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
       await assert.rejects(preEnrollments.create(forbiddenActor, { ...draftInput, idempotencyKey: uuid() }), { status: 403 });
       await assert.rejects(preEnrollments.update(forbiddenActor, draft.id, 1, draftInput), { status: 403 });
     }
-    const receiptSource = await preEnrollments.create(users.front_desk, readyPaper(uuid()));
+    const copiedAddressInput = readyPaper(uuid(), {
+      addressMode: 'replace', addressBlockLotStreetPurok: 'Block 7, Lot 2', addressBarangay: 'Ibabang Iyam',
+      addressCity: 'Lucena', addressProvince: 'Quezon', addressZip: '0123', emergencyContactSameAsStudent: '1',
+      emergencyContactAddressMode: ['ignored'], emergencyContactAddressBlockLotStreetPurok: ['ignored'],
+      emergencyContactAddressZip: 'not-a-zip', emergencyContactPerson: 'Mae Santos',
+      emergencyContactRelationship: 'Mother', emergencyContactPhone: '09181234567'
+    });
+    const receiptSource = await preEnrollments.create(users.front_desk, copiedAddressInput);
+    const canonicalRetry = await preEnrollments.create(users.front_desk, {
+      ...copiedAddressInput, emergencyContactSameAsStudent: '0', emergencyContactAddressMode: 'replace',
+      emergencyContactAddressBlockLotStreetPurok: 'Block 7, Lot 2', emergencyContactAddressBarangay: 'Ibabang Iyam',
+      emergencyContactAddressCity: 'Lucena', emergencyContactAddressProvince: 'Quezon', emergencyContactAddressZip: '0123'
+    });
+    assert.equal(canonicalRetry.id, receiptSource.id);
+    assert.equal(canonicalRetry.alreadyCreated, true,
+      'copy and manual requests for the same resolved address share the canonical idempotency fingerprint');
     const receiptDetail = await preEnrollments.get(users.registrar, receiptSource.id);
     assert.equal(receiptDetail.receipts.length, 9);
     assert.equal(receiptDetail.receipts.find((row) => row.requirement_code === 'report_card').photocopy_pieces, 1);
+    assert.equal(receiptDetail.address, 'Block 7, Lot 2, Ibabang Iyam, Lucena, Quezon, 0123');
+    assert.equal(receiptDetail.emergency_contact_address, receiptDetail.address);
+    assert.equal(receiptDetail.emergency_contact_address_zip, '0123');
+    assert.equal(receiptDetail.emergency_contact_person, 'Mae Santos');
+    assert.ok(receiptDetail.revisions.some((revision) => revision.field_name === 'emergency_contact_address'),
+      'the resolved emergency address is included in the ordinary append-only creation snapshot');
     assert.equal(Number((await queryOne(rawPool, 'SELECT COUNT(*) AS count FROM student_physical_checklist_events')).count), 0,
       'pre-enrollment receipt-only entries must not create physical checklist verification events');
     await assert.rejects(preEnrollments.create(users.front_desk,
@@ -379,9 +400,15 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
       `SELECT details_json FROM audit_logs WHERE action = 'registrar.annual_enrollment_created' AND entity_id = ?`, [String(annualId)]);
     assert.equal(JSON.parse(createdAudit.details_json).intakeKind, 'new', 'audit records the same authoritative intake kind as annual enrollment');
     const persistedProfile = await queryOne(rawPool,
-      'SELECT address, address_block_lot_street_purok FROM students WHERE id = ?', [conversions[0].studentId]);
-    assert.deepEqual(persistedProfile, { address: null, address_block_lot_street_purok: null },
-      'posted profile components cannot replace the saved front-desk profile');
+      `SELECT address, address_block_lot_street_purok, emergency_contact_address,
+        emergency_contact_address_block_lot_street_purok, emergency_contact_address_zip
+      FROM students WHERE id = ?`, [conversions[0].studentId]);
+    assert.deepEqual(persistedProfile, {
+      address: 'Block 7, Lot 2, Ibabang Iyam, Lucena, Quezon, 0123',
+      address_block_lot_street_purok: 'Block 7, Lot 2',
+      emergency_contact_address: 'Block 7, Lot 2, Ibabang Iyam, Lucena, Quezon, 0123',
+      emergency_contact_address_block_lot_street_purok: 'Block 7, Lot 2', emergency_contact_address_zip: '0123'
+    }, 'annual enrollment receives the independently persisted address snapshots from the paper source');
     const afterConversion = await queryOne(rawPool, `SELECT
       (SELECT COUNT(*) FROM students) AS students, (SELECT COUNT(*) FROM annual_enrollments) AS annuals,
       (SELECT COUNT(*) FROM enrollments) AS enrollments`);

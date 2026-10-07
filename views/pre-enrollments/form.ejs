@@ -1,10 +1,13 @@
 <%- include('../partials/head', { title }) %>
+<% const savedStudentAddress = record
+  ? (record.address || [record.address_block_lot_street_purok, record.address_barangay, record.address_city, record.address_province, record.address_zip].filter(Boolean).join(', '))
+  : ''; %>
 <main class="page-shell dashboard-page admin-page records-page pre-enrollment-page" id="main-content">
   <a class="context-back" href="<%= record ? `/pre-enrollments/${encodeURIComponent(record.id)}` : '/pre-enrollments' %>">Back to pre-enrollment records</a>
-  <header class="dashboard-heading"><div><h1><%= record ? 'Correct pre-enrollment record' : 'Record paper pre-enrollment' %></h1><p>Transcribe the paper form. Receipt indicators record receipt only; they do not verify documents or set grades.</p></div></header>
+  <header class="dashboard-heading"><div><h1><%= record ? 'Correct pre-enrollment record' : 'Record paper form' %></h1><p>Copy the details from the student’s paper form. Marking an item received does not mean it was inspected, approved, or verified.</p></div></header>
   <% if (error) { %><p class="form-alert" role="alert" tabindex="-1"><%= error %></p><% } %>
   <% if (record?.status === 'enrollment_started') { %><p class="notice-panel">Annual enrollment has started. This paper record is read-only.</p><% } else { %>
-  <form class="form-stack admin-form pre-enrollment-form" method="post" action="<%= record ? `/pre-enrollments/${encodeURIComponent(record.id)}` : '/pre-enrollments' %>">
+  <form class="form-stack admin-form pre-enrollment-form" method="post" action="<%= record ? `/pre-enrollments/${encodeURIComponent(record.id)}` : '/pre-enrollments' %>" data-pre-enrollment-address-copy data-saved-student-address="<%= savedStudentAddress %>">
     <input type="hidden" name="_csrf" value="<%= csrfToken %>"><% if (record) { %><input type="hidden" name="version" value="<%= record.version %>"><% } else { %><input type="hidden" name="idempotencyKey" value="<%= values.idempotencyKey || '' %>"><% } %>
     <section class="form-section"><h2>Paper form</h2><div class="admin-form-grid">
       <div class="field"><label for="pre-school-year">School year</label><input id="pre-school-year" name="schoolYear" maxlength="20" required value="<%= values.schoolYear || '' %>"></div>
@@ -29,14 +32,15 @@
       <div class="field"><label for="pre-received-date">Paper received date</label><input id="pre-received-date" name="receivedDate" type="date" value="<%= values.receivedDate || '' %>"></div>
     </div></section>
     <section class="form-section"><h2>Student profile and contact</h2><p>These values are saved from the front-desk record and become the new profile source. Email is required before Ready for registrar.</p><div class="admin-form-grid">
-      <div class="field"><label for="pre-email">Contact and sign-in email</label><input id="pre-email" name="email" type="email" autocomplete="email" maxlength="255" value="<%= values.email || '' %>"></div>
+      <div class="field"><label for="pre-email">Email</label><input id="pre-email" name="email" type="email" autocomplete="email" maxlength="255" aria-describedby="pre-email-help" value="<%= values.email || '' %>"><small id="pre-email-help">This email will be used for the student’s account.</small></div>
       <div class="field"><label for="pre-birth-date">Birth date <span class="muted-copy">(optional)</span></label><input id="pre-birth-date" name="birthDate" type="date" value="<%= values.birthDate || '' %>"></div>
       <div class="field"><label for="pre-sex">Gender <span class="muted-copy">(optional)</span></label><select id="pre-sex" name="sex"><option value="">Not recorded</option><% for (const value of ['Male','Female','Other']) { %><option value="<%= value %>" <%= values.sex === value ? 'selected' : '' %>><%= value %></option><% } %></select></div>
       <div class="field"><label for="pre-profile-phone">Phone <span class="muted-copy">(optional)</span></label><input id="pre-profile-phone" name="profilePhone" type="tel" maxlength="50" value="<%= values.profilePhone || '' %>"></div>
       <div class="field"><label for="pre-birthplace">Birthplace <span class="muted-copy">(optional)</span></label><input id="pre-birthplace" name="birthplace" maxlength="160" value="<%= values.birthplace || '' %>"></div>
       <div class="field"><label for="pre-facebook-name">Facebook name <span class="muted-copy">(optional)</span></label><input id="pre-facebook-name" name="facebookName" maxlength="120" value="<%= values.facebookName || '' %>"></div>
     </div>
-      <%- include('../records/partials/address-fields', { prefix: 'address', values, student: record }) %>
+      <%- include('../records/partials/address-fields', { prefix: 'address', values, student: record,
+        exposeAddressForEmergencyCopy: true }) %>
       <div class="admin-form-grid">
         <div class="field"><label for="pre-emergency-person">Emergency contact person <span class="muted-copy">(optional)</span></label><input id="pre-emergency-person" name="emergencyContactPerson" maxlength="160" value="<%= values.emergencyContactPerson || '' %>"></div>
         <div class="field"><label for="pre-emergency-relationship">Relationship <span class="muted-copy">(optional)</span></label><input id="pre-emergency-relationship" name="emergencyContactRelationship" maxlength="80" value="<%= values.emergencyContactRelationship || '' %>"></div>
@@ -46,11 +50,13 @@
         <div class="field"><label for="pre-father-name">Father’s name <span class="muted-copy">(optional)</span></label><input id="pre-father-name" name="fatherName" maxlength="160" value="<%= values.fatherName || '' %>"></div>
         <div class="field"><label for="pre-father-phone">Father’s phone <span class="muted-copy">(optional)</span></label><input id="pre-father-phone" name="fatherPhone" type="tel" maxlength="50" value="<%= values.fatherPhone || '' %>"></div>
       </div>
-      <%- include('../records/partials/address-fields', { prefix: 'emergencyContactAddress', values, student: record }) %>
+      <%- include('../records/partials/address-fields', { prefix: 'emergencyContactAddress', values, student: record,
+        allowEmergencyAddressCopy: true }) %>
     </section>
     <section class="form-section"><h2>Requirements received</h2><p>Mark original and photocopy receipt separately and enter pieces when known. These entries do not record inspection, approval, or verification.</p><div class="pre-enrollment-receipts"><% for (const [code, label] of requirements) { %><fieldset class="pre-enrollment-receipt"><legend><%= label %></legend><label class="field field--check"><input type="checkbox" name="receipt_<%= code %>_original" value="1" <%= values[`receipt_${code}_original`] === '1' || values[`receipt_${code}_original`] === true || values[`receipt_${code}_original`] === 1 ? 'checked' : '' %>><span>Original received</span></label><div class="field"><label for="receipt-<%= code %>-original">Original pieces</label><input id="receipt-<%= code %>-original" name="receipt_<%= code %>_original_pieces" type="number" min="1" max="99" value="<%= values[`receipt_${code}_original_pieces`] ?? '' %>"></div><label class="field field--check"><input type="checkbox" name="receipt_<%= code %>_photocopy" value="1" <%= values[`receipt_${code}_photocopy`] === '1' || values[`receipt_${code}_photocopy`] === true || values[`receipt_${code}_photocopy`] === 1 ? 'checked' : '' %>><span>Photocopy received</span></label><div class="field"><label for="receipt-<%= code %>-photocopy">Photocopy pieces</label><input id="receipt-<%= code %>-photocopy" name="receipt_<%= code %>_photocopy_pieces" type="number" min="1" max="99" value="<%= values[`receipt_${code}_photocopy_pieces`] ?? '' %>"></div></fieldset><% } %></div></section>
     <section class="form-section"><h2>Record status</h2><div class="field"><label for="pre-status">Save as</label><select id="pre-status" name="status"><option value="draft" <%= values.status === 'draft' ? 'selected' : '' %>>Draft</option><option value="ready_for_registrar" <%= values.status === 'ready_for_registrar' ? 'selected' : '' %>>Ready for registrar</option></select><small>Ready status requires all checked paper details, including signature and date.</small></div></section>
     <div class="form-actions"><button class="button button--primary" type="submit"><%= record ? 'Save correction' : 'Save pre-enrollment record' %></button><a class="button button--secondary" href="<%= record ? `/pre-enrollments/${encodeURIComponent(record.id)}` : '/pre-enrollments' %>">Cancel</a></div>
   </form><% } %>
 </main>
+<script src="/js/pre-enrollment-address-copy.js" defer></script>
 <%- include('../partials/foot') %>

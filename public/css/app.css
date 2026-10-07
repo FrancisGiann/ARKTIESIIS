@@ -2131,6 +2131,25 @@ label { font-size: 0.84rem; }
 
 .pre-enrollment-detail-page { min-width: 0; }
 .pre-enrollment-detail-page .context-back { display: inline-block; margin-bottom: 0.8rem; }
+.pre-enrollment-form .pre-enrollment-address-copy-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.15rem;
+  margin: 0.1rem 0;
+  cursor: pointer;
+}
+.pre-enrollment-form .pre-enrollment-address-copy-toggle input[type="checkbox"] {
+  flex: 0 0 1.1rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.pre-enrollment-form [data-student-address-copy-preview] { margin-top: 0.35rem; }
 
 .pre-enrollment-detail-heading { align-items: center; gap: 1.25rem; margin-bottom: 1.15rem; }
 .pre-enrollment-detail-heading__copy { min-width: 0; }

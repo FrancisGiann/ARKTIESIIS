@@ -20,7 +20,7 @@
         <div><dt>Student name</dt><dd><%= [enrollment.firstName, enrollment.middleName, enrollment.lastName, enrollment.suffix].filter(Boolean).join(' ') %></dd></div>
         <div><dt>Academic term</dt><dd><%= enrollment.schoolYear %> · <%= enrollment.term %></dd></div>
         <div><dt>Section</dt><dd><%= enrollment.sectionName || '—' %></dd></div>
-        <div><dt>Contact and sign-in email</dt><dd><%= enrollment.email %></dd></div>
+        <div><dt>Email</dt><dd><%= enrollment.email %></dd></div>
       </dl>
     </section>
     <% if (enrollment.temporaryPassword) { %><section class="enrollment-print__credential" aria-labelledby="temporary-password-title">
@@ -30,7 +30,7 @@
     </section><% } %>
     <footer class="enrollment-print__actions">
       <button class="button button--primary" type="button" data-print-page>Print enrollment form</button>
-      <a class="button button--secondary" href="/registrar/intake">Return to pending intake</a>
+      <a class="button button--secondary" href="/registrar/intake">Return to enrollments</a>
     </footer>
   </main>
 <script src="/js/app.js" defer></script>

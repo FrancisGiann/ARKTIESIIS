@@ -60,7 +60,7 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
       }
     }
     return privateHeaders(res).status(status).render('pre-enrollments/form', {
-      title: record ? 'Correct pre-enrollment record' : 'Record paper pre-enrollment',
+      title: record ? 'Correct pre-enrollment record' : 'Record paper form',
       currentUser: req.authUser, csrfToken: ensureCsrfToken(req), record,
       values: {
         schoolYear: DEFAULT_SCHOOL_YEAR, status: 'draft', applicantKind: 'new', studentSignaturePresent: '',
@@ -79,7 +79,7 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
       });
     } catch (loadError) {
       if (loadError instanceof PreEnrollmentError) return res.status(loadError.status).render('error', { title: 'Pre-enrollment records', message: loadError.message });
-      return res.status(503).render('error', { title: 'Pre-enrollment unavailable', message: 'Paper pre-enrollment records could not be loaded.' });
+      return res.status(503).render('error', { title: 'Pre-enrollment unavailable', message: 'Pre-enrollment records could not be loaded.' });
     }
   }
 

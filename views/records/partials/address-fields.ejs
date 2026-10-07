@@ -1,18 +1,29 @@
 <% const isEmergencyAddress = prefix === 'emergencyContactAddress';
   const idPrefix = isEmergencyAddress ? 'emergency-address' : 'student-address';
   const modeKey = isEmergencyAddress ? 'emergencyContactAddressMode' : 'addressMode';
+  const enableEmergencyAddressCopy = isEmergencyAddress
+    && typeof allowEmergencyAddressCopy !== 'undefined' && allowEmergencyAddressCopy === true;
+  const exposeStudentAddressForCopy = !isEmergencyAddress
+    && typeof exposeAddressForEmergencyCopy !== 'undefined' && exposeAddressForEmergencyCopy === true;
   const fieldSet = isEmergencyAddress
     ? [['emergencyContactAddressBlockLotStreetPurok', 'Block and Lot, Street/Purok'], ['emergencyContactAddressBarangay', 'Barangay'], ['emergencyContactAddressCity', 'City'], ['emergencyContactAddressProvince', 'Province'], ['emergencyContactAddressZip', 'ZIP code']]
     : [['addressBlockLotStreetPurok', 'Block and Lot, Street/Purok'], ['addressBarangay', 'Barangay'], ['addressCity', 'City'], ['addressProvince', 'Province'], ['addressZip', 'ZIP code']];
   const legacyAddress = isEmergencyAddress ? student?.emergency_contact_address : student?.address;
 %>
-<section class="address-entry field--full" aria-labelledby="<%= idPrefix %>-heading">
+<section class="address-entry field--full" aria-labelledby="<%= idPrefix %>-heading"<% if (exposeStudentAddressForCopy) { %> data-student-address-source<% } %>>
   <h3 id="<%= idPrefix %>-heading"><%= isEmergencyAddress ? 'Emergency contact address' : 'Student address' %></h3>
+  <% if (enableEmergencyAddressCopy) { %>
+    <label class="field field--check pre-enrollment-address-copy-toggle"><input type="checkbox" name="emergencyContactSameAsStudent" value="1" data-copy-student-address-checkbox <%= ['1', 'true', 'on'].includes(String(values.emergencyContactSameAsStudent || '').toLowerCase()) ? 'checked' : '' %>><span>Same address as student</span></label>
+    <div class="notice-panel" data-student-address-copy-preview hidden role="status" aria-live="polite"><strong>Student address:</strong> <span data-student-address-copy-value></span></div>
+    <noscript><p class="muted-copy">When checked, the emergency contact address is copied from the student address when you save.</p></noscript>
+  <% } %>
+  <% if (enableEmergencyAddressCopy) { %><div data-emergency-address-manual-fields><% } %>
   <% if (legacyAddress) { %><p class="legacy-address-note" role="status">Address on file: <strong><%= legacyAddress %></strong>. This formatted address will stay intact until you choose to replace it.</p><% } %>
-  <% if (student) { %><div class="field"><label for="<%= idPrefix %>-mode">Saved address</label><select id="<%= idPrefix %>-mode" name="<%= modeKey %>"><option value="preserve" <%= values[modeKey] !== 'replace' ? 'selected' : '' %>>Keep the address currently on file</option><option value="replace" <%= values[modeKey] === 'replace' ? 'selected' : '' %>>Replace with the components below</option></select><small>Unrelated profile edits preserve the saved address. Replacing a legacy address will not copy its old text into these fields.</small></div><% } else { %><input type="hidden" name="<%= modeKey %>" value="replace"><% } %>
+  <% if (student) { %><div class="field"><label for="<%= idPrefix %>-mode">Saved address</label><select id="<%= idPrefix %>-mode" name="<%= modeKey %>"<% if (exposeStudentAddressForCopy) { %> data-student-address-mode<% } %>><option value="preserve" <%= values[modeKey] !== 'replace' ? 'selected' : '' %>>Keep the address currently on file</option><option value="replace" <%= values[modeKey] === 'replace' ? 'selected' : '' %>>Replace with the components below</option></select><small>Unrelated profile edits preserve the saved address. Replacing a legacy address will not copy its old text into these fields.</small></div><% } else { %><input type="hidden" name="<%= modeKey %>" value="replace"<% if (exposeStudentAddressForCopy) { %> data-student-address-mode<% } %>><% } %>
   <div class="admin-form-grid address-entry__fields">
     <% for (const [field,label] of fieldSet) { const zip = field.endsWith('Zip'); const max = zip ? 4 : label.startsWith('Block') ? 200 : 100; %>
-      <div class="field"><label for="<%= idPrefix %>-<%= field %>"><%= label %></label><input id="<%= idPrefix %>-<%= field %>" name="<%= field %>" maxlength="<%= max %>" <% if (zip) { %>inputmode="numeric" pattern="[0-9]{4}" title="Enter four digits; keep any leading zeroes."<% } %> value="<%= values[field] || '' %>"></div>
+      <div class="field"><label for="<%= idPrefix %>-<%= field %>"><%= label %></label><input id="<%= idPrefix %>-<%= field %>" name="<%= field %>" maxlength="<%= max %>"<% if (exposeStudentAddressForCopy) { %> data-student-address-component<% } %><% if (enableEmergencyAddressCopy) { %> data-emergency-address-component<% } %> <% if (zip) { %>inputmode="numeric" pattern="[0-9]{4}" title="Enter four digits; keep any leading zeroes."<% } %> value="<%= values[field] || '' %>"></div>
     <% } %>
   </div>
+  <% if (enableEmergencyAddressCopy) { %></div><% } %>
 </section>

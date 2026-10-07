@@ -104,7 +104,11 @@ function normalizeProfileAddress(result, input, prefix, current) {
   if (mode === 'preserve') {
     const source = current || input;
     const legacyKey = prefix === 'address' ? 'address' : 'emergency_contact_address';
-    result[prefix] = printable(source[legacyKey] ?? source[prefix], 'Address', 500);
+    const legacyAddress = source[legacyKey] ?? source[prefix];
+    if (legacyAddress === undefined || legacyAddress === null || legacyAddress === '') result[prefix] = null;
+    else if (typeof legacyAddress !== 'string' || legacyAddress.length > 500 || /[\u0000-\u001f\u007f]/.test(legacyAddress)) {
+      throw new PreEnrollmentError('Address must be 500 printable characters or fewer.');
+    } else result[prefix] = legacyAddress;
     for (const [inputName, column] of fields) result[inputName] = printable(source[column] ?? source[inputName], 'Address component', inputName.endsWith('Zip') ? 4 : inputName.endsWith('StreetPurok') ? 200 : 100);
     return;
   }
@@ -124,6 +128,24 @@ function normalizeReceiptFlag(value, label) {
   throw new PreEnrollmentError(`Choose whether ${label} was received.`);
 }
 
+function normalizeSameAddressFlag(value) {
+  if (value === true || value === '1' || value === 'true' || value === 'on') return true;
+  if (value === false || value === '0' || value === 'false' || value === undefined || value === null || value === '') return false;
+  throw new PreEnrollmentError('Choose whether the emergency contact has the same address as the student.');
+}
+
+function copyStudentAddressToEmergency(result) {
+  result.emergencyContactAddress = result.address;
+  const emergencyFields = new Map(ADDRESS_DEFINITIONS.emergencyContactAddress.map(([inputName, column]) => [
+    column.replace(/^emergency_contact_/, ''), inputName
+  ]));
+  for (const [studentInputName, studentColumn] of ADDRESS_DEFINITIONS.address) {
+    const emergencyInputName = emergencyFields.get(studentColumn);
+    if (!emergencyInputName) throw new Error('Student and emergency address definitions do not match.');
+    result[emergencyInputName] = result[studentInputName];
+  }
+}
+
 function normalizePieceCount(value, present, label) {
   if (value === undefined || value === null || value === '') return null;
   if (typeof value !== 'string' && typeof value !== 'number') throw new PreEnrollmentError(`${label} must be a whole number from 1 to 99.`);
@@ -140,11 +162,18 @@ function manilaDate() {
 
 function normalizeRecord(input = {}, { actorName = '', current = null } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new PreEnrollmentError('Enter valid paper form details.');
+  const sameAddress = normalizeSameAddressFlag(input.emergencyContactSameAsStudent);
+  const normalizedInput = sameAddress ? {
+    ...input,
+    emergencyContactAddressMode: 'replace',
+    emergencyContactAddress: '',
+    ...Object.fromEntries(ADDRESS_DEFINITIONS.emergencyContactAddress.map(([inputName]) => [inputName, '']))
+  } : input;
   const result = {};
   for (const [column, name, length] of FIELD_SPEC) {
     result[name] = column.endsWith('_date')
-      ? normalizeDate(input[name], name === 'studentSignedDate' ? 'Student signature date' : name === 'birthDate' ? 'Birth date' : 'Date received')
-      : printable(input[name], name.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`), length,
+      ? normalizeDate(normalizedInput[name], name === 'studentSignedDate' ? 'Student signature date' : name === 'birthDate' ? 'Birth date' : 'Date received')
+      : printable(normalizedInput[name], name.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`), length,
         { required: column === 'school_year' });
   }
   const currentSchoolYear = result.schoolYear.match(/^(\d{4})-(\d{4})$/);
@@ -177,7 +206,9 @@ function normalizeRecord(input = {}, { actorName = '', current = null } = {}) {
     ['emergencyContactPerson', 160, 'Emergency contact person'], ['emergencyContactRelationship', 80, 'Emergency contact relationship'],
     ['motherName', 160, 'Mother name'], ['fatherName', 160, 'Father name']
   ]) result[name] = printable(input[name], label, length);
-  for (const prefix of ['address', 'emergencyContactAddress']) normalizeProfileAddress(result, input, prefix, current);
+  normalizeProfileAddress(result, input, 'address', current);
+  normalizeProfileAddress(result, normalizedInput, 'emergencyContactAddress', current);
+  if (sameAddress) copyStudentAddressToEmergency(result);
   if (result.lrn && !/^\d{1,12}$/.test(result.lrn)) throw new PreEnrollmentError('LRN must contain digits only and be no longer than 12 digits.');
   const trackOptions = {
     'Academic Track': new Set([
