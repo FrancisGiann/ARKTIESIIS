@@ -6,6 +6,7 @@
       <p><strong><%= studentName %></strong> · Student no. <%= payment.student_no %></p></div>
     <div class="statement-actions">
       <button class="button button--primary" type="button" data-print-statement>Print confirmation</button>
+      <% if (kind === 'annual' && currentUser.role !== 'student' && backHref?.includes('?')) { %><a class="button button--secondary" href="<%= backHref %>">Back to matching student accounts</a><% } %>
       <a class="button button--secondary" href="<%= currentUser.role === 'student' ? '/student/finance/statement' : `/finance/students/${payment.student_id}/statement` %>">Back to statement</a>
     </div>
   </header>

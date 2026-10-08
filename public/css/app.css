@@ -1304,7 +1304,7 @@ label { font-size: 0.84rem; }
   .home-documents { padding-inline: 1rem; }
   .home-access { width: calc(100% - 2rem); padding: 1.25rem; }
   .home-access .button { width: 100%; }
-  .finance-overview-page > .dashboard-heading > .button, .admin-dashboard-users .admin-search .button { width: 100%; }
+  .admin-dashboard-users .admin-search .button { width: 100%; }
   .dashboard-heading { margin-bottom: 1rem; }
   .registrar-lookup { padding: 0.85rem; }
   .registrar-lookup__form { grid-template-columns: 1fr; }
@@ -2123,6 +2123,41 @@ label { font-size: 0.84rem; }
 .finance-detail-page .finance-account-action { margin-top: 0.5rem; }
 .finance-detail-page .finance-account-action > summary { display: list-item; width: fit-content; min-height: 2.75rem; padding-block: 0.35rem; color: var(--accent); cursor: pointer; font-size: 0.84rem; font-weight: 700; }
 .finance-detail-page .finance-account-action > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 0.2rem; }
+.finance-overview-search { display: grid; grid-template-columns: minmax(12rem, 1fr) auto; align-items: end; gap: 0.55rem; width: min(100%, 27rem); margin: 0; }
+.finance-overview-search .field { min-width: 0; }
+.finance-overview-search input, .finance-overview-search .button { min-height: 2.75rem; }
+.finance-overview-search .button { white-space: nowrap; }
+.finance-allocation-extra-details { padding-top: 0.3rem; margin-top: 0.35rem; border-top: 1px solid var(--line); }
+.finance-allocation-extra-details > summary { display: list-item; width: fit-content; min-height: 2.75rem; padding-block: 0.55rem; color: var(--accent); cursor: pointer; font-size: 0.84rem; font-weight: 700; }
+.finance-allocation-extra-details > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 0.2rem; }
+.finance-allocation-extra-details[open] > div { display: grid; gap: 0.75rem; }
+.finance-fee-breakdown-list { display: grid; gap: 0.65rem; margin-top: 0.7rem; }
+.finance-fee-school-year { min-width: 0; border-top: 1px solid var(--line); }
+.finance-fee-school-year > summary { display: list-item; min-height: 2.75rem; padding-block: 0.45rem; color: var(--ink); cursor: pointer; }
+.finance-fee-school-year > summary strong { font-size: 0.92rem; }
+.finance-fee-school-year > summary span { float: right; max-width: 68%; color: var(--muted); font-size: 0.78rem; text-align: right; }
+.finance-fee-term-group { min-width: 0; padding: 0.35rem 0 0.2rem; }
+.finance-fee-term-group > h3 { display: flex; min-height: 2.5rem; align-items: center; justify-content: space-between; gap: 0.55rem; padding: 0.35rem 0.15rem; margin: 0; border-bottom: 1px solid var(--line); font-size: 0.82rem; }
+.finance-fee-term-group > h3 span:last-child { color: var(--muted); font-size: 0.75rem; font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; }
+.finance-fee-items { padding: 0; margin: 0; list-style: none; }
+.finance-fee-item { min-width: 0; padding: 0.7rem 0.15rem; border-bottom: 1px solid var(--line); }
+.finance-fee-item__content { display: grid; grid-template-columns: minmax(9rem, 0.8fr) minmax(0, 2fr); align-items: start; gap: 0.7rem 1rem; }
+.finance-detail-page .finance-fee-amounts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.45rem; min-width: 0; margin: 0; }
+.finance-fee-amounts > div { min-width: 0; }
+.finance-fee-amounts dt { color: var(--muted); font-size: 0.75rem; font-weight: 650; line-height: 1.25; overflow-wrap: anywhere; }
+.finance-fee-amounts dd { margin: 0.12rem 0 0; color: var(--ink); font-size: 0.88rem; font-weight: 680; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.finance-detail-page .finance-fee-amounts__due dt, .finance-detail-page .finance-fee-amounts__due dd { color: var(--accent); }
+.finance-detail-page .finance-fee-amounts__due dd { font-size: 0.98rem; }
+.finance-detail-page .finance-fee-item .finance-charge-actions { display: flex; flex-wrap: wrap; gap: 0.7rem 1.25rem; margin-top: 0.55rem; }
+.finance-detail-page .finance-fee-item .finance-charge-actions > details { min-width: 0; flex: 1 1 15rem; }
+.finance-detail-page .finance-fee-item .finance-charge-actions > details > summary { min-height: 2.75rem; display: list-item; padding-block: 0.45rem; color: var(--accent); cursor: pointer; font-size: 0.82rem; font-weight: 700; }
+.finance-detail-page .finance-fee-item .finance-charge-actions > details[open] { flex-basis: 100%; }
+.finance-detail-page .finance-fee-item .finance-charge-actions > details > form,
+.finance-detail-page .finance-fee-item .finance-charge-actions > details > ul { max-width: 42rem; }
+.finance-detail-page .finance-payment-optional-details { padding-top: 0.35rem; margin-top: 0.45rem; border-top: 1px solid var(--line); }
+.finance-detail-page .finance-payment-optional-details > summary { display: list-item; min-height: 2.75rem; padding-block: 0.55rem; color: var(--accent); cursor: pointer; font-size: 0.84rem; font-weight: 700; }
+.finance-detail-page .finance-payment-optional-details > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 0.2rem; }
+.finance-detail-page .finance-payment-optional-details > .field { margin-top: 0.55rem; }
 .finance-detail-page .button-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.55rem; margin-block: 0.4rem; }
 .finance-detail-page[data-account-view="overview"] [data-finance-view]:not([data-finance-view~="overview"]),
 .finance-detail-page[data-account-view="payments"] [data-finance-view]:not([data-finance-view~="payments"]),
@@ -2205,6 +2240,8 @@ label { font-size: 0.84rem; }
 }
 
 @media (max-width: 680px) {
+  .finance-overview-page > .dashboard-heading { align-items: stretch; flex-direction: column; }
+  .finance-overview-search { grid-template-columns: minmax(0, 1fr) auto; width: 100%; }
   .dashboard-filter--finance { grid-template-columns: minmax(0, 1fr); }
   .dashboard-filter--finance > .finance-overview-filter-primary { grid-column: 1; grid-row: 1; }
   .dashboard-filter--finance > .button { grid-column: 1; grid-row: 2; justify-self: start; }
@@ -2229,12 +2266,29 @@ label { font-size: 0.84rem; }
   .finance-account-tabs a, .finance-report-tab { min-height: 2.75rem; padding-inline: 0.65rem; font-size: 0.8rem; }
   .finance-detail-page .finance-balance-summary { grid-template-columns: minmax(0, 1fr); }
   .finance-detail-page .finance-account-balance-summary { grid-template-columns: minmax(0, 1fr); }
+  .finance-detail-page .finance-account-balance-summary > div:not(.finance-account-balance-summary__total) { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem 0.9rem; padding-block: 0.45rem; }
+  .finance-detail-page .finance-account-balance-summary > div:not(.finance-account-balance-summary__total) dt { flex: 1 1 auto; margin: 0; font-size: 0.82rem; }
+  .finance-detail-page .finance-account-balance-summary > div:not(.finance-account-balance-summary__total) dd { flex: 0 0 auto; font-size: 0.92rem; text-align: right; }
   .finance-detail-page .finance-account-balance-summary__total dd { font-size: 1.4rem; }
   .finance-detail-page .finance-balance-summary-details__list { grid-template-columns: minmax(0, 1fr); }
-  .finance-detail-page .finance-charge-actions,
-  .finance-detail-page .finance-charge-actions > details,
-  .finance-detail-page .finance-charge-actions > details > form { width: 100%; max-width: none; }
+  .finance-detail-page .finance-fee-item__content { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+  .finance-detail-page .finance-fee-amounts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem 0.7rem; }
+  .finance-detail-page .finance-fee-amounts__due { grid-column: 1 / -1; }
+  .finance-detail-page .finance-fee-amounts__due { padding-top: 0.5rem; margin-top: 0.1rem; border-top: 1px solid var(--line-strong); }
+  .finance-detail-page .finance-fee-item .finance-charge-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .finance-detail-page .finance-fee-item .finance-charge-actions > details,
+  .finance-detail-page .finance-fee-item .finance-charge-actions > details > form { width: 100%; max-width: none; }
+  .finance-detail-page .finance-fee-item .finance-charge-actions > details[open] { grid-column: 1; }
   .finance-review-term-editor[open], .finance-review-fee-line { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 380px) {
+  .finance-overview-search { grid-template-columns: minmax(0, 1fr); }
+  .finance-overview-search .button { width: 100%; }
+}
+
+@media (max-width: 430px) {
+  .finance-detail-page .dashboard-heading__actions .finance-statement-action { flex: 0 0 auto; align-self: flex-start; width: auto; min-height: 2.75rem; padding-inline: 0.7rem; font-size: 0.78rem; }
 }
 
 .pre-enrollment-filter-bar {

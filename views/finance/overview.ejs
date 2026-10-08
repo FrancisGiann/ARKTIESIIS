@@ -1,8 +1,11 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-overview-page" id="main-content">
   <header class="dashboard-heading">
-    <div><h1>Finance overview</h1><p>Choose a term, then view student payment status.</p></div>
-    <div class="dashboard-heading__actions"><a class="button button--primary" href="/finance">Student accounts</a></div>
+    <div><h1>Finance overview</h1><p>Find a student account or review payment status for a term.</p></div>
+    <form class="finance-overview-search" method="get" action="/finance" role="search" aria-label="Find a student account">
+      <label class="field" for="finance-overview-search"><span>Student name or number</span><input id="finance-overview-search" type="search" name="search" maxlength="100" autocomplete="off" required></label>
+      <button class="button button--primary" type="submit">Find student</button>
+    </form>
   </header>
 
   <section class="finance-overview" aria-labelledby="finance-overview-heading">

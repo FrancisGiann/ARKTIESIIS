@@ -1937,7 +1937,7 @@ function createAnnualFinanceService({
       await requireFinanceActor(transaction.request(), actorInput);
     }
     const eventsRequest = transaction.request().input('studentId', sql.Int, studentId).input('isStudent', sql.Bit, access === 'student');
-    const studentResult = await transaction.request().input('studentId', sql.Int, studentId).query(`SELECT id, student_no, first_name, middle_name, last_name, suffix FROM students WHERE id = @studentId`);
+    const studentResult = await transaction.request().input('studentId', sql.Int, studentId).query(`SELECT id, student_no, first_name, middle_name, last_name, suffix, status FROM students WHERE id = @studentId`);
     const summaryResult = await transaction.request().input('studentId', sql.Int, studentId)
       .query(STUDENT_LEDGER_SUMMARY_SQL);
     const chargesResult = await transaction.request().input('studentId', sql.Int, studentId).query(`SELECT charge.id AS charge_id, charge.enrollment_id,

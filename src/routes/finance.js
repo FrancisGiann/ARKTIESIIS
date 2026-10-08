@@ -13,7 +13,7 @@ const {
   createStudentDocumentFinanceClearanceService
 } = require('../services/studentDocumentFinanceClearanceService');
 const { FinanceReviewDraftError } = require('../services/financeReviewDraftService');
-const { actionByPath, createFinanceReviewActionService, normalizeActionInput } = require('../services/financeReviewActionService');
+const { actionByPath, createFinanceReviewActionService, normalizeActionInput, normalizeFinanceReturnContext } = require('../services/financeReviewActionService');
 const { createStatementProjection } = require('../utils/financeStatementProjection');
 const { formatFinanceDateTime, manilaWeekStartDate } = require('../utils/financeDateTime');
 const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
@@ -24,6 +24,13 @@ const RETIRED_LEGACY_ACCOUNT_POST = /^\/students\/\d{1,10}\/(?:account|transacti
 
 function submittedText(input, name, maxLength) {
   return typeof input?.[name] === 'string' ? input[name].slice(0, maxLength).replace(/[\u0000-\u001f\u007f]/g, '') : '';
+}
+
+function financeBackHref(source) {
+  const filters = normalizeFinanceReturnContext(source);
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) params.set(key, value);
+  return `/finance${params.size ? `?${params.toString()}` : ''}`;
 }
 
 function paymentRecoveryValues(input = {}) {
@@ -657,13 +664,13 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       for (const key of ['Search', 'SchoolYear', 'TermId', 'GradeLevel', 'SectionId', 'Cluster', 'Strand', 'VoucherCode', 'Status', 'FinanceStatus', 'Installment', 'Page']) {
         if (typeof req.query[`back${key}`] === 'string' && req.query[`back${key}`]) backParams.set(key[0].toLowerCase() + key.slice(1), req.query[`back${key}`]);
       }
-      const accountTabs = accountViews.map((view) => ({ view, label: ({ overview: 'Overview', payments: 'Payments', charges: 'Charges & coverage', clearance: 'Clearance & reviews', history: 'History' })[view] }));
+      const accountTabs = accountViews.map((view) => ({ view, label: ({ overview: 'Overview', payments: 'Payments', charges: 'Fees', clearance: 'Term account clearance', history: 'History' })[view] }));
       return res.status(status).set('Cache-Control', 'private, no-store').render('finance/annual-student', {
         title: 'Student account', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), ledger,
         annualFeeBalance: accountProjection.summary.annualFeeBalance,
         hasEarlierAccountBalance: accountProjection.summary.showPreviousAccountBalance,
         hasPreviouslyConfirmedBalance: accountProjection.summary.showPreviouslyConfirmedBalance,
-        chargeBreakdown: accountProjection.charges, schedules,
+        chargeBreakdown: accountProjection.charges, chargeGroups: accountProjection.chargeGroups, schedules,
         financeCases, preview, openingPreview, tokens, error, paymentValues, preservedValues, failedAction, notice: req.query.notice || null,
         accountView, accountTabs, backHref: `/finance${backParams.size ? `?${backParams.toString()}` : ''}`
       });
@@ -897,7 +904,8 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     try {
       const confirmation = await annual.getAnnualPaymentConfirmation(req.authUser.id, studentId, req.params.paymentId, 'finance');
       return res.set('Cache-Control', 'private, no-store').render('finance/payment-confirmation', {
-        title: 'Payment confirmation', currentUser: req.authUser, confirmation, kind: 'annual', formatFinanceDateTime
+        title: 'Payment confirmation', currentUser: req.authUser, confirmation, kind: 'annual', formatFinanceDateTime,
+        backHref: financeBackHref(req.query)
       });
     } catch (error) {
       const status = error instanceof AnnualFinanceError ? error.status : 503;

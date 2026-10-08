@@ -15,7 +15,7 @@
         <div class="field"><label for="document-clearance-status">Request or finance status</label>
           <select id="document-clearance-status" name="status">
             <option value="">Active requests</option>
-            <% for (const [value, label] of [['pending','Finance pending'],['on_hold','On hold'],['approved','Approved'],['reapproval_required','Reapproval required'],['withdrawn','Withdrawn'],['requested','Requested'],['processing','Processing'],['ready','Ready'],['released','Released'],['cancelled','Cancelled']]) { %>
+            <% for (const [value, label] of [['pending','Fee review pending'],['on_hold','On hold'],['approved','Fee review approved'],['reapproval_required','Reapproval required'],['withdrawn','Fee review withdrawn'],['requested','Requested'],['processing','Processing'],['ready','Ready'],['released','Released'],['cancelled','Cancelled']]) { %>
               <option value="<%= value %>" <%= queue.filters.status === value ? 'selected' : '' %>><%= label %></option>
             <% } %>
           </select>
@@ -34,16 +34,16 @@
           <% const fullName = [row.first_name, row.middle_name, row.last_name, row.suffix].filter(Boolean).join(' '); %>
           <% const requestedDate = row.requested_on instanceof Date ? row.requested_on.toISOString().slice(0, 10) : String(row.requested_on || '').slice(0, 10); %>
           <% const hasOutstanding = /[1-9]/.test(String(row.outstanding || '0.00')); %>
-          <% const rowActionPath = `/document-clearance/${row.id}/decision`; const failedForRow = failedAction?.path === rowActionPath ? failedAction.input : {}; %>
+          <% const rowActionPath = `/document-clearance/${row.id}/decision`; const failedForRow = failedAction?.path === rowActionPath ? failedAction.input : {}; const feeReviewStatusLabels = { pending: 'Fee review pending', approved: 'Fee review approved', on_hold: 'On hold', reapproval_required: 'Reapproval required', withdrawn: 'Fee review withdrawn' }; %>
           <article class="finance-roster-record">
             <div class="finance-roster-record__header">
-              <div><h3><%= fullName %> <span class="record-status"><%= row.clearanceStatus.replaceAll('_', ' ') %></span></h3>
+              <div><h3><%= fullName %> <span class="record-status"><%= feeReviewStatusLabels[row.clearanceStatus] || 'Finance review status unavailable' %></span></h3>
                 <p><strong><%= row.student_no || 'Student number not recorded' %></strong> · <%= row.document_name %> (<%= row.document_type %>)</p>
                 <% const requestStatusLabel = ({ready_for_release:'Ready for release',reapproval_required:'Reapproval required',on_hold:'On hold',cancelled:'Cancelled',pending:'Pending',requested:'Requested',processing:'Processing',ready:'Ready',released:'Released'})[row.request_status] || String(row.request_status || 'Not recorded').replaceAll('_', ' ').replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()); %>
                 <p>Requested <%= requestedDate %> · Request reference: <%= row.reference_text || row.id %> · Request status: <%= requestStatusLabel %></p>
                 <p><a href="/finance/students/<%= row.student_id %>">Review student finance account</a></p>
               </div>
-              <div class="finance-roster-record__balance"><span>All-years outstanding</span><strong><%= row.ledgerComplete ? `₱${row.outstanding}` : 'Needs finance review' %></strong></div>
+              <div class="finance-roster-record__balance"><span>All-years balance due</span><strong><%= row.ledgerComplete ? `₱${row.outstanding}` : 'Needs finance review' %></strong></div>
             </div>
             <% if (!row.ledgerComplete) { %><p class="form-alert">The ledger is missing a required finance source or a confirmed annual assessment. Verify the account records before approving.</p><% } %>
             <% if (row.reason && row.clearanceStatus !== 'approved') { %><p><strong>Finance reason:</strong> <%= row.reason %></p><% } %>
@@ -63,7 +63,7 @@
                       <% } %>
                       <div class="field"><label for="clearance-note-<%= row.id %>">Private finance note (finance staff only, optional)</label><textarea id="clearance-note-<%= row.id %>" name="financeNote" maxlength="1000"><%= failedForRow.decision === 'approve' ? failedForRow.financeNote || '' : '' %></textarea></div>
                       <label class="check-row"><input type="checkbox" name="ledgerReviewConfirmed" value="1" <%= failedForRow.decision === 'approve' && (failedForRow.ledgerReviewConfirmed === '1' || failedForRow.ledgerReviewConfirmed === true) ? 'checked' : '' %> required> I reviewed the complete balance across all school-year fees and earlier account balances shown above.</label>
-                      <button class="button button--primary" type="submit">Approve clearance</button>
+                      <button class="button button--primary" type="submit">Approve document fee review</button>
                     </form>
                   <% } %>
                   <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision">
@@ -76,9 +76,9 @@
                   <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision">
                     <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= row.decisionKeys.withdraw %>"><input type="hidden" name="decision" value="withdraw">
                     <input type="hidden" name="search" value="<%= queue.filters.search %>"><input type="hidden" name="status" value="<%= queue.filters.status %>"><input type="hidden" name="page" value="<%= queue.filters.page %>">
-                    <div class="field"><label for="withdraw-reason-<%= row.id %>">Reason to withdraw clearance</label><textarea id="withdraw-reason-<%= row.id %>" name="reason" maxlength="1000" minlength="5" required><%= failedForRow.decision === 'withdraw' ? failedForRow.reason || '' : '' %></textarea></div>
+                    <div class="field"><label for="withdraw-reason-<%= row.id %>">Reason to withdraw fee approval</label><textarea id="withdraw-reason-<%= row.id %>" name="reason" maxlength="1000" minlength="5" required><%= failedForRow.decision === 'withdraw' ? failedForRow.reason || '' : '' %></textarea></div>
                     <div class="field"><label for="withdraw-note-<%= row.id %>">Private finance note (optional)</label><textarea id="withdraw-note-<%= row.id %>" name="financeNote" maxlength="1000"><%= failedForRow.decision === 'withdraw' ? failedForRow.financeNote || '' : '' %></textarea></div>
-                    <button class="button button--secondary" type="submit">Withdraw clearance</button>
+                    <button class="button button--secondary" type="submit">Withdraw fee approval</button>
                   </form>
                 </div>
               </details>
@@ -86,7 +86,7 @@
           </article>
         <% } %>
       </div>
-      <nav class="finance-roster-pagination" aria-label="Finance clearance queue pages">
+      <nav class="finance-roster-pagination" aria-label="Document fee review queue pages">
         <% const queuePageHref = (pageNumber) => { const query = new URLSearchParams(); if (queue.filters.search) query.set('search', queue.filters.search); if (queue.filters.status) query.set('status', queue.filters.status); query.set('page', String(pageNumber)); return `/finance/document-clearance?${query.toString()}`; }; %>
         <% if (queue.filters.page > 1) { %><a class="button button--secondary" href="<%= queuePageHref(queue.filters.page - 1) %>">Previous</a><% } %>
         <span>Page <%= queue.filters.page %></span>

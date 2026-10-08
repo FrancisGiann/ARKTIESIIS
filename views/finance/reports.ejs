@@ -38,7 +38,7 @@
     <% } %>
     <% if (filters.view === 'corrections') { %>
       <section class="finance-panel finance-report-reversals" aria-labelledby="reversal-records-title">
-        <div class="finance-report-reversals__heading"><div><h2 id="reversal-records-title">Payment corrections by correction date · <%= report.fromDate %> to <%= report.toDate %></h2><p>These are corrections to payment records, not a cash-refund report. The original amount is shown for reference and is not deducted twice.</p></div></div>
+        <div class="finance-report-reversals__heading"><div><h2 id="reversal-records-title">Payment corrections by correction date · <%= report.fromDate %> to <%= report.toDate %></h2><p>These are corrections to recorded payments, not a refund report. The original amount is shown for reference and is not deducted twice.</p></div></div>
         <% if (!report.reversals.length) { %><p class="empty-state">No payment corrections in this date range.</p><% } else { %>
         <p class="finance-report-reversals__summary"><%= report.reversalSummary.distinct_payers %> students · <%= report.reversalSummary.reversal_count %> corrections · ₱<%= formatMoney(report.reversalSummary.corrected_record_amount) %> original payment amount referenced.</p>
         <div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Correction date</th><th>Students</th><th>Correction records</th><th>Original payments</th></tr></thead><tbody>

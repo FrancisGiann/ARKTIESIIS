@@ -75,6 +75,50 @@ function safeText(value, maxLength = 2048) {
   return value.slice(0, maxLength).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
 }
 
+const FINANCE_RETURN_FILTERS = Object.freeze([
+  { key: 'search', max: 100 },
+  { key: 'schoolYear', max: 20, pattern: /^\d{4}[-/]\d{4}$/ },
+  { key: 'termId', max: 18, pattern: /^\d{1,18}$/ },
+  { key: 'gradeLevel', max: 20, values: ['Grade 11', 'Grade 12'] },
+  { key: 'sectionId', max: 18, pattern: /^\d{1,18}$/ },
+  { key: 'cluster', max: 100 },
+  { key: 'strand', max: 100 },
+  { key: 'voucherCode', max: 10, values: ['PUB', 'ESC', 'NV'] },
+  { key: 'status', max: 30, values: ['pending_payment', 'enrolled', 'cancelled', 'dropped', 'transferred'] },
+  { key: 'financeStatus', max: 30, values: ['unpaid', 'partially_paid', 'fully_paid', 'no_payment_required', 'needs_review'] },
+  { key: 'installment', max: 20, values: ['whole', 'dp', 'prelim', 'midterm', 'finals'] },
+  { key: 'page', max: 4, pattern: /^\d{1,4}$/ }
+]);
+
+function normalizeFinanceReturnContext(source) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return {};
+  const result = {};
+  for (const field of FINANCE_RETURN_FILTERS) {
+    const capitalized = field.key[0].toUpperCase() + field.key.slice(1);
+    const raw = source[field.key] ?? source[`financeBack${capitalized}`] ?? source[`back${capitalized}`];
+    if (typeof raw !== 'string' || raw.length > field.max) continue;
+    const value = safeText(raw, field.max).trim();
+    if (!value || (field.pattern && !field.pattern.test(value)) || (field.values && !field.values.includes(value))) continue;
+    result[field.key] = value;
+  }
+  return result;
+}
+
+function financeActionContext(context = {}) {
+  const result = { ...(context && typeof context === 'object' && !Array.isArray(context) ? context : {}) };
+  delete result.financeUiReturnContext;
+  return result;
+}
+
+function financeReturnQuery(context) {
+  const filters = normalizeFinanceReturnContext(context);
+  const params = new URLSearchParams();
+  for (const field of FINANCE_RETURN_FILTERS) {
+    if (filters[field.key]) params.set(`back${field.key[0].toUpperCase()}${field.key.slice(1)}`, filters[field.key]);
+  }
+  return params;
+}
+
 function normalizeInput(value, depth = 0) {
   if (depth > 3) throw new Error('Finance review input is too deeply nested.');
   if (value == null || typeof value === 'boolean' || typeof value === 'number') return value;
@@ -135,7 +179,15 @@ function departureAdjustments(body) {
 }
 
 function normalizeActionInput(actionType, body) {
-  const input = normalizeInput(body || {});
+  const returnFilterNames = new Set(FINANCE_RETURN_FILTERS.flatMap((field) => {
+    const capitalized = field.key[0].toUpperCase() + field.key.slice(1);
+    return [field.key, `back${capitalized}`, `financeBack${capitalized}`];
+  }));
+  const source = actionType === 'annual_payment' && body && typeof body === 'object' && !Array.isArray(body)
+    ? Object.fromEntries(Object.entries(body).filter(([key]) => !key.startsWith('financeBack')
+      && !key.startsWith('back') && !returnFilterNames.has(key)))
+    : body;
+  const input = normalizeInput(source || {});
   if (actionType === 'schedule_create') {
     if (!Array.isArray(input.lines)) input.lines = scheduleLines(input);
     input.lines = input.lines.map((line) => ({ ...line,
@@ -611,8 +663,10 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
   async function calculateReview(tx, action, context, rawInput, locking = false, prepareSuggestions = false) {
     const input = structuredClone(rawInput);
     const request = tx.request();
-    const studentId = await resolveStudentId(request, context);
-    const resolvedContext = { ...context, ...(studentId ? { studentId } : {}) };
+    const actionContext = financeActionContext(context);
+    const financeUiReturnContext = normalizeFinanceReturnContext(context?.financeUiReturnContext);
+    const studentId = await resolveStudentId(request, actionContext);
+    const resolvedContext = { ...actionContext, ...(studentId ? { studentId } : {}) };
     if (action.type === 'annual_assessment' && context.annualId) {
       const annual = await tx.request().input('annualId', sql.Int, context.annualId)
         .query('SELECT school_year, grade_level, voucher_code FROM annual_enrollments WHERE id = @annualId');
@@ -832,7 +886,9 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       preview.appliedAmount = `${appliedCents / 100n}.${String(appliedCents % 100n).padStart(2, '0')}`;
       preview.unallocatedCredit = `${remainingCents / 100n}.${String(remainingCents % 100n).padStart(2, '0')}`;
     }
-    return { dependencyFingerprint: fingerprint, preview, entityContext: resolvedContext, normalizedInput: input };
+    return { dependencyFingerprint: fingerprint, preview,
+      entityContext: { ...resolvedContext, ...(Object.keys(financeUiReturnContext).length ? { financeUiReturnContext } : {}) },
+      normalizedInput: input };
   }
 
   async function previewOutsideTransaction(action, context, input, prepareSuggestions = false) {
@@ -852,6 +908,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
   async function startDraft(actorId, sessionBindingHmac, pathname, body) {
     const action = actionByPath(pathname);
     if (!action) return null;
+    const financeUiReturnContext = action.type === 'annual_payment' ? normalizeFinanceReturnContext(body) : {};
     const input = normalizeActionInput(action.type, body || {});
     const context = { ...action.context };
     if (action.type === 'schedule_create') {
@@ -860,7 +917,9 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       context.voucherCode = input.voucherCode;
     }
     const review = await previewOutsideTransaction(action, context, input, action.type === 'annual_payment');
-    const draft = await drafts.createDraft(actorId, sessionBindingHmac, action.type, review.entityContext, review.normalizedInput, review);
+    const entityContext = { ...review.entityContext,
+      ...(Object.keys(financeUiReturnContext).length ? { financeUiReturnContext } : {}) };
+    const draft = await drafts.createDraft(actorId, sessionBindingHmac, action.type, entityContext, review.normalizedInput, review);
     return draft;
   }
 
@@ -950,8 +1009,13 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     afterCommitPath: (draft) => {
       const studentId = safeIntegerId(draft.entityContext?.studentId);
       const result = draft.committedResult || {};
+      const returnParams = financeReturnQuery(draft.entityContext?.financeUiReturnContext);
+      const appendReturnContext = (path) => {
+        const suffix = returnParams.toString();
+        return suffix ? `${path}${path.includes('?') ? '&' : '?'}${suffix}` : path;
+      };
       const accountPath = (view, notice = 'reviewSaved') => studentId
-        ? `/finance/students/${studentId}/annual?view=${encodeURIComponent(view)}&notice=${encodeURIComponent(notice)}`
+        ? appendReturnContext(`/finance/students/${studentId}/annual?view=${encodeURIComponent(view)}&notice=${encodeURIComponent(notice)}`)
         : '/finance?notice=saved';
       switch (draft.actionType) {
         case 'schedule_create': {
@@ -963,7 +1027,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           return `/finance/schedules?${params.toString()}`;
         }
         case 'annual_payment': return studentId && Number.isSafeInteger(Number(result.paymentId))
-          ? `/finance/students/${studentId}/annual/payments/${Number(result.paymentId)}/confirmation`
+          ? appendReturnContext(`/finance/students/${studentId}/annual/payments/${Number(result.paymentId)}/confirmation`)
           : accountPath('payments', 'paymentRecorded');
         case 'legacy_transaction':
           if (studentId && draft.input?.transactionType === 'payment' && Number.isSafeInteger(Number(result.transactionId))) {
@@ -999,4 +1063,4 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
   };
 }
 
-module.exports = { createFinanceReviewActionService, SAFE_ACTIONS, ACTION_WRITERS, READ_ONLY_POSTS, actionByPath, isReadOnlyPost, normalizeInput, normalizeActionInput };
+module.exports = { createFinanceReviewActionService, SAFE_ACTIONS, ACTION_WRITERS, READ_ONLY_POSTS, actionByPath, isReadOnlyPost, normalizeInput, normalizeActionInput, normalizeFinanceReturnContext, financeActionContext };

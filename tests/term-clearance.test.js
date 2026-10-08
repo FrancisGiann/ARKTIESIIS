@@ -452,6 +452,9 @@ test('annual activation review uses only Not completed and Completed paper statu
   assert.doesNotMatch(annualReviewText, /Required signatures from earlier attended terms/);
   const financeReviewText = fs.readFileSync(require('node:path').resolve(__dirname, '../views/finance/document-clearance.ejs'), 'utf8');
   assert.match(financeReviewText, /The registrar’s paper clearance record is separate from this fee review/);
+  assert.match(financeReviewText, /Approve document fee review/);
+  assert.match(financeReviewText, /Withdraw fee approval/);
+  assert.doesNotMatch(financeReviewText, />Approve clearance</);
   assert.doesNotMatch(financeReviewText, /registrar’s paper clearance checklist/);
 });
 

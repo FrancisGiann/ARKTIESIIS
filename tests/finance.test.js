@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const bcrypt = require('bcrypt');
 const { createApp } = require('../src/app');
-const { ACTION_WRITERS, SAFE_ACTIONS, actionByPath, createFinanceReviewActionService, normalizeActionInput } = require('../src/services/financeReviewActionService');
+const { ACTION_WRITERS, SAFE_ACTIONS, actionByPath, createFinanceReviewActionService, normalizeActionInput, normalizeFinanceReturnContext, financeActionContext } = require('../src/services/financeReviewActionService');
 const { AnnualFinanceError } = require('../src/services/annualFinanceService');
 const { FinanceReviewDraftError } = require('../src/services/financeReviewDraftService');
 const {
@@ -352,6 +352,51 @@ test('saved reversal and allocation-release drafts return to account history', (
     assert.equal(actions.afterCommitPath({ actionType, entityContext: { studentId: 22 }, committedResult: {} }),
       '/finance/students/22/annual?view=payments&notice=reviewSaved');
   }
+});
+
+test('payment return filters stay out of financial input and use only bounded internal return links', () => {
+  const actions = createFinanceReviewActionService({ getPool: async () => { throw new Error('redirect mapping must not query'); } });
+  const financialFields = {
+    amount: '20.00', paymentDate: '2026-10-01', referenceNo: 'OR-1', receiptIssued: '0',
+    allocations: [{ target: 'charge:41', amount: '20.00' }]
+  };
+  const withReturnContext = normalizeActionInput('annual_payment', {
+    ...financialFields,
+    financeBackSearch: 'Villanueva Santos', financeBackSchoolYear: '2026-2027',
+    financeBackTermId: '41', financeBackStatus: 'enrolled', financeBackPage: '2',
+    financeBackReturnTo: 'https://example.invalid/', financeBackUnknown: 'ignored',
+    financeBackArray: Array.from({ length: 121 }, () => 'ignored')
+  });
+  assert.deepEqual(withReturnContext, normalizeActionInput('annual_payment', financialFields),
+    'return navigation metadata does not enter the payment action input');
+  assert.deepEqual(normalizeActionInput('annual_payment', {
+    ...financialFields, search: 'Villanueva Santos', schoolYear: '2026-2027',
+    backSearch: 'Villanueva Santos', backSchoolYear: '2026-2027', backTermId: '41'
+  }), normalizeActionInput('annual_payment', financialFields),
+  'canonical and back-prefixed filter aliases cannot leak into financial review fields');
+  assert.deepEqual(actionByPath('/students/22/annual/payments')?.context, { studentId: '22' });
+
+  const returnContext = normalizeFinanceReturnContext({
+    financeBackSearch: 'Villanueva Santos', financeBackSchoolYear: '2026-2027',
+    financeBackTermId: '41', financeBackStatus: 'enrolled', financeBackPage: '2',
+    financeBackReturnTo: 'https://example.invalid/', financeBackUnknown: 'ignored',
+    financeBackSectionId: { id: 9 }, financeBackCluster: 'x'.repeat(101),
+    financeBackSchoolYearExtra: '2026-2027', financeBackVoucherCode: ['ESC'], financeBackPageTooLong: '99999'
+  });
+  assert.deepEqual(returnContext, {
+    search: 'Villanueva Santos', schoolYear: '2026-2027', termId: '41', status: 'enrolled', page: '2'
+  });
+  assert.deepEqual(financeActionContext({ studentId: 22, financeUiReturnContext: returnContext }), { studentId: 22 },
+    'saved return filters do not change review dependency context or stale checks');
+  assert.deepEqual(normalizeFinanceReturnContext({ backSearch: 'Santos', search: ['bad'], backSchoolYear: 'not-a-year',
+    schoolYear: '2026-2027', backTermId: { id: 41 }, termId: '41', backPage: '12345' }),
+  { schoolYear: '2026-2027', termId: '41' }, 'malformed aliases are ignored while valid filters remain bounded');
+  assert.equal(actions.afterCommitPath({ actionType: 'annual_payment',
+    entityContext: { studentId: 22, financeUiReturnContext: returnContext }, committedResult: { paymentId: 104 } }),
+  '/finance/students/22/annual/payments/104/confirmation?backSearch=Villanueva+Santos&backSchoolYear=2026-2027&backTermId=41&backStatus=enrolled&backPage=2');
+  assert.equal(actions.afterCommitPath({ actionType: 'annual_payment',
+    entityContext: { studentId: 22, financeUiReturnContext: { returnTo: 'https://example.invalid/' } }, committedResult: { paymentId: 104 } }),
+  '/finance/students/22/annual/payments/104/confirmation', 'unknown return destinations cannot create external redirects');
 });
 
 test('money parsing and financial transaction fields enforce DECIMAL(12,2) limits and signs', () => {
@@ -851,6 +896,8 @@ test('annual finance correction routes stay student-bound, CSRF-protected, and r
     const paymentHtml = await payment.text();
     assert.equal(payment.status, 400);
     assert.match(paymentHtml, /data-account-view="payments"/);
+    assert.match(paymentHtml, /<details class="finance-payment-optional-details" open>/,
+      'a rejected payment opens optional details so the payment panel and recovered values stay visible');
     assert.match(paymentHtml, /name="amount"[^>]*value="20\.00"/);
     assert.match(paymentHtml, /value="RECOVER-104"/);
     assert.match(paymentHtml, /value="TRANSMIT-KEEP"/);
