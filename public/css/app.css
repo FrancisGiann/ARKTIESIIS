@@ -567,7 +567,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-colo
   .enrollment-print__actions, .finance-statement .statement-actions, .finance-statement .context-back { display: none !important; }
   .page-shell { width: 100%; padding: 0; }
   .enrollment-print, .finance-statement, .finance-statement .finance-panel { background: #fff; border: 0; box-shadow: none; }
-  .app-shell, .app-frame, .app-content, .finance-statement { display: block !important; width: 100% !important; max-width: none !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
+  .app-shell, .app-frame, .app-content, .finance-statement { display: block !important; width: 100% !important; max-width: none !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
   .finance-statement { color: #000; font-size: 9pt; }
   .finance-statement .finance-panel { margin: 0 0 0.65rem; padding: 0.45rem 0; border: 0; box-shadow: none; break-inside: auto; }
   .finance-statement .table-scroll { width: 100%; overflow: visible !important; }
@@ -756,6 +756,7 @@ h2 { margin-bottom: 0.4rem; font-size: 1.18rem; font-weight: 700; letter-spacing
 h3 { font-size: 1rem; font-weight: 700; }
 p { max-width: 70ch; }
 .app-shell, .public-shell { min-height: 100vh; }
+.app-shell { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
 .app-header, .public-header { position: relative; z-index: 4; min-height: 5rem; padding: 0.65rem max(1.35rem, calc((100vw - 92rem) / 2)); background: var(--surface); border-bottom: 1px solid var(--line); }
 .public-header { min-height: 4.8rem; }
 .brand { gap: 0.7rem; }
@@ -768,8 +769,8 @@ p { max-width: 70ch; }
 .account-shortcut, .sign-out-button { font-size: 0.86rem; font-weight: 650; }
 .account-shortcut { color: var(--ink); text-decoration: none; }
 .account-shortcut:hover, .account-shortcut.is-current { color: var(--accent); text-decoration: underline; text-underline-offset: 0.2em; }
-.app-frame { display: grid; width: min(100%, 96rem); min-height: calc(100vh - 8.5rem); grid-template-columns: 14.5rem minmax(0, 1fr); align-items: start; margin-inline: auto; }
-.desktop-nav { position: sticky; top: 0.5rem; align-self: start; height: calc(100vh - 1rem); max-height: calc(100dvh - 1rem); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 1.25rem 0.75rem 1.5rem; background: #f0f3f3; border-right: 1px solid var(--line); }
+.app-frame { display: grid; width: min(100%, 96rem); min-height: 0; flex: 1 1 auto; grid-template-columns: 14.5rem minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); align-items: stretch; margin-inline: auto; }
+.desktop-nav { min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 1.25rem 0.75rem 1.5rem; background: #f0f3f3; border-right: 1px solid var(--line); }
 .app-nav { display: grid; min-height: 0; gap: 1.15rem; overflow: visible; padding: 0; background: transparent; border: 0; }
 .nav-group h2 { margin: 0 0 0.4rem; padding: 0 0.6rem; color: #79212f; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.035em; }
 .nav-group ul { display: grid; gap: 0.12rem; padding: 0; margin: 0; list-style: none; }
@@ -777,7 +778,7 @@ p { max-width: 70ch; }
 .app-nav__link:hover { color: var(--ink); background: #e5ebeb; }
 .app-nav__link.is-current { color: var(--accent); background: var(--accent-soft); font-weight: 700; }
 .mobile-nav { display: none; }
-.app-content { min-width: 0; padding: 0; }
+.app-content { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; padding: 0; }
 .page-shell { width: min(calc(100% - 3rem), 77rem); margin-inline: auto; padding: 2rem 0 3.5rem; }
 .dashboard-heading, .page-heading, .account-heading, .records-heading { align-items: flex-start; gap: 1rem; margin-bottom: 1.25rem; }
 .dashboard-heading p, .page-heading p, .account-heading p, .records-heading p { margin: 0; font-size: 0.9rem; }
@@ -1206,9 +1207,11 @@ label { font-size: 0.84rem; }
 }
 
 @media (max-width: 900px) {
+  .app-shell { height: auto; min-height: 100vh; overflow: visible; }
   .app-header, .public-header { min-height: 4.7rem; }
-  .app-frame { display: block; min-height: 0; }
+  .app-frame { display: block; min-height: 0; flex: 0 0 auto; }
   .desktop-nav { display: none; }
+  .app-content { min-height: 0; overflow: visible; }
   .mobile-nav { display: block; position: relative; align-self: center; }
   .mobile-nav > summary { display: flex; min-height: 2.75rem; align-items: center; gap: 0.5rem; padding: 0.45rem 0.7rem; color: var(--ink); background: #fff; border: 1px solid var(--line-strong); border-radius: var(--radius-control); cursor: pointer; font-size: 0.83rem; font-weight: 700; list-style: none; }
   .mobile-nav > summary::-webkit-details-marker { display: none; }

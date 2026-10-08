@@ -7,10 +7,22 @@ This inventory covers the current EJS web application for all six roles. It reco
 - The active stack is Node.js, Express, EJS, CSS/JavaScript, and MariaDB. This prototype does not use SQL Server for active application work.
 - The roles are database administrator, registrar, front desk, finance, teacher, and student. Server route guards remain authoritative; the navigation only reflects those rules.
 - The shared shell preserves the supplied official seal and the full Ark Technological Institute Education System Inc. / Lucena Branch identity. Navigation group headings remain text-only burgundy; selected destinations use the current light selected state.
-- On desktop, the grouped sidebar remains viewport-bounded and sticky with its own overflow; the content track retains natural document height. Tablet and phone layouts use the unpinned native disclosure menu.
+- Above 900px, the authenticated shell fills the viewport. Header and footer remain visible while the grouped sidebar and main content scroll independently; the sidebar has its own overflow for long role navigation. At 900px and below, the shell returns to natural document scrolling and the unpinned native disclosure menu.
 - Interactive controls use at least 44px targets where they are controls: buttons, form inputs/selects, navigation items, row actions, and disclosures. Checkbox/radio geometry remains native. Inline reading links are not enlarged into button-like controls.
 - Paper clearance has only **Not completed** and **Completed** outcomes. The registrar records completion with one checkbox after inspection; the server stores operator, date, and audit history. A separate collapsed, reasoned registrar control corrects whole-term applicability only for existing eligible past/current placements. It does not show signature-collection progress. Finance's term account clearance is separate, and document request fee review is a separate decision before document release.
 - Automated document prechecks provide limited advisory findings. Staff inspect sources and decide; the interface does not claim authenticity, forgery, signature, seal, or forensic verification.
+
+#### Shared authenticated shell scroll follow-up · 2026-10-08
+
+The baseline desktop rail moved with the first document scroll and was clipped by the end of `.app-frame` near the footer. The updated desktop shell gives the content pane and navigation rail independent scroll areas inside the viewport. At 900px and below, the app shell returns to document flow; the existing print rule clears its fixed height and overflow.
+
+Root's read-only browser review used `http://127.0.0.1:4188/?role=registrar&v=after`, a GET-only fixture assembled from the real `views/partials/head.ejs`, `views/partials/foot.ejs`, and `buildNavigation` role links. It used synthetic content, no database or external services, and returned 405 for non-GET requests. The `v=before` query serves the committed baseline stylesheet. All six role variants were checked.
+
+At 1440×900, the rail stayed at `top:80px` from the initial view through a 198px content scroll and the bottom of the long page. At the bottom, content `scrollTop` was 9341px (`scrollHeight` 10106px, `clientHeight` 765px), while rail and document scroll remained zero; the footer stayed at `top:844.77px`. A short-content page filled the 900px viewport with the footer at the bottom and no page overflow. At 1440×520, the rail scrolled internally to 292px without moving the content pane. Shift+Tab reached the 44px Teacher assignments link; activating the skip link focused `MAIN` and returned content to the top; PageDown advanced content by 669px without moving the rail or document.
+
+All six role fixtures kept the rail at 80px after a 900px content scroll at 1440px, with no horizontal page overflow. At 800px, document scrolling and the native menu were active. At 390px, the open menu target was 44px and its panel was 576px tall; at 320px, normal flow had no horizontal overflow. Root's screenshots are in `/tmp/arktiesiis-sidebar-check/` (`before-footer.jpg`, `after-top.jpg`, `after-bottom.jpg`, `after-short-viewport.jpg`, `mobile-390.jpg`, and `mobile-320.jpg`).
+
+Print emulation hid the header and navigation, restored visible overflow for the content pane, and retained all 24 sections. Extracted text from the 11-page, 105,818-byte PDF contained the first and last sections and all 24 section headings. Evidence: `/tmp/arktiesiis-sidebar-check/print-after.pdf`.
 
 ## Active screen inventory
 
