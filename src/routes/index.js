@@ -45,6 +45,7 @@ const { createRegistrarGradeOverviewService } = require('../services/registrarGr
 const { createRegistrarDashboardService } = require('../services/registrarDashboardService');
 const { createFinanceDashboardService } = require('../services/financeDashboardService');
 const { RegistrarDashboardError } = require('../services/registrarDashboardService');
+const { createDocumentService } = require('../services/documentService');
 const { createClassScheduleService } = require('../services/classScheduleService');
 const { createPreEnrollmentService } = require('../services/preEnrollmentService');
 const { createPreEnrollmentRouter } = require('./preEnrollments');
@@ -104,6 +105,8 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   const studentDocumentClearance = documentClearanceService || createStudentDocumentFinanceClearanceService({ getPool, sql });
   const registrarGradeOverview = gradeOverviewService || createRegistrarGradeOverviewService({ getPool, sql });
   const registrarDashboard = registrarDashboardService || createRegistrarDashboardService({ getPool, sql });
+  const documentsService = documentService || createDocumentService({ getPool, sql,
+    storageDirectory: environment.upload?.storageDirectory });
   const studentSetup = studentSetupService || createStudentSetupService({ getPool, sql });
   const schedulesService = classScheduleService || createClassScheduleService({ getPool, sql });
   const accountsService = accountService || createAccountService({ getPool, sql, smtp: environment.smtp, appBaseUrl: environment.appBaseUrl });
@@ -223,7 +226,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   router.use('/student', requireAuth, requireRole('student'), createStudentPortalRouter({ getPool, sql, studentRecordsService: recordsService, academicRecordsService: academicsService, financeService: financesService, annualFinanceService: annualFinancesService, classScheduleService: schedulesService, termClearanceService: termClearancesService }));
   router.use('/teacher/grades', requireAuth, requireRole('teacher'), createTeacherGradeSubmissionRouter({ getPool, sql, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
   router.use('/registrar/grade-submissions', requireAuth, requireRole('registrar'), createRegistrarGradeSubmissionRouter({ getPool, sql, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
-  router.use('/documents', requireAuth, requireRole('database_admin', 'registrar', 'teacher', 'finance', 'student'), createDocumentsRouter({ getPool, sql, environment, documentService, documentProcessingService, form137ScanService, physicalChecklistService: physicalChecklistsService }));
+  router.use('/documents', requireAuth, requireRole('database_admin', 'registrar', 'teacher', 'finance', 'student'), createDocumentsRouter({ getPool, sql, environment, documentService: documentsService, documentProcessingService, form137ScanService, physicalChecklistService: physicalChecklistsService }));
   router.use('/account/email/confirm', createEmailConfirmationRouter({ accountService: accountsService }));
   router.use(authRouter);
   router.use('/account', requireAuth, createAccountRouter({ accountService: accountsService, environment }));
@@ -546,13 +549,49 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
 
   router.get('/registrar', requireAuth, requireRole('registrar'), async (req, res) => {
     try {
-      const overview = await registrarDashboard.getDashboard(req.authUser.id, req.query);
+      const workloadRequests = [
+        () => preEnrollmentsService.list(req.authUser.id, { status: 'ready_for_registrar', page: '1' })
+          .then((result) => Number(result.pagination?.totalRecords || 0)),
+        () => annualEnrollmentsService.listAnnualEnrollmentsPage(req.authUser.id, { confirmationStatus: 'needs_confirmation', page: '1' })
+          .then((result) => Number(result.pagination?.totalRecords || 0)),
+        () => documentsService.countAwaitingStaffReview(req.authUser.id),
+        () => teacherSubmissions.listReviewQueue(req.authUser.id).then((rows) => rows.length)
+      ];
+      const [overviewResult, ...workloadResults] = await Promise.allSettled([
+        Promise.resolve().then(() => registrarDashboard.getDashboard(req.authUser.id, req.query)),
+        ...workloadRequests.map((load) => Promise.resolve().then(load))
+      ]);
+      if (overviewResult.status === 'rejected'
+        && (overviewResult.reason?.status === 403
+          || (overviewResult.reason instanceof RegistrarDashboardError && overviewResult.reason.status < 500))) {
+        throw overviewResult.reason;
+      }
+      const queueDefinitions = [
+        { key: 'paperIntake', label: 'Paper intakes ready for registrar review', href: '/pre-enrollments?status=ready_for_registrar', description: 'Front-desk forms saved as ready for registrar review.' },
+        { key: 'annualConfirmation', label: 'Enrollments awaiting confirmation', href: '/registrar/intake?confirmationStatus=needs_confirmation', description: 'Annual records linked to front-desk paper forms and awaiting entry confirmation.' },
+        { key: 'digitalDocuments', label: 'Digital submissions needing review', href: '/documents?status=awaiting_review', description: 'Latest permitted Good Moral, PSA, or student-uploaded report-card submissions.' },
+        { key: 'gradeSubmissions', label: 'Teacher grade submissions awaiting review', href: '/registrar/grade-submissions', description: 'Saved teacher submissions awaiting registrar review.' }
+      ];
+      const authorizationFailure = workloadResults.find((result) => result.status === 'rejected' && result.reason?.status === 403);
+      if (authorizationFailure) throw authorizationFailure.reason;
+      const needsReview = queueDefinitions.map((definition, index) => {
+        const result = workloadResults[index];
+        return result.status === 'fulfilled'
+          ? { ...definition, status: 'available', count: Math.max(0, Number(result.value) || 0) }
+          : { ...definition, status: 'unavailable', count: null };
+      });
       return res.status(200).set('Cache-Control', 'private, no-store').render('dashboards/registrar', {
         title: dashboardViews.registrar.title,
         csrfToken: ensureCsrfToken(req),
-        overview
+        overview: overviewResult.status === 'fulfilled' ? overviewResult.value : {
+          configuredTerms: [], schoolYears: [], schoolYearTerms: [], selectedSchoolYear: '', selectedTerm: null,
+          activeEnrolledCount: null, pendingActivationCount: null, departedCount: null, droppedCount: null,
+          transferredCount: null, everFinalizedCount: null, termCounts: [], needsTermSelection: true, unavailable: true
+        },
+        needsReview
       });
     } catch (error) {
+      if (error?.status === 403) return res.status(403).render('error', { title: 'Registrar overview', message: error.message });
       if (error instanceof RegistrarDashboardError) {
         return res.status(error.status).render('error', { title: 'Registrar overview', message: error.message });
       }

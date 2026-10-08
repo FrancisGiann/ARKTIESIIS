@@ -3,43 +3,15 @@
   <header class="dashboard-heading">
     <div>
       <h1>Registrar workspace</h1>
-      <p>Review paper forms, find a student record, or continue to a registrar task.</p>
+      <p>Enrollment overview, student records, and registrar review work.</p>
     </div>
   </header>
 
-  <section class="registrar-lookup registrar-lookup--primary" aria-labelledby="find-student-title">
-    <div class="registrar-lookup__heading"><h2 id="find-student-title">Find a student</h2></div>
-    <form class="admin-search registrar-lookup__form" method="get" action="/registrar/records">
-      <div class="field"><label for="registrar-student-search">Student name, number, or LRN</label><input id="registrar-student-search" name="search" type="search" maxlength="100" autocomplete="off" required></div>
-      <button class="button button--primary" type="submit">Search records</button>
-      <a class="text-link" href="/registrar/records">Browse student records</a>
-    </form>
-  </section>
-
-  <div class="registrar-task-layout">
-    <section class="registrar-task-group" aria-labelledby="registrar-next-tasks">
-      <h2 id="registrar-next-tasks">Enrollment and review</h2>
-      <nav class="registrar-work-index" aria-label="Enrollment and review tasks">
-        <a class="registrar-work-index__link" href="/pre-enrollments"><span><strong>Pre-enrollment records</strong><span>Review saved paper forms and start a new enrollment from a ready record.</span></span><span class="registrar-work-index__action">Review forms</span></a>
-        <a class="registrar-work-index__link" href="/documents"><span><strong>Document review</strong><span>Review Good Moral, PSA, and Form 137 status from student records.</span></span><span class="registrar-work-index__action">Review documents</span></a>
-        <a class="registrar-work-index__link" href="/registrar/grade-submissions"><span><strong>Grade review</strong><span>Review and approve submitted grades.</span></span><span class="registrar-work-index__action">Review submissions</span></a>
-        <a class="registrar-work-index__link" href="/registrar/schedules"><span><strong>Class schedules</strong><span>Manage meeting times for assigned classes.</span></span><span class="registrar-work-index__action">Manage schedules</span></a>
-      </nav>
-    </section>
-    <section class="registrar-task-group registrar-task-group--setup" aria-labelledby="registrar-setup-title">
-      <h2 id="registrar-setup-title">Academic setup</h2>
-      <p>Manage subjects and teacher assignments for classes.</p>
-      <nav class="registrar-work-index" aria-label="Academic setup tasks">
-        <a class="registrar-work-index__link" href="/registrar/records/subjects"><span><strong>Subjects</strong><span>Maintain subjects used for classes and academic records.</span></span><span class="registrar-work-index__action">Manage subjects</span></a>
-        <a class="registrar-work-index__link" href="/registrar/records/teacher-assignments"><span><strong>Teacher assignments</strong><span>Assign teachers to a term, section, and subject.</span></span><span class="registrar-work-index__action">Manage assignments</span></a>
-      </nav>
-    </section>
-  </div>
   <section class="registrar-overview" aria-labelledby="registrar-overview-heading">
     <div class="registrar-overview__top">
       <div>
         <h2 id="registrar-overview-heading">Enrollment overview</h2>
-        <p>Choose a school year and term to review active enrollment.</p>
+        <p>Counts show active students for the selected school year and term.</p>
       </div>
       <% if (overview.schoolYears.length) { %>
         <div class="dashboard-filter-stack">
@@ -74,7 +46,9 @@
       <% } %>
     </div>
 
-    <% if (!overview.schoolYears.length) { %>
+    <% if (overview.unavailable) { %>
+      <p class="dashboard-empty" role="status">Enrollment counts are temporarily unavailable. Student search and registrar review queues remain available.</p>
+    <% } else if (!overview.schoolYears.length) { %>
       <p class="dashboard-empty" role="status">No school-year terms are configured yet. Configure the term order before reviewing term enrollment counts.</p>
     <% } else if (!overview.selectedSchoolYear) { %>
       <p class="dashboard-empty" role="status">No current school year is configured. Choose a school year to review enrollment.</p>
@@ -82,7 +56,7 @@
       <% const selectedTermCounts = overview.selectedTerm && overview.termCounts.find((term) => term.academicTermId === overview.selectedTerm.academicTermId); %>
       <dl class="registrar-overview__selected">
         <div class="registrar-overview__lead">
-          <dt><%= overview.selectedTerm ? `Active enrolled students · ${overview.selectedTerm.term}` : 'Active enrolled students' %></dt>
+          <dt><span class="registrar-overview__lead-label--desktop"><%= overview.selectedTerm ? `Active enrolled students · ${overview.selectedTerm.term}` : 'Active enrolled students' %></span><span class="registrar-overview__lead-label--mobile">Total enrolled</span></dt>
           <dd>
             <% if (overview.selectedTerm && overview.activeEnrolledCount !== null) { %>
               <% const activeTermQuery = new URLSearchParams({ schoolYear: overview.selectedSchoolYear, termId: String(overview.selectedTerm.academicTermId), status: 'enrolled', studentStatus: 'active' }); %>
@@ -106,7 +80,7 @@
         <% } %>
       </dl>
 
-      <details class="registrar-overview__comparison"><summary>Enrollment counts by term</summary>
+      <details class="registrar-overview__comparison"><summary>Compare enrollment by term</summary>
       <section class="registrar-overview__term-comparison" aria-labelledby="registrar-term-chart-title">
         <h3 class="visually-hidden" id="registrar-term-chart-title">Grade 11 and Grade 12 by term</h3>
         <% if (overview.termCounts.length) { %>
@@ -144,6 +118,52 @@
       </details>
     <% } %>
   </section>
+
+  <section class="registrar-lookup registrar-lookup--primary" aria-labelledby="find-student-title">
+    <div class="registrar-lookup__heading"><h2 id="find-student-title">Find a student</h2></div>
+    <form class="admin-search registrar-lookup__form" method="get" action="/registrar/records">
+      <div class="field"><label for="registrar-student-search">Student name, number, or LRN</label><input id="registrar-student-search" name="search" type="search" maxlength="100" autocomplete="off" required></div>
+      <button class="button button--primary" type="submit">Search records</button>
+      <a class="text-link" href="/registrar/records">Browse student records</a>
+    </form>
+  </section>
+
+  <section class="registrar-needs-review" aria-labelledby="registrar-needs-review-title">
+    <div class="registrar-needs-review__heading"><div><h2 id="registrar-needs-review-title">Needs your review</h2><p>All school years · counts are independent of the selected enrollment term.</p></div></div>
+    <ul class="registrar-needs-review__list">
+      <% for (const item of needsReview) { %>
+        <li>
+          <% if (item.status === 'available') { %>
+            <a href="<%= item.href %>"><span><strong><%= item.label %></strong><span><%= item.description %></span></span><span class="registrar-needs-review__count"><%= item.count.toLocaleString('en-US') %></span></a>
+          <% } else { %>
+            <div class="registrar-needs-review__unavailable"><span><strong><%= item.label %></strong><span><%= item.description %></span></span><span class="registrar-needs-review__count">Unavailable</span></div>
+          <% } %>
+        </li>
+      <% } %>
+    </ul>
+    <% const allQueuesAvailable = needsReview.every((item) => item.status === 'available'); %>
+    <% if (allQueuesAvailable && needsReview.every((item) => item.count === 0)) { %>
+      <p class="registrar-needs-review__zero" role="status">No registrar review items are waiting.</p>
+    <% } else if (!allQueuesAvailable) { %>
+      <p class="registrar-needs-review__unavailable-note" role="status">Some queue counts are unavailable. Open a listed workspace to review its current records.</p>
+    <% } %>
+  </section>
+
+  <details class="registrar-other-work">
+    <summary>Other workspaces and setup</summary>
+    <nav class="registrar-other-work__links" aria-label="Other registrar workspaces">
+      <a href="/pre-enrollments">Front-desk paper forms</a>
+      <a href="/documents/physical">Paper requirements</a>
+      <a href="/registrar/records/clearance">Paper clearance</a>
+      <a href="/documents?status=awaiting_review">Digital document review</a>
+      <a href="/registrar/grade-submissions">Grade review</a>
+      <a href="/registrar/intake">Annual enrollment management</a>
+      <a href="/registrar/schedules">Class schedules</a>
+      <a href="/registrar/records/subjects">Subjects</a>
+      <a href="/registrar/records/teacher-assignments">Teacher assignments</a>
+    </nav>
+  </details>
+
 
 </main>
 <%- include('../partials/foot') %>

@@ -313,7 +313,10 @@ test('authenticated navigation only exposes destinations available to each role'
         assert.doesNotMatch(html, /System summary|admin-dashboard-summary/);
       }
       if (scenario.role === 'registrar') {
-        assert.match(html, /class="registrar-work-index"/);
+        assert.ok(html.indexOf('class="registrar-overview"') < html.indexOf('class="registrar-lookup registrar-lookup--primary"'));
+        assert.ok(html.indexOf('class="registrar-lookup registrar-lookup--primary"') < html.indexOf('class="registrar-needs-review"'));
+        assert.ok(html.indexOf('class="registrar-needs-review"') < html.indexOf('class="registrar-other-work"'));
+        assert.match(html, /<summary>Other workspaces and setup<\/summary>/);
         assert.match(html, /href="\/registrar\/records"/);
         assert.match(html, /href="\/documents"/);
         assert.match(html, /href="\/registrar\/records\/subjects"/);

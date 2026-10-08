@@ -1,163 +1,103 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page records-page student-clearance-page" id="main-content">
   <% const clearanceStudentName = [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(' ');
-    const nextTerm = terms.find((term) => !term.future && !term.beforeEntry
-      && !['complete', 'not_attended', 'not_applicable'].includes(term.state));
-    const nextTermTemplates = nextTerm ? templates.filter((item) => item.grade_level === nextTerm.grade_level
-      && (nextTerm.past || item.status === 'approved')) : [];
-    const needsTemplateSetup = Boolean(nextTerm && !nextTerm.template_id && nextTermTemplates.length === 0);
-    const nextTermLabel = nextTerm ? `${nextTerm.school_year} · ${nextTerm.grade_level} · ${nextTerm.term_label}` : '';
-    const nextStepText = !terms.length ? 'No term placements are recorded on this student profile yet.'
-      : !nextTerm ? 'No required term remains to be completed. Terms before entry or in the future stay outside required clearance.'
-        : needsTemplateSetup ? `No matching paper form is set up for ${nextTerm.grade_level}. If school records show attendance, a registrar must first add a form version that matches the paper copy.`
-          : `Not completed: the registrar has not confirmed a completed paper form for ${nextTermLabel}.`;
+    const nextTerm = terms.find((term) => !term.future && !term.beforeEntry && term.state !== 'complete'
+      && term.state !== 'not_attended' && term.enrollment_id);
   %>
-  <a class="context-back" href="/registrar/records/clearance">Back to clearance overview</a>
-  <%- include('partials/clearance-workspace-tabs', { activeTab: 'overview' }) %>
+  <a class="context-back" href="/registrar/records/clearance">Back to paper clearance</a>
   <section class="dashboard-heading">
-    <div><h1><%= currentUser.role === 'registrar' ? 'Record paper clearance' : 'Review paper clearance' %></h1><p><strong><%= clearanceStudentName %></strong><% if (student.student_no) { %> · Student no. <%= student.student_no %><% } %></p><p><%= currentUser.role === 'registrar' ? 'Use this record after the paper form is fully signed and you have inspected it.' : 'Review the saved details and history recorded by the registrar after inspecting the paper form.' %></p></div>
+    <div><h1>Paper clearance</h1><p><strong><%= clearanceStudentName %></strong><% if (student.student_no) { %> · Student no. <%= student.student_no %><% } %></p>
+      <p>After checking the returned paper form, the registrar records one completion for each applicable term.</p></div>
   </section>
-  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (notice) { %><p class="form-success" role="status">Paper clearance status saved and recorded in history.</p><% } %>
   <% if (error) { %><p class="form-alert" role="alert" tabindex="-1"><%= error %></p><% } %>
-  <% if (staleAttempt) { %><p class="muted-copy" role="status">Your changes were not saved because this form was out of date. The current saved review below is shown as-is; compare it before re-entering anything. Your submitted draft is available separately and was not merged.</p><% } %>
-  <section class="clearance-next-step" aria-labelledby="clearance-next-step-title">
-    <div><h2 id="clearance-next-step-title"><%= nextTerm ? 'Next step' : 'Current status' %></h2><p><%= currentUser.role === 'database_admin' && nextTerm ? 'Registrar follow-up: ' : '' %><%= nextStepText %></p></div>
-    <% if (nextTerm && needsTemplateSetup) { %><a class="button button--secondary" href="/registrar/records/clearance/templates"><%= currentUser.role === 'registrar' ? 'Set up paper forms' : 'View paper forms' %></a>
-    <% } else if (nextTerm) { %><a class="button button--secondary" href="#clearance-term-<%= nextTerm.enrollment_id %>">Open term record</a><% } %>
-  </section>
 
   <% const groups = []; const groupMap = new Map(); for (const term of terms) { let group = groupMap.get(term.school_year); if (!group) { group = { schoolYear: term.school_year, gradeLevel: term.grade_level, terms: [] }; groupMap.set(term.school_year, group); groups.push(group); } group.terms.push(term); } %>
   <% if (!groups.length) { %><section class="admin-section"><p class="empty-state">No term placements are recorded for this student.</p></section><% } %>
   <% for (const group of groups) { %>
     <section class="clearance-year" aria-labelledby="clearance-year-<%= group.schoolYear.replace(/[^A-Za-z0-9]/g, '-') %>">
       <div class="clearance-year-heading"><h2 id="clearance-year-<%= group.schoolYear.replace(/[^A-Za-z0-9]/g, '-') %>"><%= group.schoolYear %> · <%= group.gradeLevel %></h2></div>
-          <% for (const term of group.terms) { const createValues = term.createAttempt?.values || null; const updateValues = term.updateAttempt?.values || null;
-            const itemOverrides = updateValues?.itemsById || {}; const matchingTermTemplates = templates.filter((item) => item.grade_level === term.grade_level && (term.past || item.status === 'approved'));
-            const pending = !['complete', 'not_attended', 'not_applicable'].includes(term.state);
-            const detailsOpen = Number(nextTerm?.enrollment_id) === Number(term.enrollment_id) || Boolean(term.createAttempt || term.updateAttempt)
-              || Number(staleAttempt?.recordId) === Number(term.enrollment_id) || Number(staleAttempt?.recordId) === Number(term.clearance_id);
-          %>
-            <details id="clearance-term-<%= term.enrollment_id %>" class="clearance-term clearance-term--<%= term.state %>" <%= detailsOpen ? 'open' : '' %>>
-              <summary class="clearance-term-summary">
-                <span class="clearance-term-title"><strong><%= term.term_label %></strong><span><%= group.schoolYear %> · Term <%= term.annual_term_number %> · <%= term.grade_level %> · <%= term.section_name || 'Section not recorded' %></span></span>
-                <span class="record-status clearance-status clearance-status--<%= pending ? 'pending' : term.state %>"><%= term.state === 'complete' ? 'Completed' : term.state === 'not_attended' ? 'Term not attended' : term.state === 'not_applicable' ? 'Outside required terms' : 'Not completed' %></span>
-                <span class="clearance-term-summary-note"><% if (term.state === 'not_attended') { %>Entire term excluded from required clearance<% } else if (term.state === 'not_applicable') { %>Before entry or a future term<% } else if (term.state === 'complete') { %>Registrar confirmed inspection of the paper form<% } else { %>No completed paper form confirmed<% } %></span>
-              </summary>
-              <div class="clearance-term-content">
-                <% if (term.scope_status === 'not_attended') { %><p><strong>Term not attended:</strong> school records show no attendance for the entire term. The registrar records the reason. This term is excluded from required clearance and is not completed.</p><% if (term.scope_reason) { %><p><strong>Registrar’s reason:</strong> <%= term.scope_reason %></p><% } else { %><p class="muted-copy">The registrar has not recorded a reason yet.</p><% } %>
-                <% } else if (term.state === 'not_applicable') { %><p><strong>Outside required terms:</strong> <%= term.beforeEntry ? 'This placement is before the student’s saved entry term.' : 'This is a future term.' %> It is not completed; a future term can be reviewed when applicable.</p>
-                <% } else if (term.scope_status === 'unreviewed' || !term.clearance_id) { %><p class="muted-copy">Check school records to decide whether the entire term was attended, then match the saved form to the printed copy.</p><% } %>
-                <% if (term.clearance_id && !term.template_id && term.scope_status !== 'not_attended') { %><p class="clearance-template-needed"><strong>Choose a matching paper form to continue.</strong><% if (matchingTermTemplates.length) { %> Select the version printed on the paper copy.<% } else { %> Ask the registrar to set up the form version printed by the school.<% } %></p><% } %>
-                <% if (term.clearance_id) { %>
-                  <details class="clearance-review-record">
-                    <summary>Paper form and review history</summary>
-                    <dl class="clearance-review-record-facts">
-                      <% if (term.track_label_snapshot) { %><div><dt>Paper form</dt><dd><%= term.track_label_snapshot %> · version <%= term.template_version || 'saved form' %></dd></div><% } %>
-                      <div><dt>Paper inspection</dt><dd><% if (term.attested_at) { %>Completed and inspected on <%= term.inspected_on instanceof Date ? term.inspected_on.toISOString().slice(0, 10) : String(term.inspected_on || '').slice(0, 10) %><% } else if (term.inspected_on) { %>A date remains in this saved record (<%= term.inspected_on instanceof Date ? term.inspected_on.toISOString().slice(0, 10) : String(term.inspected_on).slice(0, 10) %>); no completed paper is confirmed<% } else { %>No completed paper confirmed<% } %></dd></div>
-                      <div><dt>Review version</dt><dd><%= term.version %></dd></div>
-                    </dl>
-                    <% if (term.history?.length) { %><h4>Change history</h4><ol class="document-review-history"><% for (const event of term.history) { const historyLabels = { created: 'Review started', reopened: 'Review reopened', items_updated: 'Paper signatures updated', attested: 'Paper form inspection confirmed', scope_reviewed: 'Attendance decision updated' }; %><li><strong><%= historyLabels[event.event_type] || event.event_type.replaceAll('_', ' ') %></strong><span><%= event.created_at instanceof Date ? event.created_at.toLocaleString('en-PH', { timeZone: 'Asia/Manila' }) : new Date(event.created_at).toLocaleString('en-PH', { timeZone: 'Asia/Manila' }) %> · <%= [event.actor_first_name, event.actor_last_name].filter(Boolean).join(' ') || 'Registrar' %></span><% for (const summary of event.changeSummary || []) { %><p><%= summary %></p><% } %><% if (event.reason) { %><p><strong>Recorded reason:</strong> <%= event.reason %></p><% } %></li><% } %></ol><% } %>
+      <% for (const term of group.terms) {
+        const complete = term.state === 'complete';
+        const outsideRequiredTerms = term.state === 'not_applicable' || term.beforeEntry || term.future;
+        const excludedTerm = term.state === 'not_attended';
+        const open = Number(nextTerm?.enrollment_id) === Number(term.enrollment_id) || term.completionConflict
+          || term.scopeConflict || Boolean(term.completionAttempt) || Boolean(term.scopeAttempt);
+      %>
+        <details id="clearance-term-<%= term.enrollment_id %>" class="clearance-term clearance-term--<%= complete ? 'complete' : outsideRequiredTerms ? 'not_applicable' : 'pending' %>" <%= open ? 'open' : '' %>>
+          <summary class="clearance-term-summary">
+            <span class="clearance-term-title"><strong><%= term.term_label %></strong><span><%= group.schoolYear %> · Term <%= term.annual_term_number %> · <%= term.grade_level %> · <%= term.section_name || 'Section not recorded' %></span></span>
+            <span class="record-status clearance-status clearance-status--<%= complete ? 'complete' : outsideRequiredTerms ? 'not_applicable' : 'pending' %>"><%= complete ? 'Completed' : outsideRequiredTerms ? 'Outside required terms' : 'Not completed' %></span>
+            <span class="clearance-term-summary-note"><%= complete ? 'Completion recorded by registrar' : outsideRequiredTerms ? term.beforeEntry ? 'Before the saved entry term' : 'Future term' : excludedTerm ? 'A saved exclusion remains in the history' : 'No completion is recorded' %></span>
+          </summary>
+          <div class="clearance-term-content">
+            <% if (outsideRequiredTerms) { %>
+              <p>This term is outside the required clearance scope and cannot be marked complete here.</p>
+            <% } else if (currentUser.role === 'registrar' && student.status !== 'archived' && !term.completionConflict && !term.scopeConflict) { %>
+              <form class="admin-form clearance-edit-form clearance-completion-form" method="post" action="/registrar/records/students/<%= student.id %>/clearance/terms/<%= term.enrollment_id %>">
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                <input type="hidden" name="idempotencyKey" value="<%= term.completionToken %>">
+                <input type="hidden" name="expectedVersion" value="<%= term.completionAttempt?.values?.expectedVersion ?? term.version ?? 0 %>">
+                <label class="checkbox-field clearance-completion-checkbox"><input type="checkbox" name="paperCompleted" value="1" aria-describedby="clearance-inspection-help-<%= term.enrollment_id %>" <%= (term.completionAttempt ? term.completionAttempt.values.paperCompleted : complete) ? 'checked' : '' %>><span>Paper clearance completed</span></label>
+                <p class="muted-copy clearance-completion-help" id="clearance-inspection-help-<%= term.enrollment_id %>">Inspect the returned paper form before checking this box. The saved record includes the registrar and date automatically.</p>
+                <% if (complete) { %>
+                  <details class="clearance-corrections">
+                    <summary>Change saved completion</summary>
+                    <div class="field"><label for="clearance-correction-reason-<%= term.enrollment_id %>">Correction reason</label><textarea id="clearance-correction-reason-<%= term.enrollment_id %>" name="correctionReason" rows="2" maxlength="1000"><%= term.completionAttempt?.values?.correctionReason || '' %></textarea><p class="muted-copy">Required only when clearing the saved completion.</p></div>
+                  </details>
+                <% } else if (excludedTerm) { %>
+                  <details class="clearance-corrections">
+                    <summary>Change saved term exclusion</summary>
+                    <div class="field"><label for="clearance-exclusion-reason-<%= term.enrollment_id %>">Correction reason</label><textarea id="clearance-exclusion-reason-<%= term.enrollment_id %>" name="correctionReason" rows="2" maxlength="1000"><%= term.completionAttempt?.values?.correctionReason || '' %></textarea><p class="muted-copy">Required only when changing the saved exclusion.</p></div>
                   </details>
                 <% } %>
-                <% if (term.staleDraft) { const stale = term.staleDraft.values; const templateDraft = templates.find((item) => String(item.id) === stale.templateId); %>
-                  <details class="clearance-stale-draft"><summary>Unapplied submitted values</summary>
-                    <p>These values were not saved because the record changed. They are shown for reference and are not copied into the current form.</p>
-                    <dl><div><dt>Attendance decision</dt><dd><%= stale.scopeStatus === 'attended' ? 'Attended' : stale.scopeStatus === 'not_attended' ? 'Term not attended' : 'Not selected' %></dd></div>
-                      <% if (stale.scopeReason) { %><div><dt>Attendance reason</dt><dd><%= stale.scopeReason %></dd></div><% } %>
-                      <% if (templateDraft) { %><div><dt>Paper form</dt><dd><%= templateDraft.grade_level %> · <%= templateDraft.track_label %> · version <%= templateDraft.version_no %></dd></div><% } %>
-                      <% if (stale.templateSelectionReason) { %><div><dt>Older paper form reason</dt><dd><%= stale.templateSelectionReason %></dd></div><% } %>
-                      <% if (stale.inspectedOn) { %><div><dt>Inspection date</dt><dd><%= stale.inspectedOn %></dd></div><% } %>
-                      <% if (stale.correctionReason) { %><div><dt>Correction reason</dt><dd><%= stale.correctionReason %></dd></div><% } %>
-                      <% if (stale.paperTeacherRows.length) { %><div><dt>Paper subject lines</dt><dd><ul><% for (const row of stale.paperTeacherRows) { %><li><%= [row.subjectCode, row.subjectName].filter(Boolean).join(' · ') %></li><% } %></ul></dd></div><% } %>
-                      <% const staleItems = Object.entries(stale.itemsById); if (staleItems.length) { %><div><dt>Paper signature entries</dt><dd><ul><% for (const [itemId, itemDraft] of staleItems) { const savedItem = (term.clearanceItems || []).find((item) => String(item.id) === itemId); %><li><%= savedItem?.label_snapshot || 'Saved paper signature line' %><% if (savedItem?.subject_name_snapshot) { %> · <%= savedItem.subject_name_snapshot %><% } %>: <%= itemDraft.applicabilityStatus === 'not_applicable' ? 'Not required' : itemDraft.applicabilityStatus === 'unreviewed' ? 'Not checked yet' : 'Required' %>, <%= itemDraft.signaturePresent ? `signature present — ${itemDraft.signerName}` : 'signature not marked' %><% if (itemDraft.paperSignedOn) { %>, paper date <%= itemDraft.paperSignedOn %><% } %></li><% } %></ul></dd></div><% } %>
-                    </dl>
-                  </details>
-                <% } %>
-                <% if (term.clearance_id && !term.future && !term.beforeEntry) { %>
-                  <% if (term.clearanceItems.length || (term.scope_status === 'not_attended' && currentUser.role === 'registrar')) { %>
-                    <section class="clearance-review-section" aria-labelledby="clearance-signatures-heading-<%= term.clearance_id %>">
-                      <form class="admin-form clearance-edit-form" method="post" action="/registrar/records/students/<%= student.id %>/clearance/records/<%= term.clearance_id %>">
-                        <div class="clearance-form-intro"><h3 id="clearance-signatures-heading-<%= term.clearance_id %>">Paper form signatures</h3><p id="clearance-signature-help-<%= term.clearance_id %>"><%= currentUser.role === 'registrar' ? 'Enter each required line from the fully signed paper form. Names and line decisions save only when you record the completed paper.' : 'Review the names and line decisions recorded from the signed paper form. A registrar records the completed paper after inspection.' %></p></div>
-                        <% if (Number(term.unresolved_count) > 0 || Number(term.teacher_context_missing_count) > 0) { %><p class="clearance-pending-review">Before recording completion, resolve each laboratory line and explain any historical teacher name when requested below.</p><% } %>
-                        <% if (currentUser.role !== 'registrar') { %><p class="muted-copy">Database administrators can review these saved details and history; registrar editing is required for changes.</p><fieldset disabled aria-label="Read-only clearance details"><% } %>
-                        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-                        <input type="hidden" name="idempotencyKey" value="<%= term.updateToken %>">
-                        <input type="hidden" name="expectedVersion" value="<%= updateValues?.expectedVersion || term.version %>">
-                        <% if (term.template_id) { %><input type="hidden" name="templateId" value="<%= term.template_id %>"><% } %>
-                        <% if (term.clearanceItems.length) { %><div class="table-scroll" tabindex="0" aria-label="Saved paper signature lines for <%= term.term_label %>">
-          <table class="admin-table clearance-items-table"><thead><tr><th scope="col">Required line</th><th scope="col">Paper record</th></tr></thead><tbody>
-                            <% for (const item of term.clearanceItems) { const itemDate = item.paper_signed_on instanceof Date ? item.paper_signed_on.toISOString().slice(0, 10) : item.paper_signed_on ? String(item.paper_signed_on).slice(0, 10) : ''; const itemValues = itemOverrides[String(item.id)] || null; const itemApplicability = itemValues ? itemValues.applicabilityStatus : item.applicability_status; const itemHasSignature = itemValues ? itemValues.signaturePresent : Number(item.signature_present) === 1; const itemSigner = itemValues ? itemValues.signerName : item.signer_name || ''; const itemPaperDate = itemValues ? itemValues.paperSignedOn : itemDate; const itemSignerContext = itemValues ? itemValues.signerContextReason : item.signer_context_reason || ''; const itemApplicabilityReason = itemValues ? itemValues.applicabilityReason : item.applicability_reason || ''; const signatureContext = item.category === 'teacher' ? [item.subject_code_snapshot, item.subject_name_snapshot].filter(Boolean).join(' · ') || 'Teacher' : item.category === 'laboratory' ? item.subject_name_snapshot || 'Laboratory' : item.category.replaceAll('_', ' '); %>
-                              <tr>
-                                <td><strong><%= item.label_snapshot %></strong><% if (item.category === 'teacher') { const teacherContextLabels = { assigned: item.teacher_name_snapshot || 'Current teacher in saved term record', missing: 'No teacher saved for this subject', revoked: 'Saved teacher account is no longer active', ambiguous: 'More than one teacher is saved for this subject' }; %><br><%= [item.subject_code_snapshot, item.subject_name_snapshot].filter(Boolean).join(' · ') %><br><span class="muted-copy"><%= teacherContextLabels[item.teacher_context_status] || 'Teacher details need review' %></span><% } else if (item.category === 'laboratory' && item.subject_name_snapshot) { %><br><span><%= item.subject_name_snapshot %></span><% } %>
-                                  <% if (item.category === 'laboratory') { %><label class="field" for="item-<%= item.id %>-applicability">Required on this form?</label><select id="item-<%= item.id %>-applicability" name="item_<%= item.id %>_applicabilityStatus" required aria-describedby="item-<%= item.id %>-applicability-help"><option value="unreviewed" <%= itemApplicability === 'unreviewed' ? 'selected' : '' %>>Not checked yet</option><option value="required" <%= itemApplicability === 'required' ? 'selected' : '' %>>Required</option><option value="not_applicable" <%= itemApplicability === 'not_applicable' ? 'selected' : '' %>>Not required</option></select><span id="item-<%= item.id %>-applicability-help" class="muted-copy">Choose from the printed paper form.</span><label class="field" for="item-<%= item.id %>-applicability-reason">Reason if not required</label><input id="item-<%= item.id %>-applicability-reason" name="item_<%= item.id %>_applicabilityReason" maxlength="1000" value="<%= itemApplicabilityReason %>">
-                                  <% } else { %><input type="hidden" name="item_<%= item.id %>_applicabilityStatus" value="required"><% } %>
-                                </td>
-                                <td>
-                                  <label class="checkbox-field clearance-signature-checkbox"><input type="checkbox" name="item_<%= item.id %>_signaturePresent" value="1" data-clearance-signature-toggle aria-label="Signature on paper: <%= signatureContext %>" aria-describedby="clearance-signature-help-<%= term.clearance_id %>" <%= itemHasSignature ? 'checked' : '' %>><span>Signature on paper</span></label>
-                                  <details class="clearance-signer-details" <%= itemValues?.signaturePresent && !itemSigner || updateValues && itemHasSignature && item.category === 'teacher' && item.teacher_context_status !== 'assigned' && !itemSignerContext ? 'open' : '' %>>
-                                    <summary><%= itemHasSignature && itemSigner ? `Signed by ${itemSigner}` : 'Enter the name beside this signature' %></summary>
-                                    <div class="clearance-signer-fields"><label class="field" for="item-<%= item.id %>-signer">Name beside signature</label><input id="item-<%= item.id %>-signer" name="item_<%= item.id %>_signerName" maxlength="160" value="<%= itemSigner %>" autocomplete="off">
-                                      <label class="field" for="item-<%= item.id %>-date">Paper date, if shown</label><input id="item-<%= item.id %>-date" name="item_<%= item.id %>_paperSignedOn" type="date" value="<%= itemPaperDate %>">
-                                      <% if (item.category === 'teacher' && item.teacher_context_status !== 'assigned') { %><div class="clearance-row-context"><p class="muted-copy">The current teacher assignment does not match this saved paper context. Keep the historical teacher record and explain why this signer applies.</p><label class="field" for="item-<%= item.id %>-context">Reason this name applies to the term</label><textarea id="item-<%= item.id %>-context" name="item_<%= item.id %>_signerContextReason" rows="2" maxlength="1000"><%= itemSignerContext %></textarea></div><% } %>
-                                    </div>
-                                  </details>
-                                </td>
-                              </tr>
-                            <% } %>
-                          </tbody></table>
-                        </div><% } else { %><p class="muted-copy">No paper signature lines are saved yet. Choose the matching form and compare its subject lines with school records before recording completion.</p><% } %>
-                        <details class="clearance-corrections" <%= updateValues || term.staleDraft ? 'open' : '' %>>
-                          <summary>Correct attendance or saved details</summary>
-                          <p>Use this section when school records show a different attendance decision, the paper form differs from the saved subject list, or an earlier entry needs correction. A correction reopens a completed record; after correcting it, inspect the paper form again before recording completion.</p>
-                          <fieldset class="clearance-fieldset"><legend>Attendance shown by school records</legend>
-                            <label class="checkbox-field"><input type="radio" name="scopeStatus" value="attended" <%= (updateValues ? updateValues.scopeStatus : term.scope_status) === 'attended' ? 'checked' : '' %> required><span>Attended this term</span></label>
-                            <label class="checkbox-field"><input type="radio" name="scopeStatus" value="not_attended" <%= (updateValues ? updateValues.scopeStatus : term.scope_status) === 'not_attended' ? 'checked' : '' %>><span>No attendance for the entire term</span></label>
-                            <div class="field"><label for="clearance-scope-reason-<%= term.clearance_id %>">Reason the entire term was not attended</label><textarea id="clearance-scope-reason-<%= term.clearance_id %>" name="scopeReason" rows="2" maxlength="1000"><%= updateValues?.scopeReason ?? term.scope_reason ?? '' %></textarea><p class="muted-copy">Required. This excludes the term from required clearance; it does not mark the term complete.</p></div>
-                          </fieldset>
-                          <% if (!term.template_id && matchingTermTemplates.length) { %><div class="field"><label for="conversion-template-<%= term.clearance_id %>">Paper form matching this record</label><select id="conversion-template-<%= term.clearance_id %>" name="templateId"><option value="">Choose the form matching this paper copy</option><% for (const template of matchingTermTemplates) { %><option value="<%= template.id %>" <%= updateValues?.templateId === String(template.id) ? 'selected' : '' %>><%= template.track_label %> · version <%= template.version_no %><%= template.status === 'superseded' ? ' · older version' : ' · approved' %></option><% } %></select></div>
-                            <% if (term.past) { %><div class="field"><label for="conversion-template-reason-<%= term.clearance_id %>">Why this older form matches the historical copy</label><p class="muted-copy">Required when selecting a superseded paper form.</p><textarea id="conversion-template-reason-<%= term.clearance_id %>" name="templateSelectionReason" rows="2" maxlength="1000"><%= updateValues?.templateSelectionReason || '' %></textarea></div><% } %><% } %>
-                          <% if (!term.template_id && !matchingTermTemplates.length) { %><p class="muted-copy">No form version is available for <%= term.grade_level %>. A registrar can record that the entire term was not attended, with a reason. An attended term needs a matching form set up by a registrar.<% if (currentUser.role === 'registrar') { %> <a href="/registrar/records/clearance/templates">Open checklist setup</a>.<% } %></p><% } %>
-                          <details class="clearance-reconciliation" <%= updateValues?.paperTeacherRows?.length ? 'open' : '' %>><summary>Compare or add paper subject lines</summary>
-                            <p>Teacher signature lines follow the saved subject list. Add a line only when the printed form and school records show it is missing; this does not change academic records or grades.</p>
-                            <div class="admin-form-grid"><% for (let row = 0; row < 6; row += 1) { const paperRow = updateValues?.paperTeacherRows?.[row] || {}; %><div class="field"><label for="paper-code-<%= term.clearance_id %>-<%= row %>">Paper subject code <%= row + 1 %></label><input id="paper-code-<%= term.clearance_id %>-<%= row %>" name="paperSubjectCode" maxlength="50" value="<%= paperRow.subjectCode || '' %>"></div><div class="field"><label for="paper-name-<%= term.clearance_id %>-<%= row %>">Paper subject name <%= row + 1 %></label><input id="paper-name-<%= term.clearance_id %>-<%= row %>" name="paperSubjectName" maxlength="200" value="<%= paperRow.subjectName || '' %>"></div><% } %></div>
-                            <label class="checkbox-field"><input type="checkbox" name="rosterReviewed" value="1" <%= updateValues?.rosterReviewed ? 'checked' : '' %>><span>I compared the subject lines with the printed form and saved school record.</span></label>
-                            <div class="field"><label for="roster-reason-<%= term.clearance_id %>">Why the paper subject lines differ</label><textarea id="roster-reason-<%= term.clearance_id %>" name="rosterReconciliationReason" rows="2" maxlength="1000"><%= updateValues?.rosterReconciliationReason || '' %></textarea></div>
-                          </details>
-                          <div class="field"><label for="clearance-correction-reason-<%= term.clearance_id %>">Reason for this correction</label><p class="muted-copy">Required when changing saved information.</p><textarea id="clearance-correction-reason-<%= term.clearance_id %>" name="correctionReason" rows="2" maxlength="1000"><%= updateValues?.correctionReason || '' %></textarea></div>
-                          <% if (currentUser.role === 'registrar' && !term.attested_at) { %><button class="button button--secondary" type="submit" name="clearanceAction" value="prepare">Save attendance and paper-form setup</button><% } %>
-                        </details>
-                        <div class="field"><label for="inspection-date-<%= term.clearance_id %>">Date the registrar inspected the completed paper</label><input id="inspection-date-<%= term.clearance_id %>" name="inspectedOn" type="date" value="<%= updateValues?.inspectedOn ?? (term.inspected_on instanceof Date ? term.inspected_on.toISOString().slice(0, 10) : term.inspected_on ? String(term.inspected_on).slice(0, 10) : '') %>"><p class="muted-copy">Required when recording completed paper. Setup saves do not change this date.</p></div>
-                        <% if (currentUser.role === 'registrar') { %>
-                          <% if (term.attested_at) { %><button class="button button--primary" type="submit" name="clearanceAction" value="reopen">Save correction and reopen</button>
-                          <% } else if (term.scope_status === 'not_attended') { %><button class="button button--primary" type="submit" name="clearanceAction" value="prepare">Save attendance decision</button>
-                          <% } else { %><p class="muted-copy clearance-completion-help">Signature entries, line decisions, and the inspection date are saved together only when you record the completed paper. Attendance and form setup changes are under Correct attendance or saved details.</p><div class="clearance-form-actions"><button class="button button--primary" type="submit" name="clearanceAction" value="complete">Record completed paper</button></div><% } %>
-                        <% } %>
-                        <% if (currentUser.role !== 'registrar') { %></fieldset><% } %>
-                      </form>
-                    </section>
-                <% } else { %><p class="muted-copy">This review has no signature lines. Choose Attended to add the matching paper form and teacher/subject lines.</p><% } %>
-                <% } else if (term.state === 'not_applicable') { %>
-                <% } else if (currentUser.role === 'registrar') { %>
-                    <form class="admin-form clearance-start-form" method="post" action="/registrar/records/students/<%= student.id %>/clearance/terms/<%= term.enrollment_id %>">
-                      <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= term.createToken %>">
-                      <div class="clearance-form-intro"><h3>Prepare the paper record</h3><p>Check attendance against school records, choose the matching paper form, and compare its subject lines. This step does not record signatures.</p></div>
-                      <fieldset class="clearance-fieldset"><legend>Attendance for this term</legend>
-                        <label class="checkbox-field"><input type="radio" name="scopeStatus" value="attended" <%= createValues ? createValues.scopeStatus === 'attended' ? 'checked' : '' : 'checked' %> required><span>Attended this term</span></label>
-                        <label class="checkbox-field"><input type="radio" name="scopeStatus" value="not_attended" <%= createValues?.scopeStatus === 'not_attended' ? 'checked' : '' %>><span>No attendance for the entire term</span></label>
-                        <div class="field"><label for="create-scope-reason-<%= term.enrollment_id %>">Reason the entire term was not attended</label><textarea id="create-scope-reason-<%= term.enrollment_id %>" name="scopeReason" rows="2" maxlength="1000"><%= createValues?.scopeReason || '' %></textarea></div>
-                      </fieldset>
-                      <% if (matchingTermTemplates.length) { %><div class="field"><label for="create-template-<%= term.enrollment_id %>">Paper form matching this grade and term</label><p class="muted-copy">Choose the labels and track printed on the copy. Do not infer the track from the section name.</p><select id="create-template-<%= term.enrollment_id %>" name="templateId"><option value="">Choose the form matching this paper copy</option><% for (const template of matchingTermTemplates) { %><option value="<%= template.id %>" <%= createValues?.templateId === String(template.id) ? 'selected' : '' %>><%= template.track_label %> · version <%= template.version_no %><%= template.status === 'superseded' ? ' · older version' : ' · approved' %></option><% } %></select></div>
-                        <% if (term.past) { %><div class="field"><label for="create-template-reason-<%= term.enrollment_id %>">Why this older form matches the historical copy</label><p class="muted-copy">Required when using a superseded form version.</p><textarea id="create-template-reason-<%= term.enrollment_id %>" name="templateSelectionReason" rows="2" maxlength="1000"><%= createValues?.templateSelectionReason || '' %></textarea></div><% } %>
-                      <% } else { %><p class="clearance-template-needed" role="status">No form version matches <%= term.grade_level %>. The registrar can still record that the entire term was not attended, with a reason. For an attended term, set up the form labels printed on the school copy.<% if (currentUser.role === 'registrar') { %> <a href="/registrar/records/clearance/templates">Set up a paper form</a>.<% } %></p><% } %>
-                      <p>Teacher signature lines will follow the saved subject list. Compare the list with the paper form; only add missing subject lines shown on school records. This does not change academic records or grades.</p>
-                      <label class="checkbox-field"><input type="checkbox" name="rosterReviewed" value="1" <%= createValues?.rosterReviewed ? 'checked' : '' %>><span>I compared the saved subject list with the school paper form.</span></label>
-                      <details class="clearance-reconciliation" <%= createValues?.paperTeacherRows?.length ? 'open' : '' %>><summary>Compare or add paper subject lines</summary><p>Enter only subject lines that school records and the printed form show are missing from the saved list. This is used for historical paper records or an empty subject list; no grades or academic records are changed.</p><div class="admin-form-grid"><% for (let row = 0; row < 8; row += 1) { const paperRow = createValues?.paperTeacherRows?.[row] || {}; %><div class="field"><label for="create-code-<%= term.enrollment_id %>-<%= row %>">Paper subject code <%= row + 1 %></label><input id="create-code-<%= term.enrollment_id %>-<%= row %>" name="paperSubjectCode" maxlength="50" value="<%= paperRow.subjectCode || '' %>"></div><div class="field"><label for="create-name-<%= term.enrollment_id %>-<%= row %>">Paper subject name <%= row + 1 %></label><input id="create-name-<%= term.enrollment_id %>-<%= row %>" name="paperSubjectName" maxlength="200" value="<%= paperRow.subjectName || '' %>"></div><% } %></div><div class="field"><label for="create-roster-reason-<%= term.enrollment_id %>">Why the paper subject lines differ</label><textarea id="create-roster-reason-<%= term.enrollment_id %>" name="rosterReconciliationReason" rows="2" maxlength="1000"><%= createValues?.rosterReconciliationReason || '' %></textarea></div></details>
-                      <button class="button button--primary" type="submit"><%= createValues?.scopeStatus === 'not_attended' ? 'Save attendance decision' : 'Save attendance and paper-form setup' %></button>
-                    </form>
-                <% } else { %><p class="muted-copy">Not completed: the registrar has not confirmed a completed paper form for this term.</p><% } %>
-              </div>
-            </details>
-          <% } %>
+                <button class="button button--primary button--align-start" type="submit">Save clearance status</button>
+              </form>
+            <% } else if (term.completionConflict || term.scopeConflict) { %>
+              <p class="form-alert" role="alert">This clearance changed after the form was opened. Reload this term before correcting its saved status or applicability.</p>
+              <a class="button button--secondary" href="/registrar/records/students/<%= student.id %>/clearance#clearance-term-<%= term.enrollment_id %>">Reload term</a>
+            <% } else if (student.status === 'archived') { %>
+              <p class="muted-copy">Archived student records are read-only.</p>
+            <% } else { %>
+              <p class="muted-copy"><%= complete ? 'The registrar recorded this term as completed after inspecting the paper form.' : excludedTerm ? 'The saved term exclusion is retained in the registrar history.' : 'Not completed: no registrar confirmation is recorded.' %></p>
+            <% } %>
+
+            <% if (currentUser.role === 'registrar' && student.status !== 'archived' && term.enrollment_id
+              && !outsideRequiredTerms && !term.completionConflict && !term.scopeConflict) {
+              const attemptedScopeReason = term.scopeAttempt?.values?.scopeReason;
+              const savedScopeReason = term.scope_status === 'not_attended' ? term.scope_reason : '';
+              const scopeReasonValue = attemptedScopeReason ?? savedScopeReason ?? '';
+            %>
+              <details class="clearance-scope-exception" <%= term.scopeAttempt ? 'open' : '' %>>
+                <summary><%= excludedTerm ? 'Update term not attended decision' : 'Record term not attended' %></summary>
+                <p class="muted-copy">Use this only when school records establish that the student did not attend the entire term. This separate applicability correction is reasoned and audited; it does not record paper completion.</p>
+                <% if (excludedTerm && savedScopeReason) { %><p class="muted-copy"><strong>Saved reason:</strong> <%= savedScopeReason %></p><% } %>
+                <form class="admin-form clearance-scope-exception-form" method="post" action="/registrar/records/students/<%= student.id %>/clearance/terms/<%= term.enrollment_id %>/not-attended">
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                  <input type="hidden" name="idempotencyKey" value="<%= term.scopeToken %>">
+                  <input type="hidden" name="expectedVersion" value="<%= term.scopeAttempt?.values?.expectedVersion ?? term.version ?? 0 %>">
+                  <div class="field"><label for="clearance-scope-reason-<%= term.enrollment_id %>">Reason the entire term was not attended</label><textarea id="clearance-scope-reason-<%= term.enrollment_id %>" name="scopeReason" rows="2" minlength="5" maxlength="1000" required><%= scopeReasonValue %></textarea></div>
+                  <button class="button button--secondary" type="submit"><%= excludedTerm ? 'Update saved decision' : 'Save term exception' %></button>
+                </form>
+              </details>
+            <% } %>
+
+            <% if (term.history?.length) { %>
+              <details class="clearance-review-record">
+                <summary>Change history</summary>
+                <ol class="document-review-history">
+                  <% for (const event of term.history) { const historyLabels = { created: 'Clearance record created', paper_confirmation: 'Paper clearance status saved', reopened: 'Legacy clearance reopened', attested: 'Legacy checklist confirmed', items_updated: 'Legacy checklist updated', scope_reviewed: 'Term applicability updated' }; %>
+                    <li><strong><%= historyLabels[event.event_type] || 'Clearance history updated' %></strong><span><%= event.created_at instanceof Date ? event.created_at.toLocaleString('en-PH', { timeZone: 'Asia/Manila' }) : new Date(event.created_at).toLocaleString('en-PH', { timeZone: 'Asia/Manila' }) %> · <%= [event.actor_first_name, event.actor_last_name].filter(Boolean).join(' ') || 'Registrar' %></span>
+                      <% if (event.reason) { %><p><strong>Recorded reason:</strong> <%= event.reason %></p><% } %>
+                      <% for (const summary of event.changeSummary || []) { %><p><%= summary %></p><% } %>
+                    </li>
+                  <% } %>
+                </ol>
+              </details>
+            <% } %>
+          </div>
+        </details>
+      <% } %>
     </section>
   <% } %>
 </main>

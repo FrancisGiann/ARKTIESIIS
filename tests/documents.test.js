@@ -7,6 +7,7 @@ const path = require('node:path');
 const { Readable } = require('node:stream');
 const { once } = require('node:events');
 const vm = require('node:vm');
+const ejs = require('ejs');
 const bcrypt = require('bcrypt');
 const express = require('express');
 const { createApp } = require('../src/app');
@@ -69,6 +70,28 @@ test('document status labels distinguish active report cards from the legacy arc
   assert.equal(documentStatusLabel('processing', null, null, 'report_card'), 'Field precheck processing');
   assert.equal(documentStatusLabel('failed', null, null, 'report_card'), 'Precheck unavailable; staff review required');
   assert.equal(documentStatusLabel('pending', null, null, 'report_card', true), 'Historical archive');
+});
+
+test('shared student document tabs preserve staff Requests context without exposing staff tabs to students', async () => {
+  const partial = path.join(__dirname, '../views/partials/student-document-sections.ejs');
+  const student = { id: 44 };
+  const studentHtml = await ejs.renderFile(partial, {
+    student, currentUser: { role: 'student' }, activeDocumentSection: 'digital'
+  });
+  assert.match(studentHtml, /Digital submissions/);
+  assert.doesNotMatch(studentHtml, /Paper requirements|Form 137|Requests/);
+
+  const requestHtml = await ejs.renderFile(partial, {
+    student, currentUser: { role: 'registrar' }, activeDocumentSection: 'requests'
+  });
+  assert.match(requestHtml, /Digital submissions[\s\S]*Paper requirements[\s\S]*Form 137[\s\S]*aria-current="page">Requests/);
+  assert.match(requestHtml, /href="\/documents\/students\/44\?section=paper#physical-checklist-title"/);
+  assert.match(requestHtml, /href="\/documents\/students\/44\?section=form137#form137-status-title"/);
+  assert.equal((requestHtml.match(/aria-current="page"/g) || []).length, 1);
+  const stylesheet = await fs.readFile(path.join(__dirname, '../public/css/app.css'), 'utf8');
+  assert.match(stylesheet, /@media \(max-width: 700px\)[\s\S]*?\.student-document-sections \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); overflow: visible; \}/);
+  assert.match(stylesheet, /\.student-document-sections a \{ min-width: 0; justify-content: center; text-align: center; white-space: normal; \}/);
+  assert.match(stylesheet, /\.student-document-sections a \{ min-height: 2\.75rem;/);
 });
 
 function transactionHarness({ actorRole = 'student', ownStudentId = 44, previousOwnerId = 7, previousDocumentType = 'good_moral', previousUploadSource = actorRole === 'student' ? 'student' : 'registrar', previousIsLegacyArchive = false, failAt = null, correctionAction = 'correction_requested', hasRevision = false, hasCorrectedSubmission = false, originalSubmissionExists = false, latestSubmissionStatus = originalSubmissionExists ? 'needs_review' : null, latestSubmissionRows = null, documentStatus = 'needs_review', ocrResultStatus = 'needs_review', validationJson = JSON.stringify({ advisoryChecks: [{ key: 'linked_student_name', found: true }] }), originalFilename = 'report.pdf', storedFilename = '5dd677e1-87fb-4214-a7c1-27aca233ae1f.pdf', previousDecision = null, id = 90, fileSystem } = {}) {
@@ -466,6 +489,7 @@ test('staff document queue supports bounded parameterized review filters and a m
         async query(statement) {
           calls.push({ statement, values: { ...values } });
           if (statement.startsWith('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+          if (statement.includes('SELECT COUNT(*) AS actionable_count')) return { recordset: [{ actionable_count: 4 }] };
           if (statement.includes('LIMIT 200')) return { recordset: [{ id: 20, document_type: 'good_moral', status: 'needs_review' }] };
           if (statement.includes('GROUP BY required.document_type')) return { recordset: [{ document_type: 'good_moral', missing_count: 12, awaiting_review_count: 4 }] };
           if (statement.includes('WITH ranked_report_cards AS')) return { recordset: [{
@@ -486,11 +510,20 @@ test('staff document queue supports bounded parameterized review filters and a m
   assert.equal(listCall.values.statusFilter, 'awaiting_review');
   assert.match(listCall.statement, /s\.lrn LIKE @searchPattern/);
   assert.match(listCall.statement, /@documentType IS NULL OR d\.document_type = @documentType/);
-  assert.match(listCall.statement, /@statusFilter = 'awaiting_review' AND d\.status = 'needs_review'[\s\S]*d\.document_type <> 'report_card' OR COALESCE\(latest_decision\.decision_type, ''\) <> 'correction_requested'/);
+  assert.match(listCall.statement, /@statusFilter = 'awaiting_review' AND \(d\.status = 'needs_review'[\s\S]*latest_decision\.decision_type, ''\) <> 'correction_requested'/);
+  assert.match(listCall.statement, /d\.document_type IN \('good_moral', 'psa_birth_certificate'\)/);
+  assert.match(listCall.statement, /d\.document_type = 'report_card' AND d\.is_legacy_archive = 0 AND d\.upload_source = 'student'/);
+  assert.match(listCall.statement, /newer\.created_at > d\.created_at/);
   assert.equal(result.documents[0].status, 'needs_review');
   assert.equal(result.statusSummary[0].missing_count, 12);
   assert.equal(result.documentType, 'good_moral');
   assert.equal(result.statusFilter, 'awaiting_review');
+  assert.equal(await service.countAwaitingStaffReview(7), 4);
+  const queueCountCall = calls.find(({ statement }) => statement.includes('SELECT COUNT(*) AS actionable_count'));
+  assert.match(queueCountCall.statement, /d\.status = 'needs_review'/);
+  assert.match(queueCountCall.statement, /latest_decision\.decision_type, ''\) <> 'correction_requested'/);
+  assert.match(queueCountCall.statement, /d\.document_type = 'report_card' AND d\.is_legacy_archive = 0 AND d\.upload_source = 'student'/);
+  assert.match(queueCountCall.statement, /d\.document_type IN \('good_moral', 'psa_birth_certificate'\)/);
   const reportCardQueue = await service.listDocuments(7, '', { documentType: 'report_card' });
   assert.equal(reportCardQueue.documentType, 'report_card');
   const reportCardSummaryCall = calls.find(({ statement }) => statement.includes('WITH ranked_report_cards AS'));

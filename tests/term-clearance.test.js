@@ -69,6 +69,23 @@ test('completion requires an attended template, teacher/office rows, signatures,
   }
 });
 
+test('paper-confirmation completion requires a saved inspection date but no template or checklist rows', () => {
+  const confirmed = { recording_mode: 'paper_confirmation', scope_status: 'attended', attested_by: 8,
+    attested_at: new Date(), inspected_on: '2026-10-05', template_id: null, teacher_count: 0 };
+  assert.equal(completeFromCounts(confirmed), true);
+  assert.equal(completeFromCounts({ ...confirmed, inspected_on: null }), false);
+  assert.equal(completeFromCounts({ ...confirmed, scope_status: 'unreviewed' }), false);
+  assert.equal(completeFromCounts({ ...confirmed, attested_by: null }), false);
+});
+
+test('legacy signature checklist writers are retired from the normal service API', async () => {
+  const { createTermClearanceService } = require('../src/services/termClearanceService');
+  const service = createTermClearanceService({ getPool: async () => { throw new Error('should not reach the database'); } });
+  await assert.rejects(service.createTemplateVersion(1, {}), { status: 410 });
+  await assert.rejects(service.createTermClearance(1, 1, {}), { status: 410 });
+  await assert.rejects(service.updateTermClearance(1, 1, {}), { status: 410 });
+});
+
 test('clearance dashboard filters preserve an explicit all-terms scope and reject malformed values', () => {
   assert.equal(normalizeClearanceDashboardFilters({}).scopeSpecified, false);
   const allTerms = normalizeClearanceDashboardFilters({ search: '', schoolYear: '', termId: '', status: 'all' });
@@ -95,18 +112,12 @@ test('current academic period resolution fails closed unless exactly one mapped 
   assert.equal(resolveCurrentAcademicPosition([{ id: 8, school_year: '2026-2027', term_number: 4 }]), null);
 });
 
-test('student-facing confirmation status is shown only when every non-attestation requirement is complete', () => {
+test('incomplete paper records never imply signatures are awaiting registrar confirmation', () => {
   const signed = { scope_status: 'attended', template_id: 1, attested_by: null, attested_at: null, inspected_on: '2026-10-05',
     teacher_count: 2, registrar_count: 1, guidance_count: 1, finance_count: 1, required_unsigned_count: 0,
     unresolved_count: 0, teacher_context_missing_count: 0 };
-  assert.equal(awaitingRegistrarConfirmation(signed), true);
-  for (const change of [{ template_id: null }, { inspected_on: null }, { teacher_count: 0 }, { registrar_count: 0 },
-    { guidance_count: 0 }, { finance_count: 0 }, { required_unsigned_count: 1 }, { unresolved_count: 1 },
-    { teacher_context_missing_count: 1 }]) {
-    assert.equal(awaitingRegistrarConfirmation({ ...signed, ...change }), false, JSON.stringify(change));
-  }
-  assert.equal(awaitingRegistrarConfirmation({ ...signed, attested_by: 9, attested_at: new Date() }), false,
-    'an already-confirmed review is not waiting for confirmation');
+  assert.equal(awaitingRegistrarConfirmation(signed), false);
+  assert.equal(awaitingRegistrarConfirmation({ ...signed, recording_mode: 'paper_confirmation' }), false);
 });
 
 test('historical term comparison allows older templates only for terms before the configured current period', () => {
@@ -217,10 +228,14 @@ test('clearance overview route keeps explicit scope, paginates all terms, and en
     assert.match(response.headers.get('cache-control'), /no-store/);
     assert.match(html, /Clearance/);
     assert.match(html, /Status meanings and other filters/);
+    assert.doesNotMatch(html, /Checklist setup|href="\/registrar\/records\/clearance\/templates"|clearance-workspace-tabs/,
+      'the active checkbox workspace no longer links to retired template setup');
     assert.match(html, /Counts cover student-term records, not unique students/);
     assert.match(html, /status filters only narrow the list/);
     assert.match(html, /Filter to not completed: 21 term entries/);
     assert.match(html, /<strong>Not completed:<\/strong> The registrar has not confirmed a completed paper form/);
+    assert.match(html, /<strong>Completed:<\/strong> The registrar recorded completion after inspecting the returned paper form/);
+    assert.doesNotMatch(html, /recorded the required paper signatures/);
     assert.doesNotMatch(html, /<strong>Pending:<\/strong>/);
     assert.match(html, /<span class="record-status clearance-status clearance-status--pending">Not completed<\/span>/);
     assert.equal(html.split('The registrar has not confirmed a completed paper form.').length - 1, 1,
@@ -273,7 +288,7 @@ test('clearance overview route keeps explicit scope, paginates all terms, and en
     assert.match(allTermsHtml, /2025-2026<\/span><span class="clearance-dashboard-separator" aria-hidden="true">·<\/span><strong>Second Term<\/strong>/,
       'all-term rows retain their own school year and term context');
     assert.match(allTermsHtml, /HUMSS &amp; Social Sciences/);
-    assert.match(allTermsHtml, /aria-label="Open paper clearance checklist for Alexandra Very Long Student Name for Mobile Review Rae Reyes, 2025-2026 Second Term"/,
+    assert.match(allTermsHtml, /aria-label="Open paper clearance for Alexandra Very Long Student Name for Mobile Review Rae Reyes, 2025-2026 Second Term">Open paper clearance<\/a>/,
       'each open action has a student and term-specific accessible name');
     assert.match(allTermsHtml, /<details class="clearance-dashboard-filter-more" open data-clearance-filter-more data-default-open="false">/,
       'All terms remain selected in the native GET controls while mobile JavaScript can collapse their disclosure');
@@ -305,10 +320,10 @@ test('clearance overview route keeps explicit scope, paginates all terms, and en
   });
 });
 
-test('clearance tab records completed paper for registrars and stays read-only for database administrators', async () => {
+test('paper clearance is one registrar checkbox per term and archived/admin views are read-only', async () => {
   const calls = [];
   const saved = {
-    clearance_id: 77, version: 2, state: 'incomplete', scope_status: 'attended', scope_reason: '',
+    clearance_id: 77, version: 2, state: 'incomplete', scope_status: 'attended', scope_reason: '', recording_mode: 'signature_checklist',
     enrollment_id: 10, school_year: '2025-2026', grade_level: 'Grade 11', term_label: 'Second', annual_term_number: 2,
     section_name: 'STEM A', clearanceItems: [
       { id: 1, category: 'teacher', label_snapshot: 'Teacher signature', subject_code_snapshot: 'ENG11',
@@ -321,7 +336,7 @@ test('clearance tab records completed paper for registrars and stays read-only f
     teacherCount: 1, track_label_snapshot: 'Academic Track', template_version: 1,
     template_id: 3, attested_at: null, inspected_on: '2026-09-20', history: []
   };
-  const clearance = { async getStudentClearance(actorId, studentId) {
+    const clearance = { async getStudentClearance(actorId, studentId) {
     calls.push([actorId, studentId]);
     return { student: { id: Number(studentId), student_no: 'ST-17', first_name: 'Ari', last_name: 'Santos', status: 'active' },
       terms: [{ ...saved, clearanceItems: saved.clearanceItems, history: [] }, {
@@ -351,49 +366,26 @@ test('clearance tab records completed paper for registrars and stays read-only f
     assert.equal(registrar.status, 200);
     assert.match(registrarHtml, /Ari Santos/);
     assert.match(registrarHtml, /Student no\. ST-17/);
-    assert.match(registrarHtml, /id="clearance-signatures-heading-77">Paper form signatures/);
-    assert.match(registrarHtml, /Enter each required line from the fully signed paper form/);
-    assert.match(registrarHtml, /Oral Communication/);
-    assert.match(registrarHtml, /Record completed paper/);
-    assert.match(registrarHtml, /name="clearanceAction" value="complete"/);
-    assert.match(registrarHtml, /name="clearanceAction" value="prepare"/,
-      'attendance and matching-form changes remain available in the correction disclosure');
-    assert.doesNotMatch(registrarHtml, /Save progress|In progress|Needs review|awaiting registrar confirmation|\b\d+\s+of\s+\d+\s+required signatures/i);
-    assert.match(registrarHtml, /Correct attendance or saved details/);
-    assert.match(registrarHtml, /Required on this form\?/);
-    assert.match(registrarHtml, /value="not_applicable"[^>]*>Not required/);
-    assert.match(registrarHtml, /Paper form and review history/);
-    assert.match(registrarHtml, /Review version/);
-    assert.doesNotMatch(registrarHtml, /No saved change history|Review this paper form/);
-    assert.doesNotMatch(registrarHtml, /<details class="clearance-details"/,
-      'the current term checklist and signature form are visible directly inside the open term');
-    assert.match(registrarHtml, /id="clearance-term-10" class="clearance-term clearance-term--incomplete" open/);
-    assert.doesNotMatch(registrarHtml, /clearance-term-table|clearance-requirements-row/);
-    assert.match(registrarHtml, /Term not attended:<\/strong> school records show no attendance for the entire term/);
-    assert.match(registrarHtml, /Registrar’s reason:<\/strong> School records show no attendance/);
-    assert.match(registrarHtml, /<a href="\/registrar\/records\/clearance" aria-current="page">Overview<\/a>/,
-      'the active workspace tab renders aria-current as the value page');
-    assert.match(registrarHtml, /aria-label="Signature on paper: ENG11 · Oral Communication" aria-describedby="clearance-signature-help-77"/,
-      'each checkbox has a contextual accessible name and the shared form instructions');
-    assert.match(registrarHtml, /id="clearance-signature-help-77"/);
-    assert.doesNotMatch(registrarHtml, /When checked, enter the signer/);
-    assert.doesNotMatch(registrarHtml, /data-label="Required signature line"|data-label="Paper record"/);
-    const notAttendedForm = /<form class="admin-form clearance-edit-form"[^>]*records\/78[\s\S]*?<\/form>/.exec(registrarHtml)?.[0] || '';
-    assert.match(notAttendedForm, /Save attendance decision/);
-    assert.doesNotMatch(notAttendedForm, /Mark clearance completed/,
-      'a not-attended record cannot show an inspection-confirmation action even if old template rows remain');
+    assert.match(registrarHtml, /name="paperCompleted" value="1"/);
+    assert.match(registrarHtml, /Paper clearance completed/);
+    assert.match(registrarHtml, /Save clearance status/);
+    assert.match(registrarHtml, /Inspect the returned paper form before checking this box/);
+    assert.match(registrarHtml, /name="paperCompleted" value="1" aria-describedby="clearance-inspection-help-10"/);
+    assert.match(registrarHtml, /id="clearance-inspection-help-10"/);
+    assert.doesNotMatch(registrarHtml, /clearance-next-step|Open term/);
+    assert.doesNotMatch(registrarHtml, /Paper form signatures|signer name|Set up a paper form|laboratory|name="clearanceAction"|name="templateId"/i);
+    assert.equal((registrarHtml.match(/name="paperCompleted"/g) || []).length, 2,
+      'each applicable term has one completion checkbox');
+    assert.match(registrarHtml, /id="clearance-term-10" class="clearance-term clearance-term--pending" open/);
     const admin = await fetch(`${url}/records/students/42/clearance`, { headers: { 'x-user-role': 'database_admin', 'x-user-id': '18' } });
     const adminHtml = await admin.text();
     assert.equal(admin.status, 200);
-    assert.match(adminHtml, /Read-only clearance details/);
-    assert.doesNotMatch(adminHtml, /Record completed paper|name="clearanceAction"|<button[^>]*type="submit"/);
-    assert.match(adminHtml, /<fieldset disabled aria-label="Read-only clearance details">/,
-      'database administrators can inspect paper signature evidence inside a disabled fieldset');
+    assert.doesNotMatch(adminHtml, /method="post"|name="paperCompleted"|Save clearance status/);
     assert.deepEqual(calls, [['17', 42], ['18', 42]]);
   });
 });
 
-test('empty template setup has a direct registrar action and remains read-only for database administrators', async () => {
+test('retired template routes preserve role refusals and redirect reads to the paper-clearance workspace', async () => {
   const clearance = {
     async getStudentClearance(_actorId, studentId) {
       return { student: { id: Number(studentId), student_no: 'ST-42', first_name: 'Mia', last_name: 'Reyes' },
@@ -419,23 +411,15 @@ test('empty template setup has a direct registrar action and remains read-only f
     assert.equal(registrar.status, 200);
     assert.match(clearanceHtml, /Mia Reyes/);
     assert.match(clearanceHtml, /ST-42/);
-    assert.match(clearanceHtml, /Set up paper forms/);
-    assert.match(clearanceHtml, /entire term was not attended, with a reason/);
-    assert.match(clearanceHtml, /Set up a paper form/);
+    assert.match(clearanceHtml, /Paper clearance completed/);
+    assert.doesNotMatch(clearanceHtml, /signature|template|paper form setup/i);
 
-    const setup = await fetch(`${url}/records/clearance/templates`);
-    const setupHtml = await setup.text();
-    assert.equal(setup.status, 200);
-    assert.match(setupHtml, /No paper forms set up yet/);
-    assert.match(setupHtml, /Set up the first paper form/);
-    assert.match(setupHtml, /<a href="\/registrar\/records\/clearance\/templates" aria-current="page">Checklist setup<\/a>/,
-      'the checklist setup tab renders aria-current as the value page');
+    const setup = await fetch(`${url}/records/clearance/templates`, { redirect: 'manual' });
+    assert.equal(setup.status, 303);
+    assert.equal(setup.headers.get('location'), '/registrar/records/clearance');
 
-    const admin = await fetch(`${url}/records/clearance/templates`, { headers: { 'x-user-role': 'database_admin' } });
-    const adminHtml = await admin.text();
-    assert.equal(admin.status, 200);
-    assert.match(adminHtml, /Ask the registrar to set up the matching paper form/);
-    assert.doesNotMatch(adminHtml, /action="\/registrar\/records\/clearance\/templates"/);
+    const admin = await fetch(`${url}/records/clearance/templates`, { redirect: 'manual', headers: { 'x-user-role': 'database_admin' } });
+    assert.equal(admin.status, 303);
   });
 });
 
@@ -463,76 +447,26 @@ test('annual activation review uses only Not completed and Completed paper statu
     const filename = require('node:path').resolve(__dirname, `../views/records/${path}`);
     assert.doesNotThrow(() => ejs.compile(fs.readFileSync(filename, 'utf8'), { filename }));
   }
+  const annualReviewText = fs.readFileSync(require('node:path').resolve(__dirname, '../views/records/annual-intake-review.ejs'), 'utf8');
+  assert.match(annualReviewText, /A registrar must record completion for each required earlier attended term after inspecting the returned paper form/);
+  assert.doesNotMatch(annualReviewText, /Required signatures from earlier attended terms/);
+  const financeReviewText = fs.readFileSync(require('node:path').resolve(__dirname, '../views/finance/document-clearance.ejs'), 'utf8');
+  assert.match(financeReviewText, /The registrar’s paper clearance record is separate from this fee review/);
+  assert.doesNotMatch(financeReviewText, /registrar’s paper clearance checklist/);
 });
 
-test('template form recovery bounds displayed drafts and refreshes idempotency tokens after conflicts', async () => {
-  const csrfToken = 'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210';
-  const submittedToken = '88888888-8888-4888-8888-888888888888';
-  const rawTrackLabel = 'T'.repeat(81);
-  let failureStatus = 400;
-  let receivedTrackLabel = null;
-  const clearance = {
-    async listTemplates() { return { templates: [] }; },
-    async createTemplateVersion(_actorId, input) {
-      receivedTrackLabel = input.trackLabel;
-      throw new TermClearanceError('Complete the highlighted paper form fields.', failureStatus);
-    }
-  };
-  const router = createStudentRecordsRouter({ studentRecordsService: {}, academicRecordsService: {}, documentRequestService: {},
-    documentClearanceService: {}, gradeOverviewService: {}, readmissionService: {}, termClearanceService: clearance });
-  const app = express();
-  app.set('view engine', 'ejs');
-  app.set('views', require('node:path').resolve(__dirname, '../views'));
-  app.use(express.urlencoded({ extended: false }));
-  app.use('/records', (req, _res, next) => {
-    req.authUser = { id: 17, role: 'registrar' };
-    req.session = { csrfToken };
-    next();
-  }, requireRole('registrar', 'database_admin'), router);
-  await withServer(app, async (url) => {
-    const body = new URLSearchParams({ _csrf: csrfToken, idempotencyKey: submittedToken, gradeLevel: 'Grade 11',
-      trackLabel: rawTrackLabel, teacherRosterConfirmed: '1', laboratoryRowsConfirmed: '1' });
-    for (const office of ['registrar', 'guidance', 'finance']) body.append('officeConfirmations', office);
-    const validationResponse = await fetch(`${url}/records/clearance/templates`, { method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: body.toString() });
-    const validationHtml = await validationResponse.text();
-    assert.equal(validationResponse.status, 400);
-    assert.equal(receivedTrackLabel, rawTrackLabel, 'the service validates untruncated input');
-    assert.match(validationHtml, new RegExp(`value="${'T'.repeat(80)}"`));
-    assert.doesNotMatch(validationHtml, new RegExp(`value="${'T'.repeat(81)}"`));
-    assert.match(validationHtml, new RegExp(`name="idempotencyKey" value="${submittedToken}"`));
-
-    failureStatus = 409;
-    const conflictResponse = await fetch(`${url}/records/clearance/templates`, { method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: body.toString() });
-    const conflictHtml = await conflictResponse.text();
-    assert.equal(conflictResponse.status, 409);
-    assert.match(conflictHtml, /This template was not saved/);
-    assert.doesNotMatch(conflictHtml, new RegExp(`name="idempotencyKey" value="${submittedToken}"`));
-    assert.match(conflictHtml, new RegExp(`name="idempotencyKey" value="[0-9a-f-]{36}"`));
-  });
-});
-
-test('stale clearance submissions stay separate from current values and validation errors preserve bounded drafts', async () => {
+test('simple clearance write recovery restores checkbox and reason but stale submissions must reload', async () => {
   const submittedToken = '77777777-7777-4777-8777-777777777777';
   const csrfToken = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
   const saved = { clearance_id: 77, version: 2, state: 'complete', scope_status: 'attended', enrollment_id: 10,
-    school_year: '2025-2026', grade_level: 'Grade 11', term_label: 'Second', annual_term_number: 2, section_name: 'STEM A',
-    clearanceItems: [{ id: 1, category: 'teacher', label_snapshot: 'Teacher signature', subject_code_snapshot: 'ENG11',
-      subject_name_snapshot: 'Oral Communication', teacher_context_status: 'assigned', applicability_status: 'required',
-      signature_present: 1, signer_name: 'Saved signer', paper_signed_on: null },
-    { id: 2, category: 'teacher', label_snapshot: 'Teacher signature', subject_code_snapshot: 'SCI11',
-      subject_name_snapshot: 'Earth Science', teacher_context_status: 'assigned', applicability_status: 'required',
-      signature_present: 1, signer_name: 'Saved teacher', paper_signed_on: null }],
-    track_label_snapshot: 'Academic Track', template_version: 1, template_id: 3, attested_at: '2026-09-20T08:00:00Z',
-    inspected_on: '2026-09-20', history: [] };
+    school_year: '2025-2026', grade_level: 'Grade 11', term_label: 'Second', annual_term_number: 2,
+    section_name: 'STEM A', recording_mode: 'paper_confirmation', inspected_on: '2026-09-20', history: [] };
   let failureStatus = 400;
   const clearance = {
     async getStudentClearance(_actorId, studentId) {
-      return { student: { id: Number(studentId), student_no: 'ST-17', first_name: 'Ari', last_name: 'Santos' },
-        terms: [{ ...saved, clearanceItems: saved.clearanceItems }], templates: [] };
+      return { student: { id: Number(studentId), student_no: 'ST-17', first_name: 'Ari', last_name: 'Santos', status: 'active' }, terms: [{ ...saved }] };
     },
-    async updateTermClearance() { throw new TermClearanceError('Correct the highlighted paper details.', failureStatus); }
+    async recordTermCompletion() { throw new TermClearanceError('Enter a correction reason when changing a completed paper clearance.', failureStatus); }
   };
   const router = createStudentRecordsRouter({ studentRecordsService: {}, academicRecordsService: {}, documentRequestService: {},
     documentClearanceService: {}, gradeOverviewService: {}, readmissionService: {}, termClearanceService: clearance });
@@ -547,31 +481,150 @@ test('stale clearance submissions stay separate from current values and validati
   }, requireRole('registrar', 'database_admin'), router);
   await withServer(app, async (url) => {
     const body = new URLSearchParams({ _csrf: csrfToken, idempotencyKey: submittedToken, expectedVersion: '2',
-      scopeStatus: 'attended', item_1_applicabilityStatus: 'required', item_1_signaturePresent: '1',
-      item_1_signerName: 'Draft signer', item_1_paperSignedOn: '',
-      item_2_applicabilityStatus: 'required', item_2_signaturePresent: '1', item_2_signerName: '',
-      clearanceAction: 'reopen' });
-    const response = await fetch(`${url}/records/students/42/clearance/records/77`, { method: 'POST',
+      correctionReason: 'Please reopen this saved paper status.' });
+    const response = await fetch(`${url}/records/students/42/clearance/terms/10`, { method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: body.toString() });
     const validationHtml = await response.text();
     assert.equal(response.status, 400);
-    assert.match(validationHtml, /value="Draft signer"/);
-    assert.match(validationHtml, /<details id="clearance-term-10" class="clearance-term clearance-term--complete" open>/,
-      'a validation rerender opens the attempted term so its submitted values remain visible');
-    assert.match(validationHtml, /<details class="clearance-signer-details" open>\s*<summary>Enter the name beside this signature<\/summary>/,
-      'a checked signature with a missing name exposes the required signer fields without JavaScript');
+    assert.match(validationHtml, /id="clearance-term-10" class="clearance-term clearance-term--complete" open/);
+    assert.match(validationHtml, /Completion recorded by registrar/);
+    assert.match(validationHtml, /name="paperCompleted" value="1" aria-describedby="clearance-inspection-help-10"\s*>/,
+      'a failed reopen keeps the attempted unchecked completion value');
+    assert.match(validationHtml, /Please reopen this saved paper status\./);
     assert.match(validationHtml, new RegExp(`name="idempotencyKey" value="${submittedToken}"`));
 
     failureStatus = 409;
-    const staleResponse = await fetch(`${url}/records/students/42/clearance/records/77`, { method: 'POST',
+    const staleResponse = await fetch(`${url}/records/students/42/clearance/terms/10`, { method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: body.toString() });
     const staleHtml = await staleResponse.text();
     assert.equal(staleResponse.status, 409);
-    assert.match(staleHtml, /Your changes were not saved because this form was out of date/);
-    assert.match(staleHtml, /Unapplied submitted values/);
-    assert.match(staleHtml, /Draft signer/);
-    assert.match(staleHtml, /value="Saved signer"/);
+    assert.match(staleHtml, /changed after the form was opened|expired|out of date/i);
+    assert.match(staleHtml, /Reload this term before correcting/);
+    assert.match(staleHtml, /href="\/registrar\/records\/students\/42\/clearance#clearance-term-10">Reload term/);
     assert.doesNotMatch(staleHtml, new RegExp(`name="idempotencyKey" value="${submittedToken}"`));
+    assert.doesNotMatch(staleHtml, /method="post" action="\/registrar\/records\/students\/42\/clearance\/terms\/10"/);
+  });
+});
+
+test('term applicability exception is collapsed, registrar-only, recoverable, and stale-safe', async () => {
+  const csrfToken = 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+  const scopeToken = '33333333-3333-4333-8333-333333333333';
+  const scopeReason = 'School records confirm no attendance for the entire term.';
+  const calls = [];
+  let failureStatus = 400;
+  const clearance = {
+    async getStudentClearance(_actorId, studentId) {
+      return { student: { id: Number(studentId), first_name: 'Ari', last_name: 'Santos', status: 'active' }, terms: [
+        { enrollment_id: 10, version: 2, state: 'incomplete', scope_status: 'attended', school_year: '2025-2026',
+          grade_level: 'Grade 11', term_label: 'Second', annual_term_number: 2, section_name: 'STEM A',
+          completionToken: '44444444-4444-4444-8444-444444444444', scopeToken },
+        { enrollment_id: 11, version: 0, state: 'not_applicable', future: true, school_year: '2026-2027',
+          grade_level: 'Grade 11', term_label: 'Third', annual_term_number: 3, completionToken: '55555555-5555-4555-8555-555555555555' },
+        { enrollment_id: 12, version: 0, state: 'not_applicable', beforeEntry: true, school_year: '2024-2025',
+          grade_level: 'Grade 11', term_label: 'First', annual_term_number: 1, completionToken: '66666666-6666-4666-8666-666666666666' }
+      ] };
+    },
+    async recordTermNotAttended(actorId, enrollmentId, input, studentId) {
+      calls.push({ actorId, enrollmentId, input: { ...input }, studentId });
+      throw new TermClearanceError('Enter a reason for the entire term not attended.', failureStatus);
+    }
+  };
+  const router = createStudentRecordsRouter({ studentRecordsService: {}, academicRecordsService: {}, documentRequestService: {},
+    documentClearanceService: {}, gradeOverviewService: {}, readmissionService: {}, termClearanceService: clearance });
+  const app = express();
+  app.set('view engine', 'ejs');
+  app.set('views', require('node:path').resolve(__dirname, '../views'));
+  app.use(express.urlencoded({ extended: false }));
+  app.use('/records', (req, _res, next) => {
+    req.authUser = { id: 17, role: req.headers['x-user-role'] || 'registrar' };
+    req.session = { csrfToken };
+    next();
+  }, requireRole('registrar', 'database_admin'), router);
+
+  await withServer(app, async (url) => {
+    const page = await fetch(`${url}/records/students/42/clearance`);
+    const html = await page.text();
+    assert.equal(page.status, 200);
+    assert.match(html, /<details class="clearance-scope-exception"\s*>\s*<summary>Record term not attended<\/summary>/);
+    assert.match(html, /Reason the entire term was not attended/);
+    assert.match(html, /name="scopeReason"[^>]*required/);
+    assert.match(html, /Save term exception/);
+    assert.doesNotMatch(html, /id="clearance-term-11"[\s\S]*?<details class="clearance-scope-exception"/,
+      'future placements do not expose the exception action');
+    assert.doesNotMatch(html, /id="clearance-term-12"[\s\S]*?<details class="clearance-scope-exception"/,
+      'placements before entry do not expose the exception action');
+
+    const body = new URLSearchParams({ _csrf: csrfToken, idempotencyKey: scopeToken, expectedVersion: '2', scopeReason });
+    const validation = await fetch(`${url}/records/students/42/clearance/terms/10/not-attended`, { method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+    const validationHtml = await validation.text();
+    assert.equal(validation.status, 400);
+    assert.deepEqual(calls[0], { actorId: 17, enrollmentId: '10', studentId: '42', input: {
+      scopeReason, expectedVersion: '2', idempotencyKey: scopeToken
+    } }, 'the route passes the submitted reason/version/token to the service');
+    assert.match(validationHtml, /class="clearance-scope-exception" open/);
+    assert.match(validationHtml, new RegExp(`name="scopeReason"[^>]*>${scopeReason}<\/textarea>`));
+    assert.match(validationHtml, new RegExp(`name="idempotencyKey" value="${scopeToken}"`));
+
+    failureStatus = 409;
+    const stale = await fetch(`${url}/records/students/42/clearance/terms/10/not-attended`, { method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+    const staleHtml = await stale.text();
+    assert.equal(stale.status, 409);
+    assert.match(staleHtml, /Reload this term before correcting its saved status or applicability/);
+    assert.doesNotMatch(staleHtml, /method="post" action="\/registrar\/records\/students\/42\/clearance\/terms\/10\/not-attended"/);
+
+    const denied = await fetch(`${url}/records/students/42/clearance/terms/10/not-attended`, { method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-user-role': 'database_admin' }, body: body.toString() });
+    assert.equal(denied.status, 403);
+    assert.equal(calls.length, 2, 'database administrators cannot record term applicability decisions');
+  });
+});
+
+test('malformed and duplicate completion checkbox fields reach validation without changing clearance history', async () => {
+  const csrfToken = 'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210';
+  const receivedValues = [];
+  let savedEvents = 0;
+  const clearance = {
+    async getStudentClearance(_actorId, studentId) {
+      return { student: { id: Number(studentId), first_name: 'Ari', last_name: 'Santos', status: 'active' },
+        terms: [{ enrollment_id: 10, version: 0, state: 'not_reviewed', school_year: '2026-2027', grade_level: 'Grade 11',
+          term_label: 'First Term', annual_term_number: 1, completionToken: '11111111-1111-4111-8111-111111111111' }] };
+    },
+    async recordTermCompletion(_actorId, _enrollmentId, input) {
+      receivedValues.push(input.paperCompleted);
+      if (input.paperCompleted !== undefined && ![true, false, '1'].includes(input.paperCompleted)) {
+        throw new TermClearanceError('Choose whether the paper clearance is completed.');
+      }
+      savedEvents += 1;
+    }
+  };
+  const router = createStudentRecordsRouter({ studentRecordsService: {}, academicRecordsService: {}, documentRequestService: {},
+    documentClearanceService: {}, gradeOverviewService: {}, readmissionService: {}, termClearanceService: clearance });
+  const app = express();
+  app.set('view engine', 'ejs');
+  app.set('views', require('node:path').resolve(__dirname, '../views'));
+  app.use(express.urlencoded({ extended: false }));
+  app.use('/records', (req, _res, next) => {
+    req.authUser = { id: 17, role: 'registrar' };
+    req.session = { csrfToken };
+    next();
+  }, requireRole('registrar'), router);
+  await withServer(app, async (url) => {
+    const unknown = new URLSearchParams({ _csrf: csrfToken, idempotencyKey: '11111111-1111-4111-8111-111111111111',
+      expectedVersion: '0', paperCompleted: 'true' });
+    const unknownResponse = await fetch(`${url}/records/students/42/clearance/terms/10`, { method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: unknown.toString() });
+    assert.equal(unknownResponse.status, 400);
+    const duplicate = new URLSearchParams({ _csrf: csrfToken, idempotencyKey: '22222222-2222-4222-8222-222222222222',
+      expectedVersion: '0' });
+    duplicate.append('paperCompleted', '1');
+    duplicate.append('paperCompleted', '1');
+    const duplicateResponse = await fetch(`${url}/records/students/42/clearance/terms/10`, { method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: duplicate.toString() });
+    assert.equal(duplicateResponse.status, 400);
+    assert.deepEqual(receivedValues, ['true', ['1', '1']], 'the route does not coerce malformed values to unchecked');
+    assert.equal(savedEvents, 0, 'malformed form submissions create no status event');
   });
 });
 
@@ -607,6 +660,7 @@ test('student paper-clearance status uses only the authenticated linked account 
     assert.match(html, /the registrar has not confirmed a completed paper form for this term/);
     assert.match(html, /registrar recorded no attendance for the entire term; excluded from required clearance and not completed/);
     assert.match(html, /Outside required terms/);
+    assert.match(html, /Completed means the registrar recorded completion after inspecting the returned paper form/);
     assert.doesNotMatch(html, /Private staff value|Private note|In progress|Needs review|awaiting registrar confirmation|\d+ of \d+ required signatures/);
     assert.deepEqual(calls, [['record', 27], ['clearance', 27]]);
   });

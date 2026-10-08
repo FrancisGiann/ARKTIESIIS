@@ -10,6 +10,22 @@ const STAFF_ROLES = new Set(['registrar', 'database_admin']);
 const STUDENT_UPLOAD_DOCUMENT_TYPES = new Set(['good_moral', 'psa_birth_certificate', 'report_card']);
 const UPLOAD_DOCUMENT_TYPES = new Set(['good_moral', 'psa_birth_certificate']);
 const GEMINI_PRECHECK_PROCESSOR = 'Gemini field extraction';
+const ACTIONABLE_REGISTRAR_REVIEW_SQL = `d.status = 'needs_review'
+  AND COALESCE(latest_decision.decision_type, '') <> 'correction_requested'
+  AND (
+    (d.document_type IN ('good_moral', 'psa_birth_certificate') AND NOT EXISTS (
+      SELECT 1 FROM documents AS newer
+      WHERE newer.student_id = d.student_id AND newer.document_type = d.document_type
+        AND (newer.created_at > d.created_at OR (newer.created_at = d.created_at AND newer.id > d.id))
+    ))
+    OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'
+      AND NOT EXISTS (
+        SELECT 1 FROM documents AS newer
+        WHERE newer.student_id = d.student_id AND newer.document_type = 'report_card'
+          AND newer.is_legacy_archive = 0 AND newer.upload_source = 'student'
+          AND (newer.created_at > d.created_at OR (newer.created_at = d.created_at AND newer.id > d.id))
+      ))
+  )`;
 const FORM137_STATUSES = new Set(['pending', 'received', 'verified', 'correction', 'rejected']);
 const PREVIOUS_SCHOOL_REPORT_CARD_PHYSICAL_STATUSES = new Set(['pending', 'received', 'verified', 'correction', 'rejected']);
 const MIME_BY_EXTENSION = new Map([
@@ -607,8 +623,7 @@ function createDocumentService({
         ))
         AND (@documentType IS NULL OR d.document_type = @documentType)
         AND (@statusFilter IS NULL
-          OR (@statusFilter = 'awaiting_review' AND d.status = 'needs_review'
-            AND (d.document_type <> 'report_card' OR COALESCE(latest_decision.decision_type, '') <> 'correction_requested'))
+          OR (@statusFilter = 'awaiting_review' AND (${ACTIONABLE_REGISTRAR_REVIEW_SQL}))
           OR (@statusFilter = 'processing' AND d.status IN ('pending', 'processing'))
           OR (@statusFilter = 'verified' AND d.status = 'valid')
           OR (@statusFilter = 'rejected' AND d.status = 'rejected')
@@ -684,6 +699,20 @@ function createDocumentService({
       documents: result.recordset || [], searchTerm, isStaff: STAFF_ROLES.has(actor.role),
       blockedNewOriginalTypes, statusSummary, documentType, statusFilter
     };
+  }
+
+  async function countAwaitingStaffReview(actorInput) {
+    const pool = await getPool();
+    const actor = await requireReadActor(pool, actorInput);
+    if (actor.role !== 'registrar') throw new DocumentServiceError('Registrar document-review access is required.', 403);
+    const result = await pool.request().input('actorId', sql.Int, actor.id)
+      .query(`SELECT COUNT(*) AS actionable_count
+        FROM documents AS d
+        LEFT JOIN v_document_latest_decision_event AS latest_decision ON latest_decision.document_id = d.id
+        WHERE (${ACTIONABLE_REGISTRAR_REVIEW_SQL})
+          AND EXISTS (SELECT 1 FROM users AS reviewer WHERE reviewer.id = @actorId
+            AND reviewer.role = 'registrar' AND reviewer.is_active = 1)`);
+    return Math.max(0, Number(result.recordset?.[0]?.actionable_count) || 0);
   }
 
   async function listPhysicalRequirements(actorInput, searchInput = '', pageInput = 1) {
@@ -1417,6 +1446,7 @@ function createDocumentService({
     upload,
     reupload,
     listDocuments,
+    countAwaitingStaffReview,
     listPhysicalRequirements,
     getStudentDocuments,
     getOwnPreviousSchoolReportCardPhysicalStatus,

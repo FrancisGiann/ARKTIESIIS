@@ -110,10 +110,10 @@ const financeOverview = {
   ]
 };
 
-function appFor(role, calls = [], intakeRows = [], intakeOptions = { schoolYears: [], terms: [], sections: [] }, intakeTotal = intakeRows.length, financeOverviewData = financeOverview) {
+function appFor(role, calls = [], intakeRows = [], intakeOptions = { schoolYears: [], terms: [], sections: [] }, intakeTotal = intakeRows.length, financeOverviewData = financeOverview, workloadServices = {}, registrarDashboardService = null) {
   return createApp({
     databasePool: createAuthPool(role), environment,
-    registrarDashboardService: {
+    registrarDashboardService: registrarDashboardService || {
       async getDashboard(actorId, filters) { calls.push(['registrar', actorId, filters]); return registrarOverview; }
     },
     financeDashboardService: {
@@ -150,7 +150,10 @@ function appFor(role, calls = [], intakeRows = [], intakeOptions = { schoolYears
       },
       async listAnnualEnrollmentCounts(actorId, filters) { calls.push(['intakeCounts', actorId, filters]); return []; },
       async loadIntakeOptions() { return intakeOptions; }
-    }
+    },
+    preEnrollmentService: workloadServices.preEnrollmentService || { async list() { return { pagination: { totalRecords: 0 } }; } },
+    documentService: { async getStudentDocuments() { return null; }, ...(workloadServices.documentService || { async countAwaitingStaffReview() { return 0; } }) },
+    teacherGradeSubmissionService: workloadServices.teacherGradeSubmissionService || { async listReviewQueue() { return []; } }
   });
 }
 
@@ -161,15 +164,17 @@ test('registrar overview renders term counts and filtered intake links without f
     const response = await fetch(`${baseUrl}/registrar?schoolYear=2026-2027&termId=62`, { headers: { cookie } });
     const html = await response.text();
     assert.equal(response.status, 200);
-    assert.ok(html.indexOf('registrar-lookup--primary') < html.indexOf('registrar-task-layout'));
-    assert.ok(html.indexOf('registrar-task-layout') < html.indexOf('registrar-overview'));
+    assert.ok(html.indexOf('registrar-overview') < html.indexOf('registrar-lookup--primary'));
+    assert.ok(html.indexOf('registrar-lookup--primary') < html.indexOf('registrar-needs-review'));
     assert.match(html, /<span>Term<\/span>/);
     assert.doesNotMatch(html, /Configured term/);
-    assert.match(html, /<details class="registrar-overview__comparison"><summary>Enrollment counts by term<\/summary>/);
+    assert.match(html, /<details class="registrar-overview__comparison"><summary>Compare enrollment by term<\/summary>/);
     assert.doesNotMatch(html, /<details class="registrar-overview__comparison" open>/);
     const lookupHeading = html.match(/<div class="registrar-lookup__heading">([\s\S]*?)<\/div>/)?.[1] || '';
     assert.doesNotMatch(lookupHeading, /Review paper forms/);
     assert.match(html, /Active enrolled students · Second Term/);
+    assert.match(html, /registrar-overview__lead-label--mobile">Total enrolled/);
+    assert.match(html, /aria-label="View 12 active enrolled students for Second Term"/);
     assert.match(html, /<section class="registrar-overview__term-comparison"[\s\S]*Grade 11 and Grade 12 by term/);
     assert.match(html, /<details class="registrar-overview__details">\s*<summary>More enrollment counts and how they are counted<\/summary>/);
     assert.doesNotMatch(html, /<details class="registrar-overview__details" open>/);
@@ -202,7 +207,55 @@ test('registrar overview renders term counts and filtered intake links without f
     assert.match(html, /status=dropped/);
     assert.match(html, /status=transferred/);
     assert.doesNotMatch(html, /₱|amount due|payment history|finance ledger/i);
-    assert.deepEqual(calls.map(([name, actorId]) => [name, actorId]), [['registrar', 7]]);
+    assert.match(html, /Needs your review/);
+    assert.match(html, /href="\/pre-enrollments\?status=ready_for_registrar"/);
+    assert.match(html, /href="\/registrar\/intake\?confirmationStatus=needs_confirmation"/);
+    assert.match(html, /No registrar review items are waiting/);
+    assert.deepEqual(calls.filter(([name]) => name === 'registrar').map(([name, actorId]) => [name, actorId]), [['registrar', 7]]);
+  });
+});
+
+test('a synchronous review queue failure marks only that count unavailable and leaves the dashboard search available', async () => {
+  await withServer(appFor('registrar', [], [], undefined, undefined, financeOverview, {
+    preEnrollmentService: { list() { throw new Error('queue unavailable'); } }
+  }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'registrar');
+    const response = await fetch(`${baseUrl}/registrar`, { headers: { cookie } });
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(html, /Find a student/);
+    assert.match(html, /Paper intakes ready for registrar review[\s\S]*Unavailable/);
+    assert.match(html, /Some queue counts are unavailable/);
+    assert.match(html, /href="\/registrar\/intake\?confirmationStatus=needs_confirmation"/);
+  });
+});
+
+test('a registrar queue authorization refusal remains a 403 rather than showing an unavailable dashboard', async () => {
+  await withServer(appFor('registrar', [], [], undefined, undefined, financeOverview, {
+    documentService: { async countAwaitingStaffReview() { const error = new Error('Registrar access is no longer active.'); error.status = 403; throw error; } }
+  }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'registrar');
+    const response = await fetch(`${baseUrl}/registrar`, { headers: { cookie } });
+    const html = await response.text();
+    assert.equal(response.status, 403);
+    assert.match(html, /Registrar access is no longer active/);
+    assert.doesNotMatch(html, /Find a student|Needs your review/);
+  });
+});
+
+test('an enrollment overview query failure leaves lookup and review queues available without showing false zero counts', async () => {
+  await withServer(appFor('registrar', [], [], undefined, undefined, financeOverview, {}, {
+    async getDashboard() { throw new Error('overview unavailable'); }
+  }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'registrar');
+    const response = await fetch(`${baseUrl}/registrar`, { headers: { cookie } });
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(html, /Enrollment counts are temporarily unavailable/);
+    assert.match(html, /Find a student/);
+    assert.match(html, /Needs your review/);
+    assert.match(html, /No registrar review items are waiting/);
+    assert.doesNotMatch(html, /Active enrolled students[^\n]*0|Grade 11[^\n]*0|Grade 12[^\n]*0/);
   });
 });
 

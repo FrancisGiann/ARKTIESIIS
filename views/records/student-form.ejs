@@ -72,8 +72,9 @@
     </details>
 
     <details class="student-profile-control">
-      <summary><strong>Enrollment history and controls</strong><span>Review existing terms or add an enrollment</span></summary>
+      <summary><strong>Enrollment history</strong><span>Review recorded terms and open annual enrollments</span></summary>
       <div class="student-profile-control__body">
+      <% const annualRecords = annualEnrollments || []; const correctionRows = enrollments.filter((enrollment) => !enrollment.annual_enrollment_id); const correctionTermIds = new Set(correctionRows.map((enrollment) => String(enrollment.academic_term_id))); const correctionTerms = terms.filter((term) => correctionTermIds.has(String(term.id))); const correctionSections = sections.filter((section) => correctionTermIds.has(String(section.academic_term_id))); %>
       <% if (enrollments.length) { %>
         <div class="table-scroll" tabindex="0" aria-label="Student enrollment history">
           <table class="admin-table"><thead><tr><th scope="col">Academic term</th><th scope="col">Section</th><th scope="col">Status</th><th scope="col">Enrolled</th></tr></thead><tbody>
@@ -86,15 +87,24 @@
           </tbody></table>
         </div>
       <% } else { %><p class="empty-state">This student has no enrollments.</p><% } %>
-      <% if (student.status !== 'archived') { %><form class="form-stack records-enrollment-form" method="post" action="/registrar/records/enrollments">
+      <% if (annualRecords.length) { %>
+        <section class="student-annual-records" aria-labelledby="student-annual-records-title">
+          <h3 id="student-annual-records-title">Annual enrollment records</h3>
+          <ul><% for (const record of annualRecords) { %><li><strong><%= record.school_year %> · <%= record.grade_level %></strong> · <%= record.intake_status.replaceAll('_', ' ') %>
+            <% if (student.status !== 'archived') { %><a class="table-action" href="/registrar/intake/<%= record.annual_enrollment_id %>/manage">Open enrollment</a><% } %>
+          </li><% } %></ul>
+        </section>
+      <% } %>
+      <% if (student.status !== 'archived' && correctionTerms.length) { %><form class="form-stack records-enrollment-form" method="post" action="/registrar/records/enrollments">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <input type="hidden" name="studentId" value="<%= student.id %>">
-        <h3>Save enrollment</h3>
+        <h3>Correct historical term record</h3>
+        <p class="muted-copy">Only existing term rows without an annual intake link are available for correction. This does not start an annual enrollment.</p>
         <div class="admin-form-grid">
-          <div class="field"><label for="enrollment-term">Academic term</label><select id="enrollment-term" name="academicTermId" required><option value="">Choose a term</option><% for (const term of terms) { %><option value="<%= term.id %>"><%= term.school_year %> · <%= term.term %></option><% } %></select></div>
-          <div class="field"><label for="enrollment-section">Section (optional)</label><select id="enrollment-section" name="sectionId"><option value="">No section assigned</option><% for (const section of sections) { %><option value="<%= section.id %>"><%= formatStudentPlacement(section.grade_level, section.name) %> — <%= section.school_year %> · <%= section.term %></option><% } %></select></div>
+          <div class="field"><label for="enrollment-term">Existing historical term</label><select id="enrollment-term" name="academicTermId" required><option value="">Choose an existing term</option><% for (const term of correctionTerms) { %><option value="<%= term.id %>"><%= term.school_year %> · <%= term.term %></option><% } %></select></div>
+          <div class="field"><label for="enrollment-section">Section (optional)</label><select id="enrollment-section" name="sectionId"><option value="">No section assigned</option><% for (const section of correctionSections) { %><option value="<%= section.id %>"><%= formatStudentPlacement(section.grade_level, section.name) %> — <%= section.school_year %> · <%= section.term %></option><% } %></select></div>
         </div>
-        <button class="button button--primary button--align-start" type="submit" <%= terms.length ? '' : 'disabled' %>>Save enrollment</button>
+        <button class="button button--primary button--align-start" type="submit">Save correction</button>
       </form><% } %>
       </div>
     </details>

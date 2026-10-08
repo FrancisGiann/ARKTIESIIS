@@ -37,7 +37,8 @@ function routeViewTargets() {
 const compatibilityOnlyTargets = [
   'records/legacy-activation-review',
   'records/student-intake-form',
-  'records/student-intake-list'
+  'records/student-intake-list',
+  'records/term-clearance-templates'
 ];
 
 test('reachable EJS render targets compile and every active screen is present in the UI review inventory', () => {
@@ -59,6 +60,8 @@ test('reachable EJS render targets compile and every active screen is present in
     assert.doesNotThrow(() => ejs.compile(fs.readFileSync(path.join(viewsRoot, `${target}.ejs`), 'utf8')),
       `compatibility-only EJS still compiles: ${target}`);
   }
+
+  assert.match(inventory, /Paper-clearance template setup is retired\. `GET \/registrar\/records\/clearance\/templates` redirects to the checkbox workspace; its old write endpoint returns 410\./);
 
   const nonPartialViews = sourceFiles(viewsRoot)
     .filter((file) => file.endsWith('.ejs') && !file.split(path.sep).includes('partials'))

@@ -545,7 +545,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
   async function renderList(req, res, { status = 200, error = null, notice = null } = {}) {
     try {
       const filters = {};
-      for (const key of ['search', 'schoolYear', 'gradeLevel', 'voucherCode', 'termId', 'sectionId', 'cluster', 'strand', 'status', 'studentStatus', 'page']) {
+      for (const key of ['search', 'schoolYear', 'gradeLevel', 'voucherCode', 'termId', 'sectionId', 'cluster', 'strand', 'status', 'studentStatus', 'confirmationStatus', 'page']) {
         filters[key] = typeof req.query?.[key] === 'string' ? req.query[key].slice(0, 100) : '';
       }
       const rosterPromise = service.listAnnualEnrollmentsPage

@@ -8,7 +8,7 @@
   }; %>
   <% const annualPageHref = (page) => {
     const params = new URLSearchParams();
-    for (const key of ['search', 'schoolYear', 'gradeLevel', 'voucherCode', 'termId', 'sectionId', 'cluster', 'strand', 'status', 'studentStatus']) {
+    for (const key of ['search', 'schoolYear', 'gradeLevel', 'voucherCode', 'termId', 'sectionId', 'cluster', 'strand', 'status', 'studentStatus', 'confirmationStatus']) {
       if (filters[key]) params.set(key, filters[key]);
     }
     params.set('page', String(page));
@@ -34,7 +34,7 @@
         <div class="field"><label for="annual-filter-term">Term</label><select id="annual-filter-term" name="termId"><option value="">All terms</option><% for (const term of terms) { %><option value="<%= term.id %>" <%= String(filters.termId || '') === String(term.id) ? 'selected' : '' %>><%= term.school_year %> · <%= termLabel(term) %></option><% } %></select></div>
         <button class="button button--primary" type="submit">Find records</button>
       </div>
-      <details class="annual-filter-details" <%= filters.gradeLevel || filters.voucherCode || filters.sectionId || filters.cluster || filters.strand || filters.status ? 'open' : '' %>>
+      <details class="annual-filter-details" <%= filters.gradeLevel || filters.voucherCode || filters.sectionId || filters.cluster || filters.strand || filters.status || filters.confirmationStatus ? 'open' : '' %>>
         <summary>More filters</summary>
         <div class="annual-filter-grid">
           <div class="field"><label for="annual-filter-grade">Grade level</label><select id="annual-filter-grade" name="gradeLevel"><option value="">All grades</option><% for (const grade of ['Grade 11', 'Grade 12']) { %><option value="<%= grade %>" <%= filters.gradeLevel === grade ? 'selected' : '' %>><%= grade %></option><% } %></select></div>
@@ -43,6 +43,7 @@
           <div class="field"><label for="annual-filter-cluster">Cluster</label><input id="annual-filter-cluster" name="cluster" maxlength="80" value="<%= filters.cluster %>"></div>
           <div class="field"><label for="annual-filter-strand">Strand</label><input id="annual-filter-strand" name="strand" maxlength="80" value="<%= filters.strand %>"></div>
           <div class="field"><label for="annual-filter-status">Term placement status</label><select id="annual-filter-status" name="status"><option value="">All statuses</option><% for (const [value, label] of [['pending_payment', 'Pending activation'], ['enrolled', 'Enrolled'], ['cancelled', 'Cancelled'], ['dropped', 'Stopped studying'], ['transferred', 'Transferred']]) { %><option value="<%= value %>" <%= filters.status === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
+          <div class="field"><label for="annual-filter-confirmation">Annual confirmation</label><select id="annual-filter-confirmation" name="confirmationStatus"><option value="">All confirmation statuses</option><option value="needs_confirmation" <%= filters.confirmationStatus === 'needs_confirmation' ? 'selected' : '' %>>Needs confirmation from sourced intake</option></select></div>
         </div>
       </details>
       <div class="admin-form-actions annual-search-actions"><a class="button button--secondary" href="/registrar/intake">Clear filters</a></div>

@@ -1429,10 +1429,14 @@ function createAnnualEnrollmentService({
     const filterStrand = filters.strand ? printable(filters.strand, 'Strand', 80) : null;
     const filterStatus = filters.status ? printable(filters.status, 'Status', 20) : null;
     const filterStudentStatus = filters.studentStatus ? printable(filters.studentStatus, 'Student status', 20) : null;
+    const filterConfirmationStatus = filters.confirmationStatus ? printable(filters.confirmationStatus, 'Confirmation status', 30) : null;
     const searchTerm = filters.search ? printable(filters.search, 'Search', 100) : null;
     if (filterVoucher && !['PUB', 'ESC', 'NV'].includes(filterVoucher)) throw new AnnualEnrollmentError('Choose PUB, ESC, or NV.');
     if (filterStatus && !['pending_payment', 'enrolled', 'cancelled', 'dropped', 'transferred'].includes(filterStatus)) throw new AnnualEnrollmentError('Choose a valid term placement status.');
     if (filterStudentStatus && filterStudentStatus !== 'active') throw new AnnualEnrollmentError('Choose active student records.');
+    if (filterConfirmationStatus && filterConfirmationStatus !== 'needs_confirmation') {
+      throw new AnnualEnrollmentError('Choose a valid annual confirmation status.');
+    }
 
     const searchPattern = searchTerm ? `%${searchTerm.replace(/[~%_[\]]/g, (character) => `~${character}`)}%` : null;
     const bindFilters = (request) => request
@@ -1445,6 +1449,7 @@ function createAnnualEnrollmentService({
       .input('strand', sql.NVarChar(80), filterStrand)
       .input('status', sql.NVarChar(20), filterStatus)
       .input('studentStatus', sql.NVarChar(20), filterStudentStatus)
+      .input('confirmationStatus', sql.NVarChar(30), filterConfirmationStatus)
       .input('searchPattern', sql.NVarChar(204), searchPattern);
     const filtersSql = `annual.intake_status <> 'legacy'
       AND (@searchPattern IS NULL OR student.student_no LIKE @searchPattern ESCAPE '~'
@@ -1457,7 +1462,13 @@ function createAnnualEnrollmentService({
       AND (@gradeLevel IS NULL OR annual.grade_level = @gradeLevel)
       AND (@voucherCode IS NULL OR annual.voucher_code = @voucherCode)
       AND (@status IS NULL OR enrollment.enrollment_status = @status)
-      AND (@studentStatus IS NULL OR student.status = @studentStatus)`;
+      AND (@studentStatus IS NULL OR student.status = @studentStatus)
+      AND (@confirmationStatus IS NULL OR (@confirmationStatus = 'needs_confirmation'
+        AND annual.intake_status = 'pending' AND annual.pre_enrollment_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM pre_enrollments AS source_intake
+          WHERE source_intake.id = annual.pre_enrollment_id AND source_intake.status = 'enrollment_started')
+        AND NOT EXISTS (SELECT 1 FROM annual_registrar_confirmations AS saved_confirmation
+          WHERE saved_confirmation.annual_enrollment_id = annual.id)))`;
 
     const actorResult = await pool.request().input('actorId', sql.Int, actorId)
       .query(`SELECT role FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin')`);

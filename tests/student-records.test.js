@@ -447,6 +447,9 @@ test('unified student record reads only the active student-origin report-card sc
           if (statement.includes('FROM students AS s LEFT JOIN users')) {
             return { recordset: [{ id: 44, previous_report_card_status: 'needs_review', previous_school_report_card_physical_status: 'received', form137_status: 'verified' }] };
           }
+          if (statement.includes('FROM annual_enrollments AS annual')) return { recordset: [
+            { annual_enrollment_id: 701, school_year: '2026-2027', grade_level: 'Grade 11', intake_status: 'pending', pre_enrollment_id: 'paper-1', source_intake_status: 'enrollment_started', registrar_confirmation_id: null }
+          ] };
           return { recordset: [] };
         }
       };
@@ -457,6 +460,10 @@ test('unified student record reads only the active student-origin report-card sc
   assert.equal(result.student.previous_report_card_status, 'needs_review');
   assert.equal(result.student.previous_school_report_card_physical_status, 'received');
   assert.equal(result.student.form137_status, 'verified');
+  assert.equal(result.annualEnrollments[0].annual_enrollment_id, 701);
+  assert.equal(result.annualEnrollments[0].source_intake_status, 'enrollment_started');
+  assert.match(statements.find((statement) => statement.includes('FROM enrollments AS e')), /e\.annual_enrollment_id/);
+  assert.match(statements.find((statement) => statement.includes('FROM annual_enrollments AS annual')), /annual\.pre_enrollment_id/);
   const profileQuery = statements.find((statement) => statement.includes('FROM students AS s LEFT JOIN users'));
   assert.match(profileQuery, /d\.document_type = 'report_card'[\s\S]*d\.is_legacy_archive = 0 AND d\.upload_source = 'student'/);
   assert.match(profileQuery, /previous_school_report_card_status_events/);
@@ -787,7 +794,7 @@ test('database administrators can search the master list and open a unified prof
     assert.doesNotMatch(detailHtml, /Needs review|In progress|awaiting registrar confirmation|\d+ of \d+ required signatures/);
     assert.match(detailHtml, /1 term not attended · 0 outside required terms/);
     assert.match(detailHtml, /A term not attended means no attendance for the entire term/);
-    assert.match(detailHtml, /href="\/registrar\/records\/students\/12\/clearance">Open clearance checklist/);
+    assert.match(detailHtml, /href="\/registrar\/records\/students\/12\/clearance">Open paper clearance/);
     assert.match(detailHtml, /Review digital scan/);
     assert.match(detailHtml, /Not submitted/);
     assert.match(detailHtml, /href="\/documents\/students\/12"/);
@@ -831,9 +838,20 @@ test('records mutations reject missing CSRF tokens before calling the service', 
     }; },
     async getStudent(id) {
       return {
-        student: { id, student_no: 'S-12', first_name: 'Jamie', last_name: 'Lee' },
-        terms: [{ id: 2, school_year: '2026-2027', term: 'First', is_current: true }],
-        sections: [], enrollments: []
+        student: { id, student_no: 'S-12', first_name: 'Jamie', last_name: 'Lee', status: 'active' },
+        terms: [
+          { id: 2, school_year: '2025-2026', term: 'First' },
+          { id: 3, school_year: '2026-2027', term: 'First', is_current: true }
+        ],
+        sections: [
+          { id: 21, academic_term_id: 2, school_year: '2025-2026', term: 'First', grade_level: 'Grade 11', name: 'STEM A' },
+          { id: 31, academic_term_id: 3, school_year: '2026-2027', term: 'First', grade_level: 'Grade 12', name: 'STEM B' }
+        ],
+        enrollments: [
+          { id: 201, academic_term_id: 2, annual_enrollment_id: null, school_year: '2025-2026', term: 'First', section_name: 'STEM A', enrollment_status: 'enrolled' },
+          { id: 301, academic_term_id: 3, annual_enrollment_id: 701, school_year: '2026-2027', term: 'First', section_name: 'STEM B', enrollment_status: 'pending_payment' }
+        ],
+        annualEnrollments: [{ annual_enrollment_id: 701, school_year: '2026-2027', grade_level: 'Grade 12', intake_status: 'pending' }]
       };
     }
   };
@@ -883,6 +901,11 @@ test('records mutations reject missing CSRF tokens before calling the service', 
     assert.equal(editStudentForm.status, 200);
     const editStudentHtml = await editStudentForm.text();
     assert.match(editStudentHtml, /Enrollment history/);
+    assert.match(editStudentHtml, /Correct historical term record/);
+    assert.match(editStudentHtml, /href="\/registrar\/intake\/701\/manage">Open enrollment/);
+    assert.match(editStudentHtml, /<select id="enrollment-term" name="academicTermId" required><option value="">Choose an existing term<\/option><option value="2">2025-2026 · First<\/option><\/select>/);
+    assert.doesNotMatch(editStudentHtml, /<select id="enrollment-term"[\s\S]*?<option value="3">/);
+    assert.doesNotMatch(editStudentHtml, /Save enrollment|add an enrollment/i);
     assert.match(editStudentHtml, /id="student-no"[^>]*readonly aria-describedby="student-number-help"/);
     assert.match(editStudentHtml, /Only a database administrator can correct a student number/);
     const response = await postForm(baseUrl, '/registrar/records/terms', cookie, { schoolYear: '2026-2027', term: 'First' });
@@ -897,7 +920,9 @@ test('registrar follow-up ledgers are linked from student records and protected 
   let failCreateRequest = false;
   const student = { id: 12, student_no: 'S-12', first_name: 'Jamie', last_name: 'Lee', status: 'active' };
   const recordsService = {
-    async getStudent() { return { student, terms: [], sections: [], enrollments: [] }; },
+    async getStudent() { return { student, terms: [], sections: [], enrollments: [], annualEnrollments: [
+      { annual_enrollment_id: 710, school_year: '2026-2027', grade_level: 'Grade 11', intake_status: 'pending', source_intake_status: 'enrollment_started', registrar_confirmation_id: null }
+    ] }; },
     async listStudentProfileRevisions() { return []; },
     async listWorkspace() { return { students: [], terms: [], sections: [], totalStudents: 0, page: 1, pageSize: 25, totalPages: 1 }; }
   };
@@ -946,6 +971,8 @@ test('registrar follow-up ledgers are linked from student records and protected 
     assert.equal(profilePage.status, 200);
     const studentOverviewHtml = await profilePage.text();
     assert.match(studentOverviewHtml, /<h2 class="student-record-view-title">Overview<\/h2>/);
+    assert.match(studentOverviewHtml, /Review for confirmation · 2026-2027 · Grade 11/);
+    assert.match(studentOverviewHtml, /href="\/registrar\/intake\/710\/review">Review for confirmation · 2026-2027 · Grade 11/);
     assert.doesNotMatch(studentOverviewHtml, /Document requests and release history|Student profile revision history|Record document request/);
     const requestsPage = await fetch(`${baseUrl}/registrar/records/students/12?view=requests`, { headers: { cookie } });
     assert.equal(requestsPage.status, 200);
@@ -954,6 +981,15 @@ test('registrar follow-up ledgers are linked from student records and protected 
     assert.match(studentNavigation || '', /href="\/documents\/students\/12" aria-current="page">Documents<\/a>/);
     assert.equal((studentNavigation?.match(/aria-current="page"/g) || []).length, 1);
     assert.match(html, /Document requests and release history/);
+    const documentSections = html.match(/<nav class="student-document-sections"[\s\S]*?<\/nav>/)?.[0] || '';
+    assert.match(documentSections, /Digital submissions/);
+    assert.match(documentSections, /Paper requirements/);
+    assert.match(documentSections, /Form 137/);
+    assert.match(documentSections, /aria-current="page">Requests/);
+    assert.equal((documentSections.match(/aria-current="page"/g) || []).length, 1);
+    assert.match(documentSections, /href="\/documents\/students\/12\?section=paper#physical-checklist-title"/);
+    assert.match(html, /Document request fee review:/);
+    assert.doesNotMatch(html, /Term account clearance:/);
     assert.doesNotMatch(html, /Student profile revision history/);
     assert.match(studentNavigation, /href="\/registrar\/records\/students\/12\/academic"\s*>Academics<\/a>/);
     assert.match(html, /<option value="processing" >Processing<\/option><option value="cancelled" >Cancelled<\/option>/);

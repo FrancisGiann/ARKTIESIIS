@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const env = require('../src/config/environment');
 const { REQUIRED_OBJECTS, REQUIRED_COLUMNS, REQUIRED_CONSTRAINTS, REQUIRED_INDEXES, REQUIRED_FOREIGN_KEYS, EXPECTED_VERSIONS, checkDatabase } = require('../scripts/check-db');
 
-function checkHarness({ databaseName = env.database.database, missingObject = null, missingConstraint = null,
+function checkHarness({ databaseName = env.database.database, missingObject = null, missingColumn = null, missingConstraint = null,
   invalidRoleConstraint = false, missingIndex = null, missingForeignKey = false, failAt = null } = {}) {
   const state = { queries: [], logs: [], errors: [], closed: 0 };
   let queryCount = 0;
@@ -19,7 +19,9 @@ function checkHarness({ databaseName = env.database.database, missingObject = nu
         if (statement.includes('SELECT DATABASE()')) return { recordset: [{ databaseName }] };
         if (statement.includes('FROM schema_migrations')) return { recordset: EXPECTED_VERSIONS.map((version) => ({ version })) };
         if (statement.includes('information_schema.tables')) return { recordset: REQUIRED_OBJECTS.filter((name) => name !== missingObject).map((objectName) => ({ objectName })) };
-        if (statement.includes('information_schema.columns')) return { recordset: Object.entries(REQUIRED_COLUMNS).flatMap(([tableName, columnNames]) => columnNames.map((columnName) => ({ tableName, columnName }))) };
+        if (statement.includes('information_schema.columns')) return { recordset: Object.entries(REQUIRED_COLUMNS).flatMap(([tableName, columnNames]) => columnNames
+          .filter((columnName) => `${tableName}.${columnName}` !== missingColumn)
+          .map((columnName) => ({ tableName, columnName }))) };
         if (statement.includes('information_schema.table_constraints')) return { recordset: REQUIRED_CONSTRAINTS
           .filter(({ tableName, constraintName }) => `${tableName}.${constraintName}` !== missingConstraint)
           .map(({ tableName, constraintName, type, clauseIncludes }) => ({
@@ -64,7 +66,7 @@ test('MariaDB database check verifies migration versions, required tables, views
   assert.equal(state.exitCode, undefined);
   assert.equal(state.closed, 1);
   assert.match(state.logs[0], /MariaDB connectivity/);
-  assert.match(state.logs[0], /v2\.017/);
+  assert.match(state.logs[0], /v2\.018/);
   assert.ok(state.queries.some((statement) => statement.includes('information_schema.tables')));
   assert.ok(state.queries.some((statement) => statement.includes('information_schema.columns')));
   assert.ok(state.queries.every((statement) => !/\b(?:DB_NAME|OBJECT_ID|dbo\.|sys\.tables|TRIGGER)\b/i.test(statement)));
@@ -85,6 +87,20 @@ test('MariaDB database check identifies missing schema objects and masks databas
   const failed = await runCheck({ failAt: 2 });
   assert.equal(failed.exitCode, 1);
   assert.doesNotMatch(failed.errors.join('\n'), /raw private SQL details/);
+});
+
+test('MariaDB database check requires paper-confirmation recording mode and its named constraints', async () => {
+  const missingColumn = await runCheck({ missingColumn: 'student_term_clearances.recording_mode' });
+  assert.equal(missingColumn.exitCode, 1);
+  assert.match(missingColumn.errors.join('\n'), /column student_term_clearances\.recording_mode/);
+
+  const missingModeConstraint = await runCheck({ missingConstraint: 'student_term_clearances.CK_student_term_clearance_recording_mode' });
+  assert.equal(missingModeConstraint.exitCode, 1);
+  assert.match(missingModeConstraint.errors.join('\n'), /constraint student_term_clearances\.CK_student_term_clearance_recording_mode/);
+
+  const missingAttestationConstraint = await runCheck({ missingConstraint: 'student_term_clearances.CK_student_term_clearance_attestation' });
+  assert.equal(missingAttestationConstraint.exitCode, 1);
+  assert.match(missingAttestationConstraint.errors.join('\n'), /constraint student_term_clearances\.CK_student_term_clearance_attestation/);
 });
 
 test('MariaDB database check verifies role, address, idempotency, LRN, and annual-source constraints', async () => {

@@ -318,6 +318,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         terms: record?.terms || workspace.terms,
         sections: record?.sections || workspace.sections,
         enrollments: record?.enrollments || [],
+        annualEnrollments: record?.annualEnrollments || [],
         values: formValues,
         maxBirthDate: latestBirthDate(),
         error,
@@ -365,7 +366,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         studentView: view, notice: notices[req.query.notice] || null, requestError: error,
         returnEvaluationError, returnEvaluation, returnEvaluationValues, returnEvaluationExpectedVersion, returnEvaluations, returnEligibility,
         requestForm, requestFormId: requestId, requestFormValues: requestValues,
-        student: record.student, enrollments: academicRecord.enrollments, lastEnrollment,
+        student: record.student, enrollments: academicRecord.enrollments,
+        annualEnrollments: record.annualEnrollments || [], lastEnrollment,
         documentRequests: documentRequestRows, profileRevisions: revisions,
         clearanceOverview,
         financeSummary: clearanceData.financeSummary, requestClearanceData,
@@ -378,30 +380,32 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
   }
 
   async function renderTermClearance(req, res, studentIdInput, {
-    status = 200, error = null, formAttempt = null, staleAttempt = null
+    status = 200, error = null, completionAttempt = null, scopeAttempt = null, staleEnrollmentId = null,
+    staleScopeEnrollmentId = null
   } = {}) {
     const studentId = normalizeRecordId(studentIdInput);
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
     try {
       const data = await termClearances.getStudentClearance(req.authUser.id, studentId);
       for (const term of data.terms) {
-        term.createToken = crypto.randomUUID();
-        term.updateToken = crypto.randomUUID();
-        if (formAttempt?.kind === 'create' && Number(formAttempt.recordId) === Number(term.enrollment_id)) {
-          term.createAttempt = formAttempt;
-          term.createToken = formAttempt.values.idempotencyKey;
+        term.completionToken = crypto.randomUUID();
+        term.scopeToken = crypto.randomUUID();
+        if (completionAttempt && Number(completionAttempt.enrollmentId) === Number(term.enrollment_id)) {
+          term.completionAttempt = completionAttempt;
+          term.completionToken = completionAttempt.values.idempotencyKey;
         }
-        if (formAttempt?.kind === 'update' && Number(formAttempt.recordId) === Number(term.clearance_id)) {
-          term.updateAttempt = formAttempt;
-          term.updateToken = formAttempt.values.idempotencyKey;
+        if (scopeAttempt && Number(scopeAttempt.enrollmentId) === Number(term.enrollment_id)) {
+          term.scopeAttempt = scopeAttempt;
+          term.scopeToken = scopeAttempt.values.idempotencyKey;
         }
-        if (staleAttempt && ((staleAttempt.kind === 'create' && Number(staleAttempt.recordId) === Number(term.enrollment_id))
-          || (staleAttempt.kind === 'update' && Number(staleAttempt.recordId) === Number(term.clearance_id)))) term.staleDraft = staleAttempt;
+        if (staleEnrollmentId != null && Number(staleEnrollmentId) === Number(term.enrollment_id)) term.completionConflict = true;
+        if (staleScopeEnrollmentId != null && Number(staleScopeEnrollmentId) === Number(term.enrollment_id)) term.scopeConflict = true;
       }
       return res.status(status).set('Cache-Control', 'private, no-store').render('records/student-clearance', {
-        title: 'Clearance checklist', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
-        student: data.student, terms: data.terms, templates: data.templates, error, staleAttempt: Boolean(staleAttempt),
-        notice: req.query?.notice === 'saved' ? 'Paper-clearance record saved and history recorded.' : null
+        title: 'Paper clearance', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        student: data.student, terms: data.terms, error, staleEnrollmentId,
+        notice: req.query?.notice === 'scopeSaved' ? 'Term attendance exception saved.'
+          : req.query?.notice === 'saved' ? 'Paper clearance status saved.' : null
       });
     } catch (loadError) {
       if (loadError instanceof TermClearanceError) return res.status(loadError.status).render('error', { title: 'Paper clearance unavailable', message: loadError.message });
@@ -640,64 +644,83 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     : renderStudentForm(req, res));
 
   router.get('/clearance', (req, res) => renderClearanceDashboard(req, res));
-  router.get('/clearance/templates', (req, res) => renderClearanceTemplates(req, res));
-  router.post('/clearance/templates', async (req, res) => {
-    if (req.authUser.role !== 'registrar') return res.status(403).render('error', { title: 'Forbidden', message: 'Only registrars can change paper-clearance templates.' });
-    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
-    const values = safeClearanceTemplateValues(req.body);
-    const input = { ...req.body, laboratoryLabels: repeatedFields(req.body, 'laboratoryLabel').filter((label) => label.trim()) };
-    try {
-      await termClearances.createTemplateVersion(req.authUser.id, input);
-      return res.redirect(303, '/registrar/records/clearance/templates?notice=saved');
-    } catch (error) {
-      if (error instanceof TermClearanceError) {
-        const tokenConflict = error.status === 409;
-        const recoveredValues = tokenConflict ? { ...values, idempotencyKey: crypto.randomUUID() } : values;
-        return renderClearanceTemplates(req, res, { status: error.status, error: error.message, values: recoveredValues,
-          recoveryNotice: tokenConflict ? 'This template was not saved because the form token was already used for different details. Review the saved versions, then submit again with the refreshed form.' : null });
-      }
-      return res.status(503).render('error', { title: 'Paper-clearance templates unavailable', message: 'The template version could not be saved.' });
-    }
+  router.get('/clearance/templates', (req, res) => res.redirect(303, '/registrar/records/clearance'));
+  router.post('/clearance/templates', (req, res) => {
+    if (req.authUser.role !== 'registrar') return res.status(403).render('error', {
+      title: 'Forbidden', message: 'Only registrars can change paper-clearance settings.'
+    });
+    return res.status(410).render('error', {
+    title: 'Paper-clearance setup retired',
+    message: 'Paper clearance is now recorded as one registrar-confirmed completion for each term.'
+    });
   });
 
   router.get('/students/:id/clearance', (req, res) => renderTermClearance(req, res, req.params.id));
   router.post('/students/:id/clearance/terms/:enrollmentId', async (req, res) => {
-    if (req.authUser.role !== 'registrar') return res.status(403).render('error', { title: 'Forbidden', message: 'Only registrars can prepare a paper clearance record.' });
+    if (req.authUser.role !== 'registrar') return res.status(403).render('error', { title: 'Forbidden', message: 'Only registrars can record paper clearance completion.' });
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
-    const input = { ...req.body, paperTeacherRows: paperTeacherRowsFromBody(req.body),
-      rosterReviewed: req.body?.rosterReviewed === '1' };
     try {
-      await termClearances.createTermClearance(req.authUser.id, req.params.enrollmentId, input, req.params.id);
+      await termClearances.recordTermCompletion(req.authUser.id, req.params.enrollmentId, {
+        paperCompleted: req.body?.paperCompleted,
+        expectedVersion: req.body?.expectedVersion,
+        correctionReason: req.body?.correctionReason,
+        idempotencyKey: req.body?.idempotencyKey
+      }, req.params.id);
       return res.redirect(303, `/registrar/records/students/${encodeURIComponent(req.params.id)}/clearance?notice=saved`);
     } catch (error) {
       if (error instanceof TermClearanceError) {
-        const attempt = clearanceFormAttempt(req.body, 'create', req.params.enrollmentId);
+        const version = boundedString(req.body, 'expectedVersion', 10);
+        const token = boundedString(req.body, 'idempotencyKey', 36);
+        const values = {
+          paperCompleted: req.body?.paperCompleted === '1',
+          correctionReason: boundedString(req.body, 'correctionReason', 1000),
+          expectedVersion: /^\d{1,10}$/.test(version) ? version : '0',
+          idempotencyKey: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token) ? token : crypto.randomUUID()
+        };
+        if (error.status === 409) return renderTermClearance(req, res, req.params.id, {
+          status: error.status, error: error.message, staleEnrollmentId: req.params.enrollmentId
+        });
         return renderTermClearance(req, res, req.params.id, { status: error.status, error: error.message,
-          formAttempt: error.status === 409 ? null : attempt, staleAttempt: error.status === 409 ? attempt : null });
+          completionAttempt: { enrollmentId: req.params.enrollmentId, values } });
       }
-      return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'The term attendance review could not be saved.' });
+      return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'The paper clearance status could not be saved.' });
+    }
+  });
+  router.post('/students/:id/clearance/terms/:enrollmentId/not-attended', async (req, res) => {
+    if (req.authUser.role !== 'registrar') return res.status(403).render('error', { title: 'Forbidden', message: 'Only registrars can record a whole-term attendance exception.' });
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    try {
+      await termClearances.recordTermNotAttended(req.authUser.id, req.params.enrollmentId, {
+        scopeReason: req.body?.scopeReason,
+        expectedVersion: req.body?.expectedVersion,
+        idempotencyKey: req.body?.idempotencyKey
+      }, req.params.id);
+      return res.redirect(303, `/registrar/records/students/${encodeURIComponent(req.params.id)}/clearance?notice=scopeSaved`);
+    } catch (error) {
+      if (error instanceof TermClearanceError) {
+        const version = boundedString(req.body, 'expectedVersion', 10);
+        const token = boundedString(req.body, 'idempotencyKey', 36);
+        const values = {
+          scopeReason: boundedString(req.body, 'scopeReason', 1000),
+          expectedVersion: /^\d{1,10}$/.test(version) ? version : '0',
+          idempotencyKey: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token) ? token : crypto.randomUUID()
+        };
+        if (error.status === 409) return renderTermClearance(req, res, req.params.id, {
+          status: error.status, error: error.message, staleScopeEnrollmentId: req.params.enrollmentId
+        });
+        return renderTermClearance(req, res, req.params.id, { status: error.status, error: error.message,
+          scopeAttempt: { enrollmentId: req.params.enrollmentId, values } });
+      }
+      return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'The term attendance exception could not be saved.' });
     }
   });
   router.post('/students/:id/clearance/records/:clearanceId', async (req, res) => {
     if (req.authUser.role !== 'registrar') return res.status(403).render('error', { title: 'Forbidden', message: 'Only registrars can update paper-clearance records.' });
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
-    const input = { ...req.body, items: clearanceItemsFromBody(req.body),
-      paperTeacherRows: paperTeacherRowsFromBody(req.body),
-      rosterReviewed: req.body?.rosterReviewed === '1',
-      clearanceAction: req.body?.clearanceAction,
-      paperInspected: req.body?.clearanceAction === 'complete',
-      attestPaperInspected: req.body?.clearanceAction === 'complete' };
-    try {
-      await termClearances.updateTermClearance(req.authUser.id, req.params.clearanceId, input, req.params.id);
-      return res.redirect(303, `/registrar/records/students/${encodeURIComponent(req.params.id)}/clearance?notice=saved`);
-    } catch (error) {
-      if (error instanceof TermClearanceError) {
-        const attempt = clearanceFormAttempt(req.body, 'update', req.params.clearanceId);
-        return renderTermClearance(req, res, req.params.id, { status: error.status, error: error.message,
-          formAttempt: error.status === 409 ? null : attempt, staleAttempt: error.status === 409 ? attempt : null });
-      }
-      return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'The paper clearance record could not be saved.' });
-    }
+    return res.status(410).render('error', {
+      title: 'Signature checklist retired',
+      message: 'Use the term checkbox to record whether the registrar inspected the returned paper form.'
+    });
   });
 
   router.get('/students/:id', (req, res) => renderStudentOverview(req, res, {

@@ -43,17 +43,29 @@ function isChecked(value) {
   return value === true || value === 1 || value === '1' || value === 'on';
 }
 
+function schoolDateValue(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en', {
+    timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 const CLEARANCE_DASHBOARD_PAGE_SIZE = 25;
 const CLEARANCE_DASHBOARD_STATUSES = new Set(['all', 'complete', 'pending', 'incomplete', 'not_reviewed', 'not_attended', 'not_applicable']);
 
 function clearanceCompleteSql(clearanceAlias = 'clearance', itemsAlias = 'items') {
-  return `${clearanceAlias}.scope_status = 'attended' AND ${clearanceAlias}.template_id IS NOT NULL
-    AND ${clearanceAlias}.attested_by IS NOT NULL AND ${clearanceAlias}.attested_at IS NOT NULL
-    AND ${clearanceAlias}.inspected_on IS NOT NULL
-    AND COALESCE(${itemsAlias}.teacher_count, 0) > 0 AND COALESCE(${itemsAlias}.registrar_count, 0) > 0
-    AND COALESCE(${itemsAlias}.guidance_count, 0) > 0 AND COALESCE(${itemsAlias}.finance_count, 0) > 0
-    AND COALESCE(${itemsAlias}.required_unsigned_count, 0) = 0 AND COALESCE(${itemsAlias}.unresolved_count, 0) = 0
-    AND COALESCE(${itemsAlias}.teacher_context_missing_count, 0) = 0`;
+  return `(${clearanceAlias}.recording_mode = 'paper_confirmation'
+      AND ${clearanceAlias}.scope_status = 'attended' AND ${clearanceAlias}.attested_by IS NOT NULL
+      AND ${clearanceAlias}.attested_at IS NOT NULL AND ${clearanceAlias}.inspected_on IS NOT NULL)
+    OR (${clearanceAlias}.recording_mode = 'signature_checklist'
+      AND ${clearanceAlias}.scope_status = 'attended' AND ${clearanceAlias}.template_id IS NOT NULL
+      AND ${clearanceAlias}.attested_by IS NOT NULL AND ${clearanceAlias}.attested_at IS NOT NULL
+      AND ${clearanceAlias}.inspected_on IS NOT NULL
+      AND COALESCE(${itemsAlias}.teacher_count, 0) > 0 AND COALESCE(${itemsAlias}.registrar_count, 0) > 0
+      AND COALESCE(${itemsAlias}.guidance_count, 0) > 0 AND COALESCE(${itemsAlias}.finance_count, 0) > 0
+      AND COALESCE(${itemsAlias}.required_unsigned_count, 0) = 0 AND COALESCE(${itemsAlias}.unresolved_count, 0) = 0
+      AND COALESCE(${itemsAlias}.teacher_context_missing_count, 0) = 0)`;
 }
 
 function clearanceDashboardStateSql({ enrollmentAlias = 'enrollment', annualAlias = 'annual', clearanceAlias = 'clearance', itemsAlias = 'items' } = {}) {
@@ -216,14 +228,19 @@ function cleanItemUpdates(input = {}) {
 }
 
 function completeFromCounts(row) {
+  if (row?.recording_mode === 'paper_confirmation') {
+    return Boolean(row.scope_status === 'attended' && row.attested_by && row.attested_at && row.inspected_on);
+  }
+  // Rows created under the original checklist flow retain their strict evidence checks.
   return Boolean(row && row.scope_status === 'attended' && row.template_id && row.attested_by && row.attested_at && row.inspected_on
     && Number(row.teacher_count) > 0 && Number(row.registrar_count) > 0 && Number(row.guidance_count) > 0 && Number(row.finance_count) > 0
-    && Number(row.required_unsigned_count) === 0 && Number(row.unresolved_count) === 0 && Number(row.teacher_context_missing_count) === 0);
+    && Number(row.required_unsigned_count) === 0 && Number(row.unresolved_count) === 0
+    && Number(row.teacher_context_missing_count) === 0);
 }
 
 function awaitingRegistrarConfirmation(row) {
-  return Boolean(row && !completeFromCounts(row) && completeFromCounts({ ...row,
-    attested_by: row.attested_by || 1, attested_at: row.attested_at || true }));
+  // An incomplete whole-paper record does not establish that signatures are being collected.
+  return false;
 }
 
 function academicYearStart(value) {
@@ -275,11 +292,22 @@ function clearanceEventSummary(event) {
   const attendanceLabel = (value) => ({ attended: 'Attended', not_attended: 'Term not attended', unreviewed: 'Pending' })[value] || 'Not recorded';
   const labDecisionLabel = (value) => ({ required: 'Required on this form', not_applicable: 'Not required', unreviewed: 'Not checked yet' })[value] || 'Not recorded';
   if (!event.before_json) {
+    if (after.unchanged) summaries.push(`Registrar confirmed the existing ${after.paperCompleted ? 'Completed' : 'Not completed'} status; no change was made.`);
+    else if (typeof after.paperCompleted === 'boolean') summaries.push(after.paperCompleted
+      ? 'Registrar marked paper clearance completed after inspection.' : 'Registrar marked paper clearance not completed.');
+    if (after.recordingMode === 'paper_confirmation') summaries.push('Paper clearance status saved.');
     if (after.scopeStatus) summaries.push(`Attendance decision recorded: ${attendanceLabel(after.scopeStatus)}.`);
     if (after.trackLabel) summaries.push(`Paper form: ${after.trackLabel}${after.templateVersion ? `, version ${after.templateVersion}` : ''}.`);
     const teacherRows = Number(after.generatedItems?.filter?.((item) => item.category === 'teacher').length || 0);
     if (teacherRows) summaries.push(`${teacherRows} teacher/subject signature row${teacherRows === 1 ? '' : 's'} recorded.`);
   } else {
+    if (before.recordingMode !== after.recordingMode && after.recordingMode === 'paper_confirmation') {
+      summaries.push('Paper clearance status updated; earlier checklist evidence remains in the history.');
+    }
+    if (before.paperCompleted !== after.paperCompleted && typeof after.paperCompleted === 'boolean') {
+      summaries.push(after.paperCompleted ? 'Paper clearance marked completed after registrar inspection.'
+        : 'Completed paper clearance reopened for correction.');
+    }
     if (before.scopeStatus !== after.scopeStatus) summaries.push(`Attendance decision changed from ${attendanceLabel(before.scopeStatus)} to ${attendanceLabel(after.scopeStatus)}.`);
     if (before.templateId !== after.templateId && after.trackLabel) summaries.push(`Paper form changed to ${after.trackLabel}.`);
     const beforeItems = new Map((Array.isArray(before.items) ? before.items : []).map((item) => [Number(item.id), item]));
@@ -317,7 +345,8 @@ function clearanceEventSummary(event) {
   return summaries.slice(0, 10);
 }
 
-function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql, transactionFactory = (pool) => new sql.Transaction(pool) } = {}) {
+function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql,
+  transactionFactory = (pool) => new sql.Transaction(pool), allowLegacyWrites = false } = {}) {
   async function runTransaction(callback) {
     return runSerializableTransaction({ getPool, sql, transactionFactory }, callback);
   }
@@ -378,11 +407,14 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
         VALUES (@actorId, @action, @entityType, @entityId, @detailsJson)`);
   }
 
-  async function eventByKey(transaction, idempotencyKey, requestFingerprint) {
+  async function eventByKey(transaction, idempotencyKey, requestFingerprint, expectedActorId = null) {
     const result = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
-      .query('SELECT id, clearance_id, request_fingerprint FROM student_term_clearance_events WHERE idempotency_key = @idempotencyKey FOR UPDATE');
+      .query('SELECT id, clearance_id, actor_id, request_fingerprint FROM student_term_clearance_events WHERE idempotency_key = @idempotencyKey FOR UPDATE');
     const event = result.recordset?.[0];
     if (!event) return null;
+    if (expectedActorId !== null && Number(event.actor_id) !== Number(expectedActorId)) {
+      throw new TermClearanceError('This clearance submission token belongs to another registrar.', 409);
+    }
     if (event.request_fingerprint !== requestFingerprint) throw new TermClearanceError('This clearance submission token was already used for different details.', 409);
     return event;
   }
@@ -540,12 +572,28 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
   async function clearanceByEnrollment(transaction, enrollmentId, { lock = false } = {}) {
     const result = await transaction.request().input('enrollmentId', sql.Int, enrollmentId)
       .query(`SELECT clearance.id, clearance.enrollment_id, clearance.annual_enrollment_id, clearance.student_id,
-          clearance.template_id, clearance.grade_level_snapshot, clearance.school_year_snapshot, clearance.term_label_snapshot,
+          clearance.template_id, clearance.recording_mode, clearance.grade_level_snapshot, clearance.school_year_snapshot, clearance.term_label_snapshot,
           clearance.academic_term_id_snapshot, clearance.term_number_snapshot, clearance.section_id_snapshot,
           clearance.section_name_snapshot, clearance.section_cluster_snapshot, clearance.section_strand_snapshot,
           clearance.track_label_snapshot, clearance.scope_status, clearance.scope_reason, clearance.inspected_on,
-          clearance.attested_by, clearance.attested_at, clearance.version
-        FROM student_term_clearances AS clearance WHERE clearance.enrollment_id = @enrollmentId ${lock ? 'FOR UPDATE' : ''}`);
+          clearance.attested_by, clearance.attested_at, clearance.version,
+          COALESCE(items.teacher_count, 0) AS teacher_count, COALESCE(items.registrar_count, 0) AS registrar_count,
+          COALESCE(items.guidance_count, 0) AS guidance_count, COALESCE(items.finance_count, 0) AS finance_count,
+          COALESCE(items.required_unsigned_count, 0) AS required_unsigned_count,
+          COALESCE(items.unresolved_count, 0) AS unresolved_count,
+          COALESCE(items.teacher_context_missing_count, 0) AS teacher_context_missing_count
+        FROM student_term_clearances AS clearance
+        LEFT JOIN (
+          SELECT clearance_id, SUM(category = 'teacher') AS teacher_count,
+            SUM(category = 'registrar') AS registrar_count, SUM(category = 'guidance') AS guidance_count,
+            SUM(category = 'finance') AS finance_count,
+            SUM(applicability_status = 'required' AND (signature_present = 0 OR signer_name IS NULL OR TRIM(signer_name) = '')) AS required_unsigned_count,
+            SUM(applicability_status = 'unreviewed') AS unresolved_count,
+            SUM(category = 'teacher' AND signature_present = 1 AND teacher_context_status <> 'assigned'
+              AND (signer_context_reason IS NULL OR CHAR_LENGTH(TRIM(signer_context_reason)) < 5)) AS teacher_context_missing_count
+          FROM student_term_clearance_items GROUP BY clearance_id
+        ) AS items ON items.clearance_id = clearance.id
+        WHERE clearance.enrollment_id = @enrollmentId ${lock ? 'FOR UPDATE' : ''}`);
     return result.recordset?.[0] || null;
   }
 
@@ -630,6 +678,7 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
       const actor = await requireStaff(transaction.request(), actorId, { write: true });
       const student = await lockStudent(transaction, Number(owner.student_id));
       if (!student) throw new TermClearanceError('Student record not found.', 404);
+      if (student.status === 'archived') throw new TermClearanceError('Archived student records are read-only.', 409);
       const prior = await eventByKey(transaction, idempotencyKey, requestFingerprint);
       if (prior) {
         if (Number(prior.clearance_id) !== Number((await clearanceByEnrollment(transaction, enrollmentId))?.id || 0)) {
@@ -699,6 +748,251 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
           scopeStatus, templateId: template ? Number(template.id) : null, generatedItemCount: items.length,
           rosterReconciled: reconciliation.rows.length > 0 });
       return { clearanceId, version: 1, alreadyRecorded: false };
+    });
+  }
+
+  async function recordTermCompletion(actorInput, enrollmentInput, input = {}, expectedStudentInput = null) {
+    const actorId = idValue(actorInput, 'user');
+    const enrollmentId = idValue(enrollmentInput, 'enrollment');
+    const expectedStudentId = expectedStudentInput == null ? null : idValue(expectedStudentInput, 'student');
+    const rawVersion = input.expectedVersion;
+    const expectedVersion = typeof rawVersion === 'number' ? rawVersion
+      : typeof rawVersion === 'string' && /^\d{1,10}$/.test(rawVersion) ? Number(rawVersion) : NaN;
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || expectedVersion > 2147483647) {
+      throw new TermClearanceError('Reload the clearance record before saving.', 409);
+    }
+    if (input.paperCompleted !== undefined && ![true, false, '1'].includes(input.paperCompleted)) {
+      throw new TermClearanceError('Choose whether the paper clearance is completed.');
+    }
+    const paperCompleted = isChecked(input.paperCompleted);
+    const correctionReason = field(input.correctionReason || '', 'Correction reason', 1000, { minimum: 0 });
+    const idempotencyKey = requestKey(input.idempotencyKey);
+    const requestFingerprint = fingerprint({ enrollmentId, expectedVersion, paperCompleted, correctionReason });
+    const pool = await getPool();
+    const ownerResult = await pool.request().input('enrollmentId', sql.Int, enrollmentId)
+      .query('SELECT student_id FROM enrollments WHERE id = @enrollmentId');
+    const owner = ownerResult.recordset?.[0];
+    if (!owner) throw new TermClearanceError('Term enrollment not found.', 404);
+    if (expectedStudentId && Number(owner.student_id) !== expectedStudentId) {
+      throw new TermClearanceError('Term enrollment does not belong to this student record.', 404);
+    }
+
+    return runTransaction(async (transaction) => {
+      const actor = await requireStaff(transaction.request(), actorId, { write: true });
+      const student = await lockStudent(transaction, Number(owner.student_id));
+      if (!student) throw new TermClearanceError('Student record not found.', 404);
+      if (student.status === 'archived') throw new TermClearanceError('Archived student records are read-only.', 409);
+      const prior = await eventByKey(transaction, idempotencyKey, requestFingerprint, actor.id);
+      const current = await clearanceByEnrollment(transaction, enrollmentId, { lock: true });
+      if (prior) {
+        if (Number(prior.clearance_id) !== Number(current?.id || 0)) {
+          throw new TermClearanceError('This token belongs to a different clearance record.', 409);
+        }
+        return { clearanceId: Number(prior.clearance_id), alreadyRecorded: true };
+      }
+      const context = await loadEnrollmentContext(transaction, enrollmentId);
+      if (!context || Number(context.student_id) !== Number(owner.student_id)
+        || (expectedStudentId && Number(context.student_id) !== expectedStudentId)) {
+        throw new TermClearanceError('Term enrollment changed. Reload the student record.', 409);
+      }
+      await ensureTermMayBeReviewed(transaction, context);
+      if ((current ? Number(current.version) : 0) !== expectedVersion) {
+        throw new TermClearanceError('This clearance changed in another session. Reload it before saving.', 409);
+      }
+      const currentlyCompleted = completeFromCounts(current);
+      if (currentlyCompleted && !paperCompleted && !correctionReason) {
+        throw new TermClearanceError('Enter a correction reason when changing a completed paper clearance.');
+      }
+      if (current?.scope_status === 'not_attended' && paperCompleted && !correctionReason) {
+        throw new TermClearanceError('Enter a correction reason when changing a saved term exclusion.');
+      }
+      const modeChange = Boolean(current && current.recording_mode !== 'paper_confirmation');
+      if (current && currentlyCompleted === paperCompleted && !modeChange) {
+        const clearanceId = Number(current.id);
+        const version = Number(current.version);
+        const before = { version, paperCompleted: currentlyCompleted, recordingMode: current.recording_mode,
+          attestedBy: current.attested_by, attestedAt: current.attested_at, inspectedOn: current.inspected_on };
+        await addEvent(transaction, { clearanceId, actorId: actor.id, eventType: 'paper_confirmation',
+          reason: correctionReason || null, before,
+          after: { version, paperCompleted, recordingMode: current.recording_mode, unchanged: true,
+            recorderId: current.attested_by == null ? null : Number(current.attested_by), inspectedOn: current.inspected_on },
+          idempotencyKey, requestFingerprint });
+        await writeAudit(transaction, actor, 'term_clearance_confirmation_saved', 'student_term_clearance', clearanceId,
+          { studentId: Number(context.student_id), enrollmentId, version, paperCompleted, unchanged: true });
+        return { clearanceId, version, unchanged: true };
+      }
+
+      let clearanceId;
+      let nextVersion;
+      let eventType;
+      const before = current ? {
+        version: Number(current.version), paperCompleted: currentlyCompleted,
+        scopeStatus: current.scope_status, attestedBy: current.attested_by, attestedAt: current.attested_at,
+        inspectedOn: current.inspected_on, templateId: current.template_id == null ? null : Number(current.template_id),
+        recordingMode: current.recording_mode || 'signature_checklist'
+      } : null;
+      const inspectionDate = paperCompleted ? schoolDateValue() : null;
+      if (!current) {
+        const inserted = await transaction.request().input('enrollmentId', sql.Int, enrollmentId)
+          .input('annualEnrollmentId', sql.Int, context.annual_enrollment_id).input('studentId', sql.Int, context.student_id)
+          .input('gradeLevel', sql.NVarChar(50), context.grade_level).input('schoolYear', sql.NVarChar(20), context.school_year)
+          .input('termLabel', sql.NVarChar(100), context.term_label).input('academicTermId', sql.Int, context.academic_term_id)
+          .input('termNumber', sql.TinyInt, context.annual_term_number).input('sectionId', sql.Int, context.section_id)
+          .input('sectionName', sql.NVarChar(100), context.section_name).input('sectionCluster', sql.NVarChar(80), context.section_cluster)
+          .input('sectionStrand', sql.NVarChar(80), context.section_strand).input('scopeStatus', sql.NVarChar(20), paperCompleted ? 'attended' : 'unreviewed')
+          .input('inspectionDate', sql.Date, inspectionDate)
+          .input('actorId', sql.Int, actor.id)
+          .query(`INSERT INTO student_term_clearances
+            (enrollment_id, annual_enrollment_id, student_id, recording_mode, grade_level_snapshot, school_year_snapshot,
+              term_label_snapshot, academic_term_id_snapshot, term_number_snapshot, section_id_snapshot,
+              section_name_snapshot, section_cluster_snapshot, section_strand_snapshot, scope_status,
+              attested_by, attested_at, inspected_on, created_by)
+            VALUES (@enrollmentId, @annualEnrollmentId, @studentId, 'paper_confirmation', @gradeLevel, @schoolYear,
+              @termLabel, @academicTermId, @termNumber, @sectionId, @sectionName, @sectionCluster,
+              @sectionStrand, @scopeStatus, IF(@scopeStatus = 'attended', @actorId, NULL),
+              IF(@scopeStatus = 'attended', UTC_TIMESTAMP(3), NULL), IF(@scopeStatus = 'attended', @inspectionDate, NULL), @actorId)`);
+        clearanceId = Number(inserted.insertId);
+        nextVersion = 1;
+        eventType = 'paper_confirmation';
+      } else {
+        clearanceId = Number(current.id);
+        nextVersion = expectedVersion + 1;
+        eventType = 'paper_confirmation';
+        const updated = await transaction.request().input('clearanceId', sql.BigInt, clearanceId)
+          .input('expectedVersion', sql.Int, expectedVersion).input('nextVersion', sql.Int, nextVersion)
+          .input('scopeStatus', sql.NVarChar(20), paperCompleted ? 'attended' : current.scope_status)
+          .input('actorId', sql.Int, actor.id).input('paperCompleted', sql.Bit, paperCompleted)
+          .input('inspectionDate', sql.Date, inspectionDate)
+          .query(`UPDATE student_term_clearances SET recording_mode = 'paper_confirmation', scope_status = @scopeStatus,
+              scope_reason = CASE WHEN @paperCompleted = 1 THEN NULL ELSE scope_reason END,
+              attested_by = IF(@paperCompleted = 1, @actorId, NULL),
+              attested_at = IF(@paperCompleted = 1, UTC_TIMESTAMP(3), NULL),
+              inspected_on = IF(@paperCompleted = 1, @inspectionDate, NULL),
+              version = @nextVersion, updated_at = UTC_TIMESTAMP(3)
+            WHERE id = @clearanceId AND version = @expectedVersion`);
+        if (updated.rowsAffected?.[0] !== 1) throw new TermClearanceError('This clearance changed in another session. Reload it before saving.', 409);
+      }
+      const after = { version: nextVersion, paperCompleted, recordingMode: 'paper_confirmation', schoolYear: context.school_year,
+        term: context.term_label, annualTermNumber: Number(context.annual_term_number),
+        recorderId: paperCompleted ? actor.id : null, inspectedOn: inspectionDate };
+      await addEvent(transaction, { clearanceId, actorId: actor.id, eventType,
+        reason: correctionReason || null, before, after, idempotencyKey, requestFingerprint });
+      await writeAudit(transaction, actor, paperCompleted ? 'term_clearance_completed'
+        : currentlyCompleted ? 'term_clearance_reopened' : 'term_clearance_not_completed',
+      'student_term_clearance', clearanceId, { studentId: Number(context.student_id), enrollmentId,
+        fromVersion: expectedVersion, toVersion: nextVersion, paperCompleted });
+      return { clearanceId, version: nextVersion, paperCompleted, alreadyRecorded: false };
+    });
+  }
+
+  async function recordTermNotAttended(actorInput, enrollmentInput, input = {}, expectedStudentInput = null) {
+    const actorId = idValue(actorInput, 'user');
+    const enrollmentId = idValue(enrollmentInput, 'enrollment');
+    const expectedStudentId = expectedStudentInput == null ? null : idValue(expectedStudentInput, 'student');
+    const rawVersion = input.expectedVersion;
+    const expectedVersion = typeof rawVersion === 'number' ? rawVersion
+      : typeof rawVersion === 'string' && /^\d{1,10}$/.test(rawVersion) ? Number(rawVersion) : NaN;
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || expectedVersion > 2147483647) {
+      throw new TermClearanceError('Reload the clearance record before saving.', 409);
+    }
+    const scopeReason = field(input.scopeReason, 'Reason the entire term was not attended', 1000, { required: true, minimum: 5 });
+    const idempotencyKey = requestKey(input.idempotencyKey);
+    const requestFingerprint = fingerprint({ enrollmentId, expectedVersion, scopeStatus: 'not_attended', scopeReason });
+    const pool = await getPool();
+    const ownerResult = await pool.request().input('enrollmentId', sql.Int, enrollmentId)
+      .query('SELECT student_id FROM enrollments WHERE id = @enrollmentId');
+    const owner = ownerResult.recordset?.[0];
+    if (!owner) throw new TermClearanceError('Term enrollment not found.', 404);
+    if (expectedStudentId && Number(owner.student_id) !== expectedStudentId) {
+      throw new TermClearanceError('Term enrollment does not belong to this student record.', 404);
+    }
+
+    return runTransaction(async (transaction) => {
+      const actor = await requireStaff(transaction.request(), actorId, { write: true });
+      const student = await lockStudent(transaction, Number(owner.student_id));
+      if (!student) throw new TermClearanceError('Student record not found.', 404);
+      if (student.status === 'archived') throw new TermClearanceError('Archived student records are read-only.', 409);
+      const prior = await eventByKey(transaction, idempotencyKey, requestFingerprint, actor.id);
+      const current = await clearanceByEnrollment(transaction, enrollmentId, { lock: true });
+      if (prior) {
+        if (Number(prior.clearance_id) !== Number(current?.id || 0)) {
+          throw new TermClearanceError('This token belongs to a different clearance record.', 409);
+        }
+        return { clearanceId: Number(prior.clearance_id), version: Number(current.version), alreadyRecorded: true };
+      }
+      const context = await loadEnrollmentContext(transaction, enrollmentId);
+      if (!context || Number(context.student_id) !== Number(owner.student_id)
+        || (expectedStudentId && Number(context.student_id) !== expectedStudentId)) {
+        throw new TermClearanceError('Term enrollment changed. Reload the student record.', 409);
+      }
+      await ensureTermMayBeReviewed(transaction, context);
+      if ((current ? Number(current.version) : 0) !== expectedVersion) {
+        throw new TermClearanceError('This clearance changed in another session. Reload it before saving.', 409);
+      }
+
+      const before = current ? { version: Number(current.version), scopeStatus: current.scope_status,
+        scopeReason: current.scope_reason, paperCompleted: completeFromCounts(current),
+        attestedBy: current.attested_by == null ? null : Number(current.attested_by),
+        attestedAt: current.attested_at || null, inspectedOn: current.inspected_on || null,
+        templateId: current.template_id == null ? null : Number(current.template_id),
+        recordingMode: current.recording_mode || 'signature_checklist' } : null;
+      if (current?.scope_status === 'not_attended' && String(current.scope_reason || '') === scopeReason) {
+        const clearanceId = Number(current.id);
+        const version = Number(current.version);
+        await addEvent(transaction, { clearanceId, actorId: actor.id, eventType: 'scope_reviewed', reason: scopeReason,
+          before, after: { version, scopeStatus: 'not_attended', scopeReason, paperCompleted: false,
+            attested: false, attestedBy: current.attested_by == null ? null : Number(current.attested_by),
+            attestedAt: current.attested_at || null, inspectedOn: current.inspected_on || null,
+            templateId: current.template_id == null ? null : Number(current.template_id),
+            recordingMode: current.recording_mode, unchanged: true }, idempotencyKey, requestFingerprint });
+        await writeAudit(transaction, actor, 'term_clearance_scope_reviewed', 'student_term_clearance', clearanceId,
+          { studentId: Number(context.student_id), enrollmentId, version, scopeStatus: 'not_attended', unchanged: true });
+        return { clearanceId, version, unchanged: true };
+      }
+
+      if (current && expectedVersion >= 2147483647) {
+        throw new TermClearanceError('This clearance cannot be revised further. Contact the database administrator.', 409);
+      }
+      let clearanceId;
+      const nextVersion = expectedVersion + 1;
+      if (!current) {
+        const inserted = await transaction.request().input('enrollmentId', sql.Int, enrollmentId)
+          .input('annualEnrollmentId', sql.Int, context.annual_enrollment_id).input('studentId', sql.Int, context.student_id)
+          .input('gradeLevel', sql.NVarChar(50), context.grade_level).input('schoolYear', sql.NVarChar(20), context.school_year)
+          .input('termLabel', sql.NVarChar(100), context.term_label).input('academicTermId', sql.Int, context.academic_term_id)
+          .input('termNumber', sql.TinyInt, context.annual_term_number).input('sectionId', sql.Int, context.section_id)
+          .input('sectionName', sql.NVarChar(100), context.section_name).input('sectionCluster', sql.NVarChar(80), context.section_cluster)
+          .input('sectionStrand', sql.NVarChar(80), context.section_strand).input('scopeReason', sql.NVarChar(1000), scopeReason)
+          .input('actorId', sql.Int, actor.id)
+          .query(`INSERT INTO student_term_clearances
+            (enrollment_id, annual_enrollment_id, student_id, recording_mode, grade_level_snapshot, school_year_snapshot,
+              term_label_snapshot, academic_term_id_snapshot, term_number_snapshot, section_id_snapshot,
+              section_name_snapshot, section_cluster_snapshot, section_strand_snapshot, scope_status, scope_reason, created_by)
+            VALUES (@enrollmentId, @annualEnrollmentId, @studentId, 'paper_confirmation', @gradeLevel, @schoolYear,
+              @termLabel, @academicTermId, @termNumber, @sectionId, @sectionName, @sectionCluster,
+              @sectionStrand, 'not_attended', @scopeReason, @actorId)`);
+        clearanceId = Number(inserted.insertId);
+      } else {
+        clearanceId = Number(current.id);
+        const updated = await transaction.request().input('clearanceId', sql.BigInt, clearanceId)
+          .input('expectedVersion', sql.Int, expectedVersion).input('nextVersion', sql.Int, nextVersion)
+          .input('scopeReason', sql.NVarChar(1000), scopeReason)
+          .query(`UPDATE student_term_clearances SET recording_mode = 'paper_confirmation', scope_status = 'not_attended',
+              scope_reason = @scopeReason, attested_by = NULL, attested_at = NULL, inspected_on = NULL,
+              version = @nextVersion, updated_at = UTC_TIMESTAMP(3)
+            WHERE id = @clearanceId AND version = @expectedVersion`);
+        if (updated.rowsAffected?.[0] !== 1) throw new TermClearanceError('This clearance changed in another session. Reload it before saving.', 409);
+      }
+
+      await addEvent(transaction, { clearanceId, actorId: actor.id, eventType: 'scope_reviewed', reason: scopeReason,
+        before, after: { version: nextVersion, scopeStatus: 'not_attended', scopeReason, paperCompleted: false,
+          attested: false, attestedBy: null, attestedAt: null, inspectedOn: null,
+          templateId: current?.template_id == null ? null : Number(current.template_id),
+          recordingMode: 'paper_confirmation' }, idempotencyKey, requestFingerprint });
+      await writeAudit(transaction, actor, 'term_clearance_scope_reviewed', 'student_term_clearance', clearanceId,
+        { studentId: Number(context.student_id), enrollmentId, fromVersion: expectedVersion, toVersion: nextVersion,
+          scopeStatus: 'not_attended' });
+      return { clearanceId, version: nextVersion, alreadyRecorded: false };
     });
   }
 
@@ -997,7 +1291,7 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
       .query(`SELECT enrollment.id AS enrollment_id, enrollment.academic_term_id, enrollment.annual_term_number,
           enrollment.enrollment_status, enrollment.term_scope_status, enrollment.section_id,
           order_row.term_number, term.term AS term_label, section.name AS section_name,
-          clearance.id AS clearance_id, clearance.scope_status, clearance.scope_reason, clearance.template_id,
+          clearance.id AS clearance_id, clearance.scope_status, clearance.scope_reason, clearance.template_id, clearance.recording_mode,
           clearance.attested_by, clearance.attested_at, clearance.inspected_on, clearance.version AS clearance_version,
           COALESCE(items.item_count, 0) AS item_count, COALESCE(items.teacher_count, 0) AS teacher_count,
           COALESCE(items.registrar_count, 0) AS registrar_count, COALESCE(items.guidance_count, 0) AS guidance_count,
@@ -1045,12 +1339,13 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
         enrollmentStatus: row.enrollment_status, termScopeStatus: row.term_scope_status,
         clearanceId: row.clearance_id == null ? null : Number(row.clearance_id), scopeStatus: row.scope_status,
         scopeReason: row.scope_reason, clearanceVersion: row.clearance_version == null ? null : Number(row.clearance_version),
+        recordingMode: row.recording_mode || 'signature_checklist',
         itemCount: Number(row.item_count || 0), teacherCount: Number(row.teacher_count || 0), awaitingConfirmation,
         requiredCount: Number(row.required_count || 0), signedCount: Number(row.signed_count || 0), state, beforeEntry, future,
         fingerprintData: { enrollmentId: row.enrollment_id == null ? null : Number(row.enrollment_id), academicTermId: Number(row.academic_term_id),
           termNumber: number, termLabel: row.term_label, enrollmentStatus: row.enrollment_status,
           termScopeStatus: row.term_scope_status, clearanceId: row.clearance_id == null ? null : Number(row.clearance_id),
-          scopeStatus: row.scope_status, scopeReason: row.scope_reason, beforeEntry, future,
+          scopeStatus: row.scope_status, scopeReason: row.scope_reason, recordingMode: row.recording_mode || 'signature_checklist', beforeEntry, future,
           clearanceVersion: row.clearance_version == null ? null : Number(row.clearance_version), complete,
           requiredCount: Number(row.required_count || 0), signedCount: Number(row.signed_count || 0),
           requiredUnsignedCount: Number(row.required_unsigned_count || 0), unresolvedCount: Number(row.unresolved_count || 0),
@@ -1347,7 +1642,7 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
           enrollment.annual_term_number, enrollment.enrollment_status, enrollment.term_scope_status, enrollment.section_id,
           annual.school_year, annual.grade_level, annual.intake_kind, annual.intake_status, annual.entry_term_number,
           annual.continuity_source_annual_enrollment_id, term.term AS term_label, section.name AS section_name,
-          clearance.id AS clearance_id, clearance.template_id, clearance.track_label_snapshot, clearance.scope_status,
+          clearance.id AS clearance_id, clearance.template_id, clearance.recording_mode, clearance.track_label_snapshot, clearance.scope_status,
           clearance.scope_reason, clearance.inspected_on, clearance.attested_by, clearance.attested_at, clearance.version,
           template.version_no AS template_version, template.status AS template_status,
           COALESCE(items.item_count, 0) AS item_count, COALESCE(items.teacher_count, 0) AS teacher_count,
@@ -1550,7 +1845,7 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     const records = await pool.request().input('studentId', sql.Int, studentId)
       .query(`SELECT annual.school_year, annual.grade_level, term.term AS term_label,
           enrollment.annual_term_number, enrollment.term_scope_status, annual.entry_term_number,
-          clearance.scope_status, clearance.template_id, clearance.version, clearance.attested_by,
+          clearance.scope_status, clearance.template_id, clearance.recording_mode, clearance.version, clearance.attested_by,
           clearance.attested_at, clearance.inspected_on,
           COALESCE(SUM(item.applicability_status = 'required'), 0) AS requirement_count,
           COALESCE(SUM(item.applicability_status = 'required' AND item.signature_present = 1
@@ -1572,7 +1867,7 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
         LEFT JOIN student_term_clearance_items AS item ON item.clearance_id = clearance.id
         WHERE enrollment.student_id = @studentId
         GROUP BY annual.id, annual.school_year, annual.grade_level, term.term, enrollment.annual_term_number,
-          enrollment.term_scope_status, annual.entry_term_number, clearance.scope_status, clearance.template_id,
+          enrollment.term_scope_status, annual.entry_term_number, clearance.scope_status, clearance.template_id, clearance.recording_mode,
           clearance.version, clearance.attested_by, clearance.attested_at, clearance.inspected_on
         ORDER BY annual.school_year DESC, annual.id DESC, enrollment.annual_term_number`);
     const currentRows = (await pool.request().query(`SELECT term.school_year, order_row.term_number
@@ -1591,7 +1886,13 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     }) };
   }
 
-  return { createTemplateVersion, listTemplates, createTermClearance, updateTermClearance,
+  const retiredLegacyWrite = async () => {
+    throw new TermClearanceError('This signature-checklist write workflow has been retired. Record paper clearance from the term checkbox.', 410);
+  };
+
+  return { createTemplateVersion: allowLegacyWrites ? createTemplateVersion : retiredLegacyWrite,
+    listTemplates, createTermClearance: allowLegacyWrites ? createTermClearance : retiredLegacyWrite,
+    updateTermClearance: allowLegacyWrites ? updateTermClearance : retiredLegacyWrite, recordTermCompletion, recordTermNotAttended,
     getStudentClearance, getClearanceDashboard, getStudentClearanceOverview,
     getAnnualPrerequisiteReview, assertAnnualEntryPrerequisitesInTransaction,
     getTermActivationReview, assertTermPrerequisitesInTransaction, getContinuitySourceOptions,

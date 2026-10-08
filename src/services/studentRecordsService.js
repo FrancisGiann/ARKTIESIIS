@@ -588,19 +588,28 @@ function createStudentRecordsService({
         WHERE s.id = @studentId`);
     const student = result.recordset?.[0];
     if (!student) return null;
-    const [terms, sections, enrollments] = await Promise.all([
+    const [terms, sections, enrollments, annualEnrollments] = await Promise.all([
       listTerms(pool),
       listSections(pool),
       pool.request().input('studentId', sql.Int, id).query(`
-        SELECT e.id, e.academic_term_id, e.section_id, e.enrollment_status, e.enrolled_at,
+        SELECT e.id, e.academic_term_id, e.annual_enrollment_id, e.section_id, e.enrollment_status, e.enrolled_at,
           t.school_year, t.term, s.name AS section_name, s.grade_level
         FROM enrollments AS e
         INNER JOIN academic_terms AS t ON t.id = e.academic_term_id
         LEFT JOIN sections AS s ON s.id = e.section_id AND s.academic_term_id = e.academic_term_id
         WHERE e.student_id = @studentId
-        ORDER BY t.is_current DESC, t.id DESC, e.id DESC`)
+        ORDER BY t.is_current DESC, t.id DESC, e.id DESC`),
+      pool.request().input('studentId', sql.Int, id).query(`
+        SELECT annual.id AS annual_enrollment_id, annual.school_year, annual.grade_level,
+          annual.intake_status, annual.pre_enrollment_id, source_intake.status AS source_intake_status,
+          confirmation.id AS registrar_confirmation_id
+        FROM annual_enrollments AS annual
+        LEFT JOIN pre_enrollments AS source_intake ON source_intake.id = annual.pre_enrollment_id
+        LEFT JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = annual.id
+        WHERE annual.student_id = @studentId AND annual.intake_status <> 'legacy'
+        ORDER BY annual.school_year DESC, annual.id DESC`)
     ]);
-    return { student, terms, sections, enrollments: enrollments.recordset || [] };
+    return { student, terms, sections, enrollments: enrollments.recordset || [], annualEnrollments: annualEnrollments.recordset || [] };
   }
 
   async function getOwnStudentRecord(userId) {

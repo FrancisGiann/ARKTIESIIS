@@ -5,12 +5,7 @@
   <a class="context-back" href="/documents">Back to document review</a>
   <%- include('../partials/student-record-navigation', { student, activeStudentView: 'documents' }) %>
   <h2 class="student-record-view-title">Documents</h2>
-  <nav class="student-document-sections" aria-label="Student document workflows">
-    <a href="#digital-submissions-title" data-student-document-section="digital"<% if (activeDocumentSection === 'digital') { %> aria-current="page"<% } %>>Digital submissions</a>
-    <a href="#physical-checklist-title" data-student-document-section="paper"<% if (activeDocumentSection === 'paper') { %> aria-current="page"<% } %>>Paper requirements</a>
-    <a href="#form137-status-title" data-student-document-section="form137"<% if (activeDocumentSection === 'form137') { %> aria-current="page"<% } %>>Form 137</a>
-    <a href="/registrar/records/students/<%= student.id %>?view=requests">Requests</a>
-  </nav>
+  <%- include('../partials/student-document-sections', { student, currentUser, activeDocumentSection }) %>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice === 'form137StatusRecorded' ? 'Form 137 status recorded.' : notice === 'previousSchoolReportCardStatusRecorded' ? 'Previous-school report-card paper status recorded.' : notice === 'physicalChecklistRecorded' ? 'Paper requirement status recorded in the staff history.' : notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>

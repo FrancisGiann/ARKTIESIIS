@@ -63,7 +63,7 @@
     </section>
 
     <section class="admin-section" aria-labelledby="paper-clearance-review-title">
-      <div class="admin-section__heading"><div><h2 id="paper-clearance-review-title">Earlier-term paper forms</h2><p>Required signatures from earlier attended terms must be recorded and confirmed by a registrar before this enrollment is finalized. Finance payments and document checklists are separate records.</p></div></div>
+      <div class="admin-section__heading"><div><h2 id="paper-clearance-review-title">Earlier-term paper forms</h2><p>A registrar must record completion for each required earlier attended term after inspecting the returned paper form before this enrollment is finalized. Finance payments and document checklists are separate records.</p></div></div>
       <% if (!prerequisiteReview) { %><p class="form-alert" role="alert">Earlier-term paper review is unavailable. Enrollment confirmation is blocked.</p>
       <% } else if (prerequisiteReview.kind === 'exempt') { %>
         <p>This is a <%= prerequisiteReview.intakeKind === 'readmission' ? 'readmission' : 'new-student' %> entry. There is no internal preceding-year clearance gate for this first enrollment.</p>

@@ -78,3 +78,35 @@ test('annual roster pages whole annual records with a bounded SQL offset and cla
   await service.listAnnualEnrollmentsPage(7, { page: 'not-a-page' });
   assert.equal(observed.at(-1).values.offset, 0, 'invalid page input safely returns to the first page');
 });
+
+test('sourced annual confirmation filter is validated and shared by count and page queries without requiring a term', async () => {
+  const observed = [];
+  const getPool = async () => ({ request() {
+    const values = {};
+    return {
+      input(name, _type, value) { values[name] = value; return this; },
+      async query(statement) {
+        observed.push({ statement, values: { ...values } });
+        if (statement.includes('SELECT role FROM users')) return { recordset: [{ role: 'registrar' }] };
+        if (statement.includes('COUNT(DISTINCT annual.id)')) return { recordset: [{ total_records: 1 }] };
+        return { recordset: [{ annual_enrollment_id: 42, enrollment_id: null, academic_term_id: null }] };
+      }
+    };
+  } });
+  const service = createAnnualEnrollmentService({ getPool, sql });
+
+  const page = await service.listAnnualEnrollmentsPage(7, { confirmationStatus: 'needs_confirmation' });
+
+  assert.equal(page.pagination.totalRecords, 1);
+  const matchingQueries = observed.filter(({ statement }) => statement.includes('@confirmationStatus IS NULL'));
+  assert.equal(matchingQueries.length, 2, 'count and page use the same matching predicate');
+  for (const query of matchingQueries) {
+    assert.equal(query.values.confirmationStatus, 'needs_confirmation');
+    assert.match(query.statement, /annual\.intake_status = 'pending'/);
+    assert.match(query.statement, /source_intake\.status = 'enrollment_started'/);
+    assert.match(query.statement, /saved_confirmation\.annual_enrollment_id = annual\.id/);
+    assert.doesNotMatch(query.statement, /INNER JOIN (?:enrollments|academic_terms)/);
+  }
+
+  await assert.rejects(service.listAnnualEnrollmentsPage(7, { confirmationStatus: 'all' }), AnnualEnrollmentError);
+});

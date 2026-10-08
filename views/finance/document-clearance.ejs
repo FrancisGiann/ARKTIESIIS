@@ -27,7 +27,7 @@
   </section>
 
   <section class="finance-panel" aria-labelledby="document-clearance-results-title">
-    <div class="admin-section__heading"><div><h2 id="document-clearance-results-title">Requests awaiting a fee decision</h2><p>Displayed totals combine unpaid fees for every school year and earlier account balances. Unused payment credit is not subtracted. This review is separate from the registrar’s paper clearance checklist.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="document-clearance-results-title">Requests awaiting a fee decision</h2><p>Displayed totals combine unpaid fees for every school year and earlier account balances. Unused payment credit is not subtracted. The registrar’s paper clearance record is separate from this fee review.</p></div></div>
     <% if (!queue.rows.length) { %><p class="empty-state">No requests match these filters.</p><% } else { %>
       <div class="finance-roster-record-list">
         <% for (const row of queue.rows) { %>

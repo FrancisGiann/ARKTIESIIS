@@ -1,0 +1,9 @@
+<% const documentsPath = `/documents/students/${encodeURIComponent(String(student.id))}`; const canSeeStaffDocumentSections = ['registrar', 'database_admin'].includes(currentUser?.role); %>
+<nav class="student-document-sections" aria-label="Student document workflows">
+  <a href="<%= documentsPath %>#digital-submissions-title" data-student-document-section="digital"<% if (activeDocumentSection === 'digital') { %> aria-current="page"<% } %>>Digital submissions</a>
+  <% if (canSeeStaffDocumentSections) { %>
+    <a href="<%= documentsPath %>?section=paper#physical-checklist-title" data-student-document-section="paper"<% if (activeDocumentSection === 'paper') { %> aria-current="page"<% } %>>Paper requirements</a>
+    <a href="<%= documentsPath %>?section=form137#form137-status-title" data-student-document-section="form137"<% if (activeDocumentSection === 'form137') { %> aria-current="page"<% } %>>Form 137</a>
+    <a href="/registrar/records/students/<%= encodeURIComponent(String(student.id)) %>?view=requests"<% if (activeDocumentSection === 'requests') { %> aria-current="page"<% } %>>Requests</a>
+  <% } %>
+</nav>
