@@ -7,19 +7,15 @@
       <h1><%= view === 'setup' ? 'Academic setup' : 'Student records' %></h1>
       <p><%= view === 'setup' ? 'Set up school years, terms, and sections used by student records.' : `${currentUser.role === 'database_admin' ? 'Database administrator' : 'Registrar'} workspace · Lucena Branch` %></p>
     </div>
-    <div class="admin-heading-actions">
-      <% if (view === 'setup') { %><a class="button button--secondary" href="/registrar/records">Back to student records</a><% } else { %><% if (currentUser.role === 'registrar') { %><a class="button button--primary" href="/pre-enrollments">Review paper forms</a><% } %><a class="button button--secondary" href="/registrar/records?view=setup">Academic setup</a><% } %>
-      <% if (currentUser.role === 'registrar') { %><a class="button button--secondary" href="/registrar/intake">Enrollments</a><% } %>
-      <% if (currentUser.role === 'database_admin') { %><a class="button button--secondary" href="/admin/student-accounts">Set up student logins</a><% } %>
-      <a class="button button--secondary" href="/registrar/records/grades/missing">Grade completion overview</a>
-    </div>
+    <% if (view === 'setup') { %><div class="admin-heading-actions"><a class="button button--secondary" href="/registrar/records">Back to student records</a></div><% } %>
   </section>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
-  <% if (view !== 'setup') { %><section class="records-context-strip records-context-strip--term" aria-label="Academic term context">
+  <% if (view !== 'setup') { %><section class="records-context-strip records-context-strip--term records-context-strip--search" aria-label="Academic term context">
     <p><strong>Current term</strong><span><% if (currentTerm) { %><%= currentTerm.school_year %> · <%= currentTerm.term %><% } else { %>No academic term is marked current.<% } %></span></p>
+    <% if (['registrar', 'database_admin'].includes(currentUser.role)) { %><a class="button button--secondary records-grade-overview-link" href="/registrar/records/grades/missing">Grade completion overview</a><% } %>
   </section><% } %>
 
   <% if (view === 'setup') { %>
@@ -31,10 +27,7 @@
       <% } else if (!currentTerm) { %>
         <p><strong>Next step</strong><span>Create an academic term before adding sections.</span><a class="button button--primary" href="/registrar/records?view=setup&amp;openForm=term#school-year">Add an academic term</a></p>
       <% } %>
-      <nav class="admin-heading-actions" aria-label="Academic setup tasks">
-        <a class="button button--secondary" href="/registrar/records/subjects?openForm=1#subject-code">Subjects</a>
-        <a class="button button--secondary" href="/registrar/records/teacher-assignments<% if (currentTerm) { %>?termId=<%= currentTerm.id %><% } %>">Teacher assignments</a>
-      </nav>
+      <% if (['registrar', 'database_admin'].includes(currentUser.role)) { %><a class="button button--secondary records-grade-overview-link" href="/registrar/records/grades/missing">Grade completion overview</a><% } %>
     </section>
   <% } %>
 

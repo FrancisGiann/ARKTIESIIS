@@ -1,7 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page" id="main-content">
   <header class="dashboard-heading">
-    <div><h1>Document request finance clearance</h1><p>Review a student’s fees across all school years and earlier account balances before a registrar starts document processing.</p></div>
+    <div><h1>Document request fee review</h1><p>Review a student’s fees across all school years and earlier account balances before a registrar starts processing the requested document.</p></div>
     <a class="button button--secondary" href="/finance/overview">Finance overview</a>
   </header>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
@@ -27,7 +27,7 @@
   </section>
 
   <section class="finance-panel" aria-labelledby="document-clearance-results-title">
-    <div class="admin-section__heading"><div><h2 id="document-clearance-results-title">Finance review queue</h2><p>Displayed totals combine unpaid fees for every school year and earlier account balances. Unused payment credit is not subtracted.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="document-clearance-results-title">Requests awaiting a fee decision</h2><p>Displayed totals combine unpaid fees for every school year and earlier account balances. Unused payment credit is not subtracted. This review is separate from the registrar’s paper clearance checklist.</p></div></div>
     <% if (!queue.rows.length) { %><p class="empty-state">No requests match these filters.</p><% } else { %>
       <div class="finance-roster-record-list">
         <% for (const row of queue.rows) { %>
@@ -39,7 +39,8 @@
             <div class="finance-roster-record__header">
               <div><h3><%= fullName %> <span class="record-status"><%= row.clearanceStatus.replaceAll('_', ' ') %></span></h3>
                 <p><strong><%= row.student_no || 'Student number not recorded' %></strong> · <%= row.document_name %> (<%= row.document_type %>)</p>
-                <p>Requested <%= requestedDate %> · Request reference: <%= row.reference_text || row.id %> · Request status: <%= row.request_status %></p>
+                <% const requestStatusLabel = ({ready_for_release:'Ready for release',reapproval_required:'Reapproval required',on_hold:'On hold',cancelled:'Cancelled',pending:'Pending',requested:'Requested',processing:'Processing',ready:'Ready',released:'Released'})[row.request_status] || String(row.request_status || 'Not recorded').replaceAll('_', ' ').replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()); %>
+                <p>Requested <%= requestedDate %> · Request reference: <%= row.reference_text || row.id %> · Request status: <%= requestStatusLabel %></p>
                 <p><a href="/finance/students/<%= row.student_id %>">Review student finance account</a></p>
               </div>
               <div class="finance-roster-record__balance"><span>All-years outstanding</span><strong><%= row.ledgerComplete ? `₱${row.outstanding}` : 'Needs finance review' %></strong></div>

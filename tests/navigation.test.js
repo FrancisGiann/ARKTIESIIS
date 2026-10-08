@@ -202,6 +202,28 @@ test('return evaluations keep Student records selected for both staff roles', ()
   }
 });
 
+test('clearance workspace stays selected on its dashboard, setup, and existing student checklist routes', () => {
+  const contexts = [
+    '/registrar/records/clearance',
+    '/registrar/records/clearance/templates',
+    '/registrar/records/students/22/clearance',
+    '/registrar/records/students/22/clearance?notice=saved'
+  ];
+  for (const role of ['registrar', 'database_admin']) {
+    for (const path of contexts) {
+      const navigation = buildNavigation(role, path);
+      assert.equal(navigation.currentPage, 'clearance', `${role} at ${path} stays in Clearance`);
+      assert.deepEqual(navigation.items.filter((item) => item.current).map((item) => item.id), ['clearance']);
+      assert.equal(navigation.items.find((item) => item.id === 'students')?.current, false,
+        'the checklist deep link does not also select Student records');
+    }
+  }
+  for (const role of ['front_desk', 'teacher', 'finance', 'student']) {
+    assert.equal(buildNavigation(role, '/registrar/records/clearance').items.some((item) => item.id === 'clearance'), false,
+      `${role} does not receive a Clearance destination`);
+  }
+});
+
 test('finance navigation keeps student accounts selected for annual accounts, statements, and historic confirmations', () => {
   const contexts = [
     ['/finance/overview', 'finance-overview', '/finance/overview'],
@@ -229,11 +251,11 @@ test('finance navigation keeps student accounts selected for annual accounts, st
 
 test('authenticated navigation only exposes destinations available to each role', async () => {
   const cases = [
-    { role: 'database_admin', path: '/admin', labels: ['Overview', 'User accounts', 'Student records', 'Pre-enrollment records', 'Activity log', 'Documents', 'Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/pre-enrollments', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: [] },
-    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Enrollments', 'Pre-enrollment records', 'Document review', 'Grade review', 'Class schedules', 'Subjects', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
+    { role: 'database_admin', path: '/admin', labels: ['Overview', 'User accounts', 'Student records', 'Paper clearance', 'Pre-enrollment records', 'Activity log', 'Documents', 'Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Stopped or transferred', 'Unfinished reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/registrar/records/clearance', '/pre-enrollments', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: [] },
+    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Paper clearance', 'Enrollments', 'Pre-enrollment records', 'Document review', 'Grade review', 'Class schedules', 'Subjects', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
     { role: 'front_desk', path: '/pre-enrollments', labels: ['Pre-enrollment records'], hrefs: ['/pre-enrollments'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/documents', '/admin'] },
     { role: 'teacher', path: '/teacher', labels: ['My classes', 'Submit grades'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/admin'] },
-    { role: 'finance', path: '/finance', labels: ['Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Departure review', 'Saved reviews'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: ['/registrar/records', '/documents', '/admin'] },
+    { role: 'finance', path: '/finance', labels: ['Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Stopped or transferred', 'Unfinished reviews'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: ['/registrar/records', '/documents', '/admin'] },
     { role: 'student', path: '/student', labels: ['Home', 'Class schedule', 'Grades', 'Fees &amp; payments', 'My records', 'Documents'], forbidden: ['/registrar/records', '/finance', '/admin'] }
   ];
 
@@ -391,8 +413,8 @@ test('student records use the workspace rail and show a clear no-current-term st
     assert.match(html, /<main class="page-shell dashboard-page admin-page records-page"/);
     assert.match(html, /<h1>Student records<\/h1>/);
     assert.match(html, /No academic term is marked current\./);
-    assert.match(html, /href="\/pre-enrollments">Review paper forms/);
-    assert.match(html, /href="\/registrar\/records\?view=setup">Academic setup/);
+    assert.match(html, /href="\/registrar\/records\/grades\/missing">Grade completion overview/);
+    assert.doesNotMatch(html, /<div class="admin-heading-actions">[\s\S]*?Review paper forms/);
     assert.doesNotMatch(html, /Evaluate return without a saved record/);
     assert.match(html, /Find a student record/);
     assert.doesNotMatch(html, /<h2 id="terms-title">Academic terms/);

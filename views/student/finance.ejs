@@ -71,7 +71,7 @@
                 <ul class="student-finance-charge-list">
                   <% for (const charge of group.charges) { %>
                     <li class="student-finance-charge">
-                      <h5><%= charge.line_name %><% if (charge.installment) { %> · <%= charge.installment %><% } %><% if (charge.fee_category) { %><span class="student-finance-charge__category"><%= charge.fee_category %></span><% } %></h5>
+                      <h5><%= charge.line_name %><% if (charge.installment) { %> · <%= charge.installment %><% } %><% if (charge.fee_category) { %><span class="student-finance-charge__category"><%= String(charge.fee_category).replaceAll('_', ' ').replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()) %></span><% } %></h5>
                       <dl class="student-finance-charge__details">
                         <div><dt>Assessed amount</dt><dd><%= pesoAmount(charge.assessed_amount) %></dd></div>
                         <div><dt>Approved coverage</dt><dd><%= deductionAmount(charge.coverage_amount) %></dd></div>
@@ -94,7 +94,7 @@
         <div class="student-finance-section-heading">
           <div>
             <h3 id="finance-placements-title">Enrollment by term</h3>
-            <p>Term balances are already included in school-year fees above. Finance clearance is separate from paper enrollment clearance and does not change the amount due.</p>
+            <p>Term balances are already included in school-year fees above. Term account clearance is separate from the registrar’s paper clearance and does not change the amount due.</p>
           </div>
         </div>
         <% if (annualLedger.terms.length) { %>
@@ -115,15 +115,15 @@
                 <dl class="student-finance-term__details">
                   <div>
                     <dt>Enrollment status</dt>
-                    <dd><%= term.enrollment_status ? term.enrollment_status.replaceAll('_', ' ') : 'Not recorded' %></dd>
+                    <dd><%= term.enrollment_status ? String(term.enrollment_status).replaceAll('_', ' ').replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()) : 'Not recorded' %></dd>
                   </div>
                   <div>
                     <dt>Registrar confirmation</dt>
                     <dd><%= term.term_scope_status === 'not_applicable' ? 'Not applicable before entry term' : term.registrar_confirmation_id ? 'Confirmed by registrar' : 'Awaiting registrar confirmation' %></dd>
                   </div>
                   <div>
-                    <dt>Finance clearance</dt>
-                    <dd><%= term.signed_clearance_status === 'signed' ? 'Signed' : 'Not signed' %></dd>
+                    <dt>Term account clearance</dt>
+                    <dd><%= term.signed_clearance_status === 'signed' ? 'Recorded' : 'Not recorded' %></dd>
                   </div>
                 </dl>
               </li>

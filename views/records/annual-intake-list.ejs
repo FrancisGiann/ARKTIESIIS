@@ -15,7 +15,7 @@
     return `/registrar/intake?${params.toString()}`;
   }; %>
   <section class="dashboard-heading">
-    <div><h1>Enrollments</h1><p>Each record covers one student and school year, with its term placements. Start new enrollments from a saved front-desk paper form.</p></div>
+    <div><h1>Enrollments</h1><p>New enrollments start from a saved front-desk paper form.</p></div>
     <div class="admin-heading-actions"><a class="button button--secondary" href="/registrar/intake/setup/terms">Set term order</a><a class="button button--primary" href="/pre-enrollments">Review paper forms</a></div>
   </section>
   <% if (notice === 'annualCreated') { %><p class="form-success" role="status">Enrollment saved. Open the student record to note received originals, photocopies, and pieces on the paper checklist.</p><% } %>
@@ -25,7 +25,7 @@
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
   <section class="admin-section annual-search-section" aria-labelledby="annual-filter-title">
-    <div class="admin-section__heading"><div><h2 id="annual-filter-title">Find an enrollment</h2><p>Search by student name or number, then narrow by school year and term. Finance amounts and private arrangements stay in the finance workspace.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="annual-filter-title">Find an enrollment</h2><p>Search by student name or number, school year, or term.</p></div></div>
     <form class="annual-search-form" method="get" action="/registrar/intake">
       <% if (filters.studentStatus === 'active') { %><input type="hidden" name="studentStatus" value="active"><% } %>
       <div class="annual-search-primary">
@@ -42,7 +42,7 @@
           <div class="field"><label for="annual-filter-section">Section</label><select id="annual-filter-section" name="sectionId"><option value="">All sections</option><% for (const section of sections) { %><option value="<%= section.id %>" <%= String(filters.sectionId || '') === String(section.id) ? 'selected' : '' %>><%= section.school_year %> · <%= section.term %> · <%= section.grade_level %> · <%= section.name %></option><% } %></select></div>
           <div class="field"><label for="annual-filter-cluster">Cluster</label><input id="annual-filter-cluster" name="cluster" maxlength="80" value="<%= filters.cluster %>"></div>
           <div class="field"><label for="annual-filter-strand">Strand</label><input id="annual-filter-strand" name="strand" maxlength="80" value="<%= filters.strand %>"></div>
-          <div class="field"><label for="annual-filter-status">Term placement status</label><select id="annual-filter-status" name="status"><option value="">All statuses</option><% for (const [value, label] of [['pending_payment', 'Pending activation'], ['enrolled', 'Enrolled'], ['cancelled', 'Cancelled'], ['dropped', 'Dropped'], ['transferred', 'Transferred']]) { %><option value="<%= value %>" <%= filters.status === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
+          <div class="field"><label for="annual-filter-status">Term placement status</label><select id="annual-filter-status" name="status"><option value="">All statuses</option><% for (const [value, label] of [['pending_payment', 'Pending activation'], ['enrolled', 'Enrolled'], ['cancelled', 'Cancelled'], ['dropped', 'Stopped studying'], ['transferred', 'Transferred']]) { %><option value="<%= value %>" <%= filters.status === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
         </div>
       </details>
       <div class="admin-form-actions annual-search-actions"><a class="button button--secondary" href="/registrar/intake">Clear filters</a></div>
@@ -51,7 +51,7 @@
   </section>
 
   <section class="admin-section annual-enrollments-section" aria-labelledby="annual-placements-title">
-    <div class="admin-section__heading"><div><h2 id="annual-placements-title">Student enrollments</h2><p>Each record keeps that school year's term placements together. The registrar confirms the entry term; finance records payments and clearances separately.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="annual-placements-title">Student enrollments</h2><p>One record per student and school year.</p></div></div>
     <% if (pagination.totalRecords) { %>
       <div class="annual-pagination-summary"><p role="status">Showing <%= pagination.from %>–<%= pagination.to %> of <%= pagination.totalRecords %> annual records.</p>
         <% if (pagination.totalPages > 1) { %><nav class="annual-pagination" aria-label="Enrollment pages">
@@ -65,38 +65,38 @@
       <% const annualGroups = new Map(); %>
       <% for (const row of rows) { const key = String(row.annual_enrollment_id); if (!annualGroups.has(key)) annualGroups.set(key, []); annualGroups.get(key).push(row); } %>
       <div class="annual-record-list">
-        <% for (const annualRows of annualGroups.values()) { const record = annualRows[0]; const fullName = [record.first_name, record.middle_name, record.last_name, record.suffix].filter(Boolean).join(' '); const entryPlacement = annualRows.find((row) => Number(row.annual_term_number) === Number(row.entry_term_number) && row.term_scope_status !== 'not_applicable'); const confirmationLabel = entryPlacement ? (entryPlacement.registrar_confirmation_id ? 'Recorded' : 'Needed') : (annualRows.some((row) => row.registrar_confirmation_id) ? 'Recorded' : 'Review term placements'); %>
-          <article class="annual-record">
-            <header class="annual-record__summary">
-              <span class="annual-record__identity"><strong id="annual-record-title-<%= record.annual_enrollment_id %>"><%= fullName %></strong><span>Student no. <%= record.student_no %> · LRN <%= record.lrn || 'Not recorded' %></span><span class="annual-record__confirmation-status"><strong>Enrollment confirmation:</strong> <%= confirmationLabel %></span></span>
-              <span class="annual-record__context"><strong><%= record.school_year %> · <%= record.grade_level %></strong><span>Voucher type <%= record.voucher_code %></span></span>
-              <span class="annual-record__placement-count"><%= annualRows.length %> matching <%= annualRows.length === 1 ? 'term placement' : 'term placements' %></span>
-            </header>
-            <nav class="annual-record__primary-actions" aria-label="Primary actions for <%= fullName %>">
-              <a class="button button--primary" href="/registrar/intake/<%= record.annual_enrollment_id %>/manage">Manage annual record</a>
-              <a class="button button--secondary" href="/documents/students/<%= record.student_id %>#physical-checklist-title">Record paper requirements checklist</a>
-            </nav>
+        <% for (const annualRows of annualGroups.values()) { const record = annualRows[0]; const fullName = [record.first_name, record.middle_name, record.last_name, record.suffix].filter(Boolean).join(' '); const entryPlacement = annualRows.find((row) => Number(row.annual_term_number) === Number(row.entry_term_number) && row.term_scope_status !== 'not_applicable'); const confirmationLabel = entryPlacement ? (entryPlacement.registrar_confirmation_id ? 'Confirmed' : 'Needs confirmation') : (annualRows.some((row) => row.registrar_confirmation_id) ? 'Confirmed' : 'Review term records'); %>
+          <article class="annual-record" aria-labelledby="annual-record-title-<%= record.annual_enrollment_id %>">
+            <div class="annual-record__main">
+              <div class="annual-record__identity"><h3 id="annual-record-title-<%= record.annual_enrollment_id %>"><%= fullName %></h3><p>Student no. <%= record.student_no %> · LRN <%= record.lrn || 'Not recorded' %></p></div>
+              <div class="annual-record__context"><strong><%= record.school_year %> · <%= record.grade_level %></strong><span>Voucher <%= record.voucher_code %></span></div>
+              <div class="annual-record__confirmation"><span>Enrollment confirmation</span><strong><%= confirmationLabel %></strong></div>
+              <a class="annual-record__open-link" href="/registrar/intake/<%= record.annual_enrollment_id %>/manage">Open enrollment</a>
+            </div>
             <details class="annual-record-details">
-              <summary class="annual-record__toggle">Review term placements and secondary actions</summary>
+              <summary class="annual-record__toggle">View terms <span>· <%= annualRows.length %> <%= annualRows.length === 1 ? 'term' : 'terms' %> shown</span></summary>
               <div class="annual-record__body">
-            <details class="annual-voucher-details">
-              <summary>Update voucher type</summary>
-              <form class="form-stack records-compact-form annual-voucher-form" method="post" action="/registrar/intake/<%= record.annual_enrollment_id %>/voucher">
-                <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-                <div class="field"><label for="voucher-<%= record.annual_enrollment_id %>">Voucher type</label><select id="voucher-<%= record.annual_enrollment_id %>" name="voucherCode" required><% for (const voucher of ['PUB', 'ESC', 'NV']) { %><option value="<%= voucher %>" <%= record.voucher_code === voucher ? 'selected' : '' %>><%= voucher %></option><% } %></select></div>
-                <div class="field"><label for="voucher-reason-<%= record.annual_enrollment_id %>">Reason for change</label><input id="voucher-reason-<%= record.annual_enrollment_id %>" name="reason" maxlength="1000" required></div>
-                <button class="table-action table-button" type="submit">Save voucher type</button>
-              </form>
-            </details>
-            <ol class="annual-placement-list" aria-label="Term placements for <%= fullName %>">
-              <% for (const row of annualRows) { const displayTerm = termLabel(row); const statusLabel = ({ pending_payment: 'Pending activation', enrolled: 'Enrolled', cancelled: 'Cancelled', dropped: 'Dropped', transferred: 'Transferred' })[row.enrollment_status] || row.enrollment_status; %>
+                <div class="annual-record__secondary-actions">
+                  <a class="annual-record__paper-link" href="/documents/students/<%= record.student_id %>#physical-checklist-title">Paper requirements checklist</a>
+                  <details class="annual-voucher-details">
+                    <summary>Update voucher</summary>
+                    <form class="form-stack records-compact-form annual-voucher-form" method="post" action="/registrar/intake/<%= record.annual_enrollment_id %>/voucher">
+                      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                      <div class="field"><label for="voucher-<%= record.annual_enrollment_id %>">Voucher type</label><select id="voucher-<%= record.annual_enrollment_id %>" name="voucherCode" required><% for (const voucher of ['PUB', 'ESC', 'NV']) { %><option value="<%= voucher %>" <%= record.voucher_code === voucher ? 'selected' : '' %>><%= voucher %></option><% } %></select></div>
+                      <div class="field"><label for="voucher-reason-<%= record.annual_enrollment_id %>">Reason for change</label><input id="voucher-reason-<%= record.annual_enrollment_id %>" name="reason" maxlength="1000" required></div>
+                      <button class="table-action table-button" type="submit">Save voucher type</button>
+                    </form>
+                  </details>
+                </div>
+                <ol class="annual-placement-list" aria-label="Term placements for <%= fullName %>">
+              <% for (const row of annualRows) { const displayTerm = termLabel(row); const statusLabel = ({ pending_payment: 'Pending activation', enrolled: 'Enrolled', cancelled: 'Cancelled', dropped: 'Stopped studying', transferred: 'Transferred' })[row.enrollment_status] || row.enrollment_status; %>
                 <li class="annual-placement" id="annual-placement-<%= row.enrollment_id %>">
                   <div class="annual-placement__overview">
                     <div><h4><%= displayTerm %></h4><p><%= [row.section_name || 'No section assigned', row.cluster ? `Cluster ${row.cluster}` : '', row.strand, row.adviser ? `Adviser ${row.adviser}` : '', row.modality, row.modular_subtype].filter(Boolean).join(' · ') %></p></div>
                     <dl class="annual-placement__status">
                       <div><dt>Status</dt><dd><%= statusLabel %></dd></div>
                       <div><dt>Enrollment</dt><dd><%= row.term_scope_status === 'not_applicable' ? 'Not applicable before entry' : row.registrar_confirmation_id ? 'Confirmed' : Number(row.annual_term_number) === Number(row.entry_term_number) ? 'Needs fee confirmation' : 'Waiting for entry confirmation' %></dd></div>
-                      <div><dt>Signed clearance</dt><dd><%= row.signed_clearance_status === 'signed' ? 'Signed' : 'Not signed' %></dd></div>
+                      <div><dt>Term account clearance</dt><dd><%= row.signed_clearance_status === 'signed' ? 'Recorded' : 'Not recorded' %></dd></div>
                     </dl>
                   </div>
                   <details class="annual-placement__actions">
@@ -136,7 +136,7 @@
                   </details>
                 </li>
               <% } %>
-            </ol>
+                </ol>
               </div>
             </details>
           </article>
@@ -157,7 +157,7 @@
               <td data-label="Term"><%= termLabel(count) %></td>
               <td data-label="Section"><%= count.section_name %></td><td data-label="Cluster"><%= count.cluster %></td>
               <td data-label="Strand"><%= count.strand %></td><td data-label="Gender"><%= count.gender %></td>
-              <td data-label="Placement status"><%= ({ pending_payment: 'Pending activation', enrolled: 'Enrolled', cancelled: 'Cancelled', dropped: 'Dropped', transferred: 'Transferred' })[count.enrollment_status] || 'Status review' %></td>
+              <td data-label="Placement status"><%= ({ pending_payment: 'Pending activation', enrolled: 'Enrolled', cancelled: 'Cancelled', dropped: 'Stopped studying', transferred: 'Transferred' })[count.enrollment_status] || 'Status review' %></td>
               <td data-label="Students"><strong><%= count.student_count %></strong></td>
             </tr><% } %></tbody>
           </table>

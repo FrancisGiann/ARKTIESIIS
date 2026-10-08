@@ -1,12 +1,12 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-review-page" id="main-content">
-  <a class="context-back" href="/finance/overview">Back to Finance</a>
+  <a class="context-back" href="/finance/overview">Back to Finance overview</a>
   <header class="dashboard-heading">
-    <div><p class="eyebrow">Saved work</p><h1>Finance reviews</h1><p>Resume an unfinished update, review its current details, then save it.</p></div>
+    <div><p class="eyebrow">Your saved work</p><h1>Unfinished reviews</h1><p>Resume an update you saved, check its current details, then finish it.</p></div>
     <a class="button button--secondary" href="/finance">Student accounts</a>
   </header>
   <section class="finance-panel" aria-labelledby="saved-review-title">
-    <div class="admin-section__heading"><div><h2 id="saved-review-title">Your unfinished reviews</h2><p>Drafts are private to your account and remain available after sign out.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="saved-review-title">Your unfinished reviews</h2><p>These saved changes are private to your account and remain available after sign out.</p></div></div>
     <% if (drafts.length) { %>
       <ul class="finance-review-list">
         <% for (const draft of drafts) { %>
@@ -28,7 +28,7 @@
         <% } %>
       </ul>
     <% } else { %>
-      <p class="dashboard-empty" role="status">You have no unfinished Finance reviews.</p>
+      <p class="dashboard-empty" role="status">You have no unfinished reviews.</p>
     <% } %>
   </section>
 </main>

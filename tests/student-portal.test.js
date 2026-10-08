@@ -164,8 +164,8 @@ test('student pages are separate, read-only destinations bound to the authentica
     assert.match(financeHtml, /Current term · Term 2 · 2026-2027[\s\S]*?₱1,000\.00/);
     assert.match(financeHtml, /Current term/);
     assert.match(financeHtml, /Confirmed by registrar/);
-    assert.match(financeHtml, /Finance clearance[\s\S]*?Signed/);
-    assert.match(financeHtml, /Finance clearance is separate from paper enrollment clearance and does not change the amount due/);
+    assert.match(financeHtml, /Term account clearance[\s\S]*?Recorded/);
+    assert.match(financeHtml, /Term account clearance is separate from the registrar’s paper clearance and does not change the amount due/);
     assert.doesNotMatch(financeHtml, /<form[^>]+action="\/finance\/students\/|Add adjustment|Append comment|Private staff note/);
     const recentActivity = financeHtml.match(/<ol class="student-finance-activity-list">([\s\S]*?)<\/ol>/)?.[1];
     assert.ok(recentActivity, 'recent activity preview is present');
@@ -189,7 +189,8 @@ test('student pages are separate, read-only destinations bound to the authentica
     assert.equal(statementResponse.status, 200);
     assert.match(statementHtml, /All school-year fees due[\s\S]*?₱4,990\.00/);
     assert.match(statementHtml, /Combined account balance[\s\S]*?₱5,190\.00/);
-    assert.match(statementHtml, /Fee breakdown[\s\S]*?Coverage[\s\S]*?₱0\.00[\s\S]*?Payments applied[\s\S]*?₱0\.00/);
+    assert.match(statementHtml, /Fee breakdown[\s\S]*?Approved coverage[\s\S]*?₱0\.00[\s\S]*?Payments applied[\s\S]*?₱0\.00/);
+    assert.match(statementHtml, /data-label="Payments applied">₱250\.00<\/td>/, 'the print statement shows applied payments as a positive applied amount, like the Finance account breakdown');
     assert.doesNotMatch(statementHtml, /−₱0\.00|\blegacy\b/i, 'student statement omits zero negative-looking deductions and old account terminology');
 
     studentFinanceLedger = {
@@ -245,7 +246,7 @@ test('student pages are separate, read-only destinations bound to the authentica
   });
 });
 
-test('student profile and enrollment history remain available when paper-clearance progress fails', async () => {
+test('student profile and enrollment history remain available when paper-clearance status fails', async () => {
   const student = {
     student_no: 'SHS-2026-0042', first_name: 'Rae', middle_name: null, last_name: 'Student', suffix: null,
     birth_date: '2009-05-10', sex: 'female', phone: '555-0100', address: 'Lucena', status: 'active'
@@ -279,8 +280,8 @@ test('student profile and enrollment history remain available when paper-clearan
     assert.match(html, /Rae Student/);
     assert.match(html, /Student number <strong>SHS-2026-0042<\/strong>/);
     assert.match(html, /2026-2027 · First/);
-    assert.match(html, /Paper-clearance progress is temporarily unavailable/);
-    assert.doesNotMatch(html, /No paper-clearance progress has been recorded/);
+    assert.match(html, /Paper-clearance status is temporarily unavailable/);
+    assert.doesNotMatch(html, /No paper clearance records are available yet/);
     assert.doesNotMatch(html, /private SQL text|student context|signer_name/i);
   });
 
@@ -359,7 +360,7 @@ test('unlinked student accounts receive clear empty states on every self-service
   });
 });
 
-test('student grades select one own semester and grading period with safe defaults and query validation', async () => {
+test('student grades select one own term and grading period with safe defaults and query validation', async () => {
   const gradeUserIds = [];
   const studentRecordsService = {
     async getOwnStudentRecord(userId) {
@@ -395,12 +396,12 @@ test('student grades select one own semester and grading period with safe defaul
     const defaultPage = await fetch(`${baseUrl}/student/grades`, { headers: { cookie } });
     const defaultHtml = await defaultPage.text();
     assert.equal(defaultPage.status, 200);
-    assert.match(defaultHtml, /<label for="student-grade-semester">Semester<\/label>/);
+    assert.match(defaultHtml, /<label for="student-grade-semester">Term<\/label>/);
     assert.match(defaultHtml, /<label for="student-grade-period">Grading period<\/label>/);
     assert.match(defaultHtml, /value="\[&#34;2026-2027&#34;,&#34;First&#34;\]" selected/);
     assert.match(defaultHtml, /value="Second Grading" selected/);
     assert.ok(defaultHtml.indexOf('value="First Grading"') < defaultHtml.indexOf('value="Second Grading"'), 'grading periods keep logical order');
-    assert.ok(defaultHtml.indexOf('2025-2026 · First') < defaultHtml.indexOf('2025-2026 · Second'), 'semester labels keep logical order');
+    assert.ok(defaultHtml.indexOf('2025-2026 · First') < defaultHtml.indexOf('2025-2026 · Second'), 'term labels keep logical order');
     assert.match(defaultHtml, /<td data-label="Grade">91<\/td>/);
     assert.doesNotMatch(defaultHtml, /<td data-label="Grade">84<\/td>|<td data-label="Grade">78<\/td>/);
     assert.equal((defaultHtml.match(/data-label="Subject">English/g) || []).length, 1, 'each subject is shown once for the selected period');

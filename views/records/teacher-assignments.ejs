@@ -6,7 +6,7 @@
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
   <section class="class-context-panel" aria-labelledby="assignment-context-title">
-    <div class="admin-section__heading"><div><h2 id="assignment-context-title">Class context</h2><p>Sections are tied to their academic term. Changing the term clears the section filter.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="assignment-context-title">Choose term and section</h2><p>Choose the term and section whose teacher assignments you want to view.</p></div></div>
     <form class="class-context-filter" method="get" action="/registrar/records/teacher-assignments" data-clear-section-on-term-change>
       <div class="field"><label for="assignment-term-context">Academic term</label>
         <select id="assignment-term-context" name="termId" required>
@@ -19,7 +19,7 @@
           <% for (const section of sections) { %><option value="<%= section.id %>" <%= Number(selectedSectionId) === Number(section.id) ? 'selected' : '' %>><%= formatStudentPlacement(section.grade_level, section.name) %></option><% } %>
         </select>
       </div>
-      <button class="button button--secondary" type="submit">Show class context</button>
+      <button class="button button--secondary" type="submit">Show assignments</button>
       <% if (selectedTermId) { %><a class="table-action" href="/registrar/records/teacher-assignments?termId=<%= selectedTermId %>">Clear section filter</a><% } %>
     </form>
     <% if (sectionFilterNotice) { %><p class="form-alert" role="status"><%= sectionFilterNotice %></p><% } %>
@@ -28,16 +28,22 @@
   </section>
 
   <section class="admin-section assignment-create-panel" aria-labelledby="create-teacher-assignment-title">
-    <div class="admin-section__heading"><div><h2 id="create-teacher-assignment-title">Assign a teacher</h2><p>Only active teacher accounts can receive assignments. Revoke an active assignment before transferring a class context.</p></div></div>
     <% if (!selectedTerm) { %>
+      <div class="admin-section__heading"><div><h2 id="create-teacher-assignment-title">Assign a teacher</h2></div></div>
       <p class="empty-state">Choose or create an academic term before assigning classes.</p>
     <% } else if (!sections.length) { %>
+      <div class="admin-section__heading"><div><h2 id="create-teacher-assignment-title">Assign a teacher</h2></div></div>
       <p class="empty-state">There are no sections in <strong><%= selectedTerm.school_year %> · <%= selectedTerm.term %></strong>. <a class="table-action" href="/registrar/records?view=setup&amp;openForm=section&amp;termId=<%= selectedTerm.id %>#section-name">Add a section for this term</a></p>
     <% } else if (!teachers.length) { %>
+      <div class="admin-section__heading"><div><h2 id="create-teacher-assignment-title">Assign a teacher</h2></div></div>
       <p class="empty-state">An active teacher account is needed before a class can be assigned.<% if (currentUser.role === 'database_admin') { %> <a class="table-action" href="/admin/users/new?category=staff&amp;role=teacher">Create a teacher account</a><% } else { %> Ask a database administrator to create the account.<% } %></p>
     <% } else if (!subjects.length) { %>
+      <div class="admin-section__heading"><div><h2 id="create-teacher-assignment-title">Assign a teacher</h2></div></div>
       <p class="empty-state">Add a subject to the catalog before assigning a class. <a class="table-action" href="/registrar/records/subjects?openForm=1#subject-code">Add a subject</a></p>
     <% } else { %>
+      <details class="assignment-create-details" <%= error ? 'open' : '' %>>
+        <summary id="create-teacher-assignment-title">Assign a teacher</summary>
+        <p>Only active teacher accounts can receive assignments. Revoke an active assignment before transferring a class.</p>
       <form class="form-stack records-compact-form" method="post" action="/registrar/records/teacher-assignments">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <input type="hidden" name="academicTermId" value="<%= selectedTermId %>">
@@ -49,6 +55,7 @@
         </div>
         <button class="button button--primary button--align-start" type="submit">Create assignment</button>
       </form>
+      </details>
     <% } %>
   </section>
 

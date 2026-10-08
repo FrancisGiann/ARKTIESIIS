@@ -10,10 +10,10 @@ const { FinanceReviewDraftError, createFinanceReviewDraftService } = require('./
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RETIRED_ACTION_TYPES = new Set(['legacy_account_create', 'legacy_transaction', 'legacy_enrollment_clearance']);
 const SAFE_ACTIONS = Object.freeze([
-  { type: 'document_clearance_decision', label: 'Document clearance decision', pattern: /^\/document-clearance\/([0-9a-f-]{36})\/decision$/, ids: ['requestId'] },
+  { type: 'document_clearance_decision', label: 'Document request fee review', pattern: /^\/document-clearance\/([0-9a-f-]{36})\/decision$/, ids: ['requestId'] },
   { type: 'schedule_create', label: 'Create fee schedule version', pattern: /^\/schedules$/, ids: [] },
   { type: 'annual_assessment', label: 'Post annual assessment', pattern: /^\/annual\/(\d{1,10})\/assessment$/, ids: ['annualId'] },
-  { type: 'annual_payment', label: 'Record payment and apply it to balances', pattern: /^\/students\/(\d{1,10})\/annual\/payments$/, ids: ['studentId'] },
+  { type: 'annual_payment', label: 'Review payment', pattern: /^\/students\/(\d{1,10})\/annual\/payments$/, ids: ['studentId'] },
   { type: 'annual_credit_allocation', label: 'Apply unused payment credit', pattern: /^\/students\/(\d{1,10})\/annual\/credits\/(\d{1,18})\/allocate$/, ids: ['studentId', 'paymentId'] },
   { type: 'annual_adjustment', label: 'Adjust an assessed charge', pattern: /^\/students\/(\d{1,10})\/annual\/charges\/(\d{1,18})\/adjustments$/, ids: ['studentId', 'chargeId'] },
   { type: 'annual_handbook_reference', label: 'Update finance handbook reference', pattern: /^\/students\/(\d{1,10})\/annual\/(\d{1,10})\/handbook-number$/, ids: ['studentId', 'annualId'] },
@@ -21,7 +21,7 @@ const SAFE_ACTIONS = Object.freeze([
   { type: 'annual_supplementary_charge', label: 'Add supplementary charge', pattern: /^\/students\/(\d{1,10})\/annual\/terms\/(\d{1,10})\/supplementary-charges$/, ids: ['studentId', 'enrollmentId'] },
   { type: 'annual_special_subject_charge', label: 'Bill special-subject charge', pattern: /^\/students\/(\d{1,10})\/annual\/special-subjects\/(\d{1,10})\/bill$/, ids: ['studentId', 'specialSubjectId'] },
   { type: 'annual_exemption', label: 'Approve finance exemption', pattern: /^\/students\/(\d{1,10})\/annual\/(\d{1,10})\/exemptions$/, ids: ['studentId', 'annualId'] },
-  { type: 'departure_review', label: 'Review departure charges', pattern: /^\/departure-cases\/(\d{1,10})\/review$/, ids: ['caseId'] },
+  { type: 'departure_review', label: 'Review fees for a stopped or transferred student', pattern: /^\/departure-cases\/(\d{1,10})\/review$/, ids: ['caseId'] },
   { type: 'annual_payment_reversal', label: 'Reverse recorded payment', pattern: /^\/students\/(\d{1,10})\/annual\/payments\/(\d{1,18})\/reverse$/, ids: ['studentId', 'paymentId'] },
   { type: 'annual_adjustment_reversal', label: 'Reverse charge adjustment', pattern: /^\/students\/(\d{1,10})\/annual\/adjustments\/(\d{1,18})\/reverse$/, ids: ['studentId', 'adjustmentId'] },
   { type: 'legacy_payment_reconciliation', label: 'Apply earlier payment to a balance', pattern: /^\/students\/(\d{1,10})\/annual\/legacy-payments\/(\d{1,18})\/reconcile$/, ids: ['studentId', 'transactionId'] },
@@ -186,7 +186,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
 
   function actionForDraft(actionType) {
     if (RETIRED_ACTION_TYPES.has(actionType)) {
-      throw new FinanceReviewDraftError('This legacy account review has been retired. Discard it from Saved reviews.', 410);
+      throw new FinanceReviewDraftError('This legacy account review has been retired. Discard it from Unfinished reviews.', 410);
     }
     const action = SAFE_ACTIONS.find((item) => item.type === actionType);
     if (!action) throw new FinanceReviewDraftError('The saved finance action is no longer supported.', 410);
@@ -579,7 +579,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       [['specialSubjectId', sql.BigInt, context.specialSubjectId], ['studentId', sql.Int, context.studentId]]);
     }
     if (context.caseId) {
-      await row('Departure review', `SELECT CONCAT(annual.school_year, ' · ', annual.grade_level, ' · ', departure.departure_type,
+      await row('Stopped or transferred review', `SELECT CONCAT(annual.school_year, ' · ', annual.grade_level, ' · ', departure.departure_type,
           ' · effective ', DATE_FORMAT(departure.effective_date, '%Y-%m-%d'), ' · Finance status ', departure.finance_status) AS target
         FROM finance_departure_cases AS departure INNER JOIN annual_enrollments AS annual ON annual.id = departure.annual_enrollment_id
         WHERE departure.id = @caseId`, [['caseId', sql.BigInt, context.caseId]]);

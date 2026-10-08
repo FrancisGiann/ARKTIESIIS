@@ -1,0 +1,99 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page records-page clearance-dashboard-page" id="main-content">
+  <%- include('partials/clearance-workspace-tabs', { activeTab: 'overview' }) %>
+  <% const filtersOpen = Boolean(needsTermSelection);
+    const statusHref = (status) => {
+      const params = new URLSearchParams();
+      params.set('search', filters.search || '');
+      if (!usesDefaultTerm) {
+        params.set('schoolYear', filters.schoolYear || '');
+        params.set('termId', filters.termId || '');
+      }
+      params.set('status', status);
+      params.set('page', '1');
+      return `/registrar/records/clearance?${params.toString()}`;
+    };
+  %>
+  <section class="dashboard-heading clearance-dashboard-heading">
+    <div><h1>Paper clearance</h1><p>Record completed paper forms by student and term.</p></div>
+    <% if (usesDefaultTerm && currentTerm) { %>
+      <p class="clearance-dashboard-context"><span>Current period</span><strong><%= currentTerm.school_year %> · <%= currentTerm.term %></strong></p>
+    <% } else if (needsTermSelection) { %>
+      <p class="clearance-dashboard-context" role="status">No clear current term is set. Choose a year or term, or review all terms.</p>
+    <% } else if (filters.termId) { const selectedTerm = terms.find((term) => String(term.id) === String(filters.termId)); %>
+      <% if (selectedTerm) { %><p class="clearance-dashboard-context"><span>Selected period</span><strong><%= selectedTerm.school_year %> · <%= selectedTerm.term %></strong></p><% } %>
+    <% } else if (filters.schoolYear) { %>
+      <p class="clearance-dashboard-context"><span>Selected school year</span><strong><%= filters.schoolYear %></strong></p>
+    <% } else { %>
+      <p class="clearance-dashboard-context"><span>Selected period</span><strong>All school years and terms</strong></p>
+    <% } %>
+  </section>
+
+  <section class="clearance-dashboard-summary" aria-labelledby="clearance-summary-title">
+    <h2 id="clearance-summary-title" class="visually-hidden">Clearance status</h2>
+    <div class="clearance-dashboard-primary-statuses">
+      <% for (const [value, label, count] of [['pending', 'Not completed', counts.pending], ['complete', 'Completed', counts.completed]]) { const selected = filters.status === value; %>
+        <a class="clearance-dashboard-status-link clearance-dashboard-status-link--<%= value %> <%= selected ? 'is-selected' : '' %>" href="<%= statusHref(value) %>" aria-label="Filter to <%= label.toLowerCase() %>: <%= count %> term entries"<% if (selected) { %> aria-current="true"<% } %>>
+          <span><%= label %></span><strong><%= count %></strong>
+        </a>
+      <% } %>
+    </div>
+  </section>
+
+  <form class="clearance-dashboard-filters" method="get" action="/registrar/records/clearance" aria-label="Filter clearance by student and period">
+    <input type="hidden" name="status" value="<%= filters.status %>">
+    <div class="clearance-dashboard-search-row">
+      <div class="field clearance-dashboard-search"><label for="clearance-search">Search students</label><input id="clearance-search" type="search" name="search" maxlength="100" value="<%= filters.search %>" autocomplete="off"></div>
+      <button class="button button--primary clearance-dashboard-search-submit" type="submit">Search</button>
+      <a class="clearance-dashboard-reset" href="/registrar/records/clearance">Reset</a>
+    </div>
+    <details class="clearance-dashboard-filter-more" open data-clearance-filter-more data-default-open="<%= filtersOpen ? 'true' : 'false' %>">
+      <summary>More filters</summary>
+      <div class="clearance-dashboard-filter-fields">
+        <div class="field"><label for="clearance-school-year">School year</label><select id="clearance-school-year" name="schoolYear"><option value="">All years</option><% for (const year of schoolYears) { %><option value="<%= year %>" <%= filters.schoolYear === year ? 'selected' : '' %>><%= year %></option><% } %></select></div>
+        <div class="field"><label for="clearance-term">Term</label><select id="clearance-term" name="termId"><option value="">All terms</option><% for (const term of terms) { %><option value="<%= term.id %>" <%= String(filters.termId) === String(term.id) ? 'selected' : '' %>><%= term.school_year %> · <%= term.term %></option><% } %></select></div>
+      </div>
+    </details>
+  </form>
+
+  <section class="clearance-dashboard-results" aria-labelledby="clearance-results-title">
+    <div class="clearance-dashboard-results-heading"><div><h2 id="clearance-results-title">Student clearance by term</h2><p><%= pagination.totalRecords %> matching term placement<%= pagination.totalRecords === 1 ? '' : 's' %><% if (pagination.totalRecords) { %> · showing <%= pagination.from %>–<%= pagination.to %><% } %></p><% if (filters.status === 'not_attended' || filters.status === 'not_applicable') { %><p class="clearance-dashboard-active-filter" role="status">Filtered to <strong><%= filters.status === 'not_attended' ? 'Term not attended' : 'Outside required terms' %></strong></p><% } %></div></div>
+    <% if (rows.length) { %>
+      <div class="table-scroll" tabindex="0" aria-label="Clearance by student and term">
+        <table class="admin-table clearance-dashboard-table">
+          <thead class="clearance-dashboard-table-head"><tr><th scope="col">Student</th><th scope="col">School year and term</th><th scope="col">Grade and section</th><th scope="col">Status</th><th scope="col">Action</th></tr></thead>
+          <tbody><% for (const row of rows) { const studentName = [row.first_name, row.middle_name, row.last_name, row.suffix].filter(Boolean).join(' '); const pending = ['incomplete', 'not_reviewed'].includes(row.clearance_state); const statusLabel = row.clearance_state === 'complete' ? 'Completed' : pending ? 'Not completed' : row.clearance_state === 'not_attended' ? 'Term not attended' : row.clearance_state === 'not_applicable' ? 'Outside required terms' : 'Not completed'; const statusClass = pending ? 'pending' : row.clearance_state; %>
+            <tr><td class="clearance-dashboard-student" data-label="Student"><strong><%= studentName %></strong><span class="muted-copy clearance-dashboard-student-number"><%= row.student_no %></span></td>
+              <td class="clearance-dashboard-period" data-label="School year and term"><span><%= row.school_year %></span><span class="clearance-dashboard-separator" aria-hidden="true">·</span><strong><%= row.term_label %></strong></td>
+              <td class="clearance-dashboard-placement" data-label="Grade and section"><span><%= row.grade_level %></span><span class="clearance-dashboard-separator" aria-hidden="true">·</span><span class="muted-copy"><%= row.section_name || 'Section not assigned' %></span></td>
+              <td class="clearance-dashboard-row-status" data-label="Status"><span class="record-status clearance-status clearance-status--<%= statusClass %>"><%= statusLabel %></span></td>
+              <td class="clearance-dashboard-row-action" data-label="Action"><a class="table-action" href="/registrar/records/students/<%= row.student_id %>/clearance#clearance-term-<%= row.enrollment_id %>" aria-label="Open paper clearance checklist for <%= studentName %>, <%= row.school_year %> <%= row.term_label %>">Open checklist</a></td></tr>
+          <% } %></tbody>
+        </table>
+      </div>
+    <% } else { %><p class="empty-state clearance-dashboard-empty">No term entries match these filters. Change the search, school year, term, or status to see more.</p><% } %>
+    <% if (pagination.totalPages > 1) { const pageHref = (page) => { const params = new URLSearchParams(); params.set('search', filters.search); if (!usesDefaultTerm) { params.set('schoolYear', filters.schoolYear); params.set('termId', filters.termId); } params.set('status', filters.status); params.set('page', String(page)); return `/registrar/records/clearance?${params.toString()}`; }; %>
+      <nav class="clearance-dashboard-pagination" aria-label="Clearance result pages">
+        <% if (pagination.page > 1) { %><a class="button button--secondary" href="<%= pageHref(pagination.page - 1) %>">Previous</a><% } %>
+        <span>Page <%= pagination.page %> of <%= pagination.totalPages %></span>
+        <% if (pagination.page < pagination.totalPages) { %><a class="button button--secondary" href="<%= pageHref(pagination.page + 1) %>">Next</a><% } %>
+      </nav>
+    <% } %>
+  </section>
+  <details class="clearance-dashboard-status-meanings">
+    <summary>Status meanings and other filters</summary>
+    <p>Counts cover student-term records, not unique students. Search and period filters change counts; status filters only narrow the list.</p>
+    <nav class="clearance-dashboard-secondary-statuses" aria-label="Other clearance status filters">
+      <a class="clearance-dashboard-all-statuses" href="<%= statusHref('all') %>"<% if (filters.status === 'all') { %> aria-current="true"<% } %>>Show all term entries</a>
+      <a class="clearance-dashboard-exclusion-link <%= filters.status === 'not_attended' ? 'is-selected' : '' %>" href="<%= statusHref('not_attended') %>" aria-label="Filter to term not attended: <%= counts.notAttended %> term entries"<% if (filters.status === 'not_attended') { %> aria-current="true"<% } %>><strong><%= counts.notAttended %></strong> Term not attended</a>
+      <a class="clearance-dashboard-exclusion-link <%= filters.status === 'not_applicable' ? 'is-selected' : '' %>" href="<%= statusHref('not_applicable') %>" aria-label="Filter to outside required terms: <%= counts.notApplicable %> term entries"<% if (filters.status === 'not_applicable') { %> aria-current="true"<% } %>><strong><%= counts.notApplicable %></strong> Outside required terms</a>
+    </nav>
+    <ul>
+      <li><strong>Not completed:</strong> The registrar has not confirmed a completed paper form. This status does not show whether signatures have been collected.</li>
+      <li><strong>Completed:</strong> The registrar recorded the required paper signatures and confirmed inspection of the form.</li>
+      <li><strong>Term not attended:</strong> School records show no attendance for the entire term; the registrar records the reason. It is excluded and is not completed.</li>
+      <li><strong>Outside required terms:</strong> The placement is before entry or in a future term. It is not completed; a future term can be reviewed when applicable.</li>
+    </ul>
+  </details>
+</main>
+<%- include('../partials/foot') %>

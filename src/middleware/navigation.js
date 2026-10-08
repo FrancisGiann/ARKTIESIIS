@@ -3,8 +3,8 @@ const financeNavigationItems = [
   { id: 'finance-roster', label: 'Student accounts', href: '/finance', group: 'Finance' },
   { id: 'finance-schedules', label: 'Fee schedules', href: '/finance/schedules', group: 'Finance' },
   { id: 'finance-reports', label: 'Reports', href: '/finance/reports', group: 'Finance' },
-  { id: 'finance-departures', label: 'Departure review', href: '/finance/departures', group: 'Finance' },
-  { id: 'finance-review-drafts', label: 'Saved reviews', href: '/finance/review-drafts', group: 'Finance' }
+  { id: 'finance-departures', label: 'Stopped or transferred', href: '/finance/departures', group: 'Finance' },
+  { id: 'finance-review-drafts', label: 'Unfinished reviews', href: '/finance/review-drafts', group: 'Finance' }
 ];
 
 const navigationByRole = {
@@ -12,6 +12,7 @@ const navigationByRole = {
     { id: 'overview', label: 'Overview', href: '/admin', group: 'Workspace' },
     { id: 'accounts', label: 'User accounts', href: '/admin/users', group: 'People and records' },
     { id: 'students', label: 'Student records', href: '/registrar/records', group: 'People and records' },
+    { id: 'clearance', label: 'Paper clearance', href: '/registrar/records/clearance', group: 'People and records' },
     { id: 'pre-enrollments', label: 'Pre-enrollment records', href: '/pre-enrollments', group: 'People and records' },
     { id: 'audit', label: 'Activity log', href: '/admin/audit', group: 'Activity & documents' },
     { id: 'documents', label: 'Documents', href: '/documents', group: 'Activity & documents' },
@@ -20,6 +21,7 @@ const navigationByRole = {
   registrar: [
     { id: 'overview', label: 'Overview', href: '/registrar', group: 'Workspace' },
     { id: 'students', label: 'Student records', href: '/registrar/records', group: 'Records' },
+    { id: 'clearance', label: 'Paper clearance', href: '/registrar/records/clearance', group: 'Records' },
     { id: 'intake', label: 'Enrollments', href: '/registrar/intake', group: 'Records' },
     { id: 'pre-enrollments', label: 'Pre-enrollment records', href: '/pre-enrollments', group: 'Records' },
     { id: 'documents', label: 'Document review', href: '/documents', group: 'Records' },
@@ -63,7 +65,12 @@ function buildNavigation(role, currentPath = '') {
     else if (item.id === 'pre-enrollments') current = path.startsWith('/pre-enrollments');
     else if (item.id === 'accounts') current = path.startsWith('/admin/users') || path.startsWith('/admin/student-accounts');
     else if (item.id === 'audit') current = path === '/admin/audit';
-    else if (item.id === 'students') current = (path === '/registrar/records' && (role !== 'registrar' || query.get('view') !== 'setup')) || path.startsWith('/registrar/records/students') || path.startsWith('/registrar/records/return-evaluations');
+    else if (item.id === 'students') current = !/^\/registrar\/records\/students\/[^/]+\/clearance(?:\/|$)/.test(path)
+      && ((path === '/registrar/records' && (role !== 'registrar' || query.get('view') !== 'setup'))
+        || path.startsWith('/registrar/records/students') || path.startsWith('/registrar/records/return-evaluations'));
+    else if (item.id === 'clearance') current = path === '/registrar/records/clearance'
+      || path.startsWith('/registrar/records/clearance/')
+      || /^\/registrar\/records\/students\/[^/]+\/clearance(?:\/|$)/.test(path);
     else if (item.id === 'intake') current = path.startsWith('/registrar/intake');
     else if (item.id === 'subjects') current = path.startsWith('/registrar/records/subjects');
     else if (item.id === 'assignments') current = path.startsWith('/registrar/records/teacher-assignments');

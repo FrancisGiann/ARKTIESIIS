@@ -462,6 +462,8 @@ test('teacher assignment list keeps concise context and working status and revok
     assert.match(html, /name="termId"/);
     assert.match(html, /name="sectionId"/);
     assert.match(html, /<label for="assignment-term-context">Academic term<\/label>/);
+    assert.match(html, /<h2 id="assignment-context-title">Choose term and section<\/h2>/);
+    assert.match(html, /<button class="button button--secondary" type="submit">Show assignments<\/button>/);
     assert.match(html, /<label for="assignment-section-context">Section<\/label>/);
     assert.match(html, /<label for="assignment-section">Section<\/label>/);
     assert.match(html, /<label for="teacher-id">Teacher<\/label>/);
@@ -477,6 +479,7 @@ test('teacher assignment list keeps concise context and working status and revok
     assert.equal(createResponse.status, 409);
     const createErrorHtml = await createResponse.text();
     assert.match(createErrorHtml, /The selected term, section, or subject is unavailable/);
+    assert.match(createErrorHtml, /<details class="assignment-create-details" open>[\s\S]*?<summary id="create-teacher-assignment-title">Assign a teacher<\/summary>/);
     assert.match(createErrorHtml, /name="academicTermId" value="2"/);
     assert.match(createErrorHtml, /<option value="3" selected>Grade 11 · Section A<\/option>/);
     assert.match(createErrorHtml, /option value="6" selected/);

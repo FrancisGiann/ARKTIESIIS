@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-review-page" id="main-content">
-  <a class="context-back" href="/finance/review-drafts">Back to saved reviews</a>
+  <a class="context-back" href="/finance/review-drafts">Back to unfinished reviews</a>
   <header class="dashboard-heading">
     <div><p class="eyebrow">Finance · Review before saving</p><h1><%= actionLabel %></h1><p>Check the complete update below. Saving applies it once and records the reviewed result together.</p></div>
   </header>
@@ -27,7 +27,7 @@
     <% } %>
     <% if (draft.preview.targetDetails?.length) { %>
       <dl class="finance-review-fields finance-review-targets" aria-label="Current record being updated">
-        <% for (const target of draft.preview.targetDetails) { %><div><dt><%= target.label %></dt><dd><%= target.value %></dd></div><% } %>
+        <% for (const target of draft.preview.targetDetails) { %><div><dt><%= target.label %></dt><dd><%= target.label === 'Stopped or transferred review' ? String(target.value).replace(/\bdropped\b/gi, 'stopped') : target.value %></dd></div><% } %>
       </dl>
     <% } %>
 
@@ -75,7 +75,7 @@
     <% } %>
 
     <% if (draft.preview.departureAdjustments?.length) { %>
-      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Reviewed departure charge corrections">
+      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Reviewed fees and corrections for a stopped or transferred student">
         <table class="admin-table"><caption>Charge corrections</caption><thead><tr><th>Charge</th><th>Amount</th><th>Reason</th></tr></thead>
           <tbody><% for (const item of draft.preview.departureAdjustments) { %><tr><td data-label="Charge"><%= item.charge %></td><td data-label="Amount">₱<%= item.amount %></td><td data-label="Reason"><%= item.reason %></td></tr><% } %></tbody>
         </table>
@@ -186,7 +186,7 @@
     </form>
     <form method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/discard">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-      <button class="button button--secondary" type="submit">Discard draft</button>
+        <button class="button button--secondary" type="submit">Discard unfinished review</button>
     </form>
   </div>
 </main>

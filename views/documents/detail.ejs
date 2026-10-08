@@ -44,10 +44,10 @@
 
   <section class="admin-section document-detail-card document-submission-facts" aria-labelledby="submission-title">
     <div class="admin-section__heading"><div><h2 id="submission-title">Submission</h2><p><% if (document.isArchivedReportCard) { %>This historical report-card file is retained as a read-only archive. New previous-school report-card scans are enrollment submissions; current grades use the separate teacher workbook review workflow.<% } else if (document.document_type === 'report_card') { %>This digital scan was submitted as an enrollment requirement. It receives a limited precheck for the visible linked student name and configured file format. Staff inspect the source and make every final decision. The precheck does not extract or change grades.<% } else if (document.document_type === 'form_137') { %>This is a historical Form 137 file. New records use a separate physical status workflow; authorized staff may send a temporary scan to Gemini for field suggestions. Scans and suggestions are not retained in that workflow.<% } else if (isStaff) { %>Gemini provides field suggestions for staff. Inspect the source file before making a decision.<% } else { %>This is the file submitted for review. Staff make the final decision after inspecting the source.<% } %></p></div></div>
-    <dl class="student-profile-grid">
+    <dl class="student-profile-grid document-precheck-facts">
       <div><dt>File name</dt><dd><%= document.original_filename %></dd></div>
       <div><dt>File type</dt><dd><%= document.mime_type %></dd></div>
-      <div><dt>File size</dt><dd><%= (Number(document.file_size_bytes) / 1048576).toFixed(2) %> MB</dd></div>
+      <div><dt>File size</dt><dd><%= Number.isFinite(Number(document.file_size_bytes)) && Number(document.file_size_bytes) >= 0 ? `${(Number(document.file_size_bytes) / 1048576).toFixed(2)} MB` : 'Not recorded' %></dd></div>
       <div><dt>Status</dt><dd><%= documentStatusLabel(document.status, latestDecision?.decision_type, document.reviewEvents?.[0]?.action_type, document.document_type, document.is_legacy_archive) %></dd></div>
       <div><dt>Uploaded</dt><dd><%= document.created_at ? new Date(document.created_at).toLocaleString() : '—' %></dd></div>
       <div><dt>Submission version</dt><dd><%= document.supersedes_document_id ? `Corrected from submission #${document.supersedes_document_id}` : 'Original submission' %></dd></div>
@@ -68,7 +68,7 @@
             <span><%= reportCardOutcome === 'pass' ? 'The visible name matched the linked student record and the supported file format matched.' : reportCardOutcome === 'attention' ? 'The name or file-format check needs source inspection.' : 'Gemini or file processing did not complete. The submission remains available for staff review.' %></span>
           </div>
           <p class="muted-copy"><%= document.validation.message %></p>
-          <dl class="student-profile-grid">
+          <dl class="student-profile-grid document-precheck-facts">
             <div><dt>File format</dt><dd><%= document.validation.formatCheckPassed ? 'Supported PDF, JPEG, or PNG' : 'Unsupported or mismatched format' %></dd></div>
             <div><dt>Processor</dt><dd><%= document.validation.processor %></dd></div>
             <div><dt>Processed</dt><dd><%= document.validation.created_at ? new Date(document.validation.created_at).toLocaleString() : '—' %></dd></div>
@@ -110,7 +110,7 @@
       <p class="document-precheck-scope">A pass means the extracted student name matched the linked record and configured field/context and file-format checks found expected values. It does not establish authenticity or acceptance, prove issuer identity, confirm every required field, or confirm page completeness. Inspect every page before recording a decision.</p>
       <% if (document.validation) { %>
         <p class="muted-copy"><%= document.validation.message %></p>
-        <dl class="student-profile-grid">
+        <dl class="student-profile-grid document-precheck-facts">
           <div><dt>Gemini field result</dt><dd><%= document.validation.legacyOcrOnly ? 'Legacy OCR-only · Needs review' : automatedCheckOutcome === 'pass' ? 'Configured fields and context found' : automatedCheckOutcome === 'attention' ? 'One or more fields or context clues need review' : 'Unavailable' %></dd></div>
           <div><dt>File format</dt><dd><%= document.validation.formatCheckPassed ? 'Supported PDF, JPEG, or PNG' : 'Unsupported or mismatched format' %></dd></div>
           <div><dt>Processor</dt><dd><%= document.validation.processor %></dd></div>

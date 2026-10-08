@@ -2,7 +2,7 @@
 <main class="page-shell admin-page records-page annual-term-activation-review" id="main-content">
   <a class="context-back" href="/registrar/intake">Back to enrollments</a>
   <header class="dashboard-heading">
-    <div><h1>Review term activation</h1><p>Earlier attended terms need complete paper signatures and registrar confirmation before this term can be activated.</p></div>
+    <div><h1>Review term activation</h1><p>Earlier attended terms must have a completed paper form confirmed by the registrar before this term can be activated.</p></div>
   </header>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% if (!review) { %>
@@ -12,16 +12,15 @@
       <div class="admin-section__heading"><div><h2 id="activation-target-title"><%= review.targetTermLabel %> · Term <%= review.targetTermNumber || 'not recorded' %></h2><p><strong><%= review.studentName || 'Student name not recorded' %></strong><% if (review.studentNo) { %> · Student no. <%= review.studentNo %><% } %> · <%= review.schoolYear || 'School year not recorded' %> · <%= review.gradeLevel || 'Grade not recorded' %><% if (review.sectionName) { %> · <%= review.sectionName %><% } %></p></div></div>
       <% if (review.terms.length) { %>
         <div class="table-scroll" tabindex="0" aria-label="Earlier term paper form reviews">
-          <table class="admin-table"><thead><tr><th scope="col">Earlier term</th><th scope="col">Paper form status</th><th scope="col">Required signatures</th><th scope="col">Recorded signatures</th></tr></thead>
-            <tbody><% for (const term of review.terms) { const labels = { complete: 'Complete', not_attended: 'Did not attend · reason recorded', not_applicable: 'Not applicable', missing_placement: 'Term placement missing', missing: 'Attendance review needed', unreviewed: 'Attendance review needed', invalid_exclusion: 'Attendance decision needs correction', incomplete: term.awaitingConfirmation ? 'Waiting for registrar confirmation' : 'Signatures or review incomplete' }; %><tr>
-              <th scope="row"><%= term.termLabel %></th><td data-label="Paper form status"><%= labels[term.state] || 'Review needed' %></td>
-              <td data-label="Required signatures"><%= term.requiredCount == null ? '—' : term.requiredCount %></td><td data-label="Recorded signatures"><%= term.signedCount == null ? '—' : term.signedCount %></td>
+          <table class="admin-table"><thead><tr><th scope="col">Earlier term</th><th scope="col">Paper clearance status</th></tr></thead>
+            <tbody><% for (const term of review.terms) { const labels = { complete: 'Completed', not_attended: 'Term not attended · reason recorded', not_applicable: 'Outside required terms', missing_placement: 'Not completed · placement record needed', missing: 'Not completed', unreviewed: 'Not completed', invalid_exclusion: 'Not completed · attendance reason needs correction', incomplete: 'Not completed' }; %><tr>
+              <th scope="row"><%= term.termLabel %></th><td data-label="Paper clearance status"><%= labels[term.state] || 'Not completed' %></td>
             </tr><% } %></tbody>
           </table>
         </div>
       <% } else { %><p>No earlier applicable term is required before this placement.</p><% } %>
       <% if (review.blockers.length) { %><ul class="form-alert" aria-label="Paper form items to resolve"><% for (const blocker of review.blockers) { %><li><%= blocker %></li><% } %></ul><% } else { %><p class="form-success" role="status">All required earlier-term paper forms are complete.</p><% } %>
-      <p><a class="table-action" href="/registrar/records/students/<%= review.studentId %>/clearance">Open the student’s Clearance tab</a></p>
+      <p><a class="table-action" href="/registrar/records/students/<%= review.studentId %>/clearance">Open the Paper clearance workspace</a></p>
     </section>
     <section class="admin-section" aria-labelledby="activate-term-title">
       <div class="admin-section__heading"><div><h2 id="activate-term-title">Activate placement</h2><p>Earlier paper forms are checked again when you save. If a review changes, reload this page before continuing.</p></div></div>

@@ -7,10 +7,11 @@
       <a href="/finance/students/<%= ledger.student.id %>/annual?<%= query.toString() %>"<% if (accountView === tab.view) { %> aria-current="page"<% } %>><%= tab.label %></a>
     <% } %>
   </nav>
-  <% if (notice) { %><p class="form-success" role="status"><%= ({assessmentPosted:'Annual assessment posted.', paymentRecorded:'Payment recorded.', creditAllocated:'Unused payment credit applied.', allocationReleased:'Payment application removed; the amount is available as unused credit.', legacyReconciliationReleased:'Earlier payment application removed; the amount returned to its source.', legacyOpeningTransferred:'Confirmed previous balance recorded.', paymentMetadataUpdated:'Payment details updated.', adjustmentRecorded:'Adjustment recorded.', supplementaryChargeAdded:'Supplementary charge recorded.', specialSubjectBilled:'Special-subject charge recorded.', exemptionApproved:'Finance exemption approved.', paymentReversed:'Payment reversal recorded.', adjustmentReversed:'Adjustment reversal recorded.', legacyPaymentReconciled:'Earlier payment applied to a balance.', termClearanceSigned:'Term-end clearance signed.', voucherReviewResolved:'Voucher review resolution recorded.', handbookNumberUpdated:'Finance handbook reference saved.', feeCommentAdded:'Fee comment appended to history.'})[notice] || 'Finance update saved.' %></p><% } %>
+  <% if (notice) { %><p class="form-success" role="status"><%= ({assessmentPosted:'Annual assessment posted.', paymentRecorded:'Payment recorded.', creditAllocated:'Unused payment credit applied.', allocationReleased:'Payment application removed; the amount is available as unused credit.', legacyReconciliationReleased:'Earlier payment application removed; the amount returned to its source.', legacyOpeningTransferred:'Confirmed previous balance recorded.', paymentMetadataUpdated:'Payment details updated.', adjustmentRecorded:'Adjustment recorded.', supplementaryChargeAdded:'Supplementary charge recorded.', specialSubjectBilled:'Special-subject charge recorded.', exemptionApproved:'Finance exemption approved.', paymentReversed:'Payment reversal recorded.', adjustmentReversed:'Adjustment reversal recorded.', legacyPaymentReconciled:'Earlier payment applied to a balance.', termClearanceSigned:'Term account clearance recorded.', voucherReviewResolved:'Voucher review resolution recorded.', handbookNumberUpdated:'Finance handbook reference saved.', feeCommentAdded:'Fee comment appended to history.'})[notice] || 'Finance update saved.' %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% if (preservedValues?.length) { %><details class="finance-form-recovery" open><summary>Values from your previous submission</summary><p>The form values are still available below or here while you correct the highlighted information.</p><dl class="finance-review-fields"><% for (const field of preservedValues) { %><div><dt><%= field.name %></dt><dd><%= field.value %></dd></div><% } %></dl></details><% } %>
   <% const failedInputFor = (path) => failedAction?.path === path ? (failedAction.input || {}) : {}; %>
+  <% const financeAccountHref = (view) => { const query = new URLSearchParams({ view }); const backQuery = new URLSearchParams(backHref.split('?')[1] || ''); for (const [key, value] of backQuery) query.set(`back${key[0].toUpperCase()}${key.slice(1)}`, value); return `/finance/students/${ledger.student.id}/annual?${query.toString()}`; }; %>
   <% if (ledger.student.status === 'archived') { %><p class="form-alert" role="status">Archived student financial history is read-only.</p><% } %>
   <% const allocationTargets = [
     ...ledger.openingLiabilities.map((opening, index) => ({ value: `opening:${opening.opening_liability_id}`, label: `Confirmed previous balance · ${opening.source_label}`, balance: opening.amount_due, order: index })),
@@ -19,7 +20,7 @@
 
   <% const currentTermPlacement = ledger.terms.find((term) => term.is_current === true || term.is_current === 1 || term.is_current === '1'); %>
   <% const annualFeesDue = typeof annualFeeBalance === 'undefined' ? ledger.summary.allYearsAnnualBalance : annualFeeBalance; %>
-  <section class="finance-panel" aria-labelledby="annual-balance-heading" data-finance-view="overview payments charges clearance history">
+  <section class="finance-panel" aria-labelledby="annual-balance-heading" data-finance-view="overview">
     <div class="admin-section__heading"><div><h2 id="annual-balance-heading">Balance summary</h2><p>Account balance combines fees due across all school years with any earlier account balances. Unused payment credit stays separate from fees due until applied.</p></div></div>
     <dl class="finance-account-balance-summary">
       <div class="finance-account-balance-summary__total"><dt>Account balance</dt><dd>₱<strong><%= formatMoney(ledger.summary.totalBalance) %></strong></dd></div>
@@ -45,6 +46,10 @@
     </details>
   </section>
 
+  <section class="finance-account-quick-summary" aria-label="Account balance and unused credit" data-finance-view="payments charges clearance history">
+    <p><strong>Account balance:</strong> ₱<%= formatMoney(ledger.summary.totalBalance) %> <span>· School-year fees due: ₱<%= formatMoney(annualFeesDue) %></span><% if (Number(ledger.summary.availableCredit) > 0) { %> <span>· Unused credit: ₱<%= formatMoney(ledger.summary.availableCredit) %></span><% } %></p>
+  </section>
+
   <% if (preview) { %>
     <section class="finance-panel" aria-labelledby="assessment-preview-title" data-finance-view="charges">
       <div class="admin-section__heading"><div><h2 id="assessment-preview-title">Assessment preview · <%= preview.parent.school_year %> · <%= preview.parent.grade_level %> · <%= preview.parent.voucher_code %></h2><p>Schedule version <%= preview.scheduleVersion %>. Review all selected student-payable charges before confirming.</p></div></div>
@@ -65,7 +70,7 @@
     <div class="admin-section__heading"><div><h2 id="charge-history-title">Fee breakdown</h2><p>For each fee: assessed amount − approved coverage + other adjustments − payments applied = remaining due. Term balances above are included in these all-years fees.</p></div></div>
     <% if (!chargeBreakdown.length) { %><p class="empty-state">No annual fees have been assessed. The account balance may still include an earlier account balance.</p><% } else { %>
       <div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Year and term</th><th>Fee and installment</th><th>Assessed amount</th><th>Approved coverage</th><th>Other adjustments</th><th>Payments applied</th><th>Remaining due</th><% if (accountView === 'charges') { %><th>Action</th><% } %></tr></thead><tbody>
-        <% for (const charge of chargeBreakdown) { const adjustmentPath = `/students/${ledger.student.id}/annual/charges/${charge.charge_id}/adjustments`; const adjustmentRecovery = failedInputFor(adjustmentPath); const commentPath = `/students/${ledger.student.id}/annual/charges/${charge.charge_id}/comments`; const commentRecovery = failedInputFor(commentPath); %><tr><td data-label="Year and term"><%= charge.school_year %> · <%= charge.term %></td><td data-label="Fee and installment"><div class="finance-charge-description"><strong><%= charge.line_name %> · <%= charge.installment %></strong><span class="muted-copy"><%= charge.fee_category %></span></div></td><td data-label="Assessed amount">₱<%= formatMoney(charge.assessed_amount) %></td><td data-label="Approved coverage">₱<%= formatMoney(charge.coverage_amount) %></td><td data-label="Other adjustments">₱<%= formatMoney(charge.other_adjustments) %></td><td data-label="Payments applied">₱<%= formatMoney(charge.applied_amount) %></td><td data-label="Remaining due">₱<%= formatMoney(charge.due_amount) %></td><% if (accountView === 'charges') { %><td data-label="Action"><div class="finance-charge-actions">
+        <% for (const charge of chargeBreakdown) { const adjustmentPath = `/students/${ledger.student.id}/annual/charges/${charge.charge_id}/adjustments`; const adjustmentRecovery = failedInputFor(adjustmentPath); const commentPath = `/students/${ledger.student.id}/annual/charges/${charge.charge_id}/comments`; const commentRecovery = failedInputFor(commentPath); %><tr><td data-label="Year and term"><%= charge.school_year %> · <%= charge.term %></td><td data-label="Fee and installment"><div class="finance-charge-description"><strong><%= charge.line_name %> · <%= charge.installment %></strong><span class="muted-copy"><%= String(charge.fee_category).replaceAll('_', ' ').replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()) %></span></div></td><td data-label="Assessed amount">₱<%= formatMoney(charge.assessed_amount) %></td><td data-label="Approved coverage">₱<%= formatMoney(charge.coverage_amount) %></td><td data-label="Other adjustments">₱<%= formatMoney(charge.other_adjustments) %></td><td data-label="Payments applied">₱<%= formatMoney(charge.applied_amount) %></td><td data-label="Remaining due">₱<%= formatMoney(charge.due_amount) %></td><% if (accountView === 'charges') { %><td data-label="Action"><div class="finance-charge-actions">
           <details <%= failedAction?.path === adjustmentPath ? 'open' : '' %>><summary>Add adjustment</summary><form class="form-stack" method="post" action="/finance/students/<%= ledger.student.id %>/annual/charges/<%= charge.charge_id %>/adjustments"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= tokens[`adjustment:${charge.charge_id}`] %>"><label class="field"><span>Signed adjustment amount (PHP)</span><input name="amount" inputmode="decimal" maxlength="14" value="<%= adjustmentRecovery.amount || '' %>" required></label><label class="field"><span>Reason</span><textarea name="reason" rows="2" maxlength="1000" required><%= adjustmentRecovery.reason || '' %></textarea></label><button class="button button--secondary" type="submit">Record adjustment</button></form></details>
           <% const chargeComments = (ledger.feeComments || []).filter((item) => Number(item.charge_id) === Number(charge.charge_id)); %>
           <details <%= failedAction?.path === commentPath ? 'open' : '' %>><summary>Fee comments · <%= chargeComments.length %></summary><ul class="document-review-history"><% for (const comment of chargeComments) { %><li><strong><%= comment.actor_name %> · <%= new Date(comment.created_at).toLocaleString() %></strong><p><%= comment.comment %></p></li><% } %></ul><form class="form-stack" method="post" action="/finance/students/<%= ledger.student.id %>/annual/charges/<%= charge.charge_id %>/comments"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= tokens[`feeComment:${charge.charge_id}`] %>"><label class="field"><span>Append comment</span><textarea name="comment" rows="2" maxlength="1000" required><%= commentRecovery.comment || '' %></textarea></label><button class="button button--secondary" type="submit">Add fee comment</button></form></details>
@@ -105,7 +110,7 @@
           <% } %>
         </section>
       <% } else { %>
-        <section class="finance-panel" aria-labelledby="placements-<%= annualRecord.annual_enrollment_id %>" data-finance-view="overview clearance">
+        <section class="finance-panel" aria-labelledby="placements-<%= annualRecord.annual_enrollment_id %>" data-finance-view="overview clearance charges">
           <div class="admin-section__heading"><div><h2 id="placements-<%= annualRecord.annual_enrollment_id %>">Term placements · <%= annualRecord.school_year %></h2><p><%= annualRecord.grade_level %> · <%= annualRecord.voucher_code %> · Assessment schedule version <%= annualRecord.schedule_version %></p></div></div>
           <div class="physical-requirements-list">
             <% if (annualRecord.terms.some((term) => term.voucher_review_required === true || term.voucher_review_required === 1)) { %>
@@ -124,27 +129,28 @@
             <% } %>
             <% for (const term of annualRecord.terms) { %>
               <article class="physical-requirements-item">
-                <header class="physical-requirements-item__heading"><div><h3><%= term.term %> · <%= term.section_name || 'No section' %></h3><p><%= [term.cluster, term.strand, term.adviser, term.modality === 'modular' ? `Modular ${term.modular_subtype || ''}` : term.modality].filter(Boolean).join(' · ') %></p></div></header>
-                <p><strong>Placement:</strong> <%= term.enrollment_status.replaceAll('_', ' ') %> · <strong>Current due:</strong> ₱<%= formatMoney(term.outstanding) %></p>
-                <p><strong>Registrar enrollment:</strong> <%= term.term_scope_status === 'not_applicable' ? 'Not applicable before entry term' : term.registrar_confirmation_id ? 'Confirmed by registrar' : 'Needs registrar confirmation' %> · <strong>Signed term-end clearance:</strong> <%= term.signed_clearance_status === 'signed' ? 'Signed' : 'Not signed' %></p>
-                <% if (term.signed_clearance_status !== 'signed' && ['enrolled','pending_payment','cancelled','dropped','transferred'].includes(term.enrollment_status)) { %>
+                <% const enrollmentLabels = { pending_payment: 'Pending activation', enrolled: 'Enrolled', cancelled: 'Cancelled', dropped: 'Stopped studying', transferred: 'Transferred' }; const modalityLabel = term.modality === 'modular' ? (term.modular_subtype ? `Modular · ${term.modular_subtype}` : 'Modular') : ({ face_to_face: 'Face-to-face', online: 'Online', hybrid: 'Hybrid' })[term.modality] || term.modality; const placementContext = [...new Set([term.cluster, term.strand, term.adviser, modalityLabel].filter(Boolean))]; %>
+                <header class="physical-requirements-item__heading"><div><h3><%= term.term %> · <%= term.section_name || 'No section' %></h3><% if (placementContext.length) { %><p><%= placementContext.join(' · ') %></p><% } %></div></header>
+                <p><strong>Placement:</strong> <%= enrollmentLabels[term.enrollment_status] || String(term.enrollment_status || 'Not recorded').replaceAll('_', ' ').replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()) %> · <strong>Current due:</strong> ₱<%= formatMoney(term.outstanding) %></p>
+                <p><strong>Registrar enrollment:</strong> <%= term.term_scope_status === 'not_applicable' ? 'Not applicable before entry term' : term.registrar_confirmation_id ? 'Confirmed by registrar' : 'Needs registrar confirmation' %> · <strong>Term account clearance:</strong> <%= term.signed_clearance_status === 'signed' ? 'Recorded' : 'Not recorded' %></p>
+                <% if (accountView === 'clearance' && term.signed_clearance_status !== 'signed' && ['enrolled','pending_payment','cancelled','dropped','transferred'].includes(term.enrollment_status)) { %>
                   <% const clearancePath = `/annual/terms/${term.enrollment_id}/clearance`; const clearanceRecovery = failedInputFor(clearancePath); %>
                   <details class="finance-account-action" <%= failedAction?.path === clearancePath ? 'open' : '' %>>
-                    <summary>Enter signed term-end clearance details</summary>
-                    <form class="form-stack" method="post" action="/finance/annual/terms/<%= term.enrollment_id %>/clearance">
+                    <summary>Record term account clearance</summary>
+                    <form class="form-stack" method="post" action="/finance/annual/terms/<%= term.enrollment_id %>/clearance?view=clearance">
                       <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="studentId" value="<%= ledger.student.id %>"><input type="hidden" name="idempotencyKey" value="<%= tokens[`clearance:${term.enrollment_id}`] %>">
-                      <label class="checkbox-field"><input type="checkbox" name="confirmClearance" value="1" <%= clearanceRecovery.confirmClearance === '1' || clearanceRecovery.confirmClearance === true ? 'checked' : '' %> required><span>I confirm this is a signed term-end clearance or departure clearance decision. Any remaining debt stays on the account.</span></label>
+                      <label class="checkbox-field"><input type="checkbox" name="confirmClearance" value="1" <%= clearanceRecovery.confirmClearance === '1' || clearanceRecovery.confirmClearance === true ? 'checked' : '' %> required><span>I confirm the signed paper decision was reviewed. Any remaining debt stays on the account.</span></label>
                       <label class="field"><span>Clearance reason</span><textarea name="reason" rows="2" maxlength="1000" required><%= clearanceRecovery.reason || '' %></textarea></label>
                       <label class="field"><span>Payment arrangement <span class="field__optional">(required if a balance remains)</span></span><textarea name="arrangement" rows="2" maxlength="1000"><%= clearanceRecovery.arrangement || '' %></textarea></label>
                       <label class="field"><span>Private finance note <span class="field__optional">(finance/admin only)</span></span><textarea name="financeNote" rows="2" maxlength="2000"><%= clearanceRecovery.financeNote || '' %></textarea></label>
-                      <button class="button button--secondary" type="submit">Record signed term-end clearance</button>
+                      <button class="button button--secondary" type="submit">Record term account clearance</button>
                     </form>
                   </details>
                 <% } %>
-                <% if (['pending_payment','enrolled'].includes(term.enrollment_status)) { %>
+                <% if (accountView === 'charges' && ['pending_payment','enrolled'].includes(term.enrollment_status)) { %>
                   <% const supplementaryPath = `/students/${ledger.student.id}/annual/terms/${term.enrollment_id}/supplementary-charges`; const supplementaryRecovery = failedInputFor(supplementaryPath); %>
-                  <details><summary>Add a named supplementary charge</summary>
-                    <form class="form-stack" method="post" action="/finance/students/<%= ledger.student.id %>/annual/terms/<%= term.enrollment_id %>/supplementary-charges">
+                  <details class="finance-account-action" <%= failedAction?.path === supplementaryPath ? 'open' : '' %>><summary>Add a named supplementary charge</summary>
+                    <form class="form-stack" method="post" action="/finance/students/<%= ledger.student.id %>/annual/terms/<%= term.enrollment_id %>/supplementary-charges?view=charges">
                       <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= tokens[`supplementary:${term.enrollment_id}`] %>">
                       <label class="field"><span>Fee category</span><select name="feeCategory"><% for (const category of ['tuition','miscellaneous','uniform','id','activity','retake','other']) { %><option value="<%= category %>" <%= (supplementaryRecovery.feeCategory || 'other') === category ? 'selected' : '' %>><%= category.replaceAll('_',' ') %></option><% } %></select></label>
                       <label class="field"><span>Fee name</span><input name="lineName" maxlength="120" value="<%= supplementaryRecovery.lineName || '' %>" required></label>
@@ -158,16 +164,17 @@
               </article>
             <% } %>
           </div>
+          <% if (accountView === 'overview') { %><p class="finance-placement-links"><a class="text-link" href="<%= financeAccountHref('clearance') %>">Review Term account clearance</a><a class="text-link" href="<%= financeAccountHref('charges') %>">Review charges, coverage, or supplementary fees</a></p><% } %>
         </section>
       <% } %>
       <% const annualCases = financeCases.exemptions.filter((item) => Number(item.annual_enrollment_id) === Number(annualRecord.annual_enrollment_id)); %>
-      <section class="finance-panel" aria-labelledby="assessment-cases-<%= annualRecord.annual_enrollment_id %>" data-finance-view="charges clearance">
+      <section class="finance-panel" aria-labelledby="assessment-cases-<%= annualRecord.annual_enrollment_id %>" data-finance-view="charges">
         <div class="admin-section__heading"><div><h2 id="assessment-cases-<%= annualRecord.annual_enrollment_id %>">Payment assessment exceptions · <%= annualRecord.school_year %></h2><p>Registrar tags are references only. A finance-approved exemption is required to change payable charges.</p></div></div>
         <% if (!annualCases.length && annualRecord.intake_status !== 'legacy') { %>
           <% const exemptionPath = `/students/${ledger.student.id}/annual/${annualRecord.annual_enrollment_id}/exemptions`; const exemptionRecovery = failedInputFor(exemptionPath); const recoveredRules = exemptionRecovery.rules || []; %>
           <details class="finance-account-action" <%= failedAction?.path === exemptionPath ? 'open' : '' %>>
             <summary>Set approved payment coverage</summary>
-            <form class="form-stack" method="post" action="/finance/students/<%= ledger.student.id %>/annual/<%= annualRecord.annual_enrollment_id %>/exemptions">
+            <form class="form-stack" method="post" action="/finance/students/<%= ledger.student.id %>/annual/<%= annualRecord.annual_enrollment_id %>/exemptions?view=charges">
               <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= tokens[`exemption:${annualRecord.annual_enrollment_id}`] %>">
               <p>Approve once for this school year. Each row is term-scoped and may cover a fee category or one named fee line. Full coverage and capped PHP amounts are explicit.</p>
               <% for (let index = 0; index < 3; index += 1) { %>
@@ -212,7 +219,7 @@
           </div>
         <% } %>
         <% const annualDepartures = financeCases.departures.filter((item) => Number(item.annual_enrollment_id) === Number(annualRecord.annual_enrollment_id)); %>
-        <% if (annualDepartures.length) { %><h3>Departure history</h3><ul class="document-review-history"><% for (const item of annualDepartures) { %><li><strong>Term <%= item.terms.map((term) => term.annual_term_number).join(', ') %> · <%= item.departure_type %> · <%= item.effective_date instanceof Date ? item.effective_date.toISOString().slice(0,10) : String(item.effective_date).slice(0,10) %></strong><span><%= item.finance_status === 'reviewed' ? 'Finance reviewed' : 'Awaiting finance review' %></span><p><%= item.reason %><% if (item.review_reason) { %> · Finance: <%= item.review_reason %><% } %></p></li><% } %></ul><% } %>
+        <% if (annualDepartures.length) { %><h3>Stopped or transferred history</h3><ul class="document-review-history"><% for (const item of annualDepartures) { %><li><strong>Term <%= item.terms.map((term) => term.annual_term_number).join(', ') %> · <%= item.departure_type === 'dropped' ? 'Stopped' : 'Transferred' %> · <%= item.effective_date instanceof Date ? item.effective_date.toISOString().slice(0,10) : String(item.effective_date).slice(0,10) %></strong><span><%= item.finance_status === 'reviewed' ? 'Finance reviewed' : 'Awaiting finance review' %></span><p><%= item.reason %><% if (item.review_reason) { %> · Finance: <%= item.review_reason %><% } %></p></li><% } %></ul><% } %>
       </section>
       <% } %>
     <% } %>

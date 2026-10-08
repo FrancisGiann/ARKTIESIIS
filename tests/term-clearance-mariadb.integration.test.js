@@ -8,7 +8,7 @@ const path = require('node:path');
 const mysql = require('mysql2/promise');
 const { PoolFacade, Transaction, sql } = require('../src/config/database');
 const { readSqlFile, readForwardMigrations } = require('../scripts/db-setup-v2');
-const { createTermClearanceService, TermClearanceError } = require('../src/services/termClearanceService');
+const { createTermClearanceService, TermClearanceError, completeFromCounts } = require('../src/services/termClearanceService');
 const { createAnnualFinanceService } = require('../src/services/annualFinanceService');
 const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
 
@@ -101,8 +101,8 @@ async function setCurrentTerm(pool, termId) {
 
 function templateInput(idempotencyKey, version = 1) {
   return { idempotencyKey, gradeLevel: 'Grade 11', trackLabel: 'Academic Track',
-    registrarLabel: `Registrar v${version}`, guidanceLabel: `Guidance v${version}`, financeLabel: `Finance v${version}`,
-    laboratoryLabels: ['Laboratory sign-off'], paperFormConfirmed: '1', teacherRosterConfirmed: '1', laboratoryRowsConfirmed: '1' };
+    officeConfirmations: ['registrar', 'guidance', 'finance'], laboratoryLabels: [`Laboratory line v${version}`],
+    teacherRosterConfirmed: '1', laboratoryRowsConfirmed: '1' };
 }
 
 function reconciliation(paperTeacherRows = []) {
@@ -111,20 +111,21 @@ function reconciliation(paperTeacherRows = []) {
 }
 
 function completionInput(term, items, { token = uuid(), version = 1, correctionReason = '', attest = true,
-  inspectedOn = '2026-10-05', signerChange = null } = {}) {
+  action = attest ? 'complete' : 'reopen', inspectedOn = '2026-10-05', signerChange = null } = {}) {
   const updates = items.map((item) => {
     const isTeacher = item.category === 'teacher';
     const isLab = item.category === 'laboratory';
     return { itemId: String(item.id), applicabilityStatus: isLab ? 'not_applicable' : 'required',
-      applicabilityReason: isLab ? (item.applicability_reason || 'No laboratory sign-off applies to this recorded term.') : '',
+      applicabilityReason: isLab ? (item.applicability_reason || 'No laboratory signature applies to this recorded term.') : '',
       signaturePresent: isLab ? '' : '1',
       signerName: isLab ? '' : signerChange && isTeacher ? signerChange : item.signer_name || (isTeacher ? 'Paper teacher signer' : `${item.category} signer`),
       paperSignedOn: isTeacher ? item.paper_signed_on || '2026-10-01' : '',
       signerContextReason: isTeacher && item.teacher_context_status !== 'assigned'
         ? item.signer_context_reason || 'Name matches the historical paper form.' : '' };
   });
-  return { idempotencyKey: token, expectedVersion: String(version), scopeStatus: 'attended',
-    items: updates, correctionReason, inspectedOn, attestPaperInspected: attest ? '1' : '', paperInspected: attest ? '1' : '' };
+  return { idempotencyKey: token, expectedVersion: String(version), clearanceAction: action, scopeStatus: 'attended',
+    items: updates, correctionReason, inspectedOn, attestPaperInspected: action === 'complete' ? '1' : '',
+    paperInspected: action === 'complete' ? '1' : '' };
 }
 
 async function inTransaction(pool, callback) {
@@ -204,6 +205,68 @@ test('v2.017 migration rehearsal and paper-clearance SQL, roles, snapshots, revi
     const annualEnrollment = createAnnualEnrollmentService({ getPool: async () => appPool, sql,
       transactionFactory: (currentPool) => new Transaction(currentPool), hashPassword: async (value) => `integration:${value}`,
       createPassword: () => 'integration-only-password', annualFinanceService: annualFinance, termClearanceService: clearance });
+    await pool.execute('UPDATE academic_terms SET is_current = 0');
+    const noCurrentDashboard = await clearance.getClearanceDashboard(registrarId);
+    assert.equal(noCurrentDashboard.currentTerm, null);
+    assert.equal(noCurrentDashboard.needsTermSelection, true);
+    assert.equal(noCurrentDashboard.filters.termId, '', 'without a current term the dashboard opens in All terms');
+    assert.equal(noCurrentDashboard.counts.totalRecords, 6);
+    const [unmappedCurrent] = await pool.execute(`INSERT INTO academic_terms (school_year, term, is_current)
+      VALUES ('2098-2099', 'Unmapped current term', 0)`);
+    await pool.execute('UPDATE academic_terms SET is_current = 1 WHERE id = ?', [unmappedCurrent.insertId]);
+    const unmappedDashboard = await clearance.getClearanceDashboard(registrarId);
+    assert.equal(unmappedDashboard.currentTerm, null, 'a current term without an order mapping does not become the default');
+    assert.equal(unmappedDashboard.needsTermSelection, true);
+    await pool.execute('UPDATE academic_terms SET is_current = 0 WHERE id = ?', [unmappedCurrent.insertId]);
+    await setCurrentTerm(pool, sourceTerms[0].id);
+    const initialDashboard = await clearance.getClearanceDashboard(registrarId);
+    assert.equal(initialDashboard.currentTerm.id, sourceTerms[0].id);
+    assert.equal(initialDashboard.filters.termId, String(sourceTerms[0].id), 'an unfiltered dashboard defaults to the uniquely configured current term');
+    assert.equal(initialDashboard.counts.notReviewed, 1, 'a placement without a clearance row is still counted as not reviewed');
+    assert.equal(initialDashboard.rows[0].clearance_state, 'not_reviewed');
+    const initialOverview = await clearance.getStudentClearanceOverview(registrarId, studentId);
+    assert.deepEqual(initialOverview, { totalRecords: 6, completed: 0, pending: 1, incomplete: 0, notReviewed: 1,
+      notAttended: 0, notApplicable: 5 }, 'the compact student summary uses the same term-record status rules');
+    await assert.rejects(clearance.getClearanceDashboard(frontDeskId), { status: 403 });
+    await assert.rejects(clearance.getClearanceDashboard(teacherId), { status: 403 });
+    await assert.rejects(clearance.getClearanceDashboard(financeId), { status: 403 });
+    await assert.rejects(clearance.getClearanceDashboard(studentUserId), { status: 403 });
+    const adminDashboard = await clearance.getClearanceDashboard(adminId);
+    assert.equal(adminDashboard.counts.totalRecords, 1, 'database administrators can read the scoped dashboard');
+
+    for (let index = 1; index <= 26; index += 1) {
+      const dashboardStudentUser = await insertUser(pool, 'student');
+      const dashboardStudent = await insertStudent(pool, registrarId, dashboardStudentUser, {
+        studentNo: `STU-CL-DASH-${String(index).padStart(2, '0')}`,
+        lrn: String(900000000000 + index).slice(-12), firstName: `Dashboard${String(index).padStart(2, '0')}`
+      });
+      const dashboardAnnual = await createAnnual(pool, { studentId: dashboardStudent, registrarId,
+        schoolYear: '2026-2027', gradeLevel: 'Grade 11', intakeKind: 'new', entryTermNumber: index === 1 ? 2 : 1 });
+      await createPlacements(pool, { studentId: dashboardStudent, annualId: dashboardAnnual, terms: [sourceTerms[0]] });
+    }
+    const pagedDashboard = await clearance.getClearanceDashboard(registrarId,
+      { search: '', schoolYear: '', termId: '', status: 'all', page: '2' });
+    assert.equal(pagedDashboard.filters.termId, '', 'an explicit blank term survives pagination instead of resetting to current');
+    assert.equal(pagedDashboard.filters.schoolYear, '');
+    assert.equal(pagedDashboard.pagination.page, 2);
+    assert.equal(pagedDashboard.pagination.totalRecords, 32);
+    assert.equal(pagedDashboard.pagination.matchedRecords, 32);
+    assert.equal(pagedDashboard.rows.length, 7, 'all-term results are paginated after the first 25 rows');
+    assert.deepEqual({ notReviewed: pagedDashboard.counts.notReviewed, notApplicable: pagedDashboard.counts.notApplicable },
+      { notReviewed: 26, notApplicable: 6 }, 'a pre-entry term and future terms are excluded without a clearance row');
+    const yearDashboard = await clearance.getClearanceDashboard(registrarId,
+      { search: '', schoolYear: '2026-2027', termId: '', status: 'all' });
+    assert.equal(yearDashboard.pagination.matchedRecords, 29, 'year filtering applies to term-record counts');
+    assert.equal(yearDashboard.counts.notApplicable, 3, 'future source terms remain excluded inside the selected year');
+    const reviewedFilter = await clearance.getClearanceDashboard(registrarId,
+      { search: '', schoolYear: '', termId: '', status: 'not_reviewed' });
+    assert.equal(reviewedFilter.pagination.totalRecords, 26);
+    assert.equal(reviewedFilter.counts.totalRecords, 32, 'status filtering changes the list but not the cross-status counts');
+    assert.equal(reviewedFilter.countsIgnoreStatusFilter, true);
+    const searchedDashboard = await clearance.getClearanceDashboard(registrarId,
+      { search: 'STU-CL-DASH-05', schoolYear: '', termId: '', status: 'all' });
+    assert.equal(searchedDashboard.pagination.matchedRecords, 1, 'search filters both rows and aggregate counts');
+    assert.equal(searchedDashboard.counts.notReviewed, 1);
     const scheduleLines = [1, 2, 3].flatMap((termNumber) => ['DP', 'Prelim', 'Midterm', 'Finals'].map((installment, index) => ({
       termNumber, feeCategory: 'tuition', lineName: 'Tuition', installment,
       amount: index === 0 ? '1.00' : '0.00', isOptional: false
@@ -275,31 +338,59 @@ test('v2.017 migration rehearsal and paper-clearance SQL, roles, snapshots, revi
     let studentClearance = await clearance.getStudentClearance(registrarId, studentId);
     const savedFirst = studentClearance.terms.find((term) => Number(term.enrollment_id) === firstTerm.id);
     assert.equal(Number(savedFirst.template_id), firstTemplate.templateId, 'later template versions do not replace a saved paper checklist');
-    assert.equal(savedFirst.clearanceItems.find((item) => item.category === 'registrar').label_snapshot, 'Registrar v1');
+    assert.equal(savedFirst.clearanceItems.find((item) => item.category === 'registrar').label_snapshot, 'Registrar');
+    assert.equal(savedFirst.clearanceItems.find((item) => item.category === 'laboratory').label_snapshot, 'Laboratory line v1',
+      'the saved paper-form snapshot retains its laboratory wording after newer template versions');
     assert.equal(savedFirst.state, 'incomplete');
-    const inspectionOnly = completionInput(firstTerm, savedFirst.clearanceItems,
-      { version: 1, attest: false, inspectedOn: '2026-10-03' });
-    await clearance.updateTermClearance(registrarId, firstClearance.clearanceId, inspectionOnly, studentId);
-    const inspectionSaved = (await clearance.getStudentClearance(registrarId, studentId)).terms
-      .find((term) => Number(term.enrollment_id) === firstTerm.id);
-    assert.equal(inspectionSaved.state, 'incomplete', 'an inspection date and signatures do not complete the paper record without attestation');
-    assert.equal(String(inspectionSaved.inspected_on).slice(0, 10), '2026-10-03', 'an inspection date is retained independently from attestation');
+    const unchangedItems = savedFirst.clearanceItems.map((item) => ({ itemId: String(item.id),
+      applicabilityStatus: item.applicability_status, applicabilityReason: item.applicability_reason || '',
+      signaturePresent: '', signerName: '', paperSignedOn: '', signerContextReason: '' }));
+    const inspectionOnly = { idempotencyKey: uuid(), expectedVersion: '1', clearanceAction: 'prepare', scopeStatus: 'attended',
+      items: unchangedItems, inspectedOn: '2026-10-03' };
+    await assert.rejects(clearance.updateTermClearance(registrarId, firstClearance.clearanceId, inspectionOnly, studentId),
+      /inspection date is recorded only when you record the completed paper form/i,
+      'metadata-only preparation cannot save inspection evidence');
+    const partialSignature = completionInput(firstTerm, savedFirst.clearanceItems,
+      { version: 1, attest: false, action: 'prepare', signerChange: 'Unconfirmed signer' });
+    await assert.rejects(clearance.updateTermClearance(registrarId, firstClearance.clearanceId, partialSignature, studentId),
+      /paper signatures and line decisions are recorded only when you record the completed paper form/i,
+      'direct service calls cannot save partial signature evidence under prepare');
+    const malformedAction = { ...inspectionOnly, idempotencyKey: uuid(), clearanceAction: 'progress', inspectedOn: '' };
+    await assert.rejects(clearance.updateTermClearance(registrarId, firstClearance.clearanceId, malformedAction, studentId),
+      /choose whether to save paper-form setup/i, 'forged legacy partial-save actions are rejected server-side');
+    const afterRejectedPreparation = await clearance.getStudentClearance(registrarId, studentId);
+    const unchangedFirst = afterRejectedPreparation.terms.find((term) => Number(term.enrollment_id) === firstTerm.id);
+    assert.equal(unchangedFirst.version, 1, 'rejected partial evidence writes create no revision');
+    assert.equal(unchangedFirst.inspected_on, null, 'rejected setup does not save an inspection date');
+    assert.equal(unchangedFirst.clearanceItems.some((item) => item.signature_present || item.signer_name), false);
+    const incompleteDashboard = await clearance.getClearanceDashboard(registrarId,
+      { search: '', schoolYear: '', termId: '', status: 'pending' });
+    const incompleteRow = incompleteDashboard.rows.find((row) => Number(row.enrollment_id) === firstTerm.id);
+    assert.ok(incompleteRow, 'unconfirmed paper records are grouped under the Not completed filter');
+    assert.equal(Number(incompleteRow.clearance_complete), 0);
+    assert.equal(completeFromCounts(incompleteRow), false);
     const inspectionReview = await clearance.getAnnualPrerequisiteReview(registrarId, continuingAnnualId);
-    assert.equal(inspectionReview.terms.find((term) => term.termNumber === 1).awaitingConfirmation, true,
-      'review surfaces distinguish complete signatures and decisions from the registrar confirmation step');
+    assert.equal(inspectionReview.terms.find((term) => term.termNumber === 1).awaitingConfirmation, false,
+      'partial signatures have not been saved before the complete paper record is confirmed');
     const studentInspectionProgress = await clearance.getOwnStudentProgress(studentUserId);
-    assert.equal(studentInspectionProgress.terms.find((term) => term.schoolYear === '2026-2027' && term.termNumber === 1).awaitingConfirmation, true,
-      'students see a waiting-for-confirmation state only after all other paper requirements pass');
-    const firstCompleteInput = completionInput(firstTerm, savedFirst.clearanceItems, { version: 2, inspectedOn: '2026-10-03' });
+    assert.equal(studentInspectionProgress.terms.find((term) => term.schoolYear === '2026-2027' && term.termNumber === 1).status, 'pending',
+      'students see one safe Not completed status and no signature collection progress');
+    const firstCompleteInput = completionInput(firstTerm, savedFirst.clearanceItems, { version: 1, inspectedOn: '2026-10-03' });
     const completed = await clearance.updateTermClearance(registrarId, firstClearance.clearanceId, firstCompleteInput, studentId);
     assert.equal(completed.attested, true);
-    assert.equal(completed.version, 3);
+    assert.equal(completed.version, 2);
     assert.equal((await clearance.getStudentClearance(registrarId, studentId)).terms.find((term) => Number(term.enrollment_id) === firstTerm.id).state,
       'complete', 'the staff record reader uses the full attestation and office/teacher predicate');
+    const completedDashboard = await clearance.getClearanceDashboard(registrarId,
+      { search: '', schoolYear: '', termId: '', status: 'complete' });
+    const completedRow = completedDashboard.rows.find((row) => Number(row.enrollment_id) === firstTerm.id);
+    assert.ok(completedRow);
+    assert.equal(Number(completedRow.clearance_complete), 1);
+    assert.equal(completeFromCounts(completedRow), true, 'the SQL projection and JavaScript evidence predicate agree');
 
     const changedSignature = completionInput(firstTerm, savedFirst.clearanceItems,
-      { version: 3, attest: false, signerChange: 'Corrected paper teacher' });
-    await assert.rejects(clearance.updateTermClearance(registrarId, firstClearance.clearanceId, changedSignature, studentId), /reason.*changing saved|correction reason/i);
+      { version: 2, attest: false, signerChange: 'Corrected paper teacher' });
+    await assert.rejects(clearance.updateTermClearance(registrarId, firstClearance.clearanceId, changedSignature, studentId), /reason when changing|correction reason/i);
     const reopenInput = { ...changedSignature, idempotencyKey: uuid(), correctionReason: 'Corrected a transcription from the paper form.' };
     const concurrent = await Promise.all([
       clearance.updateTermClearance(registrarId, firstClearance.clearanceId, reopenInput, studentId),
@@ -316,26 +407,25 @@ test('v2.017 migration rehearsal and paper-clearance SQL, roles, snapshots, revi
         ? { ...item, signerName: 'Altered replay' } : item) }, studentId),
     { status: 409 }, 'reusing an event key with changed details conflicts');
     await assert.rejects(clearance.updateTermClearance(registrarId, firstClearance.clearanceId,
-      { ...reopenInput, idempotencyKey: uuid(), expectedVersion: '3' }, studentId), { status: 409 }, 'stale revisions conflict');
+      { ...reopenInput, idempotencyKey: uuid(), expectedVersion: '2' }, studentId), { status: 409 }, 'stale revisions conflict');
     const reopenedData = await clearance.getStudentClearance(registrarId, studentId);
     const reopenTerm = reopenedData.terms.find((term) => Number(term.enrollment_id) === firstTerm.id);
     assert.equal(String(reopenTerm.inspected_on).slice(0, 10), '2026-10-05', 'reopening retains the last inspection date as history');
-    const reattest = completionInput(firstTerm, reopenTerm.clearanceItems, { version: 4, inspectedOn: '2026-10-05' });
+    const reattest = completionInput(firstTerm, reopenTerm.clearanceItems, { version: 3, inspectedOn: '2026-10-05' });
     await clearance.updateTermClearance(registrarId, firstClearance.clearanceId, reattest, studentId);
-    const dateCorrection = completionInput(firstTerm, reopenTerm.clearanceItems, { version: 5, inspectedOn: '2026-10-06' });
-    await assert.rejects(clearance.updateTermClearance(registrarId, firstClearance.clearanceId, dateCorrection, studentId), /reason.*changing saved|correction reason/i,
+    const dateCorrection = completionInput(firstTerm, reopenTerm.clearanceItems, { version: 4, attest: false, inspectedOn: '2026-10-06' });
+    await assert.rejects(clearance.updateTermClearance(registrarId, firstClearance.clearanceId, dateCorrection, studentId), /reason when changing|correction reason/i,
       'changing an attested inspection date is an auditable correction');
     const dateCorrectionWithReason = { ...dateCorrection, correctionReason: 'Corrected the recorded inspection date.' };
-    await assert.rejects(clearance.updateTermClearance(registrarId, firstClearance.clearanceId, dateCorrectionWithReason, studentId),
-      /separate review/i, 'an attested paper date correction must reopen before the next inspection attestation');
-    await clearance.updateTermClearance(registrarId, firstClearance.clearanceId,
-      { ...dateCorrectionWithReason, attestPaperInspected: '', paperInspected: '' }, studentId);
+    const reopenedDate = await clearance.updateTermClearance(registrarId, firstClearance.clearanceId,
+      { ...dateCorrectionWithReason, clearanceAction: 'reopen' }, studentId);
+    assert.equal(reopenedDate.reopened, true, 'date corrections reopen completed paper before a new confirmation');
     const dateCorrected = (await clearance.getStudentClearance(registrarId, studentId)).terms
       .find((term) => Number(term.enrollment_id) === firstTerm.id);
     assert.equal(dateCorrected.state, 'incomplete');
     assert.equal(String(dateCorrected.inspected_on).slice(0, 10), '2026-10-06');
     await clearance.updateTermClearance(registrarId, firstClearance.clearanceId,
-      completionInput(firstTerm, dateCorrected.clearanceItems, { version: 6, inspectedOn: '2026-10-06' }), studentId);
+      completionInput(firstTerm, dateCorrected.clearanceItems, { version: 5, inspectedOn: '2026-10-06' }), studentId);
 
     await setCurrentTerm(pool, sourceTerms[2].id);
     let historicalVersionError;
@@ -363,7 +453,11 @@ test('v2.017 migration rehearsal and paper-clearance SQL, roles, snapshots, revi
     const thirdTerm = sourcePlacements[2];
     const notAttended = await clearance.createTermClearance(registrarId, thirdTerm.id,
       { idempotencyKey: uuid(), scopeStatus: 'not_attended', scopeReason: 'Registrar records show no attendance.' }, studentId);
-    const convertInput = { idempotencyKey: uuid(), expectedVersion: '1', scopeStatus: 'attended',
+    const notAttendedDashboard = await clearance.getClearanceDashboard(registrarId,
+      { search: '', schoolYear: '', termId: '', status: 'not_attended' });
+    assert.ok(notAttendedDashboard.rows.some((row) => Number(row.enrollment_id) === thirdTerm.id),
+      'an explicit did-not-attend decision has its own status');
+    const convertInput = { idempotencyKey: uuid(), expectedVersion: '1', clearanceAction: 'prepare', scopeStatus: 'attended',
       scopeReason: '', templateId: String(secondTemplate.templateId), correctionReason: 'Paper record confirms attendance.',
       ...reconciliation([{ subjectCode: 'HIST3', subjectName: 'Third term paper subject' }]) };
     const converted = await clearance.updateTermClearance(registrarId, notAttended.clearanceId, convertInput, studentId);
@@ -377,7 +471,7 @@ test('v2.017 migration rehearsal and paper-clearance SQL, roles, snapshots, revi
       .find((term) => Number(term.enrollment_id) === thirdTerm.id);
     assert.equal(completedThird.state, 'complete');
     const markNotAttended = { ...completionInput(thirdTerm, completedThird.clearanceItems,
-      { version: 3, attest: false, inspectedOn: '2026-10-05' }),
+      { version: 3, attest: false, action: 'reopen', inspectedOn: '2026-10-05' }),
     scopeStatus: 'not_attended', scopeReason: 'Registrar records confirm no attendance this term.',
     correctionReason: 'Corrected applicability from the school attendance register.' };
     const excludedThird = await clearance.updateTermClearance(registrarId, notAttended.clearanceId, markNotAttended, studentId);
@@ -397,7 +491,7 @@ test('v2.017 migration rehearsal and paper-clearance SQL, roles, snapshots, revi
       'prior paper signer details remain in the append-only before snapshot');
     assert.equal(eventAfter.inspectedOn, null);
     assert.equal(eventAfter.attested, false);
-    assert.ok(exclusionEvent.changeSummary.some((line) => /current inspection date cleared.*not attended/i.test(line)));
+    assert.ok(exclusionEvent.changeSummary.some((line) => /inspection date cleared because.*not attended/i.test(line)));
     assert.equal((await clearance.updateTermClearance(registrarId, notAttended.clearanceId, markNotAttended, studentId)).alreadyRecorded, true,
       'an exact scope-correction retry returns the recorded event despite its now-stale version');
     const afterScopeRetry = (await clearance.getStudentClearance(registrarId, studentId)).terms
@@ -412,6 +506,15 @@ test('v2.017 migration rehearsal and paper-clearance SQL, roles, snapshots, revi
       { actorId: registrarId, annualId: continuingAnnualId, expectedFingerprint: 'a'.repeat(64) })), { status: 409 });
 
     await setCurrentTerm(pool, targetTerms[0].id);
+    const historicalNoReview = await clearance.getClearanceDashboard(registrarId, {
+      search: 'STU-CL-DASH-05', schoolYear: '2026-2027', termId: String(sourceTerms[0].id), status: 'all'
+    });
+    assert.equal(historicalNoReview.counts.notReviewed, 1,
+      'a prior historical placement without a clearance row stays not reviewed instead of being treated as complete');
+    assert.equal(historicalNoReview.rows[0].clearance_state, 'not_reviewed');
+    const completedOverview = await clearance.getStudentClearanceOverview(registrarId, studentId);
+    assert.deepEqual(completedOverview, { totalRecords: 6, completed: 2, pending: 1, incomplete: 0, notReviewed: 1,
+      notAttended: 1, notApplicable: 2 }, 'summary counts distinguish completed, not attended, no clearance, and future records');
     review = await clearance.getAnnualPrerequisiteReview(registrarId, continuingAnnualId);
     assert.equal(review.ready, true, 'source-term applicability remains valid when the next annual term becomes current');
     let confirmationPreview = await annualFinance.annualAssessmentPreviewForRegistrar(registrarId, continuingAnnualId);
@@ -661,6 +764,27 @@ test('v2.017 migration rehearsal and paper-clearance SQL, roles, snapshots, revi
     const [paperChecklist] = await pool.execute('SELECT COUNT(*) AS count FROM student_physical_checklist_events');
     assert.equal(Number(independentFinance[0].count), 0, 'paper term signoffs never write finance clearance events');
     assert.equal(Number(paperChecklist[0].count), 0, 'paper term signoffs never write physical document checklist events');
+
+    const beforeLegacyExclusion = (await clearance.getStudentClearance(registrarId, studentId)).terms
+      .find((term) => Number(term.enrollment_id) === firstTerm.id);
+    const legacyInspectionDate = String(beforeLegacyExclusion.inspected_on).slice(0, 10);
+    assert.equal(beforeLegacyExclusion.state, 'incomplete');
+    assert.match(legacyInspectionDate, /^2026-10-\d{2}$/,
+      'an unfinished historical record retains its earlier paper inspection date');
+    const excludeLegacy = { ...completionInput(firstTerm, beforeLegacyExclusion.clearanceItems,
+      { version: Number(beforeLegacyExclusion.version), attest: false, action: 'prepare',
+        correctionReason: 'Attendance records show the entire term was not attended.', inspectedOn: '' }),
+    scopeStatus: 'not_attended', scopeReason: 'Attendance records show no attendance for the entire term.' };
+    const legacyExclusion = await clearance.updateTermClearance(registrarId, firstClearance.clearanceId, excludeLegacy, studentId);
+    assert.equal(legacyExclusion.attested, false);
+    const excludedLegacy = (await clearance.getStudentClearance(registrarId, studentId)).terms
+      .find((term) => Number(term.enrollment_id) === firstTerm.id);
+    assert.equal(excludedLegacy.state, 'not_attended', 'an unfinished record with inspection history can be excluded using a reasoned attendance decision');
+    assert.equal(excludedLegacy.inspected_on, null, 'the active inspection date clears on the not-attended scope change');
+    const legacyExclusionBefore = typeof excludedLegacy.history[0].before_json === 'string'
+      ? JSON.parse(excludedLegacy.history[0].before_json) : excludedLegacy.history[0].before_json;
+    assert.equal(String(legacyExclusionBefore.inspectedOn).slice(0, 10), legacyInspectionDate,
+      'the prior inspection date remains in append-only history after the exclusion');
   } finally {
     if (pool) await pool.end();
     for (const name of [freshName, upgradeName]) {

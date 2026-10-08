@@ -18,6 +18,10 @@ const {
   validateEnrollment
 } = require('../src/services/studentRecordsService');
 
+const emptyClearanceOverview = { async getStudentClearanceOverview() {
+  return { totalRecords: 0, completed: 0, incomplete: 0, notReviewed: 0, notAttended: 0, notApplicable: 0 };
+} };
+
 async function withServer(app, run) {
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -632,6 +636,8 @@ test('student records workspace keeps create forms collapsed, opens failed forms
     const html = await response.text();
     assert.equal(response.status, 200);
     assert.match(html, /<h1>Academic setup<\/h1>/);
+    assert.match(html, /href="\/registrar\/records\/grades\/missing">Grade completion overview/);
+    assert.doesNotMatch(html, /aria-label="Academic setup tasks"/);
     assert.match(html, /href="\/registrar\/records\?view=setup" aria-current="page">Academic setup<\/a>/);
     assert.match(html, /<details class="records-create-disclosure"\s*>\s*<summary>Add academic term/);
     assert.match(html, /<details class="records-create-disclosure"\s*>\s*<summary>Add section/);
@@ -741,7 +747,10 @@ test('database administrators can search the master list and open a unified prof
     studentRecordsService,
     academicRecordsService,
     documentRequestService: { async getStudentRequests() { return []; } },
-    documentClearanceService: { async getRegistrarData() { return { financeSummary: { status: 'Needs finance review', outstanding: null }, requests: [] }; } }
+    documentClearanceService: { async getRegistrarData() { return { financeSummary: { status: 'Needs finance review', outstanding: null }, requests: [] }; } },
+    termClearanceService: { async getStudentClearanceOverview() {
+      return { totalRecords: 4, completed: 1, pending: 2, incomplete: 1, notReviewed: 1, notAttended: 1, notApplicable: 0 };
+    } }
   };
   await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, ...dependencies }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'database_admin');
@@ -768,12 +777,18 @@ test('database administrators can search the master list and open a unified prof
     assert.match(detailHtml, /PSA birth certificate/);
     assert.match(detailHtml, /Grade 11 · Mabini/);
     assert.doesNotMatch(detailHtml, /Grade Grade 11/);
-    assert.match(detailHtml, /Form 137 paper record \(staff only\)/);
-    assert.match(detailHtml, /Previous-school report card · digital enrollment scan/);
-    assert.match(detailHtml, /Previous-school report card · paper copy \(staff only\)/);
+    assert.match(detailHtml, /Form 137 · paper record <span class="muted-copy">Staff only<\/span>/);
+    assert.match(detailHtml, /Previous-school report card · digital scan/);
+    assert.match(detailHtml, /Previous-school report card · paper copy <span class="muted-copy">Staff only<\/span>/);
     assert.match(detailHtml, /href="\/documents\/students\/12#previous-school-report-card-status-title"/);
     assert.match(detailHtml, /href="\/documents\/students\/12#form137-status-title"/);
-    assert.match(detailHtml, /Review digital submission/);
+    assert.match(detailHtml, /Paper clearance status/);
+    assert.match(detailHtml, /Not completed:<\/strong> 2 · <strong>Completed:<\/strong> 1/);
+    assert.doesNotMatch(detailHtml, /Needs review|In progress|awaiting registrar confirmation|\d+ of \d+ required signatures/);
+    assert.match(detailHtml, /1 term not attended · 0 outside required terms/);
+    assert.match(detailHtml, /A term not attended means no attendance for the entire term/);
+    assert.match(detailHtml, /href="\/registrar\/records\/students\/12\/clearance">Open clearance checklist/);
+    assert.match(detailHtml, /Review digital scan/);
     assert.match(detailHtml, /Not submitted/);
     assert.match(detailHtml, /href="\/documents\/students\/12"/);
     const academics = await fetch(`${baseUrl}/registrar/records/students/12/academic`, { headers: { cookie } });
@@ -922,6 +937,7 @@ test('registrar follow-up ledgers are linked from student records and protected 
         };
       }
     },
+    termClearanceService: emptyClearanceOverview,
     gradeOverviewService
   });
   await withServer(app, async (baseUrl) => {
@@ -988,7 +1004,7 @@ test('registrar follow-up ledgers are linked from student records and protected 
     const historyPage = await fetch(`${baseUrl}/registrar/records/students/12?view=history`, { headers: { cookie } });
     assert.equal(historyPage.status, 200);
     const historyHtml = await historyPage.text();
-    assert.match(historyHtml, /Student profile revision history/);
+    assert.match(historyHtml, /Profile revision history/);
     assert.doesNotMatch(historyHtml, /Document requests and release history|Record document request/);
     const unsupportedView = await fetch(`${baseUrl}/registrar/records/students/12?view=unexpected`, { headers: { cookie } });
     assert.match(await unsupportedView.text(), /<h2 class="student-record-view-title">Overview<\/h2>/);
@@ -997,7 +1013,7 @@ test('registrar follow-up ledgers are linked from student records and protected 
     assert.equal(overview.status, 200);
     const overviewHtml = await overview.text();
     assert.match(overviewHtml, /Distinct enrolled learners/);
-    assert.match(overviewHtml, /Current terms include the four ECR grading periods/);
+    assert.match(overviewHtml, /Current terms include all four grading periods/);
     assert.match(overviewHtml, /All grading periods/);
     assert.match(overviewHtml, /registrar-records-followup\.js/);
     assert.equal(overviewCalls.length, 1);
@@ -1171,7 +1187,8 @@ test('return evaluations are searched and reviewed in student records with serve
         grade_level: 'Grade 11', section_name: 'Returned Section', enrollment_status: 'enrolled', subjects: [] }
     ] }; } },
     documentRequestService: { async getStudentRequests() { return []; } },
-    documentClearanceService: { async getRegistrarData() { return { financeSummary: { status: 'No finance review', outstanding: null }, requests: [] }; } }
+    documentClearanceService: { async getRegistrarData() { return { financeSummary: { status: 'No finance review', outstanding: null }, requests: [] }; } },
+    termClearanceService: emptyClearanceOverview
   });
 
   await withServer(app, async (baseUrl) => {

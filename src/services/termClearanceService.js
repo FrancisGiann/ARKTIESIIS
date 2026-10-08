@@ -43,6 +43,106 @@ function isChecked(value) {
   return value === true || value === 1 || value === '1' || value === 'on';
 }
 
+const CLEARANCE_DASHBOARD_PAGE_SIZE = 25;
+const CLEARANCE_DASHBOARD_STATUSES = new Set(['all', 'complete', 'pending', 'incomplete', 'not_reviewed', 'not_attended', 'not_applicable']);
+
+function clearanceCompleteSql(clearanceAlias = 'clearance', itemsAlias = 'items') {
+  return `${clearanceAlias}.scope_status = 'attended' AND ${clearanceAlias}.template_id IS NOT NULL
+    AND ${clearanceAlias}.attested_by IS NOT NULL AND ${clearanceAlias}.attested_at IS NOT NULL
+    AND ${clearanceAlias}.inspected_on IS NOT NULL
+    AND COALESCE(${itemsAlias}.teacher_count, 0) > 0 AND COALESCE(${itemsAlias}.registrar_count, 0) > 0
+    AND COALESCE(${itemsAlias}.guidance_count, 0) > 0 AND COALESCE(${itemsAlias}.finance_count, 0) > 0
+    AND COALESCE(${itemsAlias}.required_unsigned_count, 0) = 0 AND COALESCE(${itemsAlias}.unresolved_count, 0) = 0
+    AND COALESCE(${itemsAlias}.teacher_context_missing_count, 0) = 0`;
+}
+
+function clearanceDashboardStateSql({ enrollmentAlias = 'enrollment', annualAlias = 'annual', clearanceAlias = 'clearance', itemsAlias = 'items' } = {}) {
+  const automatic = `${enrollmentAlias}.annual_term_number < ${annualAlias}.entry_term_number
+    OR (@currentSchoolYear IS NOT NULL AND ${annualAlias}.school_year REGEXP '^[0-9]{4}-[0-9]{4}$'
+      AND CAST(SUBSTRING(${annualAlias}.school_year, 6, 4) AS UNSIGNED) = CAST(SUBSTRING(${annualAlias}.school_year, 1, 4) AS UNSIGNED) + 1
+      AND (${annualAlias}.school_year > @currentSchoolYear
+      OR (${annualAlias}.school_year = @currentSchoolYear AND ${enrollmentAlias}.annual_term_number > @currentTermNumber)))`;
+  return `CASE WHEN (${automatic}) THEN 'not_applicable'
+    WHEN ${clearanceAlias}.id IS NULL OR ${clearanceAlias}.scope_status = 'unreviewed' THEN 'not_reviewed'
+    WHEN ${clearanceAlias}.scope_status = 'not_attended' THEN 'not_attended'
+    WHEN (${clearanceCompleteSql(clearanceAlias, itemsAlias)}) THEN 'complete'
+    ELSE 'incomplete' END`;
+}
+
+function normalizeClearanceDashboardFilters(input = {}) {
+  const search = input.search === undefined ? '' : input.search;
+  if (typeof search !== 'string' || search.trim().length > 100 || /[\u0000-\u001f\u007f]/.test(search)) {
+    throw new TermClearanceError('Search must be 100 printable characters or fewer.');
+  }
+  const normalizedSearch = search.trim();
+  const rawSchoolYear = input.schoolYear === undefined ? '' : input.schoolYear;
+  if (typeof rawSchoolYear !== 'string') throw new TermClearanceError('Choose a valid school year.');
+  const schoolYear = rawSchoolYear.trim();
+  if (schoolYear && academicYearStart(schoolYear) === null) throw new TermClearanceError('Choose a valid school year.');
+  const rawTermId = input.termId === undefined || input.termId === '' ? null : idValue(input.termId, 'academic term');
+  const status = input.status === undefined || input.status === '' ? 'all' : input.status;
+  if (typeof status !== 'string' || !CLEARANCE_DASHBOARD_STATUSES.has(status)) {
+    throw new TermClearanceError('Choose a valid clearance status.');
+  }
+  const rawPage = input.page === undefined || input.page === '' ? 1 : input.page;
+  const page = typeof rawPage === 'number' || typeof rawPage === 'string' && /^\d{1,8}$/.test(rawPage)
+    ? Number(rawPage) : NaN;
+  if (!Number.isSafeInteger(page) || page < 1 || page > 10000000) throw new TermClearanceError('Choose a valid page.');
+  const scopeSpecified = ['search', 'schoolYear', 'termId', 'status'].some((key) => Object.hasOwn(input, key));
+  const normalizedStatus = ['incomplete', 'not_reviewed'].includes(status) ? 'pending' : status;
+  return { search: normalizedSearch, schoolYear: schoolYear || null, termId: rawTermId,
+    status: normalizedStatus, page, scopeSpecified };
+}
+
+function clearanceDashboardRecordsSql({ studentScoped = false } = {}) {
+  const stateSql = clearanceDashboardStateSql();
+  return `SELECT enrollment.id AS enrollment_id, enrollment.student_id, enrollment.academic_term_id,
+      enrollment.annual_term_number, enrollment.enrollment_status, annual.school_year, annual.grade_level,
+      annual.entry_term_number, term.term AS term_label, student.student_no, student.first_name,
+      student.middle_name, student.last_name, student.suffix, section.name AS section_name,
+      clearance.id AS clearance_id, clearance.scope_status, clearance.template_id, clearance.attested_by,
+      clearance.attested_at, clearance.inspected_on,
+      COALESCE(items.item_count, 0) AS item_count, COALESCE(items.teacher_count, 0) AS teacher_count,
+      COALESCE(items.registrar_count, 0) AS registrar_count, COALESCE(items.guidance_count, 0) AS guidance_count,
+      COALESCE(items.finance_count, 0) AS finance_count, COALESCE(items.required_unsigned_count, 0) AS required_unsigned_count,
+      COALESCE(items.unresolved_count, 0) AS unresolved_count,
+      COALESCE(items.teacher_context_missing_count, 0) AS teacher_context_missing_count,
+      CASE WHEN (${clearanceCompleteSql()}) THEN 1 ELSE 0 END AS clearance_complete,
+      ${stateSql} AS clearance_state
+    FROM enrollments AS enrollment
+    INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
+    INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
+    INNER JOIN students AS student ON student.id = enrollment.student_id
+    LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
+    LEFT JOIN student_term_clearances AS clearance ON clearance.enrollment_id = enrollment.id
+    LEFT JOIN (
+      SELECT clearance_id, COUNT(*) AS item_count, SUM(category = 'teacher') AS teacher_count,
+        SUM(category = 'registrar') AS registrar_count, SUM(category = 'guidance') AS guidance_count,
+        SUM(category = 'finance') AS finance_count,
+        SUM(applicability_status = 'required' AND (signature_present = 0 OR signer_name IS NULL OR TRIM(signer_name) = '')) AS required_unsigned_count,
+        SUM(applicability_status = 'unreviewed') AS unresolved_count,
+        SUM(category = 'teacher' AND signature_present = 1 AND teacher_context_status <> 'assigned'
+          AND (signer_context_reason IS NULL OR CHAR_LENGTH(TRIM(signer_context_reason)) < 5)) AS teacher_context_missing_count
+      FROM student_term_clearance_items GROUP BY clearance_id
+    ) AS items ON items.clearance_id = clearance.id
+    WHERE (@searchPattern IS NULL OR student.student_no LIKE @searchPattern ESCAPE '~'
+        OR student.lrn LIKE @searchPattern ESCAPE '~'
+        OR CONCAT_WS(' ', student.first_name, student.middle_name, student.last_name, student.suffix) LIKE @searchPattern ESCAPE '~')
+      AND (@schoolYear IS NULL OR annual.school_year = @schoolYear)
+      AND (@termId IS NULL OR enrollment.academic_term_id = @termId)
+      ${studentScoped ? 'AND enrollment.student_id = @studentId' : ''}`;
+}
+
+function bindClearanceDashboardFilters(request, filters, currentPosition, { sqlAdapter = defaultSql, studentId = null } = {}) {
+  request.input('searchPattern', sqlAdapter.NVarChar(204), filters.search ? `%${filters.search.replace(/[~%_[\]]/g, (character) => `~${character}`)}%` : null)
+    .input('schoolYear', sqlAdapter.NVarChar(20), filters.schoolYear)
+    .input('termId', sqlAdapter.Int, filters.termId)
+    .input('currentSchoolYear', sqlAdapter.NVarChar(20), currentPosition?.school_year || null)
+    .input('currentTermNumber', sqlAdapter.TinyInt, currentPosition?.term_number || null);
+  if (studentId !== null) request.input('studentId', sqlAdapter.Int, studentId);
+  return request;
+}
+
 function dateValue(value, label, required = false) {
   if ((value === '' || value == null) && !required) return null;
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new TermClearanceError(`${label} must be a valid calendar date.`);
@@ -55,17 +155,22 @@ function cleanTemplateInput(input = {}) {
   const gradeLevel = input.gradeLevel;
   if (!['Grade 11', 'Grade 12'].includes(gradeLevel)) throw new TermClearanceError('Choose Grade 11 or Grade 12.');
   const trackLabel = field(input.trackLabel, 'Track label', 80, { required: true, minimum: 2 });
-  const registrarLabel = field(input.registrarLabel, 'Registrar sign-off label', 120, { required: true, minimum: 2 });
-  const guidanceLabel = field(input.guidanceLabel, 'Guidance sign-off label', 120, { required: true, minimum: 2 });
-  const financeLabel = field(input.financeLabel, 'Finance sign-off label', 120, { required: true, minimum: 2 });
+  const officeConfirmations = input.officeConfirmations == null ? []
+    : Array.isArray(input.officeConfirmations) ? input.officeConfirmations : [input.officeConfirmations];
+  const requiredOffices = ['registrar', 'guidance', 'finance'];
+  if (officeConfirmations.length !== requiredOffices.length
+    || officeConfirmations.some((office) => typeof office !== 'string' || !requiredOffices.includes(office))
+    || new Set(officeConfirmations).size !== requiredOffices.length) {
+    throw new TermClearanceError('Confirm the Registrar, Guidance, and Finance signature lines shown on the paper form.');
+  }
   const rawLabs = (input.laboratoryLabels == null ? [] : Array.isArray(input.laboratoryLabels) ? input.laboratoryLabels : [input.laboratoryLabels])
     .filter((value) => typeof value === 'string' && value.trim() !== '');
-  if (rawLabs.length > 20) throw new TermClearanceError('A template can contain no more than 20 laboratory sign-offs.');
-  const laboratoryLabels = rawLabs.map((value, index) => field(value, `Laboratory sign-off ${index + 1}`, 120, { required: true, minimum: 2 }));
-  if (!isChecked(input.paperFormConfirmed) || !isChecked(input.teacherRosterConfirmed) || !isChecked(input.laboratoryRowsConfirmed)) {
-    throw new TermClearanceError('Confirm the approved paper form, subject-teacher roster rule, and laboratory rows (including when none apply).');
+  if (rawLabs.length > 20) throw new TermClearanceError('A template can contain no more than 20 laboratory signature lines.');
+  const laboratoryLabels = rawLabs.map((value, index) => field(value, `Laboratory line ${index + 1}`, 120, { required: true, minimum: 2 }));
+  if (!isChecked(input.teacherRosterConfirmed) || !isChecked(input.laboratoryRowsConfirmed)) {
+    throw new TermClearanceError('Confirm the subject-teacher roster rule and laboratory rows (including when none apply).');
   }
-  return { gradeLevel, trackLabel, registrarLabel, guidanceLabel, financeLabel, laboratoryLabels,
+  return { gradeLevel, trackLabel, registrarLabel: 'Registrar', guidanceLabel: 'Guidance', financeLabel: 'Finance', laboratoryLabels,
     paperFormConfirmed: true, teacherRosterConfirmed: true, laboratoryRowsConfirmed: true };
 }
 
@@ -79,31 +184,31 @@ function cleanReconciliation(input = {}) {
   const keys = normalized.map((row) => `${String(row.subjectCode || '').toLocaleLowerCase()}\u0000${row.subjectName.toLocaleLowerCase()}`);
   if (new Set(keys).size !== keys.length) throw new TermClearanceError('A paper subject row was entered more than once.');
   const reason = normalized.length
-    ? field(input.rosterReconciliationReason, 'Paper and roster reconciliation reason', 1000, { required: true, minimum: 5 })
+    ? field(input.rosterReconciliationReason, 'Reason these paper subject lines differ from the saved list', 1000, { required: true, minimum: 5 })
     : null;
-  if (normalized.length && !isChecked(input.rosterReviewed)) throw new TermClearanceError('Confirm that the saved subject roster was compared with the school paper record.');
+  if (normalized.length && !isChecked(input.rosterReviewed)) throw new TermClearanceError('Confirm that you compared the saved subject list with the printed form.');
   return { rows: normalized, reason, reviewed: isChecked(input.rosterReviewed) };
 }
 
 function cleanItemUpdates(input = {}) {
   const updates = input.items == null ? [] : Array.isArray(input.items) ? input.items : [input.items];
-  if (updates.length > 180) throw new TermClearanceError('Update no more than 180 sign-off rows at once.');
+  if (updates.length > 180) throw new TermClearanceError('Update no more than 180 signature lines at once.');
   const normalized = updates.map((item) => {
     const itemId = idValue(item?.itemId, 'clearance row');
     const signaturePresent = isChecked(item?.signaturePresent);
     const applicabilityStatus = item?.applicabilityStatus;
     if (!['required', 'not_applicable', 'unreviewed'].includes(applicabilityStatus)) {
-      throw new TermClearanceError('Choose whether each laboratory sign-off applies or leave it undecided while saving progress.');
+      throw new TermClearanceError('Choose a valid requirement status for each laboratory line.');
     }
     if (applicabilityStatus === 'unreviewed' && signaturePresent) {
-      throw new TermClearanceError('Clear the laboratory signature until its applicability has been reviewed.');
+      throw new TermClearanceError('Decide whether this laboratory line is required on the form before recording a signature.');
     }
-    const signerName = signaturePresent ? field(item?.signerName, 'Paper signer name', 160, { required: true, minimum: 2 }) : null;
-    const paperSignedOn = signaturePresent ? dateValue(item?.paperSignedOn, 'Paper signature date') : null;
+    const signerName = signaturePresent ? field(item?.signerName, 'Name beside signature', 160, { required: true, minimum: 2 }) : null;
+    const paperSignedOn = signaturePresent ? dateValue(item?.paperSignedOn, 'Paper date') : null;
     const applicabilityReason = applicabilityStatus === 'not_applicable'
-      ? field(item?.applicabilityReason, 'Laboratory exclusion reason', 1000, { required: true, minimum: 5 }) : null;
+      ? field(item?.applicabilityReason, 'Reason this laboratory line is not required', 1000, { required: true, minimum: 5 }) : null;
     const signerContextReason = signaturePresent
-      ? field(item?.signerContextReason || '', 'Teacher signer context reason', 1000, { minimum: 0 }) : null;
+      ? field(item?.signerContextReason || '', 'Reason this teacher name applies', 1000, { minimum: 0 }) : null;
     return { itemId, signaturePresent, applicabilityStatus, signerName, paperSignedOn, applicabilityReason, signerContextReason };
   });
   if (new Set(normalized.map(({ itemId }) => itemId)).size !== normalized.length) throw new TermClearanceError('A clearance row was submitted more than once.');
@@ -126,6 +231,17 @@ function academicYearStart(value) {
   const match = /^(\d{4})-(\d{4})$/.exec(value.trim());
   if (!match || Number(match[2]) !== Number(match[1]) + 1) return null;
   return Number(match[1]);
+}
+
+function resolveCurrentAcademicPosition(rows) {
+  if (!Array.isArray(rows) || rows.length !== 1) return null;
+  const row = rows[0];
+  const termNumber = Number(row.term_number);
+  const academicTermId = Number(row.academic_term_id ?? row.id);
+  if (!row.term_number || !Number.isInteger(termNumber) || termNumber < 1 || termNumber > 3
+    || academicYearStart(row.school_year) === null) return null;
+  return { academic_term_id: Number.isSafeInteger(academicTermId) && academicTermId > 0 ? academicTermId : null,
+    school_year: row.school_year, term_number: termNumber };
 }
 
 function isFutureAcademicTerm(currentPosition, schoolYear, termNumber) {
@@ -156,13 +272,15 @@ function clearanceEventSummary(event) {
   const before = safeJsonObject(event.before_json);
   const after = safeJsonObject(event.after_json);
   const summaries = [];
+  const attendanceLabel = (value) => ({ attended: 'Attended', not_attended: 'Term not attended', unreviewed: 'Pending' })[value] || 'Not recorded';
+  const labDecisionLabel = (value) => ({ required: 'Required on this form', not_applicable: 'Not required', unreviewed: 'Not checked yet' })[value] || 'Not recorded';
   if (!event.before_json) {
-    if (after.scopeStatus) summaries.push(`Applicability recorded as ${after.scopeStatus.replaceAll('_', ' ')}.`);
+    if (after.scopeStatus) summaries.push(`Attendance decision recorded: ${attendanceLabel(after.scopeStatus)}.`);
     if (after.trackLabel) summaries.push(`Paper form: ${after.trackLabel}${after.templateVersion ? `, version ${after.templateVersion}` : ''}.`);
     const teacherRows = Number(after.generatedItems?.filter?.((item) => item.category === 'teacher').length || 0);
     if (teacherRows) summaries.push(`${teacherRows} teacher/subject signature row${teacherRows === 1 ? '' : 's'} recorded.`);
   } else {
-    if (before.scopeStatus !== after.scopeStatus) summaries.push(`Applicability changed from ${before.scopeStatus || 'unreviewed'} to ${after.scopeStatus || 'unreviewed'}.`);
+    if (before.scopeStatus !== after.scopeStatus) summaries.push(`Attendance decision changed from ${attendanceLabel(before.scopeStatus)} to ${attendanceLabel(after.scopeStatus)}.`);
     if (before.templateId !== after.templateId && after.trackLabel) summaries.push(`Paper form changed to ${after.trackLabel}.`);
     const beforeItems = new Map((Array.isArray(before.items) ? before.items : []).map((item) => [Number(item.id), item]));
     const changedItems = (Array.isArray(after.items) ? after.items : []).filter((item) => {
@@ -178,21 +296,21 @@ function clearanceEventSummary(event) {
         summaries.push(`Paper signer for ${label}: ${old.signerName || 'not recorded'} → ${item.signerName || 'not recorded'} (${item.signaturePresent ? 'signature present' : 'signature absent'}).`);
       }
       if (old && old.paperSignedOn !== item.paperSignedOn) summaries.push(`Paper date for ${label}: ${old.paperSignedOn || 'not recorded'} → ${item.paperSignedOn || 'not recorded'}.`);
-      if (old && old.applicabilityStatus !== item.applicabilityStatus) summaries.push(`${label}: ${old.applicabilityStatus} → ${item.applicabilityStatus}.`);
+      if (old && old.applicabilityStatus !== item.applicabilityStatus) summaries.push(`${label}: ${labDecisionLabel(old.applicabilityStatus)} → ${labDecisionLabel(item.applicabilityStatus)}.`);
     }
     const added = Math.max(0, Number(after.items?.length || 0) - beforeItems.size - changedItems.filter((item) => beforeItems.has(Number(item.id))).length);
     if (added > 8) summaries.push(`${added - 8} more paper subject row${added - 8 === 1 ? '' : 's'} added.`);
     const wasAttested = Boolean(before.attestedBy || before.attestedAt);
     if (wasAttested !== Boolean(after.attested)) {
-      summaries.push(after.attested ? `Paper inspection attested for ${after.inspectedOn || 'date not recorded'}.` : 'Paper inspection attestation removed; clearance reopened.');
+      summaries.push(after.attested ? `Registrar confirmed paper inspection for ${after.inspectedOn || 'date not recorded'}.` : 'Paper inspection confirmation removed; clearance reopened.');
     }
     if (before.inspectedOn !== after.inspectedOn) {
       if (!after.inspectedOn && after.scopeStatus === 'not_attended') {
-        summaries.push('Current inspection date cleared because the term was marked not attended; prior review details remain in audit history.');
+        summaries.push('Inspection date cleared because the term was marked not attended; earlier details remain in change history.');
       } else if (after.attested) {
         summaries.push(`Paper inspection date changed to ${after.inspectedOn || 'date not recorded'}.`);
       } else {
-        summaries.push(`Saved paper inspection date changed to ${after.inspectedOn || 'date not recorded'}; the review is not attested.`);
+        summaries.push(`Paper inspection date changed to ${after.inspectedOn || 'date not recorded'}; the review is not confirmed yet.`);
       }
     }
   }
@@ -237,16 +355,16 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     const entryTermNumber = Number(context.entry_term_number);
     if (!Number.isInteger(termNumber) || termNumber < 1 || termNumber > 3
       || !Number.isInteger(entryTermNumber) || entryTermNumber < 1 || entryTermNumber > 3) {
-      throw new TermClearanceError('The term or entry-term number is not recorded clearly enough to review applicability.', 409);
+      throw new TermClearanceError('The school-year and term order are unclear, so this placement cannot be reviewed yet.', 409);
     }
     const current = await currentAcademicPosition(transaction);
-    if (!current) throw new TermClearanceError('The current academic term is not mapped to the school-year order. Resolve that setup before reviewing applicability.', 409);
+    if (!current) throw new TermClearanceError('The current school term is not set up clearly. Resolve the term order before reviewing this placement.', 409);
     if (termNumber < entryTermNumber) {
-      throw new TermClearanceError('This placement is before the student’s recorded entry term and is excluded from paper-clearance review.', 409);
+      throw new TermClearanceError('This placement is before the student’s entry term and is outside required clearance.', 409);
     }
     const future = isFutureAcademicTerm(current, context.school_year, termNumber);
-    if (future === null) throw new TermClearanceError('This term cannot be compared with the configured current academic period. Resolve the term setup before reviewing applicability.', 409);
-    if (future) throw new TermClearanceError('This is a future term. Its paper-clearance applicability will be reviewed after the term becomes current.', 409);
+    if (future === null) throw new TermClearanceError('This term cannot be compared with the current school period. Resolve the term setup before reviewing it.', 409);
+    if (future) throw new TermClearanceError('This is a future term. Review it when it becomes current.', 409);
     return current;
   }
 
@@ -494,9 +612,9 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     const expectedStudentId = expectedStudentInput == null ? null : idValue(expectedStudentInput, 'student');
     const idempotencyKey = requestKey(input.idempotencyKey);
     const scopeStatus = input.scopeStatus;
-    if (!['attended', 'not_attended'].includes(scopeStatus)) throw new TermClearanceError('Review the term against school records and choose attended or not attended.');
+    if (!['attended', 'not_attended'].includes(scopeStatus)) throw new TermClearanceError('Check school records and choose whether the student attended the entire term.');
     const scopeReason = scopeStatus === 'not_attended'
-      ? field(input.scopeReason, 'Not-attended reason', 1000, { required: true, minimum: 5 }) : null;
+      ? field(input.scopeReason, 'Reason the entire term was not attended', 1000, { required: true, minimum: 5 }) : null;
     const templateId = scopeStatus === 'attended' ? idValue(input.templateId, 'approved template') : null;
   const templateSelectionReason = field(input.templateSelectionReason || '', 'Paper form version reason', 1000, { minimum: 0 }) || '';
     const reconciliation = cleanReconciliation(input);
@@ -522,7 +640,7 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
       const context = await loadEnrollmentContext(transaction, enrollmentId);
       if (!context || Number(context.student_id) !== Number(owner.student_id)) throw new TermClearanceError('Term enrollment changed. Reload the student record.', 409);
       const existing = await clearanceByEnrollment(transaction, enrollmentId, { lock: true });
-      if (existing) throw new TermClearanceError('Term applicability has already been reviewed. Reload the saved clearance before editing it.', 409);
+      if (existing) throw new TermClearanceError('This term already has an attendance review. Reload its saved checklist before editing.', 409);
 
       let template = null;
       let roster = [];
@@ -535,13 +653,13 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
         }
         if (!context.section_id) throw new TermClearanceError('A section must be saved for this term before its paper subject roster can be reviewed.', 409);
         roster = await loadRosterSnapshot(transaction, context);
-        if (!reconciliation.reviewed) throw new TermClearanceError('Compare the saved subject roster with the approved paper checklist before recording attended-term clearance.');
+        if (!reconciliation.reviewed) throw new TermClearanceError('Compare the saved subject list with the approved paper form before saving its setup.');
         if (roster.length === 0 && reconciliation.rows.length === 0) {
-          throw new TermClearanceError('No subject roster exists for this term. Add the required teacher/subject rows from the paper checklist and record the reconciliation reason before continuing.', 409);
+          throw new TermClearanceError('No subject list exists for this term. Add the teacher and subject lines from the paper form, then explain the difference before continuing.', 409);
         }
         const rosterKeys = new Set(roster.map((row) => `${String(row.subject_code || '').toLocaleLowerCase()}\u0000${String(row.subject_name || '').toLocaleLowerCase()}`));
         if (reconciliation.rows.some((row) => rosterKeys.has(`${String(row.subjectCode || '').toLocaleLowerCase()}\u0000${row.subjectName.toLocaleLowerCase()}`))) {
-          throw new TermClearanceError('A reconciled paper subject duplicates a subject already in the saved roster.');
+          throw new TermClearanceError('A paper subject line duplicates one already in the saved subject list.');
         }
       }
       const inserted = await transaction.request().input('enrollmentId', sql.Int, enrollmentId)
@@ -611,18 +729,26 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     const idempotencyKey = requestKey(input.idempotencyKey);
     const itemUpdates = cleanItemUpdates(input);
     const scopeStatus = input.scopeStatus;
-    if (!['attended', 'not_attended'].includes(scopeStatus)) throw new TermClearanceError('Choose whether school records show that this term was attended.');
+    if (!['attended', 'not_attended'].includes(scopeStatus)) throw new TermClearanceError('Check school records and choose whether the student attended the entire term.');
     const scopeReason = scopeStatus === 'not_attended'
-      ? field(input.scopeReason, 'Not-attended reason', 1000, { required: true, minimum: 5 }) : null;
+      ? field(input.scopeReason, 'Reason the entire term was not attended', 1000, { required: true, minimum: 5 }) : null;
     const templateSelectionReason = field(input.templateSelectionReason || '', 'Paper form version reason', 1000, { minimum: 0 }) || '';
     const correctionReason = field(input.correctionReason || '', 'Correction reason', 1000, { minimum: 0 });
     const inspectionDate = dateValue(input.inspectedOn, 'Paper inspection date');
     const reconciliation = cleanReconciliation(input);
     const templateIdInput = input.templateId ? idValue(input.templateId, 'approved template') : null;
-    const attest = isChecked(input.attestPaperInspected);
-    if (attest && !isChecked(input.paperInspected)) throw new TermClearanceError('Confirm that you inspected the existing paper clearance form before attesting.');
-    const payload = { clearanceId, expectedVersion, itemUpdates, scopeStatus, scopeReason, correctionReason, inspectionDate, attest,
-      paperInspected: isChecked(input.paperInspected), templateId: templateIdInput, templateSelectionReason, reconciliation };
+    const action = input.clearanceAction;
+    if (!['prepare', 'complete', 'reopen'].includes(action)) {
+      throw new TermClearanceError('Choose whether to save paper-form setup, record a completed paper form, or reopen a completed correction.');
+    }
+    const attest = action === 'complete';
+    const paperInspected = isChecked(input.paperInspected);
+    const attestRequested = isChecked(input.attestPaperInspected);
+    if (attest !== paperInspected || attest !== attestRequested) {
+      throw new TermClearanceError('Use Record completed paper only after inspecting the printed form.');
+    }
+    const payload = { clearanceId, expectedVersion, itemUpdates, scopeStatus, scopeReason, correctionReason, inspectionDate, action, attest,
+      paperInspected, templateId: templateIdInput, templateSelectionReason, reconciliation };
     const requestFingerprint = fingerprint(payload);
     const pool = await getPool();
     const ownerResult = await pool.request().input('clearanceId', sql.BigInt, clearanceId)
@@ -670,19 +796,19 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
         }
         templateId = Number(template.id);
         roster = await loadRosterSnapshot(transaction, context);
-        if (!reconciliation.reviewed) throw new TermClearanceError('Compare the saved subject roster with the paper checklist before recording attended-term clearance.');
+        if (!reconciliation.reviewed) throw new TermClearanceError('Compare the saved subject list with the paper form before saving its setup.');
         if (roster.length === 0 && reconciliation.rows.length === 0) {
-          throw new TermClearanceError('No subject roster exists for this term. Add the required teacher/subject rows from the paper checklist and record the reconciliation reason before continuing.', 409);
+          throw new TermClearanceError('No subject list exists for this term. Add the teacher and subject lines from the paper form, then explain the difference before continuing.', 409);
         }
         const rosterKeys = new Set(roster.map((row) => `${String(row.subject_code || '').toLocaleLowerCase()}\u0000${String(row.subject_name || '').toLocaleLowerCase()}`));
         if (reconciliation.rows.some((row) => rosterKeys.has(`${String(row.subjectCode || '').toLocaleLowerCase()}\u0000${row.subjectName.toLocaleLowerCase()}`))) {
-          throw new TermClearanceError('A reconciled paper subject duplicates a subject already in the saved roster.');
+          throw new TermClearanceError('A paper subject line duplicates one already in the saved subject list.');
         }
       }
       const beforeItems = await loadClearanceItems(transaction, clearanceId, { lock: true });
       const initializingTemplate = Boolean(template && !current.template_id);
       if (initializingTemplate && beforeItems.length) {
-        throw new TermClearanceError('This not-attended record already contains sign-off rows. Resolve its history before adding an attended-term template.', 409);
+        throw new TermClearanceError('This term marked not attended already has saved signature lines. Review its history before adding an attended-term form.', 409);
       }
       let itemCountAfterInitialization = beforeItems.length;
       if (initializingTemplate) {
@@ -691,24 +817,47 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
       }
       const beforeItemMap = new Map(beforeItems.map((item) => [Number(item.id), item]));
       if (itemUpdates.some((item) => !beforeItemMap.has(item.itemId))) throw new TermClearanceError('A clearance row no longer belongs to this saved checklist. Reload it.', 409);
+      const wasAttested = Boolean(current.attested_by || current.attested_at);
+      if (action === 'prepare' && wasAttested) {
+        throw new TermClearanceError('This paper form is already completed. Use Save correction and reopen to make a reasoned change.', 409);
+      }
+      if (action === 'reopen' && !wasAttested) {
+        throw new TermClearanceError('Only a completed paper clearance can be reopened for correction.', 409);
+      }
+      if (action === 'complete' && wasAttested) {
+        throw new TermClearanceError('This paper clearance is already completed. Reopen it with a reason before making a correction.', 409);
+      }
+      if (action === 'prepare' && itemUpdates.some((update) => {
+        const item = beforeItemMap.get(update.itemId);
+        const paperDate = item.paper_signed_on instanceof Date
+          ? item.paper_signed_on.toISOString().slice(0, 10)
+          : item.paper_signed_on ? String(item.paper_signed_on).slice(0, 10) : null;
+        return update.signaturePresent !== (Number(item.signature_present) === 1)
+          || update.signerName !== (item.signer_name || null)
+          || update.paperSignedOn !== paperDate
+          || update.applicabilityStatus !== item.applicability_status
+          || update.applicabilityReason !== (item.applicability_reason || null)
+          || update.signerContextReason !== (item.signer_context_reason || null);
+      })) {
+        throw new TermClearanceError('Paper signatures and line decisions are recorded only when you record the completed paper form.');
+      }
       const before = { version: Number(current.version), scopeStatus: current.scope_status, scopeReason: current.scope_reason,
         attestedBy: current.attested_by, attestedAt: current.attested_at, inspectedOn: current.inspected_on,
         templateId: current.template_id == null ? null : Number(current.template_id),
         items: beforeItems.map(publicItemSnapshot) };
-      const wasAttested = Boolean(current.attested_by || current.attested_at);
       let itemChanged = false;
       let requiresCorrectionReason = false;
       for (const update of itemUpdates) {
         const item = beforeItemMap.get(update.itemId);
         const allowedApplicability = item.category === 'laboratory' ? update.applicabilityStatus : 'required';
-        if (item.category !== 'laboratory' && update.applicabilityStatus !== 'required') throw new TermClearanceError('Only a configured laboratory requirement can be marked not applicable.');
+        if (item.category !== 'laboratory' && update.applicabilityStatus !== 'required') throw new TermClearanceError('Only a laboratory line can be marked as not required.');
         if (item.category === 'laboratory' && update.applicabilityStatus === 'required' && !update.signaturePresent
           && item.applicability_status !== 'required') {
-          // Requiring the sign-off clears its prior exclusion and requires a paper signature before attestation.
+          // Requiring the signature clears its prior exclusion and requires a paper signature before attestation.
         }
         if (update.signaturePresent && item.category === 'teacher' && item.teacher_context_status !== 'assigned'
           && !update.signerContextReason) {
-          throw new TermClearanceError('Explain why this named paper signer applies when the saved teacher assignment is missing, revoked, or ambiguous.');
+          throw new TermClearanceError('Explain why this name belongs beside the signature when saved teacher details are missing, inactive, or unclear.');
         }
         const next = { applicabilityStatus: allowedApplicability,
           applicabilityReason: allowedApplicability === 'not_applicable' ? update.applicabilityReason : null,
@@ -737,55 +886,61 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
       }
       let reconciliationReason = null;
       if (reconciliation.rows.length) {
-        if (!reconciliation.reviewed) throw new TermClearanceError('Confirm that you compared the saved subject roster with the school paper record.');
+        if (!reconciliation.reviewed) throw new TermClearanceError('Confirm that you compared the saved subject list with the school paper form.');
         reconciliationReason = reconciliation.reason;
         const existingSubjectKeys = new Set(beforeItems.filter((item) => item.category === 'teacher').map((item) =>
           `${String(item.subject_code_snapshot || '').toLocaleLowerCase()}\u0000${String(item.subject_name_snapshot || '').toLocaleLowerCase()}`));
         if (reconciliation.rows.some((row) => existingSubjectKeys.has(`${row.subjectCode.toLocaleLowerCase()}\u0000${row.subjectName.toLocaleLowerCase()}`))) {
-          throw new TermClearanceError('A reconciled paper subject duplicates a saved teacher/subject row.');
+          throw new TermClearanceError('A paper subject line duplicates one already in the saved subject list.');
         }
         if (!correctionReason) throw new TermClearanceError('Enter a correction reason when adding paper subject rows.');
         await insertManualTeacherRows(transaction, clearanceId, reconciliation.rows, itemCountAfterInitialization + 1);
         itemChanged = true;
       }
       const scopeChanged = current.scope_status !== scopeStatus || String(current.scope_reason || '') !== String(scopeReason || '');
-      const previousInspectionDate = current.inspected_on ? String(current.inspected_on).slice(0, 10) : null;
+      const previousInspectionDate = current.inspected_on instanceof Date
+        ? current.inspected_on.toISOString().slice(0, 10)
+        : current.inspected_on ? String(current.inspected_on).slice(0, 10) : null;
       const nextInspectionDate = scopeStatus === 'attended' ? inspectionDate : null;
       const inspectionDateChanged = nextInspectionDate !== previousInspectionDate;
+      if (action === 'prepare' && inspectionDateChanged
+        && !(scopeStatus === 'not_attended' && scopeChanged)) {
+        throw new TermClearanceError('The paper inspection date is recorded only when you record the completed paper form.');
+      }
       const savedInspectionDateCorrection = previousInspectionDate !== null && inspectionDateChanged;
       const attestationChanged = wasAttested && attest
         && (inspectionDateChanged || Number(current.attested_by) !== Number(actor.id));
       if ((scopeChanged || requiresCorrectionReason || attestationChanged || savedInspectionDateCorrection || (wasAttested && !attest)) && !correctionReason) {
-        throw new TermClearanceError('Enter a reason when changing saved applicability or signature details.');
+        throw new TermClearanceError('Enter a reason when changing the attendance decision or saved signature details.');
       }
       if (wasAttested && attest && (scopeChanged || itemChanged || inspectionDateChanged)) {
-        throw new TermClearanceError('Save the correction first. Reload the paper record, inspect it again, then attest in a separate review.', 409);
+        throw new TermClearanceError('Save the correction first. Reload the paper record, inspect it again, then mark it complete in a separate review.', 409);
       }
       if (attest && wasAttested && !scopeChanged && !itemChanged && !attestationChanged) {
-        throw new TermClearanceError('This clearance is already attested with the saved paper inspection date. No change was made.', 409);
+        throw new TermClearanceError('This clearance is already complete with the saved paper inspection date. No change was made.', 409);
       }
       const itemsAfterChanges = await loadClearanceItems(transaction, clearanceId, { lock: true });
       let newAttestedBy = null;
       let inspectedOn = nextInspectionDate;
       if (attest) {
-        if (scopeStatus !== 'attended' || !(templateId || current.template_id)) throw new TermClearanceError('Only an attended term with a saved approved template can be attested.');
-        if (!inspectionDate) throw new TermClearanceError('Enter the date you inspected the paper clearance form.');
+        if (scopeStatus !== 'attended' || !(templateId || current.template_id)) throw new TermClearanceError('Only an attended term with a saved paper form can be marked complete.');
+        if (!inspectionDate) throw new TermClearanceError('Enter the date you inspected the printed form.');
         const teacherRows = itemsAfterChanges.filter((item) => item.category === 'teacher');
-        if (!teacherRows.length) throw new TermClearanceError('No teacher/subject rows exist. Reconcile the paper checklist subject rows before attesting.');
+        if (!teacherRows.length) throw new TermClearanceError('No teacher and subject lines are saved. Compare the paper form and school records before marking this complete.');
         const missingOfficeRows = ['registrar', 'guidance', 'finance'].some((category) => !itemsAfterChanges.some((item) => item.category === category));
-        if (missingOfficeRows) throw new TermClearanceError('The saved template is missing a required office sign-off row. Create a new complete template version.');
+        if (missingOfficeRows) throw new TermClearanceError('The saved template is missing a required office signature line. Create a new complete template version.');
         const unresolved = itemsAfterChanges.filter((item) => item.applicability_status === 'unreviewed');
-        if (unresolved.length) throw new TermClearanceError('Resolve every configured laboratory sign-off as required or not applicable before attesting.');
+        if (unresolved.length) throw new TermClearanceError('Choose Required or Not required for every laboratory line before marking clearance complete.');
         const required = itemsAfterChanges.filter((item) => item.applicability_status === 'required');
         const missingSignatures = required.filter((item) => Number(item.signature_present) !== 1 || !String(item.signer_name || '').trim());
-        if (missingSignatures.length) throw new TermClearanceError(`Record every required paper signature before attesting (${missingSignatures.length} still missing).`);
+        if (missingSignatures.length) throw new TermClearanceError('Record every required paper signature before recording completed paper clearance.');
         const missingTeacherContext = required.filter((item) => item.category === 'teacher'
           && item.teacher_context_status !== 'assigned' && String(item.signer_context_reason || '').trim().length < 5);
-        if (missingTeacherContext.length) throw new TermClearanceError('Explain each historical teacher signer whose saved assignment is missing, revoked, or ambiguous.');
+        if (missingTeacherContext.length) throw new TermClearanceError('Explain why each teacher name belongs beside the signature when saved teacher details are missing, inactive, or unclear.');
         newAttestedBy = actor.id;
         inspectedOn = inspectionDate;
-      } else if (!scopeChanged && !itemChanged && !inspectionDateChanged && !wasAttested) {
-        throw new TermClearanceError('No clearance changes were submitted.');
+      } else if (action === 'prepare' && !scopeChanged && !itemChanged && !inspectionDateChanged) {
+        throw new TermClearanceError('No paper-form setup or attendance changes were submitted.');
       }
       const nextVersion = Number(current.version) + 1;
       const updated = await transaction.request().input('clearanceId', sql.BigInt, clearanceId)
@@ -928,7 +1083,7 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
       else if (term.state === 'missing') blockers.push(`${term.termLabel}: no paper clearance applicability review is recorded. Review it in the student’s Clearance tab.`);
       else if (term.state === 'unreviewed') blockers.push(`${term.termLabel}: applicability is unresolved. Review school records and select attended or not attended with a reason.`);
       else if (term.state === 'invalid_exclusion') blockers.push(`${term.termLabel}: the not-attended exclusion has no valid reason. Correct the applicability history.`);
-      else if (term.state === 'incomplete') blockers.push(`${term.termLabel}: required paper signatures or registrar inspection attestation are incomplete.`);
+      else if (term.state === 'incomplete') blockers.push(`${term.termLabel}: Pending — the registrar has not confirmed a completed paper form.`);
     }
     return { ready: blockers.length === 0, blockers };
   }
@@ -1199,7 +1354,8 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
           COALESCE(items.registrar_count, 0) AS registrar_count, COALESCE(items.guidance_count, 0) AS guidance_count,
           COALESCE(items.finance_count, 0) AS finance_count,
           COALESCE(items.required_unsigned_count, 0) AS required_unsigned_count, COALESCE(items.unresolved_count, 0) AS unresolved_count,
-          COALESCE(items.teacher_context_missing_count, 0) AS teacher_context_missing_count
+          COALESCE(items.teacher_context_missing_count, 0) AS teacher_context_missing_count,
+          CASE WHEN (${clearanceCompleteSql()}) THEN 1 ELSE 0 END AS clearance_complete
         FROM enrollments AS enrollment
         INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
         INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
@@ -1222,9 +1378,7 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
       FROM academic_terms AS term
       LEFT JOIN school_year_term_order AS order_row ON order_row.academic_term_id = term.id
       WHERE term.is_current = 1`);
-    const currentRows = currentResult.recordset || [];
-    const currentPosition = currentRows.length === 1 && currentRows[0].term_number
-      ? { school_year: currentRows[0].school_year, term_number: Number(currentRows[0].term_number) } : null;
+    const currentPosition = resolveCurrentAcademicPosition(currentResult.recordset || []);
     const terms = (termResult.recordset || []).map((row) => {
       const complete = completeFromCounts(row);
       const beforeEntry = Number(row.annual_term_number) < Number(row.entry_term_number);
@@ -1273,6 +1427,117 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     return { student, terms, templates: templatesResult.recordset || [] };
   }
 
+  async function getClearanceDashboard(actorInput, filterInput = {}) {
+    const actorId = idValue(actorInput, 'user');
+    const pool = await getPool();
+    await requireStaff(pool.request(), actorId);
+    const requestedFilters = normalizeClearanceDashboardFilters(filterInput);
+    const [termsResult, currentResult] = await Promise.all([
+      pool.request().query(`SELECT term.id, term.school_year, term.term, term.is_current, order_row.term_number
+        FROM academic_terms AS term
+        LEFT JOIN school_year_term_order AS order_row ON order_row.academic_term_id = term.id
+        ORDER BY term.is_current DESC, term.school_year DESC, order_row.term_number, term.id DESC LIMIT 300`),
+      pool.request().query(`SELECT term.id, term.school_year, term.term, order_row.term_number
+        FROM academic_terms AS term
+        LEFT JOIN school_year_term_order AS order_row ON order_row.academic_term_id = term.id
+        WHERE term.is_current = 1`)
+    ]);
+    const terms = (termsResult.recordset || []).map((term) => ({ ...term,
+      id: Number(term.id), term_number: term.term_number == null ? null : Number(term.term_number),
+      is_current: Number(term.is_current) === 1 }));
+    const currentRows = currentResult.recordset || [];
+    const currentCandidate = currentRows.length === 1 ? currentRows[0] : null;
+    const currentPosition = resolveCurrentAcademicPosition(currentRows);
+    const filters = { ...requestedFilters };
+    const hasUserFilter = filters.scopeSpecified || filters.page !== 1;
+    if (!hasUserFilter && currentPosition) filters.termId = currentPosition.academic_term_id;
+    if (filters.termId && !terms.some((term) => term.id === filters.termId)) {
+      throw new TermClearanceError('Choose a configured academic term.', 404);
+    }
+    const queryFilters = { ...filters };
+    const baseSql = clearanceDashboardRecordsSql();
+    const countsRequest = bindClearanceDashboardFilters(pool.request(), queryFilters, currentPosition, { sqlAdapter: sql });
+    const countsResult = await countsRequest.query(`SELECT COUNT(*) AS total_records,
+        COALESCE(SUM(clearance_state = 'complete'), 0) AS completed_records,
+        COALESCE(SUM(clearance_state = 'incomplete'), 0) AS incomplete_records,
+        COALESCE(SUM(clearance_state = 'not_reviewed'), 0) AS not_reviewed_records,
+        COALESCE(SUM(clearance_state IN ('incomplete', 'not_reviewed')), 0) AS pending_records,
+        COALESCE(SUM(clearance_state = 'not_attended'), 0) AS not_attended_records,
+        COALESCE(SUM(clearance_state = 'not_applicable'), 0) AS not_applicable_records
+      FROM (${baseSql}) AS dashboard_records`);
+    const countRow = countsResult.recordset?.[0] || {};
+    const totalRecords = Number(countRow.total_records || 0);
+    const statusCountField = ({ complete: 'completed_records', pending: 'pending_records', not_attended: 'not_attended_records',
+      not_applicable: 'not_applicable_records' })[filters.status];
+    const filteredRecords = statusCountField ? Number(countRow[statusCountField] || 0) : totalRecords;
+    const totalPages = Math.max(1, Math.ceil(filteredRecords / CLEARANCE_DASHBOARD_PAGE_SIZE));
+    filters.page = Math.min(filters.page, totalPages);
+    const offset = (filters.page - 1) * CLEARANCE_DASHBOARD_PAGE_SIZE;
+    const rowsRequest = bindClearanceDashboardFilters(pool.request(), queryFilters, currentPosition, { sqlAdapter: sql })
+      .input('statusFilter', sql.NVarChar(30), filters.status)
+      .input('rowLimit', sql.Int, CLEARANCE_DASHBOARD_PAGE_SIZE)
+      .input('rowOffset', sql.Int, offset);
+    const rowsResult = await rowsRequest.query(`SELECT dashboard_records.* FROM (${baseSql}) AS dashboard_records
+      WHERE @statusFilter = 'all'
+        OR (@statusFilter = 'pending' AND dashboard_records.clearance_state IN ('incomplete', 'not_reviewed'))
+        OR dashboard_records.clearance_state = @statusFilter
+      ORDER BY dashboard_records.school_year DESC, dashboard_records.annual_term_number,
+        dashboard_records.last_name, dashboard_records.first_name, dashboard_records.student_id
+      LIMIT @rowLimit OFFSET @rowOffset`);
+    const statusCounts = {
+      totalRecords,
+      completed: Number(countRow.completed_records || 0),
+      pending: Number(countRow.pending_records || 0),
+      incomplete: Number(countRow.incomplete_records || 0),
+      notReviewed: Number(countRow.not_reviewed_records || 0),
+      notAttended: Number(countRow.not_attended_records || 0),
+      notApplicable: Number(countRow.not_applicable_records || 0)
+    };
+    return {
+      rows: rowsResult.recordset || [], terms,
+      schoolYears: [...new Set(terms.map((term) => term.school_year).filter((year) => academicYearStart(year) !== null))],
+      currentTerm: currentPosition ? terms.find((term) => term.id === currentPosition.academic_term_id) || {
+        id: currentPosition.academic_term_id, school_year: currentPosition.school_year,
+        term: currentCandidate.term, term_number: currentPosition.term_number, is_current: true
+      } : null,
+      usesDefaultTerm: !hasUserFilter && Boolean(currentPosition),
+      needsTermSelection: !currentPosition && !hasUserFilter,
+      filters: { ...filters, termId: filters.termId == null ? '' : String(filters.termId), schoolYear: filters.schoolYear || '' },
+      counts: statusCounts,
+      countsIgnoreStatusFilter: filters.status !== 'all',
+      pagination: { page: filters.page, pageSize: CLEARANCE_DASHBOARD_PAGE_SIZE, totalRecords: filteredRecords,
+        matchedRecords: totalRecords, totalPages, from: filteredRecords ? offset + 1 : 0,
+        to: Math.min(offset + CLEARANCE_DASHBOARD_PAGE_SIZE, filteredRecords) }
+    };
+  }
+
+  async function getStudentClearanceOverview(actorInput, studentInput) {
+    const actorId = idValue(actorInput, 'user');
+    const studentId = idValue(studentInput, 'student');
+    const pool = await getPool();
+    await requireStaff(pool.request(), actorId);
+    const currentResult = await pool.request().query(`SELECT term.school_year, order_row.term_number
+      FROM academic_terms AS term
+      LEFT JOIN school_year_term_order AS order_row ON order_row.academic_term_id = term.id
+      WHERE term.is_current = 1`);
+    const currentPosition = resolveCurrentAcademicPosition(currentResult.recordset || []);
+    const filters = { search: '', schoolYear: null, termId: null };
+    const request = bindClearanceDashboardFilters(pool.request(), filters, currentPosition, { sqlAdapter: sql, studentId });
+    const aggregate = await request.query(`SELECT COUNT(*) AS total_records,
+        COALESCE(SUM(clearance_state = 'complete'), 0) AS completed_records,
+        COALESCE(SUM(clearance_state = 'incomplete'), 0) AS incomplete_records,
+        COALESCE(SUM(clearance_state = 'not_reviewed'), 0) AS not_reviewed_records,
+        COALESCE(SUM(clearance_state IN ('incomplete', 'not_reviewed')), 0) AS pending_records,
+        COALESCE(SUM(clearance_state = 'not_attended'), 0) AS not_attended_records,
+        COALESCE(SUM(clearance_state = 'not_applicable'), 0) AS not_applicable_records
+      FROM (${clearanceDashboardRecordsSql({ studentScoped: true })}) AS student_term_records`);
+    const row = aggregate.recordset?.[0] || {};
+    return { totalRecords: Number(row.total_records || 0), completed: Number(row.completed_records || 0),
+      pending: Number(row.pending_records || 0),
+      incomplete: Number(row.incomplete_records || 0), notReviewed: Number(row.not_reviewed_records || 0),
+      notAttended: Number(row.not_attended_records || 0), notApplicable: Number(row.not_applicable_records || 0) };
+  }
+
   async function getOwnStudentProgress(userInput) {
     const userId = idValue(userInput, 'account');
     const pool = await getPool();
@@ -1313,28 +1578,26 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     const currentRows = (await pool.request().query(`SELECT term.school_year, order_row.term_number
       FROM academic_terms AS term LEFT JOIN school_year_term_order AS order_row ON order_row.academic_term_id = term.id
       WHERE term.is_current = 1`)).recordset || [];
-    const currentPosition = currentRows.length === 1 && currentRows[0].term_number
-      ? { school_year: currentRows[0].school_year, term_number: Number(currentRows[0].term_number) } : null;
+    const currentPosition = resolveCurrentAcademicPosition(currentRows);
     return { terms: (records.recordset || []).map((row) => {
       const beforeEntry = Number(row.annual_term_number) < Number(row.entry_term_number);
       const future = isFutureAcademicTerm(currentPosition, row.school_year, row.annual_term_number) === true;
       const complete = completeFromCounts(row);
-      const awaitingConfirmation = !complete && row.scope_status === 'attended' && awaitingRegistrarConfirmation(row);
       return { schoolYear: row.school_year, gradeLevel: row.grade_level,
         term: row.term_label, termNumber: row.annual_term_number == null ? null : Number(row.annual_term_number),
         status: beforeEntry || future ? 'not_applicable'
           : row.scope_status === 'not_attended' ? 'not_attended' : complete ? 'complete'
-            : row.scope_status === 'attended' ? 'incomplete' : 'not_reviewed',
-        requirementCount: Number(row.requirement_count || 0), signedCount: Number(row.signed_count || 0), awaitingConfirmation,
-        version: row.version == null ? null : Number(row.version) };
+            : 'pending' };
     }) };
   }
 
   return { createTemplateVersion, listTemplates, createTermClearance, updateTermClearance,
-    getStudentClearance, getAnnualPrerequisiteReview, assertAnnualEntryPrerequisitesInTransaction,
+    getStudentClearance, getClearanceDashboard, getStudentClearanceOverview,
+    getAnnualPrerequisiteReview, assertAnnualEntryPrerequisitesInTransaction,
     getTermActivationReview, assertTermPrerequisitesInTransaction, getContinuitySourceOptions,
     bindContinuitySource, getOwnStudentProgress };
 }
 
 module.exports = { TermClearanceError, createTermClearanceService, cleanTemplateInput, cleanReconciliation,
-  cleanItemUpdates, completeFromCounts, awaitingRegistrarConfirmation, clearanceEventSummary, isPastAcademicTerm };
+  cleanItemUpdates, completeFromCounts, awaitingRegistrarConfirmation, clearanceEventSummary, isPastAcademicTerm,
+  normalizeClearanceDashboardFilters, resolveCurrentAcademicPosition };

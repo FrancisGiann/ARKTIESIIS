@@ -349,7 +349,7 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
   app.get('/front-desk', requireRole('front_desk'), (_req, res) => res.redirect(303, '/pre-enrollments'));
   app.use('/pre-enrollments', requireRole('registrar', 'front_desk', 'database_admin'), createPreEnrollmentRouter({
     preEnrollmentService: {
-      async list(actorId) { calls.push(['list', actorId]); return { rows: [], filters: { search: '', schoolYear: '', status: '' }, pagination: { page: 1, pageSize: 20, totalRecords: 0, totalPages: 1, from: 0, to: 0 } }; },
+      async list(actorId) { calls.push(['list', actorId]); return { rows: [{ id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261', first_name: 'Ari', middle_name: '', last_name: 'Santos', suffix: '', lrn: '012345678901', school_year: '2027-2028', status: 'ready_for_registrar', recorder_first_name: 'Front', recorder_last_name: 'Desk', updated_at: '2026-10-03' }], filters: { search: '', schoolYear: '', status: '' }, pagination: { page: 1, pageSize: 20, totalRecords: 1, totalPages: 1, from: 1, to: 1 } }; },
       async getActorDisplayName(actorId) { calls.push(['display', actorId]); return 'Front Desk'; },
       async create(actorId) { calls.push(['create', actorId]); return { id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261' }; },
       async update(actorId, id, version, input) { calls.push(['update', actorId]); updateInputs.push(input); throw new PreEnrollmentError('The correction needs a current accepted evaluation.', 409); },
@@ -369,6 +369,14 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     const frontDeskListHtml = await frontDeskList.text();
     assert.match(frontDeskListHtml, /Copy the details from the student’s paper form/);
     assert.match(frontDeskListHtml, /Record paper form/);
+    assert.match(frontDeskListHtml, /class="records-student-list pre-enrollment-record-list"/);
+    assert.match(frontDeskListHtml, /LRN 012345678901/);
+    assert.match(frontDeskListHtml, /2027-2028/);
+    assert.match(frontDeskListHtml, /href="\/pre-enrollments\/a342bc01-2a68-4f19-a7fd-4d5bb1d83261">Open record/);
+    assert.match(frontDeskListHtml, /aria-label="Open pre-enrollment record for Ari Santos"/);
+    assert.match(frontDeskListHtml, /Last updated[\s\S]*?2026-10-03[\s\S]*?By Front Desk/);
+    assert.doesNotMatch(frontDeskListHtml, /<table[^>]*pre-enrollment-list-table/,
+      'front-desk records use stacked identity rows rather than a wide table');
     const newFormResponse = await fetch(`${origin}/pre-enrollments/new`);
     assert.equal(newFormResponse.status, 200);
     assert.match(newFormResponse.headers.get('cache-control'), /no-store/);
@@ -378,6 +386,9 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.match(newFormHtml, /id="pre-email-help">This email will be used for the student’s account\./);
     assert.match(newFormHtml, /name="emergencyContactSameAsStudent" value="1"[^>]*><span>Same address as student<\/span>/);
     assert.match(newFormHtml, /src="\/js\/pre-enrollment-address-copy\.js" defer/);
+    assert.match(newFormHtml, /accepted evaluation for this applicant, school year, and grade/);
+    assert.doesNotMatch(newFormHtml, /profile source|saved binding is stale|explicit current selection/i);
+    assert.match(newFormHtml, /Copy these contact details from the paper form/);
     assert.doesNotMatch(newFormHtml, /name="emergencyContactSameAsStudent" value="1"[^>]*checked/,
       'fresh pre-enrollment forms start unchecked');
     const detail = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261`);

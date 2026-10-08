@@ -4,8 +4,8 @@
   <header class="dashboard-heading records-heading"><div><h1>Grade completion overview</h1><p>Published grades remain authoritative while a newer teacher workbook is under review.</p></div></header>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <section class="admin-section" aria-labelledby="grade-overview-filter-title">
-    <div class="admin-section__heading"><div><h2 id="grade-overview-filter-title">Choose academic context</h2><p>Current terms include the four ECR grading periods. Historical terms show grading periods observed in the records only; an empty historical table does not mean all expected grades are complete.</p></div></div>
-    <form class="admin-search records-search" method="get" action="/registrar/records/grades/missing">
+    <div class="admin-section__heading"><div><h2 id="grade-overview-filter-title">Choose class and grading period</h2><p>Current terms include all four grading periods. Historical terms show periods with records; an empty historical table does not confirm that every grade is complete.</p></div></div>
+    <form class="admin-search records-search records-grade-overview-filter" method="get" action="/registrar/records/grades/missing">
       <div class="field"><label for="grade-term">School year and term</label><select id="grade-term" name="termId" required><option value="">Choose a term</option>
         <% for (const term of contexts.terms) { %><option value="<%= term.id %>" <%= String(filters.termId || '') === String(term.id) ? 'selected' : '' %>><%= term.school_year %> · <%= term.term %><%= term.is_current ? ' (current)' : '' %></option><% } %>
       </select></div>

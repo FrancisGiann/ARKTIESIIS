@@ -24,7 +24,7 @@
   const confirmationTerms = record?.terms || [];
   const placementLabel = (term) => term.term_scope_status === 'not_applicable'
     ? 'Not applicable'
-    : ({ pending_payment: 'Pending payment', enrolled: 'Enrolled', completed: 'Completed', withdrawn: 'Withdrawn' })[term.enrollment_status]
+    : ({ pending_payment: 'Pending activation', enrolled: 'Enrolled', completed: 'Completed', withdrawn: 'Withdrawn' })[term.enrollment_status]
       || String(term.enrollment_status || 'Status not recorded').replaceAll('_', ' ');
 %>
 <main class="page-shell dashboard-page admin-page records-page annual-confirmation-document" id="main-content">

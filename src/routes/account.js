@@ -67,8 +67,8 @@ function createAccountRouter({ accountService, environment } = {}) {
     try {
       const result = await accountService.changePassword(req.authUser.id, req.body?.currentPassword, password);
       if (result === 'invalid_password') return req.authUser.mustChangePassword
-        ? renderRequiredPassword(req, res, { error: 'Password must contain 12 to 72 UTF-8 bytes.', status: 400 })
-        : renderAccount(req, res, { error: 'Password must contain 12 to 72 UTF-8 bytes.', status: 400 });
+        ? renderRequiredPassword(req, res, { error: 'Use at least 12 characters. Very long or symbol-heavy passwords may exceed the limit.', status: 400 })
+        : renderAccount(req, res, { error: 'Use at least 12 characters. Very long or symbol-heavy passwords may exceed the limit.', status: 400 });
       if (result === 'invalid_current_password') return req.authUser.mustChangePassword
         ? renderRequiredPassword(req, res, { error: 'Enter your current password and try again.', status: 401 })
         : renderAccount(req, res, { error: 'Enter your current password and try again.', status: 401 });

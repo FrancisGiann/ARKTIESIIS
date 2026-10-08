@@ -600,6 +600,7 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
     const totalRecords = Number(totalResult.recordset?.[0]?.total || 0);
     const totalPages = Math.max(1, Math.ceil(totalRecords / PAGE_SIZE));
     const safePage = Math.min(page, totalPages);
+    // The recorder_* result aliases below identify entry.updated_by: the last editor, not the original creator.
     const rows = await params(pool.request()).input('pageSize', sql.Int, PAGE_SIZE)
       .input('offset', sql.Int, (safePage - 1) * PAGE_SIZE)
       .query(`SELECT entry.id, entry.school_year, entry.first_name, entry.middle_name, entry.last_name,

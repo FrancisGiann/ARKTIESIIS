@@ -1,7 +1,8 @@
-<%- include('partials/head', { title }) %>
+<% const displayTitle = ({ Forbidden: 'Access not allowed', 'Not Found': 'Page not found', 'Service Unavailable': 'Temporarily unavailable' })[title] || title; %>
+<%- include('partials/head', { title: displayTitle }) %>
 <main class="page-shell status-page" id="main-content">
   <section class="status-content" aria-labelledby="status-title">
-    <h1 id="status-title"><%= title %></h1>
+    <h1 id="status-title"><%= displayTitle %></h1>
     <p><%= message %></p>
     <% const recovery = typeof errorRecovery !== 'undefined' && errorRecovery
       ? errorRecovery

@@ -1,5 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
+  <% const readableStatus = (value) => String(value || '').replaceAll('_', ' ').replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()); %>
   <a class="context-back" href="/registrar/records/students/<%= student.id %>/edit">Back to student profile</a>
   <%- include('../partials/student-record-navigation', { student, activeStudentView: 'academics' }) %>
   <h2 class="student-record-view-title">Academic record</h2>
@@ -11,10 +12,10 @@
 
   <section class="admin-section" aria-labelledby="student-info-title">
     <div class="admin-section__heading"><div><h2 id="student-info-title">Student information</h2><p>Profile details and enrollment history for this student.</p></div></div>
-    <dl class="student-profile-grid">
+    <dl class="student-profile-grid student-academic-info-grid">
       <div><dt>Student number</dt><dd><%= student.student_no %></dd></div>
       <div><dt>Name</dt><dd><%= [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(' ') %></dd></div>
-      <div><dt>Status</dt><dd><span class="record-status <%= student.status === 'active' ? 'record-status--active' : student.status === 'archived' ? 'record-status--archived' : '' %>"><%= student.status ? student.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Unknown' %></span></dd></div>
+      <div><dt>Status</dt><dd><span class="record-status <%= student.status === 'active' ? 'record-status--active' : student.status === 'archived' ? 'record-status--archived' : '' %>"><%= readableStatus(student.status) || 'Unknown' %></span></dd></div>
       <div><dt>Phone</dt><dd><%= student.phone || 'Not provided' %></dd></div>
       <div><dt>Address</dt><dd><%= student.address || 'Not provided' %></dd></div>
     </dl>
@@ -26,7 +27,7 @@
       <% for (const enrollment of enrollments) { %>
         <article class="academic-enrollment" aria-labelledby="enrollment-<%= enrollment.id %>-title">
           <h3 id="enrollment-<%= enrollment.id %>-title"><%= enrollment.school_year %> · <%= enrollment.term %></h3>
-          <p class="muted-copy"><%= enrollment.section_name || 'No section assigned' %> · <%= enrollment.enrollment_status ? enrollment.enrollment_status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Unknown enrollment status' %><%= enrollment.is_current ? ' · Current term' : '' %></p>
+          <p class="muted-copy"><%= enrollment.section_name || 'No section assigned' %> · <%= readableStatus(enrollment.enrollment_status) || 'Unknown enrollment status' %><%= enrollment.is_current ? ' · Current term' : '' %></p>
           <% if (enrollment.subjects.length) { %>
             <div class="academic-subject-list">
               <% for (const assignment of enrollment.subjects) { %>
@@ -36,7 +37,7 @@
                     <div class="academic-grade-list">
                       <% for (const grade of assignment.grades) { %>
                         <div class="academic-grade-item">
-                          <div><strong><%= grade.gradingPeriod %></strong><span>Grade: <%= grade.gradeValue ?? 'Pending' %><% if (grade.remarks) { %> · <%= grade.remarks %><% } %></span></div>
+                          <div class="academic-grade-item__summary"><strong><%= grade.gradingPeriod %></strong><span>Grade: <%= grade.gradeValue ?? 'Pending' %><% if (grade.remarks) { %> · <%= grade.remarks %><% } %></span></div>
                         </div>
                       <% } %>
                     </div>

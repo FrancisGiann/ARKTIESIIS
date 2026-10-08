@@ -1,29 +1,23 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-overview-page" id="main-content">
   <header class="dashboard-heading">
-    <div><p class="eyebrow">Finance · Current work</p><h1>Finance overview</h1><p>Choose a term and payment view, then open matching student accounts.</p></div>
+    <div><h1>Finance overview</h1><p>Choose a term, then view student payment status.</p></div>
     <div class="dashboard-heading__actions"><a class="button button--primary" href="/finance">Student accounts</a></div>
   </header>
 
-  <nav class="finance-queue-links" aria-label="Finance work queues">
-    <a class="finance-queue-link" href="/finance/departures"><span>Departure reviews</span><strong><%= Number(overview.queueCounts?.departureReview || 0).toLocaleString('en-US') %></strong><span>students awaiting a decision</span></a>
-    <a class="finance-queue-link" href="/finance/document-clearance"><span>Document clearance</span><strong><%= Number(overview.queueCounts?.documentClearance || 0).toLocaleString('en-US') %></strong><span>requests awaiting Finance</span></a>
-    <a class="finance-queue-link" href="/finance/review-drafts"><span>Saved reviews</span><strong><%= Number(overview.queueCounts?.savedReviews || 0).toLocaleString('en-US') %></strong><span>your unfinished changes</span></a>
-  </nav>
-
   <section class="finance-overview" aria-labelledby="finance-overview-heading">
     <div class="finance-overview__top">
-      <div><h2 id="finance-overview-heading">Term payment status</h2><p>Each active placement appears once in the selected view. Unused payment credit stays separate from fees due until applied.</p></div>
+      <div><h2 id="finance-overview-heading">Term payment status</h2><p>Select a status below to open the matching accounts.</p></div>
       <% if (overview.schoolYears.length) { %>
         <form class="dashboard-filter dashboard-filter--finance" method="get" action="/finance/overview">
           <div class="finance-overview-filter-primary">
             <label class="field"><span>School year</span><select name="schoolYear" required><% for (const year of overview.schoolYears) { %><option value="<%= year %>" <%= overview.selectedSchoolYear === year ? 'selected' : '' %>><%= year %></option><% } %></select></label>
             <label class="field"><span>Term</span><select name="termId" required><% for (const term of overview.availableTerms) { %><option value="<%= term.academicTermId %>" <%= String(overview.selectedTermId) === String(term.academicTermId) ? 'selected' : '' %>><%= term.term %></option><% } %></select></label>
-            <label class="field"><span>Tuition tracking</span><select name="installment"><% for (const [value, label] of [['whole','Whole term'],['dp','DP'],['prelim','Prelim'],['midterm','Midterm'],['finals','Finals']]) { %><option value="<%= value %>" <%= overview.selectedInstallment === value ? 'selected' : '' %>><%= label %></option><% } %></select></label>
+            <label class="field"><span>Payment period</span><select name="installment"><% for (const [value, label] of [['whole','Entire term'],['dp','Down payment'],['prelim','Preliminary'],['midterm','Midterm'],['finals','Finals']]) { %><option value="<%= value %>" <%= overview.selectedInstallment === value ? 'selected' : '' %>><%= label %></option><% } %></select></label>
           </div>
           <button class="button button--secondary" type="submit">Apply filters</button>
           <details class="finance-overview-secondary-filters" <%= overview.selectedGrade || overview.selectedSectionId || overview.selectedVoucher ? 'open' : '' %>>
-            <summary>More filters · grade, section, and voucher</summary>
+            <summary>More filters</summary>
             <div>
               <label class="field"><span>Grade</span><select name="gradeLevel"><option value="">All grades</option><% for (const grade of overview.gradeLevels) { %><option value="<%= grade %>" <%= overview.selectedGrade === grade ? 'selected' : '' %>><%= grade %></option><% } %></select></label>
               <label class="field"><span>Voucher</span><select name="voucherCode"><option value="">All vouchers</option><% for (const voucher of overview.voucherCodes) { %><option value="<%= voucher %>" <%= overview.selectedVoucher === voucher ? 'selected' : '' %>><%= voucher %></option><% } %></select></label>
@@ -38,22 +32,31 @@
       <p class="dashboard-empty" role="status">No configured school year is available yet. Set up a school year and terms before reviewing Finance status.</p>
     <% } else if (overview.needsTermSelection) { %>
       <p class="dashboard-empty" role="status">No configured terms are available for <%= overview.selectedSchoolYear %>.</p>
-    <% } else if (!overview.totalEligible) { %>
-      <p class="dashboard-empty" role="status">No active applicable enrollments match this term and these filters.</p>
     <% } else { %>
-      <p class="finance-overview-context"><strong><%= overview.selectedTerm.term %></strong> · <%= overview.selectedSchoolYear %> · <%= ({whole:'Whole term',dp:'DP',prelim:'Prelim',midterm:'Midterm',finals:'Finals'})[overview.selectedInstallment] %><%= overview.selectedGrade ? ` · ${overview.selectedGrade}` : '' %><%= overview.selectedVoucher ? ` · ${overview.selectedVoucher}` : '' %><% const selectedSection = overview.sections.find((section) => section.id === String(overview.selectedSectionId)); %><%= selectedSection ? ` · ${selectedSection.name}` : '' %> · <%= overview.totalEligible.toLocaleString('en-US') %> students</p>
-      <nav class="finance-status-cards" aria-label="Filter student accounts by payment status">
+      <% if (!overview.totalEligible) { %><p class="dashboard-empty" role="status">No active applicable enrollment records match this term and these filters. The status links below will return no records.</p><% } %>
+      <% const installmentLabel = ({whole:'Entire term',dp:'Down payment',prelim:'Preliminary',midterm:'Midterm',finals:'Finals'})[overview.selectedInstallment]; %>
+      <p class="finance-overview-context"><strong><%= overview.selectedTerm.term %></strong> · <%= overview.selectedSchoolYear %> · <%= installmentLabel %><%= overview.selectedGrade ? ` · ${overview.selectedGrade}` : '' %><%= overview.selectedVoucher ? ` · ${overview.selectedVoucher}` : '' %><% const selectedSection = overview.sections.find((section) => section.id === String(overview.selectedSectionId)); %><%= selectedSection ? ` · ${selectedSection.name}` : '' %> · <%= overview.totalEligible.toLocaleString('en-US') %> enrollment records</p>
+      <nav class="finance-payment-statuses" aria-label="Open student accounts by payment status">
         <% for (const item of overview.statusCounts) { const params = new URLSearchParams({ schoolYear: overview.selectedSchoolYear, termId: overview.selectedTermId, installment: overview.selectedInstallment, financeStatus: item.status }); if (overview.selectedGrade) params.set('gradeLevel', overview.selectedGrade); if (overview.selectedVoucher) params.set('voucherCode', overview.selectedVoucher); if (overview.selectedSectionId) params.set('sectionId', overview.selectedSectionId); %>
-          <a class="finance-status-card finance-status-card--<%= item.status %>" href="/finance?<%= params.toString() %>">
-            <span><%= item.label %></span><strong><%= item.count.toLocaleString('en-US') %></strong><span class="finance-status-card__action">View matching accounts <span aria-hidden="true">→</span></span>
+          <a class="finance-payment-status finance-payment-status--<%= item.status %>" href="/finance?<%= params.toString() %>" aria-label="Open <%= item.count %> <%= item.label %> student accounts for <%= overview.selectedTerm.term %>, <%= overview.selectedSchoolYear %>, <%= installmentLabel %><%= overview.selectedGrade ? `, ${overview.selectedGrade}` : '' %><%= overview.selectedVoucher ? `, ${overview.selectedVoucher}` : '' %><%= selectedSection ? `, ${selectedSection.name}` : '' %>">
+            <span><%= item.label %></span><strong><%= item.count.toLocaleString('en-US') %></strong><span aria-hidden="true" class="finance-payment-status__arrow">→</span>
           </a>
         <% } %>
       </nav>
     <% } %>
     <details class="finance-overview-method">
-      <summary>How Finance status is assigned</summary>
-      <p>Term balances include recorded charges and adjustments after payment applications, reversals, and reconciliation changes. Whole-term view works with existing whole-term assessments. An installment view needs one assessed DP, Prelim, Midterm, and Finals tuition line; missing or ambiguous lines and missing staff confirmation need review. Previous account balances and unused payment credit are shown separately and are not assigned to a term.</p>
+      <summary>How payment status is determined</summary>
+      <p>Counts cover enrollment records for this term. Selecting a status changes the list, not the counts. Balances include recorded charges and adjustments after payments are applied or reversed. Entire term uses whole-term assessments. Each payment period needs an assessed Down payment, Preliminary, Midterm, and Finals tuition line; missing or unclear lines, or missing registrar confirmation, need review. Earlier account balances are separate from term amounts. Unused payment credit stays separate until applied.</p>
     </details>
+  </section>
+
+  <section class="finance-other-tasks" aria-labelledby="finance-other-tasks-heading">
+    <h2 id="finance-other-tasks-heading">Other finance tasks</h2>
+    <ul class="finance-other-tasks__list">
+      <li><a href="/finance/departures"><span>Stopped or transferred</span><strong><%= Number(overview.queueCounts?.departureReview || 0).toLocaleString('en-US') %></strong><small>Review fees and balances after the registrar records a stop or transfer.</small></a></li>
+      <li><a href="/finance/document-clearance"><span>Document request fee review</span><strong><%= Number(overview.queueCounts?.documentClearance || 0).toLocaleString('en-US') %></strong><small>Check account fees before document processing begins.</small></a></li>
+      <li><a href="/finance/review-drafts"><span>Unfinished reviews</span><strong><%= Number(overview.queueCounts?.savedReviews || 0).toLocaleString('en-US') %></strong><small>Your saved changes that still need review.</small></a></li>
+    </ul>
   </section>
 </main>
 <%- include('../partials/foot') %>

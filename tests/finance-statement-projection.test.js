@@ -1,6 +1,32 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
+const ejs = require('ejs');
 const { createStatementProjection, createStudentFinanceProjection } = require('../src/utils/financeStatementProjection');
+const { formatMoney } = require('../src/utils/formatMoney');
+
+test('statement prints nonzero negative earlier balances for staff and keeps student privacy flags', async () => {
+  const ledger = {
+    student: { id: 501, first_name: 'Mika', middle_name: '', last_name: 'Santos', suffix: '', student_no: 'SHS-2026-0501' },
+    summary: {
+      annualBalanceSchoolYear: '2026-2027', annualBalance: '-2.50', allYearsAnnualBalance: '-2.50',
+      unattributedLegacyBalance: '-2.50', openingLiabilityDue: '0.00', totalBalance: '-2.50',
+      currentTermOutstanding: '-2.50', priorTermYearDebt: '0.00', availableCredit: '0.00',
+      showPreviousAccountBalance: false, showPreviouslyConfirmedBalance: false
+    },
+    termBalances: [], charges: [], events: []
+  };
+  const template = path.join(__dirname, '..', 'views', 'finance', 'statement.ejs');
+  const render = (role) => ejs.renderFile(template, {
+    title: 'Statement of Account', ledger, currentUser: { role },
+    formatMoney, formatFinanceDateTime: () => 'October 8, 2026'
+  });
+
+  const staffStatement = await render('finance');
+  const studentStatement = await render('student');
+  assert.match(staffStatement, /<dt>Earlier account balance<\/dt><dd>₱-2\.50<\/dd>/);
+  assert.doesNotMatch(studentStatement, /<dt>Earlier account balance<\/dt>/);
+});
 
 test('print projection groups exact term and installment balances and excludes private correction details', () => {
   const projected = createStatementProjection({

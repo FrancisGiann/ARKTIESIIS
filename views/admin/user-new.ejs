@@ -47,7 +47,7 @@
             <input id="department" name="department" type="text" maxlength="100" value="<%= values.department || '' %>">
           </div>
           <div class="field">
-            <label for="student-number">Student number</label>
+          <label for="student-number">Student number (student logins only)</label>
             <input id="student-number" name="studentNo" type="text" maxlength="50" value="<%= values.student_no || '' %>">
           </div>
         </div>
@@ -56,7 +56,7 @@
         <div class="field">
           <label for="password">Initial password</label>
           <input id="password" name="password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required aria-describedby="password-help" data-password-source>
-          <span id="password-help" class="field-help">Use 12 to 72 UTF-8 bytes. It will be stored as a bcrypt hash.</span>
+          <span id="password-help" class="field-help">Use 12 or more ordinary letters, numbers, or symbols. Emoji and some other characters reach the maximum length sooner. Passwords are stored securely.</span>
         </div>
         <div class="field">
           <label for="confirm-password">Confirm password</label>

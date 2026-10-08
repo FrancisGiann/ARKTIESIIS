@@ -3,20 +3,20 @@
   <section class="auth-form-section auth-form-section--focused" aria-labelledby="login-title">
     <a class="context-back" href="/">Back to home</a>
     <h1 id="login-title">Sign in</h1>
-    <p>Use the email and password associated with your school account.</p>
+    <p>Use the email address and password you use to sign in.</p>
     <% if (developmentPasswordLoginEnabled) { %>
       <p class="auth-note">Development-only password sign-in is enabled.</p>
     <% } else if (demoPasswordOnlyLoginEnabled) { %>
       <p class="auth-note">Temporary demo mode is active for designated demo accounts. Those accounts sign in with their password only; email verification remains required for everyone else.</p>
     <% } else if (twoFactorRequired) { %>
-      <p class="auth-note">After your password is accepted, a six-digit verification code will be sent to your school email.</p>
+      <p class="auth-note">After your password is accepted, a six-digit verification code will be sent to the email address on your account.</p>
     <% } %>
     <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
     <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
     <form class="form-stack" method="post" action="/login" data-submitting-message="Checking your sign-in. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="field">
-        <label for="email">School email</label>
+        <label for="email">Email</label>
         <input id="email" name="email" type="email" autocomplete="username" maxlength="255" required>
       </div>
       <div class="field">

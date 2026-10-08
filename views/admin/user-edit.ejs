@@ -48,7 +48,7 @@
             <input id="department" name="department" type="text" maxlength="100" value="<%= user.department || '' %>">
           </div>
           <div class="field">
-            <label for="student-number">Student number</label>
+            <label for="student-number">Student number (student logins only)</label>
             <input id="student-number" name="studentNo" type="text" maxlength="50" value="<%= user.student_no || '' %>">
             <% if (user.student_no) { %>
               <span class="field-help">Linked student: <%= [user.student_first_name, user.student_middle_name, user.student_last_name, user.student_suffix].filter(Boolean).join(' ') %></span>
@@ -76,7 +76,7 @@
         <div class="field">
           <label for="new-password">New password</label>
           <input id="new-password" name="password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required aria-describedby="new-password-help" data-password-source>
-          <span id="new-password-help" class="field-help">Use 12 to 72 UTF-8 bytes.</span>
+          <span id="new-password-help" class="field-help">Use 12 or more ordinary letters, numbers, or symbols. Emoji and some other characters reach the maximum length sooner.</span>
         </div>
         <div class="field">
           <label for="confirm-password">Confirm new password</label>

@@ -1,3 +1,44 @@
+for (const table of document.querySelectorAll('.student-clearance-page .clearance-items-table')) {
+  for (const checkbox of table.querySelectorAll('[data-clearance-signature-toggle]')) {
+    const row = checkbox.closest('tr');
+    const details = row?.querySelector('.clearance-signer-details');
+    const signerName = details?.querySelector('input[name$="_signerName"]');
+    const contextReason = details?.querySelector('textarea[name$="_signerContextReason"]');
+    if (!details) continue;
+
+    checkbox.addEventListener('change', () => {
+      if (checkbox.checked && (!signerName?.value.trim() || (contextReason && !contextReason.value.trim()))) {
+        details.open = true;
+      }
+    });
+  }
+}
+
+const openClearanceHashTarget = () => {
+  if (!window.location.hash) return;
+  let targetId;
+  try {
+    targetId = decodeURIComponent(window.location.hash.slice(1));
+  } catch {
+    return;
+  }
+  const target = document.getElementById(targetId);
+  if (target?.matches('.student-clearance-page .clearance-term')) target.open = true;
+};
+openClearanceHashTarget();
+window.addEventListener('hashchange', openClearanceHashTarget);
+
+const clearanceFilterDisclosure = document.querySelector('[data-clearance-filter-more]');
+if (clearanceFilterDisclosure && window.matchMedia) {
+  const mobileClearanceLayout = window.matchMedia('(max-width: 760px)');
+  const syncClearanceFilterDisclosure = () => {
+    if (!mobileClearanceLayout.matches) clearanceFilterDisclosure.open = true;
+    else if (clearanceFilterDisclosure.dataset.defaultOpen !== 'true') clearanceFilterDisclosure.open = false;
+  };
+  syncClearanceFilterDisclosure();
+  mobileClearanceLayout.addEventListener('change', syncClearanceFilterDisclosure);
+}
+
 for (const button of document.querySelectorAll('[data-print-page]')) {
   button.addEventListener('click', () => window.print());
 }

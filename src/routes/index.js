@@ -144,7 +144,8 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     standardHeaders: true,
     legacyHeaders: false,
     handler: (req, res) => res.status(400).render('auth/password-reset', {
-      title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: '', token: '', error: 'This reset link is invalid or has expired.'
+      title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: '', token: '', resetLinkUnavailable: true,
+      error: 'This reset link is invalid or has expired.'
     })
   });
 
@@ -269,10 +270,12 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     try {
       const valid = await accountsService.inspectPasswordReset(req.query.requestId, req.query.token);
       if (!valid) return res.status(400).set('Referrer-Policy', 'no-referrer').set('Cache-Control', 'no-store').render('auth/password-reset', {
-        title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: '', token: '', error: 'This reset link is invalid or has expired.'
+        title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: '', token: '', resetLinkUnavailable: true,
+        error: 'This reset link is invalid or has expired.'
       });
       return res.set('Referrer-Policy', 'no-referrer').set('Cache-Control', 'no-store').render('auth/password-reset', {
-        title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: req.query.requestId, token: req.query.token, error: null
+        title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: req.query.requestId, token: req.query.token,
+        resetLinkUnavailable: false, error: null
       });
     } catch {
       return res.status(503).render('error', { title: 'Reset Unavailable', message: 'The password reset link could not be checked.' });
@@ -285,16 +288,18 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     }
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
     if (password !== req.body?.confirmPassword) return res.status(400).render('auth/password-reset', {
-      title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: req.body?.requestId || '', token: req.body?.token || '', error: 'The new passwords do not match.'
+      title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: req.body?.requestId || '', token: req.body?.token || '',
+      resetLinkUnavailable: false, error: 'The new passwords do not match.'
     });
     try {
       const result = await accountsService.resetPasswordWithToken(req.body?.requestId, req.body?.token, password);
       if (result === 'reset') return res.redirect(303, '/login?notice=passwordReset');
       const error = result === 'invalid_request'
-        ? 'Password must contain 12 to 72 UTF-8 bytes, and the reset link must be valid.'
+        ? 'Use at least 12 characters. Very long or symbol-heavy passwords may exceed the limit, and the reset link must be valid.'
         : 'This reset link is invalid or has expired.';
       return res.status(400).render('auth/password-reset', {
-        title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: req.body?.requestId || '', token: req.body?.token || '', error
+        title: 'Reset Password', csrfToken: ensureCsrfToken(req), requestId: req.body?.requestId || '', token: req.body?.token || '',
+        resetLinkUnavailable: result === 'invalid_token' || result === 'expired', error
       });
     } catch {
       return res.status(503).render('error', { title: 'Reset Unavailable', message: 'The password could not be reset.' });

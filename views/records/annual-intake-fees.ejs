@@ -12,7 +12,7 @@
     <% if (preview) { %><p class="fee-total-line"><span>Student payable</span><strong>₱<%= formatMoney(preview.total) %></strong></p><% } %>
   </header>
   <nav class="intake-progress" aria-label="Enrollment steps">
-    <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Documents received</span><span class="intake-step-label--short">Papers</span></li><li aria-current="step"><span class="intake-step-label--full">Fees</span><span class="intake-step-label--short">Fees</span></li><li><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li></ol>
+    <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Paper document review</span><span class="intake-step-label--short">Papers</span></li><li aria-current="step"><span class="intake-step-label--full">Fees</span><span class="intake-step-label--short">Fees</span></li><li><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li></ol>
   </nav>
   <% if (successNotice) { %><p class="form-success" role="status"><%= successNotice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>

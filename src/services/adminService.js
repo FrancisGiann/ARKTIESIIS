@@ -98,7 +98,7 @@ function makePagination(totalRecords, requestedPage, pageSize) {
 
 function validatePassword(password) {
   if (typeof password !== 'string' || Buffer.byteLength(password, 'utf8') < 12 || Buffer.byteLength(password, 'utf8') > 72) {
-    throw new AdminServiceError('Password must contain 12 to 72 UTF-8 bytes.');
+    throw new AdminServiceError('Use at least 12 characters. Very long or symbol-heavy passwords may exceed the limit.');
   }
   return password;
 }

@@ -1,5 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page records-page student-record-overview" id="main-content">
+  <% const readableStatus = (value) => String(value || '').replaceAll('_', ' ').replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()); %>
   <a class="context-back" href="/registrar/records">Back to student search</a>
   <%- include('../partials/student-record-navigation', { student, activeStudentView: studentView }) %>
   <h2 class="student-record-view-title"><%= ({ overview: 'Overview', history: 'Profile revision history', requests: 'Document requests', 'return-evaluation': 'Return evaluation' })[studentView] %></h2>
@@ -17,7 +18,7 @@
       <% if (currentEnrollment) { %>
         <p><strong><%= currentEnrollment.school_year %> · <%= currentEnrollment.term %></strong></p>
         <p><%= currentPlacement || 'Section not assigned' %></p>
-        <p>Status: <%= currentEnrollment.enrollment_status.replaceAll('_', ' ') %></p>
+        <p>Status: <%= readableStatus(currentEnrollment.enrollment_status) %></p>
       <% } else { %><p class="empty-state">No enrollment has been recorded.</p><% } %>
       <a class="text-link" href="/registrar/records/students/<%= student.id %>/edit">Review enrollment history</a>
     </article>
@@ -26,21 +27,29 @@
       <% const documentLabel = (status) => ({ valid: 'Verified by staff', needs_review: 'Needs staff review', rejected: 'Rejected', pending: 'Precheck queued', processing: 'Precheck running', failed: 'Staff review required' })[status] || 'Not submitted'; %>
       <% const previousReportCardLabel = (status, decision) => status === 'needs_review' && decision === 'correction_requested' ? 'Correction requested' : documentLabel(status); %>
       <% const previousReportCardPaperLabel = (status) => ({ pending: 'Pending', received: 'Received', verified: 'Checked by staff', correction: 'Clearer or replacement copy needed', rejected: 'Not accepted for this requirement' })[status] || 'Not recorded'; %>
-      <dl class="student-record-document-list">
+      <dl class="student-record-document-list student-record-document-list--clearance">
         <div><dt>Good Moral Certificate</dt><dd><span class="record-document-status"><%= documentLabel(student.good_moral_status) %></span></dd></div>
         <div><dt>PSA birth certificate</dt><dd><span class="record-document-status"><%= documentLabel(student.psa_status) %></span></dd></div>
-        <div><dt>Previous-school report card · digital enrollment scan</dt><dd><span class="record-document-status"><%= previousReportCardLabel(student.previous_report_card_status, student.previous_report_card_latest_decision_type) %></span><a class="text-link" href="/documents/students/<%= student.id %>">Review digital submission</a></dd></div>
-        <div><dt>Previous-school report card · paper copy (staff only)</dt><dd><span class="record-document-status"><%= previousReportCardPaperLabel(student.previous_school_report_card_physical_status) %></span><a class="text-link" href="/documents/students/<%= student.id %>#previous-school-report-card-status-title">Record paper-copy status</a></dd></div>
-        <div><dt>Form 137 paper record (staff only)</dt><dd><span class="record-document-status"><%= student.form137_status ? student.form137_status.replaceAll('_', ' ') : 'Not recorded' %></span><a class="text-link" href="/documents/students/<%= student.id %>#form137-status-title">Record Form 137 status</a></dd></div>
+        <div><dt>Previous-school report card · digital scan</dt><dd><span class="record-document-status"><%= previousReportCardLabel(student.previous_report_card_status, student.previous_report_card_latest_decision_type) %></span><a class="text-link" href="/documents/students/<%= student.id %>">Review digital scan</a></dd></div>
+        <div><dt>Previous-school report card · paper copy <span class="muted-copy">Staff only</span></dt><dd><span class="record-document-status"><%= previousReportCardPaperLabel(student.previous_school_report_card_physical_status) %></span><a class="text-link" href="/documents/students/<%= student.id %>#previous-school-report-card-status-title">Record paper-copy status</a></dd></div>
+        <div><dt>Form 137 · paper record <span class="muted-copy">Staff only</span></dt><dd><span class="record-document-status"><%= student.form137_status ? student.form137_status.replaceAll('_', ' ') : 'Not recorded' %></span><a class="text-link" href="/documents/students/<%= student.id %>#form137-status-title">Open Form 137 record</a></dd></div>
       </dl>
-      <p class="muted-copy">The digital scan and paper-copy status are separate enrollment records. Neither writes grades. Form 137 stays in its own staff-only physical-record workflow.</p>
+      <p class="muted-copy">The digital scan and paper-copy status are separate records. Neither writes grades. Form 137 has its own staff-only paper-record history.</p>
     </article>
   </section>
+  <% if (clearanceOverview) { %><section class="student-record-status-grid student-record-clearance-summary" aria-label="Paper clearance status">
+    <article class="admin-section"><h2>Paper clearance status</h2>
+      <% if (clearanceOverview.totalRecords) { %><p><strong>Not completed:</strong> <%= clearanceOverview.pending %> · <strong>Completed:</strong> <%= clearanceOverview.completed %></p>
+        <p class="muted-copy">Not completed means the registrar has not confirmed a completed paper form. <%= clearanceOverview.notAttended %> term<%= clearanceOverview.notAttended === 1 ? '' : 's' %> not attended · <%= clearanceOverview.notApplicable %> outside required terms. A term not attended means no attendance for the entire term; excluded terms are not completed.</p>
+      <% } else { %><p class="empty-state">No term entries are available for clearance review.</p><% } %>
+      <a class="text-link" href="/registrar/records/students/<%= student.id %>/clearance">Open clearance checklist</a>
+    </article>
+  </section><% } %>
   <section class="student-record-status-grid" aria-label="Document request finance summary">
     <article class="admin-section"><h2>Document request finance status</h2>
       <p><strong><%= financeSummary.status %></strong></p>
-      <p>All-years outstanding: <strong><%= financeSummary.outstanding === null ? 'Pending finance review' : `₱${financeSummary.outstanding}` %></strong></p>
-      <p class="muted-copy">This safe summary combines all annual years and legacy records. Finance notes and payment arrangement details remain private.</p>
+      <p>Outstanding across school years: <strong><%= financeSummary.outstanding === null ? 'Pending finance review' : `₱${financeSummary.outstanding}` %></strong></p>
+      <p class="muted-copy">This summary covers balances recorded for the student across school years. Finance notes and payment arrangements remain private.</p>
       <a class="text-link" href="/registrar/records/students/<%= student.id %>?view=requests">Review document requests</a>
     </article>
   </section>
@@ -67,7 +76,7 @@
       <% if (lastEnrollment) { %>
         <article class="academic-enrollment" aria-labelledby="return-last-enrollment-title">
           <h4 id="return-last-enrollment-title">Last recorded enrollment</h4>
-          <p><strong><%= lastEnrollment.school_year %> · <%= lastEnrollment.term %></strong> · <%= formatStudentPlacement(lastEnrollment.grade_level, lastEnrollment.section_name) || 'Section not assigned' %> · Status: <%= String(lastEnrollment.enrollment_status || 'not recorded').replaceAll('_', ' ') %></p>
+          <p><strong><%= lastEnrollment.school_year %> · <%= lastEnrollment.term %></strong> · <%= formatStudentPlacement(lastEnrollment.grade_level, lastEnrollment.section_name) || 'Section not assigned' %> · Status: <%= readableStatus(lastEnrollment.enrollment_status) || 'Not recorded' %></p>
           <p class="muted-copy">This identifies a saved enrollment record and does not by itself establish when or why the student stopped attending.</p>
         </article>
       <% } else if (enrollments.length) { %>
@@ -78,7 +87,7 @@
           <% for (const enrollment of enrollments) { %>
             <article class="academic-enrollment" aria-labelledby="return-enrollment-<%= enrollment.id %>">
               <h4 id="return-enrollment-<%= enrollment.id %>">Recorded enrollment · <%= enrollment.school_year %> · <%= enrollment.term %></h4>
-              <p><%= formatStudentPlacement(enrollment.grade_level, enrollment.section_name) || 'Section not assigned' %> · Status: <%= String(enrollment.enrollment_status || 'not recorded').replaceAll('_', ' ') %></p>
+              <p><%= formatStudentPlacement(enrollment.grade_level, enrollment.section_name) || 'Section not assigned' %> · Status: <%= readableStatus(enrollment.enrollment_status) || 'Not recorded' %></p>
               <% if (enrollment.subjects?.length) { %>
                 <div class="table-scroll" tabindex="0" aria-label="Recorded subjects and grades for <%= enrollment.school_year %> <%= enrollment.term %>"><table class="admin-table">
                   <thead><tr><th scope="col">Subject code</th><th scope="col">Subject name</th><th scope="col">Recorded grades and remarks</th></tr></thead>
@@ -109,9 +118,9 @@
     </div>
     <section class="registrar-overview__selected" aria-label="Safe finance balance summary">
       <div><dt>Finance status</dt><dd><%= financeSummary.status %></dd></div>
-      <div><dt>All-years outstanding</dt><dd><%= financeSummary.outstanding === null ? 'Pending finance review' : `₱${financeSummary.outstanding}` %></dd></div>
+      <div><dt>Outstanding across school years</dt><dd><%= financeSummary.outstanding === null ? 'Pending finance review' : `₱${financeSummary.outstanding}` %></dd></div>
     </section>
-    <p class="muted-copy">Finance checks annual balances across all years and legacy records. Payment arrangements, finance reasons, and private finance notes stay with Finance.</p>
+    <p class="muted-copy">Finance checks balances recorded for each school year. Payment arrangements, reasons, and private notes stay with Finance.</p>
     <form class="form-stack records-compact-form" method="post" action="/registrar/records/students/<%= student.id %>/document-requests">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <input type="hidden" name="idempotencyKey" value="<%= newDocumentRequestKey %>">
@@ -129,7 +138,7 @@
           <article class="academic-enrollment" aria-labelledby="document-request-<%= request.id %>">
             <h3 id="document-request-<%= request.id %>"><%= request.document_name %> <span class="record-status"><%= request.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) %></span></h3>
             <p><strong><%= request.document_type %></strong> · Requested <%= requestDate %> · Reference: <%= request.reference_text || 'None' %></p>
-            <p>Finance clearance: <strong><%= clearance.status.replaceAll('_', ' ') %></strong><% if (clearance.status === 'approved') { %><%= clearance.hasArrangement ? ' with payment arrangement' : '' %> · <%= clearance.actorName %> · <%= clearance.decidedAt instanceof Date ? clearance.decidedAt.toLocaleString('en-PH', { timeZone: 'Asia/Manila' }) : clearance.decidedAt %><% } %></p>
+            <p>Term account clearance: <strong><%= clearance.status.replaceAll('_', ' ').replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()) %></strong><% if (clearance.status === 'approved') { %><%= clearance.hasArrangement ? ' with payment arrangement' : '' %> · <%= clearance.actorName %> · <%= clearance.decidedAt instanceof Date ? clearance.decidedAt.toLocaleString('en-PH', { timeZone: 'Asia/Manila' }) : clearance.decidedAt %><% } %></p>
             <% if (clearance.status === 'reapproval_required') { %><p class="form-alert">Finance must review the increased balance before processing continues. Issue a new claim slip after approval.</p><% } %>
             <% if (request.status === 'released') { %><p>Release recorded <%= releaseDate %> to <%= request.recipient %><%= request.handover_reference ? ` · Reference ${request.handover_reference}` : '' %>.</p><% } %>
             <% if (clearance.history.length) { %><details><summary>Finance decision history (<%= clearance.history.length %>)</summary><ol class="records-request-history"><% for (const event of clearance.history) { %><li><strong><%= event.eventType.replaceAll('_', ' ') %></strong> · <%= event.status.replaceAll('_', ' ') %> · <%= event.actorName %> · <%= event.createdAt instanceof Date ? event.createdAt.toLocaleString('en-PH', { timeZone: 'Asia/Manila' }) : event.createdAt %><% if (event.eventType === 'approved' && event.hasArrangement) { %> · Payment arrangement recorded<% } %></li><% } %></ol></details><% } %>
@@ -207,7 +216,7 @@
 
   <% if (studentView === 'history') { %>
   <section class="admin-section" aria-labelledby="profile-revision-history-title">
-    <div class="admin-section__heading"><div><h2 id="profile-revision-history-title">Student profile revision history</h2><p>Staff-only history records changed profile fields from the first saved edit onward.</p></div></div>
+    <div class="admin-section__heading"><div><h2 id="profile-revision-history-title">Profile field changes</h2><p>Staff-only history records changed profile fields from the first saved edit onward.</p></div></div>
     <% if (profileRevisions.length) { %>
       <div class="table-scroll" tabindex="0" aria-label="Student profile revision history"><table class="admin-table">
         <thead><tr><th scope="col">Changed</th><th scope="col">Field</th><th scope="col">Before</th><th scope="col">After</th><th scope="col">Staff</th></tr></thead>

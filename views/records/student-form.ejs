@@ -11,7 +11,7 @@
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
-  <section class="admin-form-section records-form-section" aria-labelledby="profile-title">
+  <section class="records-form-section records-profile-form-section" aria-labelledby="profile-title">
     <h2 id="profile-title">Profile details</h2>
     <p>Student profiles and history remain stored when a login is deactivated or the profile is archived.</p>
     <% if (student?.status === 'archived') { %><p class="form-alert" role="status">This student record is archived. Profile edits and new enrollments are disabled. Existing academic and finance history remains available for review, but cannot be changed.</p><% } %>

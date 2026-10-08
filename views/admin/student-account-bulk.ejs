@@ -9,10 +9,10 @@
   </section>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
 
-  <section class="admin-form-section" aria-labelledby="bulk-upload-title">
-    <h2 id="bulk-upload-title">Upload a student list</h2>
-    <p>The first worksheet must start with <strong>Student Number</strong> and <strong>Email</strong> columns. Upload up to 100 students in an .xlsx file no larger than 2 MB. Student records and enrollments are not changed by this setup.</p>
-    <p><a class="table-action" href="/admin/student-accounts/template.csv">Download the student list template</a>. Open it in Excel, replace the sample row, then save it as an .xlsx workbook before uploading. Enter one existing student number and contact email per row.</p>
+  <section class="admin-form-section bulk-account-upload" aria-labelledby="bulk-upload-title">
+    <div class="admin-section__heading"><div><h2 id="bulk-upload-title">Upload a student list</h2>
+      <p>The first worksheet must start with <strong>Student Number</strong> and <strong>Email</strong> columns. Upload up to 100 students in an .xlsx file no larger than 2 MB. Student records and enrollments are not changed by this setup.</p>
+      <p><a class="table-action" href="/admin/student-accounts/template.csv">Download the student list template</a>. Open it in Excel, replace the sample row, then save it as an .xlsx workbook before uploading. Enter one existing student number and contact email per row.</p></div></div>
     <form class="form-stack admin-form" method="post" action="/admin/student-accounts/preview" enctype="multipart/form-data">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="field"><label for="student-account-workbook">Excel workbook (.xlsx)</label><input id="student-account-workbook" name="workbook" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required></div>

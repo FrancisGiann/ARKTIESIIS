@@ -8,7 +8,7 @@
     </div>
   </header>
   <nav class="intake-progress" aria-label="Enrollment steps">
-    <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Documents received</span><span class="intake-step-label--short">Papers</span></li><li><span class="intake-step-label--full">Fees</span><span class="intake-step-label--short">Fees</span></li><li aria-current="step"><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li></ol>
+    <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Paper document review</span><span class="intake-step-label--short">Papers</span></li><li><span class="intake-step-label--full">Fees</span><span class="intake-step-label--short">Fees</span></li><li aria-current="step"><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li></ol>
   </nav>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% if (!record || !checklist || !preview) { %>
@@ -68,19 +68,19 @@
       <% } else if (prerequisiteReview.kind === 'exempt') { %>
         <p>This is a <%= prerequisiteReview.intakeKind === 'readmission' ? 'readmission' : 'new-student' %> entry. There is no internal preceding-year clearance gate for this first enrollment.</p>
       <% } else if (prerequisiteReview.kind === 'already_confirmed') { %>
-        <p>This annual enrollment was already confirmed. Its original confirmation remains on record; paper-clearance progress is shown separately in the student’s Clearance tab.</p>
+        <p>This annual enrollment was already confirmed. Its original confirmation remains on record; paper clearance status is shown separately in the Clearance workspace.</p>
       <% } else { %>
         <% if (prerequisiteReview.kind === 'continuing_source') { %><p>Preceding school year: <%= prerequisiteReview.sourceSchoolYear || 'not yet selected from school records' %></p><% } %>
         <% if (prerequisiteReview.terms?.length) { %>
           <div class="table-scroll" tabindex="0" aria-label="Prior-year paper clearance requirements"><table class="admin-table">
-            <thead><tr><th scope="col">Prior term</th><th scope="col">Attendance record</th><th scope="col">Paper form status</th></tr></thead>
-            <tbody><% for (const term of prerequisiteReview.terms) { const labels = { complete: 'Complete', not_attended: 'Did not attend · reason recorded', not_applicable: 'Before entry or future term', missing_placement: 'Term placement missing', missing: 'Attendance review needed', unreviewed: 'Attendance review needed', invalid_exclusion: 'Attendance decision needs correction', incomplete: term.awaitingConfirmation ? 'Waiting for registrar confirmation' : 'Signatures or review incomplete' }; %><tr>
-              <th scope="row"><%= term.termLabel %></th><td data-label="Attendance record"><%= term.state === 'not_attended' ? 'Did not attend · reason recorded' : term.state === 'not_applicable' ? 'Before entry or future term' : term.scopeStatus === 'attended' ? 'Attended' : 'Not reviewed' %></td><td data-label="Paper form status"><%= labels[term.state] || 'Review needed' %></td>
+            <thead><tr><th scope="col">Prior term</th><th scope="col">Attendance record</th><th scope="col">Paper clearance status</th></tr></thead>
+            <tbody><% for (const term of prerequisiteReview.terms) { const labels = { complete: 'Completed', not_attended: 'Term not attended · reason recorded', not_applicable: 'Outside required terms', missing_placement: 'Not completed · placement record needed', missing: 'Not completed', unreviewed: 'Not completed', invalid_exclusion: 'Not completed · attendance reason needs correction', incomplete: 'Not completed' }; %><tr>
+              <th scope="row"><%= term.termLabel %></th><td data-label="Attendance record"><%= term.state === 'not_attended' ? 'No attendance for the entire term' : term.state === 'not_applicable' ? 'Before entry or future term' : term.scopeStatus === 'attended' ? 'Attended' : 'Attendance not confirmed' %></td><td data-label="Paper clearance status"><%= labels[term.state] || 'Not completed' %></td>
             </tr><% } %></tbody>
           </table></div>
         <% } %>
         <% if (prerequisiteReview.blockers?.length) { %><ul class="form-alert" aria-label="Paper form items to resolve"><% for (const blocker of prerequisiteReview.blockers) { %><li><%= blocker %></li><% } %></ul><% } else { %><p class="form-success" role="status">All required earlier-term paper forms are complete.</p><% } %>
-        <p><a class="table-action" href="/registrar/records/students/<%= parent.student_id %>/clearance">Open this student’s Clearance tab</a></p>
+        <p><a class="table-action" href="/registrar/records/students/<%= parent.student_id %>/clearance">Open this student’s Clearance workspace</a></p>
         <% if (sourceOptions && !sourceOptions.sourceLocked) { %>
           <form class="form-stack admin-form" method="post" action="/registrar/intake/<%= annualId %>/continuity-source">
             <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= values.sourceBindingIdempotencyKey %>">

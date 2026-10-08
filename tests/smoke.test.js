@@ -222,7 +222,7 @@ test('home page renders with Helmet default content security policy', async () =
     assert.match(html, /Keep school requirements moving with clear next steps\./);
     assert.match(html, /authorized staff inspect documents and make every acceptance decision/);
     assert.match(html, /Connected to school life at ARKTIESIIS\./);
-    assert.match(html, /school-issued account/);
+    assert.match(html, /school account/);
     assert.match(html, /recovery option on the sign-in page/);
     assert.doesNotMatch(html, /Who it.s for|Database administrator/);
     assert.match(html, /href="\/login"/);
@@ -328,7 +328,7 @@ test('POST form feedback announces a valid submission and leaves prevented submi
 
   runInNewContext(readFileSync('public/js/app.js', 'utf8'), {
     document,
-    window: { addEventListener(name, listener) { windowListeners[name] = listener; } }
+    window: { location: { hash: '' }, addEventListener(name, listener) { windowListeners[name] = listener; } }
   });
 
   const validStatus = validForm.children[0];
@@ -380,7 +380,7 @@ test('login page remains available when the development password bypass is disab
       assert.equal(response.status, 200);
       if (environment.nodeEnv !== 'production') assert.ok(response.headers.get('set-cookie'));
       else assert.equal(response.headers.get('set-cookie'), null);
-      assert.match(html, /verification code will be sent to your school email/);
+      assert.match(html, /verification code will be sent to the email address on your account/);
     });
   }
 });

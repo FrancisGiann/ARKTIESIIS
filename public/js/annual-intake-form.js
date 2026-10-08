@@ -150,6 +150,8 @@
   const showStep = (number, focus = false) => {
     activeStep = Math.max(1, Math.min(3, number));
     panels.forEach((panel) => { panel.hidden = Number(panel.dataset.stepPanel) !== activeStep; });
+    const sourceProfileDetails = form.querySelector('[data-pre-enrollment-profile-details]');
+    if (sourceProfileDetails) sourceProfileDetails.open = activeStep === 1;
     indicators.forEach((indicator) => {
       const current = Number(indicator.dataset.stepIndicator) === activeStep;
       indicator.setAttribute('aria-current', current ? 'step' : 'false');

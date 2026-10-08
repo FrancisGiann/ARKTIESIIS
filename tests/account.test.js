@@ -274,6 +274,42 @@ test('password recovery uses the same response for found, missing, and unavailab
   });
 });
 
+test('expired reset links offer a replacement while valid links retain their token on validation errors', async () => {
+  const requestId = 'fixture-reset-request';
+  const token = 'v'.repeat(43);
+  const accountService = {
+    async inspectPasswordReset(candidateId, candidateToken) {
+      return candidateId === requestId && candidateToken === token;
+    }
+  };
+  const app = createApp({
+    databasePool: createAuthDatabase([]), environment: testEnvironment(), accountService
+  });
+
+  await withServer(app, async (baseUrl) => {
+    const expired = await fetch(`${baseUrl}/password/reset?requestId=expired&token=old`);
+    const expiredHtml = await expired.text();
+    assert.equal(expired.status, 400);
+    assert.match(expiredHtml, /Request a new reset link/);
+    assert.doesNotMatch(expiredHtml, /<form[^>]+action="\/password\/reset"/);
+    assert.doesNotMatch(expiredHtml, /name="password"/);
+
+    const page = await fetch(`${baseUrl}/password/reset?requestId=${requestId}&token=${token}`);
+    const cookie = cookieFrom(page);
+    const csrf = csrfFromHtml(await page.text());
+    const response = await postForm(baseUrl, '/password/reset', cookie, {
+      _csrf: csrf, requestId, token, password: 'First-Password-Example-1', confirmPassword: 'Different-Password-Example-2'
+    });
+    const html = await response.text();
+    assert.equal(response.status, 400, html);
+    assert.match(html, /new passwords do not match/i);
+    assert.match(html, new RegExp(`name="requestId" value="${requestId}"`));
+    assert.match(html, new RegExp(`name="token" value="${token}"`));
+    assert.match(html, new RegExp(`name="_csrf" value="${csrf}"`));
+    assert.match(html, /<form[^>]+action="\/password\/reset"/);
+  });
+});
+
 test('forced password mismatch remains on the required-password page and offers logout', async () => {
   let changeCalled = false;
   const accountService = {

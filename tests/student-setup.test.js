@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { once } = require('node:events');
 const express = require('express');
+const session = require('express-session');
 const {
   StudentSetupError,
   normalizeBulkRows,
@@ -169,6 +170,43 @@ test('legacy registrar intake creation and activation services are retired witho
   assert.equal(fixture.log.queries.length, 0);
 });
 
+test('legacy intake URLs only redirect or reject; retained form views are not reachable workflow', async () => {
+  let serviceCalls = 0;
+  const app = express();
+  app.set('views', path.join(__dirname, '..', 'views'));
+  app.set('view engine', 'ejs');
+  app.use(express.urlencoded({ extended: false }));
+  app.use(session({ secret: 'student-setup-compatibility-test-secret', resave: false, saveUninitialized: true }));
+  app.use((req, _res, next) => { req.session.csrfToken = 'fixture-csrf'; next(); });
+  app.use('/registrar/intake/legacy', createStudentIntakeRouter({ studentSetupService: {
+    async listPendingIntakes() { serviceCalls += 1; return []; },
+    async loadIntakeOptions() { serviceCalls += 1; return { terms: [], sections: [] }; },
+    async listLegacyActivationCandidates() { serviceCalls += 1; return []; }
+  } }));
+
+  await withServer(app, async (baseUrl) => {
+    const list = await fetch(`${baseUrl}/registrar/intake/legacy`, { redirect: 'manual' });
+    assert.equal(list.status, 303);
+    assert.equal(list.headers.get('location'), '/pre-enrollments');
+
+    const create = await fetch(`${baseUrl}/registrar/intake/legacy/new`, { redirect: 'manual' });
+    assert.equal(create.status, 303);
+    assert.equal(create.headers.get('location'), '/registrar/intake/new');
+
+    const activation = await fetch(`${baseUrl}/registrar/intake/legacy/activation`, { redirect: 'manual' });
+    assert.equal(activation.status, 303);
+    assert.equal(activation.headers.get('location'), '/registrar/intake');
+
+    const rejectedCreate = await fetch(`${baseUrl}/registrar/intake/legacy`, {
+      method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: 'fixture-csrf' })
+    });
+    assert.equal(rejectedCreate.status, 409);
+    assert.match(await rejectedCreate.text(), /Create new student intake through a front-desk paper source/);
+    assert.equal(serviceCalls, 0);
+  });
+});
+
 test('registrar intake opens the guided annual form and links the roster to fee confirmation and paper records', async () => {
   const app = express();
   const preEnrollmentId = 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261';
@@ -332,7 +370,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.equal(response.status, 200);
     assert.match(html, /Student details/);
     assert.match(html, /Enrollment details/);
-    assert.match(html, /Documents received/);
+    assert.match(html, /Paper document review/);
     assert.match(html, /Step 4 of 5: Fees/);
     assert.match(html, /Step 5 of 5: Review details/);
     assert.match(html, /missing papers do not block enrollment/i);
@@ -349,8 +387,8 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.ok(zeroCountCardRow);
     assert.doesNotMatch(zeroCountCardRow, /<details/);
     assert.doesNotMatch(html, /long_brown_envelopes|name="paper_[a-z0-9_]+_status"/);
-    assert.match(html, /Paper pre-enrollment for review/);
-    assert.match(html, /Saved front-desk profile/);
+    assert.match(html, /Front-desk paper source/);
+    assert.match(html, /Review the saved front-desk profile/);
     assert.match(html, /name="preEnrollmentId" value="a342bc01-2a68-4f19-a7fd-4d5bb1d83261"/);
     assert.doesNotMatch(html, /name="(?:firstName|middleName|lastName|lrn|email|birthDate|sex|phone|address)"/);
     assert.match(html, /src="\/js\/annual-intake-form.js"/);
@@ -363,12 +401,12 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     const pendingHtml = await pending.text();
     assert.equal(pending.status, 200);
     assert.match(pendingHtml, /SHS-2026-0321/);
-    assert.match(pendingHtml, /Voucher type PUB/);
-    assert.match(pendingHtml, /Update voucher type/);
+    assert.match(pendingHtml, /Voucher PUB/);
+    assert.match(pendingHtml, /Update voucher/);
     assert.doesNotMatch(pendingHtml, /Category D|name="voucherCategory"/);
     assert.match(pendingHtml, /Enrollment confirmation/);
     assert.match(pendingHtml, /Review fees and confirm enrollment/);
-    assert.match(pendingHtml, /Record paper requirements checklist/);
+    assert.match(pendingHtml, /Paper requirements checklist/);
     assert.match(pendingHtml, /Enrollment counts/);
     assert.match(pendingHtml, /data-label="Students"><strong>1/);
 
@@ -1011,7 +1049,7 @@ test('pre-enrollment source identity, version, token, and receipt labels survive
     assert.match(html, /name="preEnrollmentId" value="a342bc01-2a68-4f19-a7fd-4d5bb1d83261"/);
     assert.match(html, /name="preEnrollmentVersion" value="3"/);
     assert.match(html, new RegExp(`name="idempotencyKey" value="${sourceId}"`));
-    assert.match(html, /record is revision 4/);
+    assert.match(html, /<dt>Paper revision<\/dt><dd>4<\/dd>/);
     assert.match(html, /keeps its original revision and token/);
     assert.match(html, /Report Card \(Grade 10 \/ ALS-AF5\)/);
   });

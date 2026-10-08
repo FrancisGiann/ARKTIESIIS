@@ -416,16 +416,17 @@ test('finance annual roster separates page data, classification, and balances in
     notice: null,
     error: null
   });
-  const summary = html.match(/<details class="finance-roster-record[^\"]*">\s*<summary>([\s\S]*?)<\/summary>/)?.[1] || '';
-  assert.match(summary, /School-year balance[\s\S]*₱12,345\.67/);
-  assert.match(summary, /Voucher review[\s\S]*Required/);
-  assert.match(summary, /Voucher type ESC · 2 term placements/);
-  assert.doesNotMatch(summary, /Category A|voucher category/i);
-  assert.doesNotMatch(summary, /Legacy balance|Opening liability/);
+  const record = html.match(/<article class="finance-roster-record[^\"]*">([\s\S]*?)<\/article>/)?.[1] || '';
+  assert.match(record, /School-year balance[\s\S]*₱12,345\.67/);
+  assert.match(record, /Voucher review[\s\S]*Required/);
+  assert.match(record, /Voucher type ESC · 2 term placements/);
+  assert.match(record, /Open student account/);
+  assert.doesNotMatch(record, /Category A|voucher category/i);
+  assert.doesNotMatch(record, /Legacy balance|Opening liability/);
   assert.match(html, /Earlier account balance<\/dt><dd>₱0\.00/);
   assert.match(html, /Confirmed previous balance<\/dt><dd>₱0\.00/);
   assert.match(html, /account for a school year/);
-  assert.doesNotMatch(summary, /No review flag/);
+  assert.doesNotMatch(record, /No review flag/);
   assert.match(html, /Pending activation/);
   assert.doesNotMatch(html, /Term 1 · Term 1|pending payment/);
   assert.match(html, /schoolYear=2026-2027/);
@@ -642,6 +643,8 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
       terms: [{ enrollment_id: 82, annual_term_number: 2, academic_activity_review_required: true, charges: [] }]
     }]
   });
+  assert.match(departureHtml, /<h1>Students who stopped or transferred<\/h1>/);
+  assert.match(departureHtml, /Finance reviews fees and balances for the affected terms/);
   const departureSummary = departureHtml.match(/<details class="finance-departure-case"\s*>\s*<summary>([\s\S]*?)<\/summary>/)?.[1] || '';
   assert.match(departureSummary, /1 affected terms · 0 charges to review/);
   assert.doesNotMatch(departureSummary, /Registrar record reason/);
@@ -650,6 +653,7 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
   assert.match(departureHtml, /name="reason"[^>]*required/);
   assert.match(departureHtml, /name="_csrf" value="csrf-token"/);
   assert.match(departureHtml, /name="idempotencyKey" value="41111111-1111-4111-8111-111111111111"/);
+  assert.match(departureHtml, /Save Finance review and corrections/);
   assert.doesNotMatch(departureHtml, /<fieldset/);
 });
 

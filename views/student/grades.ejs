@@ -9,7 +9,7 @@
       <div class="student-section-heading"><div><h2 id="approved-grades-title">Approved grades</h2><p><%= ownRecords.student.student_no %></p></div></div>
       <form class="student-grade-filters" method="get" action="/student/grades">
         <div class="field">
-          <label for="student-grade-semester">Semester</label>
+          <label for="student-grade-semester">Term</label>
           <select id="student-grade-semester" name="semester">
             <% for (const semester of gradeSelection.semesters) { %><option value="<%= semester.value %>" <%= semester.value === gradeSelection.selectedSemester ? 'selected' : '' %>><%= semester.label %></option><% } %>
           </select>
@@ -23,7 +23,7 @@
         <button class="button button--primary" type="submit">Show grades</button>
       </form>
       <div class="student-grade-context">
-        <p><span>Semester</span><strong><%= gradeSelection.selectedSemesterLabel %></strong></p>
+        <p><span>Term</span><strong><%= gradeSelection.selectedSemesterLabel %></strong></p>
         <p><span>Grading period</span><strong><%= gradeSelection.selectedPeriodLabel %></strong></p>
       </div>
       <div class="table-scroll">

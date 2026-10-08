@@ -1,10 +1,10 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-departures-page" id="main-content">
   <a class="context-back" href="/finance">Back to student accounts</a>
-  <header class="dashboard-heading"><div><h1>Departure finance review</h1><p>Review affected charges after the registrar records a drop or transfer. Academic history and remaining account debt stay on record.</p></div></header>
+  <header class="dashboard-heading"><div><h1>Students who stopped or transferred</h1><p>When the registrar records a student as stopped or transferred, Finance reviews fees and balances for the affected terms. Academic history and any remaining account debt stay on record.</p></div></header>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
-  <% if (!departures.length) { %><section class="finance-panel"><p class="empty-state">No pending departure cases need finance review.</p></section><% } %>
+  <% if (!departures.length) { %><section class="finance-panel"><p class="empty-state">No students who stopped or transferred are waiting for Finance review.</p></section><% } %>
   <div class="finance-departure-list">
     <% for (const departure of departures) { %>
       <%
@@ -19,14 +19,15 @@
       <details class="finance-departure-case" <%= failedAction?.path === recoveryPath ? 'open' : '' %>>
         <summary>
           <span class="finance-departure-identity"><strong><%= departure.student_name %></strong><span><%= departure.student_no %></span></span>
-          <span class="finance-departure-type"><strong><%= departure.departure_type === 'dropped' ? 'Dropped' : 'Transferred' %></strong><time datetime="<%= effectiveDate %>">Effective <%= effectiveDate %></time></span>
+          <span class="finance-departure-type"><strong><%= departure.departure_type === 'dropped' ? 'Stopped' : 'Transferred' %></strong><time datetime="<%= effectiveDate %>">Effective <%= effectiveDate %></time></span>
           <span class="finance-departure-context"><strong><%= departure.school_year %> · <%= departure.grade_level %></strong><span><%= departure.terms.length %> affected terms · <%= chargeCount %> charges to review</span></span>
+          <span class="finance-departure-review-cue">Review fees</span>
         </summary>
         <div class="finance-departure-case-body">
           <p><strong>Registrar reason:</strong> <%= departure.reason %></p>
           <form class="form-stack" method="post" action="/finance/departure-cases/<%= departure.departure_case_id %>/review">
             <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= departure.idempotencyKey %>">
-            <div class="admin-section__heading"><div><h3>Affected term placements and charge corrections</h3><p>Enter an amount only for a correction Finance approves. Blank rows stay unchanged. Corrections above the unpaid amount return prior payments to unused account credit.</p></div></div>
+            <div class="admin-section__heading"><div><h3>Fees for affected terms</h3><p>Enter an amount only for a correction Finance approves. Blank rows stay unchanged. Corrections above the unpaid amount return prior payments to unused account credit.</p></div></div>
             <div class="finance-departure-terms">
               <% for (const term of departure.terms) { %>
                 <% if (!term.charges.length) { %>
@@ -54,7 +55,7 @@
               <% } %>
             </div>
             <label class="field"><span>Finance review reason</span><textarea name="reason" rows="3" maxlength="1000" required><%= recovered.reason || '' %></textarea></label>
-            <button class="button button--primary" type="submit">Review departure and selected corrections</button>
+            <button class="button button--primary" type="submit">Save Finance review and corrections</button>
           </form>
         </div>
       </details>

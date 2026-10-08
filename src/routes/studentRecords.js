@@ -194,7 +194,7 @@ function safeClearanceFormValues(body = {}) {
     templateSelectionReason: boundedString(body, 'templateSelectionReason', 1000),
     correctionReason: boundedString(body, 'correctionReason', 1000),
     inspectedOn: boundedString(body, 'inspectedOn', 10),
-    clearanceAction: body.clearanceAction === 'attest' ? 'attest' : 'progress',
+    clearanceAction: ['prepare', 'complete', 'reopen'].includes(body.clearanceAction) ? body.clearanceAction : '',
     rosterReviewed: body.rosterReviewed === '1',
     rosterReconciliationReason: boundedString(body, 'rosterReconciliationReason', 1000),
     paperTeacherRows: paperTeacherRowsFromBody(body).slice(0, 8).map((row) => ({
@@ -210,10 +210,7 @@ function safeClearanceTemplateValues(body = {}) {
     idempotencyKey: /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token) ? token : crypto.randomUUID(),
     gradeLevel: ['Grade 11', 'Grade 12'].includes(body.gradeLevel) ? body.gradeLevel : '',
     trackLabel: boundedString(body, 'trackLabel', 80),
-    registrarLabel: boundedString(body, 'registrarLabel', 120),
-    guidanceLabel: boundedString(body, 'guidanceLabel', 120),
-    financeLabel: boundedString(body, 'financeLabel', 120),
-    paperFormConfirmed: body.paperFormConfirmed === '1',
+    officeConfirmations: repeatedFields(body, 'officeConfirmations').filter((office) => ['registrar', 'guidance', 'finance'].includes(office)).slice(0, 3),
     teacherRosterConfirmed: body.teacherRosterConfirmed === '1',
     laboratoryRowsConfirmed: body.laboratoryRowsConfirmed === '1',
     laboratoryLabels: repeatedFields(body, 'laboratoryLabel').slice(0, 8).map((label) => label.slice(0, 120))
@@ -342,14 +339,16 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     const studentId = normalizeRecordId(req.params.id);
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
     try {
-      const [record, academicRecord, documentRequestRows, revisions, clearanceData, returnEvaluations, returnEligibility] = await Promise.all([
+      const [record, academicRecord, documentRequestRows, revisions, clearanceData, returnEvaluations, returnEligibility, clearanceOverview] = await Promise.all([
         service.getStudent(studentId),
         academics.getStudentAcademicRecord(studentId),
         documentRequests.getStudentRequests ? documentRequests.getStudentRequests(req.authUser.id, studentId) : [],
         service.listStudentProfileRevisions ? service.listStudentProfileRevisions(req.authUser.id, studentId) : [],
         documentClearance.getRegistrarData(req.authUser.id, studentId),
         readmissions.listForStudent ? readmissions.listForStudent(req.authUser.id, studentId) : [],
-        readmissions.getStudentReturnEligibility ? readmissions.getStudentReturnEligibility(req.authUser.id, studentId) : { eligible: false }
+        readmissions.getStudentReturnEligibility ? readmissions.getStudentReturnEligibility(req.authUser.id, studentId) : { eligible: false },
+        view === 'overview' && termClearances.getStudentClearanceOverview
+          ? termClearances.getStudentClearanceOverview(req.authUser.id, studentId) : null
       ]);
       if (!record || !academicRecord) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
       const lastEnrollment = lastRecordedEnrollment(academicRecord.enrollments, returnEligibility);
@@ -368,6 +367,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         requestForm, requestFormId: requestId, requestFormValues: requestValues,
         student: record.student, enrollments: academicRecord.enrollments, lastEnrollment,
         documentRequests: documentRequestRows, profileRevisions: revisions,
+        clearanceOverview,
         financeSummary: clearanceData.financeSummary, requestClearanceData,
         newDocumentRequestKey: requestIdempotencyKey || crypto.randomUUID(), requestIdempotencyKeys, correctionIdempotencyKeys,
         claimSlipIdempotencyKeys
@@ -399,13 +399,27 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
           || (staleAttempt.kind === 'update' && Number(staleAttempt.recordId) === Number(term.clearance_id)))) term.staleDraft = staleAttempt;
       }
       return res.status(status).set('Cache-Control', 'private, no-store').render('records/student-clearance', {
-        title: 'Paper clearance', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        title: 'Clearance checklist', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
         student: data.student, terms: data.terms, templates: data.templates, error, staleAttempt: Boolean(staleAttempt),
         notice: req.query?.notice === 'saved' ? 'Paper-clearance record saved and history recorded.' : null
       });
     } catch (loadError) {
       if (loadError instanceof TermClearanceError) return res.status(loadError.status).render('error', { title: 'Paper clearance unavailable', message: loadError.message });
       return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'Student paper-clearance records could not be loaded.' });
+    }
+  }
+
+  async function renderClearanceDashboard(req, res, filterInput = req.query || {}) {
+    try {
+      const dashboard = await termClearances.getClearanceDashboard(req.authUser.id, filterInput);
+      return res.status(200).set('Cache-Control', 'private, no-store').render('records/clearance-dashboard', {
+        title: 'Clearance', currentUser: req.authUser, ...dashboard
+      });
+    } catch (loadError) {
+      if (loadError instanceof TermClearanceError) {
+        return res.status(loadError.status).render('error', { title: 'Clearance unavailable', message: loadError.message });
+      }
+      return res.status(503).render('error', { title: 'Clearance unavailable', message: 'The clearance workspace could not be loaded.' });
     }
   }
 
@@ -625,6 +639,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     ? res.redirect(303, '/registrar/intake/new')
     : renderStudentForm(req, res));
 
+  router.get('/clearance', (req, res) => renderClearanceDashboard(req, res));
   router.get('/clearance/templates', (req, res) => renderClearanceTemplates(req, res));
   router.post('/clearance/templates', async (req, res) => {
     if (req.authUser.role !== 'registrar') return res.status(403).render('error', { title: 'Forbidden', message: 'Only registrars can change paper-clearance templates.' });
@@ -647,7 +662,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
 
   router.get('/students/:id/clearance', (req, res) => renderTermClearance(req, res, req.params.id));
   router.post('/students/:id/clearance/terms/:enrollmentId', async (req, res) => {
-    if (req.authUser.role !== 'registrar') return res.status(403).render('error', { title: 'Forbidden', message: 'Only registrars can record paper-clearance applicability.' });
+    if (req.authUser.role !== 'registrar') return res.status(403).render('error', { title: 'Forbidden', message: 'Only registrars can prepare a paper clearance record.' });
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     const input = { ...req.body, paperTeacherRows: paperTeacherRowsFromBody(req.body),
       rosterReviewed: req.body?.rosterReviewed === '1' };
@@ -660,7 +675,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         return renderTermClearance(req, res, req.params.id, { status: error.status, error: error.message,
           formAttempt: error.status === 409 ? null : attempt, staleAttempt: error.status === 409 ? attempt : null });
       }
-      return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'The term applicability review could not be saved.' });
+      return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'The term attendance review could not be saved.' });
     }
   });
   router.post('/students/:id/clearance/records/:clearanceId', async (req, res) => {
@@ -669,8 +684,9 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     const input = { ...req.body, items: clearanceItemsFromBody(req.body),
       paperTeacherRows: paperTeacherRowsFromBody(req.body),
       rosterReviewed: req.body?.rosterReviewed === '1',
-      paperInspected: req.body?.clearanceAction === 'attest',
-      attestPaperInspected: req.body?.clearanceAction === 'attest' };
+      clearanceAction: req.body?.clearanceAction,
+      paperInspected: req.body?.clearanceAction === 'complete',
+      attestPaperInspected: req.body?.clearanceAction === 'complete' };
     try {
       await termClearances.updateTermClearance(req.authUser.id, req.params.clearanceId, input, req.params.id);
       return res.redirect(303, `/registrar/records/students/${encodeURIComponent(req.params.id)}/clearance?notice=saved`);
@@ -680,7 +696,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         return renderTermClearance(req, res, req.params.id, { status: error.status, error: error.message,
           formAttempt: error.status === 409 ? null : attempt, staleAttempt: error.status === 409 ? attempt : null });
       }
-      return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'The paper signature review could not be saved.' });
+      return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'The paper clearance record could not be saved.' });
     }
   });
 

@@ -121,7 +121,7 @@ test('admin account input validation rejects invalid email, role, names, student
   assert.throws(() => validateCreateUser({ email: 'bad', role: 'finance', password: 'long-enough-password', firstName: 'A', lastName: 'B' }), AdminServiceError);
   assert.throws(() => validateCreateUser({ email: 'a@example.edu', role: 'owner', password: 'long-enough-password', firstName: 'A', lastName: 'B' }), AdminServiceError);
   assert.throws(() => validateCreateUser({ email: 'a@example.edu', role: 'student', password: 'long-enough-password' }), /student number/);
-  assert.throws(() => validateCreateUser({ email: 'a@example.edu', role: 'registrar', password: 'short', firstName: 'A', lastName: 'B' }), /12 to 72/);
+  assert.throws(() => validateCreateUser({ email: 'a@example.edu', role: 'registrar', password: 'short', firstName: 'A', lastName: 'B' }), /12 characters/);
   assert.throws(() => validateUpdateUser({ email: 'a@example.edu', role: 'finance', isActive: '1', firstName: 'bad\nname', lastName: 'B' }), /First and last names/);
 });
 

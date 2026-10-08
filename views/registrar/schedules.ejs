@@ -9,7 +9,7 @@
   <% if (contextNotice) { %><p class="form-error" role="status"><%= contextNotice %></p><% } %>
 
   <section class="class-context-panel schedule-context-panel" aria-labelledby="schedule-context-title">
-    <div class="section-heading"><div><h2 id="schedule-context-title">Class context</h2><p>Changing the term clears section and class filters. Changing the section clears the class filter.</p></div></div>
+    <div class="section-heading"><div><h2 id="schedule-context-title">Choose term and section</h2><p>Changing the term clears section and class filters. Changing the section clears the class filter.</p></div></div>
     <form class="class-context-filter" method="get" action="/registrar/schedules" data-clear-section-on-term-change data-clear-assignment-on-section-change>
       <div class="field"><label for="schedule-term-filter">Academic term</label>
         <select id="schedule-term-filter" name="termId" required>

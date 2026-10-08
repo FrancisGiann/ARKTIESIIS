@@ -99,10 +99,10 @@ const registrarOverview = {
 const financeOverview = {
   schoolYears: ['2026-2027'], gradeLevels: ['Grade 11', 'Grade 12'],
   selectedSchoolYear: '2026-2027', selectedGrade: '', needsSchoolYearSelection: false,
-  queueCounts: { documentClearance: 0, departureReview: 0, savedReviews: 0 },
+  queueCounts: { documentClearance: 4, departureReview: 2, savedReviews: 1 },
   availableTerms: [{ academicTermId: 62, term: 'Second Term' }], selectedTermId: '62',
   selectedTerm: { term: 'Second Term' }, selectedInstallment: 'whole', selectedVoucher: '', selectedSectionId: '',
-  sections: [], voucherCodes: ['PUB', 'ESC', 'NV'], totalEligible: 3, needsTermSelection: false,
+  sections: [{ id: '11', name: 'STEM A', cluster: 'STEM', strand: 'STEM' }], voucherCodes: ['PUB', 'ESC', 'NV'], totalEligible: 3, needsTermSelection: false,
   statusCounts: [
     { status: 'unpaid', label: 'Unpaid', count: 1 }, { status: 'partially_paid', label: 'Partially paid', count: 1 },
     { status: 'fully_paid', label: 'Fully paid', count: 0 }, { status: 'no_payment_required', label: 'No payment required', count: 0 },
@@ -110,7 +110,7 @@ const financeOverview = {
   ]
 };
 
-function appFor(role, calls = [], intakeRows = [], intakeOptions = { schoolYears: [], terms: [], sections: [] }, intakeTotal = intakeRows.length) {
+function appFor(role, calls = [], intakeRows = [], intakeOptions = { schoolYears: [], terms: [], sections: [] }, intakeTotal = intakeRows.length, financeOverviewData = financeOverview) {
   return createApp({
     databasePool: createAuthPool(role), environment,
     registrarDashboardService: {
@@ -120,7 +120,11 @@ function appFor(role, calls = [], intakeRows = [], intakeOptions = { schoolYears
       async getOverview(actorId, filters) {
         calls.push(['finance', actorId, filters]);
         return {
-          ...financeOverview,
+          ...financeOverviewData,
+          selectedSchoolYear: filters.schoolYear || financeOverviewData.selectedSchoolYear,
+          selectedTermId: filters.termId || financeOverviewData.selectedTermId,
+          selectedTerm: String(filters.termId || financeOverviewData.selectedTermId) === '61' ? { term: 'First Term' } : financeOverviewData.selectedTerm,
+          selectedInstallment: filters.installment || financeOverviewData.selectedInstallment,
           selectedGrade: filters.gradeLevel || '',
           selectedSectionId: filters.sectionId || '',
           selectedVoucher: filters.voucherCode || ''
@@ -135,7 +139,10 @@ function appFor(role, calls = [], intakeRows = [], intakeOptions = { schoolYears
         calls.push(['intakeRows', actorId, filters]);
         const totalPages = Math.max(1, Math.ceil(intakeTotal / 20));
         const page = Math.min(Math.max(1, Number(filters.page) || 1), totalPages);
-        return { rows: intakeRows, pagination: {
+        const visibleRows = filters.termId
+          ? intakeRows.filter((row) => String(row.academic_term_id) === String(filters.termId))
+          : intakeRows;
+        return { rows: visibleRows, pagination: {
           page, pageSize: 20, totalRecords: intakeTotal, totalPages,
           from: intakeTotal ? (page - 1) * 20 + 1 : 0,
           to: intakeTotal ? Math.min(page * 20, intakeTotal) : 0
@@ -154,6 +161,14 @@ test('registrar overview renders term counts and filtered intake links without f
     const response = await fetch(`${baseUrl}/registrar?schoolYear=2026-2027&termId=62`, { headers: { cookie } });
     const html = await response.text();
     assert.equal(response.status, 200);
+    assert.ok(html.indexOf('registrar-lookup--primary') < html.indexOf('registrar-task-layout'));
+    assert.ok(html.indexOf('registrar-task-layout') < html.indexOf('registrar-overview'));
+    assert.match(html, /<span>Term<\/span>/);
+    assert.doesNotMatch(html, /Configured term/);
+    assert.match(html, /<details class="registrar-overview__comparison"><summary>Enrollment counts by term<\/summary>/);
+    assert.doesNotMatch(html, /<details class="registrar-overview__comparison" open>/);
+    const lookupHeading = html.match(/<div class="registrar-lookup__heading">([\s\S]*?)<\/div>/)?.[1] || '';
+    assert.doesNotMatch(lookupHeading, /Review paper forms/);
     assert.match(html, /Active enrolled students · Second Term/);
     assert.match(html, /<section class="registrar-overview__term-comparison"[\s\S]*Grade 11 and Grade 12 by term/);
     assert.match(html, /<details class="registrar-overview__details">\s*<summary>More enrollment counts and how they are counted<\/summary>/);
@@ -195,7 +210,7 @@ test('finance overview is the dashboard destination and leaves the searchable ro
   const calls = [];
   await withServer(appFor('finance', calls), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
-    const overviewResponse = await fetch(`${baseUrl}/finance/overview?schoolYear=2026-2027&gradeLevel=Grade+11`, { headers: { cookie } });
+    const overviewResponse = await fetch(`${baseUrl}/finance/overview?schoolYear=2026-2027&termId=62&installment=prelim&gradeLevel=Grade+11&voucherCode=ESC&sectionId=11`, { headers: { cookie } });
     const overviewHtml = await overviewResponse.text();
     assert.equal(overviewResponse.status, 200);
     assert.match(overviewHtml, /Finance overview/);
@@ -203,35 +218,81 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     assert.match(overviewHtml, /Unpaid/);
     assert.match(overviewHtml, /Partially paid/);
     assert.match(overviewHtml, /Needs review/);
-    assert.match(overviewHtml, /Tuition tracking/);
-    assert.match(overviewHtml, /Departure reviews/);
-    assert.match(overviewHtml, /Unused payment credit stays separate from fees due until applied\./);
-    assert.match(overviewHtml, /Previous account balances/);
+    assert.match(overviewHtml, /Payment period/);
+    assert.match(overviewHtml, /Entire term/);
+    assert.match(overviewHtml, /Down payment/);
+    assert.match(overviewHtml, /Preliminary/);
+    assert.match(overviewHtml, /Stopped or transferred/);
+    assert.match(overviewHtml, /Document request fee review/);
+    assert.match(overviewHtml, /Unfinished reviews/);
+    assert.match(overviewHtml, /Other finance tasks/);
+    assert.match(overviewHtml, /Counts cover enrollment records for this term\. Selecting a status changes the list, not the counts\./);
+    assert.match(overviewHtml, /Earlier account balances are separate from term amounts\. Unused payment credit stays separate until applied\./);
+    assert.doesNotMatch(overviewHtml, /Finance · Current work|placements match| placements<\/p>/);
     assert.doesNotMatch(overviewHtml, /Legacy account history|href="\/finance\/legacy/);
-    assert.equal([...overviewHtml.matchAll(/<a class="finance-queue-link"/g)].length, 3);
+    assert.equal([...overviewHtml.matchAll(/<li><a href="\/finance\//g)].length, 3);
+    assert.match(overviewHtml, /<span>Stopped or transferred<\/span><strong>2<\/strong>/);
+    assert.match(overviewHtml, /<span>Document request fee review<\/span><strong>4<\/strong>/);
+    assert.match(overviewHtml, /<span>Unfinished reviews<\/span><strong>1<\/strong>/);
     assert.match(overviewHtml, /href="\/finance\/overview" aria-current="page"/);
-    const cardAnchors = [...overviewHtml.matchAll(/<a class="finance-status-card finance-status-card--([^\"]+)" href="([^\"]+)">([\s\S]*?)<\/a>/g)];
-    assert.deepEqual(cardAnchors.map(([, status]) => status), ['unpaid', 'partially_paid', 'fully_paid', 'no_payment_required', 'needs_review']);
+    const statusAnchors = [...overviewHtml.matchAll(/<a class="finance-payment-status finance-payment-status--([^\"]+)" href="([^\"]+)" aria-label="([^\"]+)">([\s\S]*?)<\/a>/g)];
+    assert.deepEqual(statusAnchors.map(([, status]) => status), ['unpaid', 'partially_paid', 'fully_paid', 'no_payment_required', 'needs_review']);
     assert.match(overviewHtml, /<details class="finance-overview-secondary-filters" open>/);
-    const zeroCountCard = cardAnchors.find(([, status]) => status === 'fully_paid');
-    assert.ok(zeroCountCard, 'zero-count statuses remain linked');
-    assert.match(zeroCountCard[3], /<strong>0<\/strong>/);
-    assert.match(zeroCountCard[3], /View matching accounts/);
-    const zeroCountQuery = new URLSearchParams(zeroCountCard[2].split('?')[1].replace(/&amp;/g, '&'));
+    const zeroCountStatus = statusAnchors.find(([, status]) => status === 'fully_paid');
+    assert.ok(zeroCountStatus, 'zero-count statuses remain linked');
+    assert.match(zeroCountStatus[4], /<strong>0<\/strong>/);
+    assert.match(zeroCountStatus[3], /Open 0 Fully paid student accounts for Second Term, 2026-2027, Preliminary/);
+    assert.doesNotMatch(overviewHtml, /View matching accounts/);
+    const zeroCountQuery = new URLSearchParams(zeroCountStatus[2].split('?')[1].replace(/&amp;/g, '&'));
     assert.equal(zeroCountQuery.get('financeStatus'), 'fully_paid');
     assert.equal(zeroCountQuery.get('gradeLevel'), 'Grade 11');
+    for (const [, status, href] of statusAnchors) {
+      const query = new URLSearchParams(href.split('?')[1].replace(/&amp;/g, '&'));
+      assert.equal(query.get('schoolYear'), '2026-2027');
+      assert.equal(query.get('termId'), '62');
+      assert.equal(query.get('installment'), 'prelim');
+      assert.equal(query.get('gradeLevel'), 'Grade 11');
+      assert.equal(query.get('voucherCode'), 'ESC');
+      assert.equal(query.get('sectionId'), '11');
+      assert.equal(query.get('financeStatus'), status);
+    }
     const appCss = readFileSync(path.join(__dirname, '../public/css/app.css'), 'utf8');
-    assert.match(appCss, /\.finance-status-cards\s*\{/);
-    assert.match(appCss, /\.finance-status-card\s*\{/);
-    assert.match(appCss, /\.finance-status-card:focus-visible\s*\{/);
-    assert.match(appCss, /\.finance-queue-links\s*\{[^}]*grid-template-columns:\s*repeat\(3,/);
+    assert.match(appCss, /\.finance-payment-statuses\s*\{[^}]*grid-template-columns:\s*repeat\(5,/);
+    assert.match(appCss, /\.finance-payment-status:focus-visible\s*\{/);
+    assert.match(appCss, /\.finance-other-tasks__list\s*\{/);
     assert.deepEqual(calls.map(([name, actorId]) => [name, actorId]), [['finance', 7]]);
 
     const rosterResponse = await fetch(`${baseUrl}/finance`, { headers: { cookie } });
     const rosterHtml = await rosterResponse.text();
     assert.equal(rosterResponse.status, 200);
     assert.match(rosterHtml, /<h2 id="annual-roster-filter-title">Find student accounts<\/h2>/);
+    assert.match(rosterHtml, /<label for="annual-roster-installment">Payment period<\/label>/);
+    assert.match(rosterHtml, /<option value="whole"[^>]*>Entire term<\/option>/);
+    assert.match(rosterHtml, /<option value="dp"[^>]*>Down payment<\/option>/);
+    assert.match(rosterHtml, /<option value="prelim"[^>]*>Preliminary<\/option>/);
+    assert.doesNotMatch(rosterHtml, /Tuition tracking|Whole term|>DP<|>Prelim</);
     assert.match(rosterHtml, /href="\/finance" aria-current="page"/);
+  });
+});
+
+test('finance overview keeps every zero-count status filter available for an empty configured term', async () => {
+  const emptyOverview = {
+    ...financeOverview,
+    totalEligible: 0,
+    statusCounts: financeOverview.statusCounts.map((item) => ({ ...item, count: 0 }))
+  };
+  await withServer(appFor('finance', [], [], undefined, undefined, emptyOverview), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'finance');
+    const response = await fetch(`${baseUrl}/finance/overview`, { headers: { cookie } });
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(html, /No active applicable enrollment records match this term/);
+    const links = [...html.matchAll(/<a class="finance-payment-status finance-payment-status--([^\"]+)" href="([^\"]+)"/g)];
+    assert.deepEqual(links.map(([, status]) => status), ['unpaid', 'partially_paid', 'fully_paid', 'no_payment_required', 'needs_review']);
+    for (const [, status, href] of links) {
+      assert.equal(new URL(href.replace(/&amp;/g, '&'), baseUrl).searchParams.get('financeStatus'), status);
+    }
+    assert.equal((html.match(/<strong>0<\/strong>/g) || []).length, 5);
   });
 });
 
@@ -295,8 +356,15 @@ test('annual enrollment search groups filtered placements under one student reco
     assert.equal((html.match(/<article class="annual-record"/g) || []).length, 20);
     assert.match(html, /<details class="annual-record-details">/);
     assert.doesNotMatch(html, /<details class="annual-record-details" open>/);
-    assert.match(html, /2 matching term placements/);
-    assert.match(html, /Voucher type ESC/);
+    assert.match(html, /View terms <span>· 2 terms shown<\/span>/);
+    assert.equal((html.match(/class="annual-record__open-link"/g) || []).length, 20);
+    assert.match(html, /class="annual-record__open-link" href="\/registrar\/intake\/71\/manage">Open enrollment<\/a>/);
+    assert.match(html, /Enrollment confirmation<\/span><strong>Needs confirmation<\/strong>/);
+    assert.match(html, /Paper requirements checklist/);
+    assert.match(html, /<dt>Term account clearance<\/dt>/);
+    assert.doesNotMatch(html, /Signed clearance|matching term placements|Review term placements and secondary actions/);
+    assert.doesNotMatch(html, /class="annual-record__open-link[^"]*button--primary/);
+    assert.match(html, /Voucher ESC/);
     assert.doesNotMatch(html, /Category A|voucher category/i);
     assert.match(html, /Pending activation/);
     assert.match(html, /Term 1/);
@@ -307,8 +375,15 @@ test('annual enrollment search groups filtered placements under one student reco
     assert.match(html, /href="\/registrar\/intake\/71\/fees"/);
     assert.match(html, /name="_csrf" value="[^"]+"/);
     assert.doesNotMatch(html, /₱|amount due|payment history|finance ledger/i);
+    const filteredTerms = await fetch(`${baseUrl}/registrar/intake?search=Ari&schoolYear=2026-2027&termId=92`, { headers: { cookie } });
+    const filteredTermsHtml = await filteredTerms.text();
+    assert.equal(filteredTerms.status, 200);
+    assert.match(filteredTermsHtml, /View terms <span>· 1 term shown<\/span>/,
+      'the disclosure count reflects placements visible under the selected term filter');
+    assert.doesNotMatch(filteredTermsHtml, /View terms <span>· 2 terms shown<\/span>/);
     assert.deepEqual(calls.filter(([name]) => name === 'intakeRows').map(([, actorId, filters]) => [actorId, filters.search, filters.schoolYear, filters.termId, filters.page]), [
-      [7, 'Ari', '2026-2027', '', '2']
+      [7, 'Ari', '2026-2027', '', '2'],
+      [7, 'Ari', '2026-2027', '92', '']
     ]);
   });
 });

@@ -310,14 +310,14 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     try {
       const drafts = await reviewActions.listPending(req.authUser.id);
       return res.set('Cache-Control', 'private, no-store').render('finance/review-drafts', {
-        title: 'Saved finance reviews', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), drafts,
+        title: 'Unfinished finance reviews', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), drafts,
         actionLabel: (type) => reviewActions.actionLabel(type),
         isRetiredAction: (type) => reviewActions.isRetiredAction?.(type) === true,
         formatFinanceDateTime
       });
     } catch (error) {
-      if (error instanceof FinanceReviewDraftError) return res.status(error.status).render('error', { title: 'Finance reviews', message: error.message });
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'Saved finance reviews could not be loaded.' });
+      if (error instanceof FinanceReviewDraftError) return res.status(error.status).render('error', { title: 'Unfinished reviews', message: error.message });
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'Unfinished reviews could not be loaded.' });
     }
   });
 
@@ -681,7 +681,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     }
   }
 
-  async function performAnnualAction(req, res, studentId, callback, notice, tokenName = null) {
+  async function performAnnualAction(req, res, studentId, callback, notice, tokenName = null, recovery = null) {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     try {
       await callback();
@@ -690,7 +690,12 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       if (error instanceof AnnualFinanceError || error instanceof FinanceCasesError) {
         if (error.status === 403) return res.status(403).render('error', { title: 'Forbidden', message: error.message });
         const tokenOverrides = tokenName && typeof req.body?.idempotencyKey === 'string' ? { [tokenName]: req.body.idempotencyKey } : {};
-        return renderAnnualStudent(req, res, studentId, { status: error.status, error: error.message, tokenOverrides });
+        const failedAction = recovery?.failedActionPath
+          ? { path: recovery.failedActionPath, input: req.body || {} } : null;
+        return renderAnnualStudent(req, res, studentId, {
+          status: error.status, error: error.message, tokenOverrides, failedAction,
+          accountViewOverride: recovery?.accountView || null
+        });
       }
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The finance update could not be saved.' });
     }
@@ -703,20 +708,20 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         approve: crypto.randomUUID(), hold: crypto.randomUUID(), withdraw: crypto.randomUUID()
       } }));
       return res.status(status).set('Cache-Control', 'private, no-store').render('finance/document-clearance', {
-        title: 'Document finance clearance', currentUser: req.authUser,
+        title: 'Document request fee review', currentUser: req.authUser,
         csrfToken: ensureCsrfToken(req), queue, error, failedAction,
         notice: req.query.notice === 'decisionRecorded' ? 'Finance decision recorded.' : null
       });
     } catch (loadError) {
       if (loadError instanceof StudentDocumentFinanceClearanceError) {
         return res.status(loadError.status).set('Cache-Control', 'private, no-store').render('finance/document-clearance', {
-          title: 'Document finance clearance', currentUser: req.authUser,
+          title: 'Document request fee review', currentUser: req.authUser,
           csrfToken: ensureCsrfToken(req), queue: { rows: [], filters: { search: '', status: '', page: 1 } },
           error: loadError.message, notice: null
         });
       }
       return res.status(503).set('Cache-Control', 'private, no-store').render('error', {
-        title: 'Service Unavailable', message: 'The document clearance queue could not be loaded.'
+        title: 'Service Unavailable', message: 'The document request fee queue could not be loaded.'
       });
     }
   }
@@ -842,12 +847,12 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       }
       const departures = [...grouped.values()].map((item) => ({ ...item, idempotencyKey: crypto.randomUUID() }));
       return res.status(status).set('Cache-Control', 'private, no-store').render('finance/departures', {
-        title: 'Departure finance review', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), departures,
-        failedAction, error, notice: req.query.notice === 'saved' ? 'Finance reviewed the departure case.' : null
+        title: 'Stopped or transferred finance review', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), departures,
+        failedAction, error, notice: req.query.notice === 'saved' ? 'Finance review saved for a stopped or transferred student.' : null
       });
     } catch (error) {
-      if (error instanceof FinanceCasesError) return res.status(error.status).render('error', { title: 'Departure finance review', message: error.message });
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'Departure cases could not be loaded.' });
+      if (error instanceof FinanceCasesError) return res.status(error.status).render('error', { title: 'Stopped or transferred finance review', message: error.message });
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The stopped or transferred review queue could not be loaded.' });
     }
   }
 
@@ -979,7 +984,9 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
   router.post('/students/:id/annual/terms/:enrollmentId/supplementary-charges', (req, res) => {
     const studentId = normalizeId(req.params.id);
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
-    return performAnnualAction(req, res, studentId, () => annual.addSupplementaryCharge(req.authUser.id, studentId, req.params.enrollmentId, req.body), 'supplementaryChargeAdded', `supplementary:${req.params.enrollmentId}`);
+    return performAnnualAction(req, res, studentId, () => annual.addSupplementaryCharge(req.authUser.id, studentId, req.params.enrollmentId, req.body), 'supplementaryChargeAdded', `supplementary:${req.params.enrollmentId}`, {
+      accountView: 'charges', failedActionPath: `/students/${studentId}/annual/terms/${req.params.enrollmentId}/supplementary-charges`
+    });
   });
   router.post('/students/:id/annual/special-subjects/:specialSubjectId/bill', (req, res) => {
     const studentId = normalizeId(req.params.id);
@@ -994,7 +1001,10 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     return cases.approveExemptionCase(req.authUser.id, annualId, { ...req.body, expectedStudentId: studentId, rules: exemptionRulesFromForm(req.body) })
       .then((result) => res.redirect(303, `/finance/students/${result.studentId}/annual?notice=exemptionApproved`))
       .catch((error) => error instanceof FinanceCasesError
-        ? renderAnnualStudent(req, res, studentId, { status: error.status, error: error.message, tokenOverrides: { [`exemption:${annualId}`]: req.body?.idempotencyKey } })
+        ? renderAnnualStudent(req, res, studentId, {
+          status: error.status, error: error.message, tokenOverrides: { [`exemption:${annualId}`]: req.body?.idempotencyKey },
+          accountViewOverride: 'charges', failedAction: { path: `/students/${studentId}/annual/${annualId}/exemptions`, input: req.body || {} }
+        })
         : res.status(503).render('error', { title: 'Service Unavailable', message: 'The exemption could not be recorded.' }));
   });
   router.post('/departure-cases/:caseId/review', async (req, res) => {
@@ -1005,8 +1015,8 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       });
       return res.redirect(303, '/finance/departures?notice=saved');
     } catch (error) {
-      if (error instanceof FinanceCasesError) return res.status(error.status).render('error', { title: 'Departure finance review', message: error.message });
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The departure review could not be saved.' });
+      if (error instanceof FinanceCasesError) return res.status(error.status).render('error', { title: 'Stopped or transferred finance review', message: error.message });
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The Finance review could not be saved.' });
     }
   });
   router.post('/students/:id/annual/payments/:paymentId/reverse', (req, res) => {
@@ -1082,7 +1092,9 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     const studentId = normalizeId(req.body?.studentId);
     if (!studentId) return res.status(400).render('error', { title: 'Clearance', message: 'Student account was not specified.' });
-    return performAnnualAction(req, res, studentId, () => annual.signTermClearance(req.authUser.id, req.params.enrollmentId, req.body), 'termClearanceSigned', 'clearance');
+    return performAnnualAction(req, res, studentId, () => annual.signTermClearance(req.authUser.id, req.params.enrollmentId, req.body), 'termClearanceSigned', 'clearance', {
+      accountView: 'clearance', failedActionPath: `/annual/terms/${req.params.enrollmentId}/clearance`
+    });
   });
 
   router.get('/students/:id', async (req, res) => {

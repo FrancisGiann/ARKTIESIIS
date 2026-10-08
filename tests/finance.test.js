@@ -197,6 +197,8 @@ test('saved reviews expose an owner discard action for retired legacy drafts', a
     const response = await fetch(`${baseUrl}/finance/review-drafts`, { headers: { cookie } });
     const html = await response.text();
     assert.equal(response.status, 200);
+    assert.match(html, /<h1>Unfinished reviews<\/h1>/);
+    assert.match(html, /Your unfinished reviews/);
     assert.match(html, /Retired legacy account action/);
     assert.match(html, new RegExp(`action="/finance/review-drafts/${draftId}/discard"`));
     assert.match(html, /Discard retired review/);
@@ -905,7 +907,7 @@ test('a pending review stays editable and discardable when current-target valida
     assert.equal(response.status, 409);
     assert.match(html, /The pending draft is retained/);
     assert.match(html, /Edit saved details/);
-    assert.match(html, /Discard draft/);
+    assert.match(html, /Discard unfinished review/);
     assert.match(html, /name="item_allocations_0_amount" value="20\.00"/);
     assert.match(html, /<button[^>]*disabled[^>]*>Review complete · Save update<\/button>/);
     assert.doesNotMatch(html, /Service Unavailable/);
@@ -974,6 +976,70 @@ test('finance routes retire legacy account entry and preserve annual account acc
     assert.equal(adminReviewProbe.starts.length, 0);
   });
   assert.equal(calls.length, serviceCallsBeforeDeniedRequests, 'database administrator redirects and retired paths need no legacy service call');
+});
+
+test('annual account charge links retain browse filters and supplementary validation returns to Charges with entered values', async () => {
+  const studentId = 22;
+  const term = {
+    annual_enrollment_id: 23, intake_status: 'confirmed', assessment_id: 40,
+    school_year: '2026-2027', grade_level: 'Grade 12', voucher_code: 'ESC', schedule_version: 2,
+    term: 'Term 1', annual_term_number: 1, enrollment_id: 14, section_name: 'Orchid',
+    enrollment_status: 'enrolled', outstanding: '10.00', term_scope_status: 'applicable',
+    registrar_confirmation_id: 8, signed_clearance_status: 'not_signed',
+    modality: 'modular', modular_subtype: 'Self-Paced'
+  };
+  const annualFinanceService = {
+    async getStudentLedger() {
+      return {
+        student: { id: studentId, student_no: 'SYNTH-22', first_name: 'Synthetic', middle_name: null, last_name: 'Student', suffix: null, status: 'active' },
+        summary: { annualBalanceSchoolYear: '2026-2027', annualBalance: '10.00', allYearsAnnualBalance: '10.00', annualWaivedAmount: '0.00', unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00', totalBalance: '10.00', currentTermOutstanding: '10.00', priorTermYearDebt: '0.00', availableCredit: '0.00' },
+        terms: [term], events: [], charges: [], availablePayments: [], openingLiabilities: [], allocationHistory: [],
+        legacyReconciliationHistory: [], payments: [], legacyCredits: [], privateClearances: [], adjustments: [],
+        feeComments: [], financeHandbookNumbers: [], financeHandbookHistory: []
+      };
+    },
+    async listSchedules() { return []; }
+  };
+  const financeCasesService = {
+    async getStudentCases() { return { specialSubjects: [], exemptions: [], departures: [] }; }
+  };
+  const reviewProbe = createReviewRouteProbe();
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, annualFinanceService, financeCasesService, financeReviewActionService: reviewProbe }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'finance');
+    const browse = new URLSearchParams({ backSearch: 'Alex Kim', backTermId: '92', backStatus: 'unpaid' });
+    const overview = await fetch(`${baseUrl}/finance/students/${studentId}/annual?${browse}`, { headers: { cookie } });
+    const overviewHtml = await overview.text();
+    assert.equal(overview.status, 200);
+    assert.match(overviewHtml, /Modular · Self-Paced/);
+    assert.match(overviewHtml, /href="\/finance\/students\/22\/annual\?view=clearance&amp;backSearch=Alex\+Kim&amp;backTermId=92&amp;backStatus=unpaid"/);
+    assert.match(overviewHtml, /href="\/finance\/students\/22\/annual\?view=charges&amp;backSearch=Alex\+Kim&amp;backTermId=92&amp;backStatus=unpaid"/);
+
+    const charges = await fetch(`${baseUrl}/finance/students/${studentId}/annual?view=charges`, { headers: { cookie } });
+    const chargesHtml = await charges.text();
+    assert.equal(charges.status, 200);
+    assert.match(chargesHtml, /data-account-view="charges"/);
+    assert.match(chargesHtml, /action="\/finance\/students\/22\/annual\/terms\/14\/supplementary-charges\?view=charges"/);
+
+    reviewProbe.startDraft = async () => { throw new AnnualFinanceError('Enter a valid student-payable amount.'); };
+    const csrfToken = csrfFrom(chargesHtml);
+    const failed = await fetch(`${baseUrl}/finance/students/${studentId}/annual/terms/14/supplementary-charges?view=charges`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        _csrf: csrfToken, idempotencyKey: '41111111-1111-4111-8111-111111111111',
+        feeCategory: 'retake', lineName: 'Retake assessment', installment: 'As incurred', amount: '12.50', reason: 'Approved'
+      })
+    });
+    const failedHtml = await failed.text();
+    assert.equal(failed.status, 400);
+    assert.match(failedHtml, /data-account-view="charges"/);
+    assert.match(failedHtml, /<details class="finance-account-action" open><summary>Add a named supplementary charge/);
+    assert.match(failedHtml, /<option value="retake" selected>retake<\/option>/);
+    assert.match(failedHtml, /name="lineName"[^>]*value="Retake assessment"/);
+    assert.match(failedHtml, /name="installment"[^>]*value="As incurred"/);
+    assert.match(failedHtml, /name="amount"[^>]*value="12\.50"/);
+    assert.match(failedHtml, /name="reason"[^>]*>Approved<\/textarea>/);
+    assert.match(failedHtml, /name="_csrf" value="[^"]+"/);
+  });
 });
 
 test('old Finance account links redirect to annual accounts while the retired workspace stays gone', async () => {

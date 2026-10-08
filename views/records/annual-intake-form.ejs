@@ -6,17 +6,18 @@
     .map(([label, value]) => `${label}: ${value}`);
   return parts.length ? parts.join('\n') : (formatted ? `Legacy free-text address: ${formatted}` : '');
 }; %>
+<% const modalityLabel = (value, subtype) => value === 'modular' && subtype ? `Modular · ${String(subtype).replaceAll('_', ' ')}` : ({ 'face-to-face': 'Face-to-face', face_to_face: 'Face-to-face', distance: 'Distance', online: 'Online', modular: 'Modular', hybrid: 'Hybrid' })[value] || String(value || '').replaceAll('_', ' '); %>
 <main class="page-shell dashboard-page admin-page records-page registrar-intake" id="main-content">
   <a class="context-back" href="/registrar/intake">Back to annual enrollment</a>
   <header class="dashboard-heading">
     <div><h1><%= preEnrollmentSource ? 'Review saved paper enrollment' : 'Enroll a student' %></h1>
-      <p><%= preEnrollmentSource ? 'Review the authoritative saved profile and applicant history, then choose annual placement and finance details before confirmation.' : 'Enter the student and annual placement, record the documents received, then review fees and details before confirming.' %></p></div>
+      <p><%= preEnrollmentSource ? 'Review the saved profile and applicant history, then choose annual placement and finance details before confirmation.' : 'Review the student information and placement, record papers received, then review fees and details before confirming.' %></p></div>
   </header>
   <% if (error) { %><p class="form-alert" role="alert" tabindex="-1" data-wizard-error><%= error %></p><% } %>
   <ol class="intake-steps" aria-label="Enrollment steps">
     <li data-step-indicator="1" aria-label="Step 1 of 5: Student"><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li>
     <li data-step-indicator="2" aria-label="Step 2 of 5: Enrollment"><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li>
-    <li data-step-indicator="3" aria-label="Step 3 of 5: Documents received"><span class="intake-step-label--full">Documents received</span><span class="intake-step-label--short">Papers</span></li>
+    <li data-step-indicator="3" aria-label="Step 3 of 5: Paper document review"><span class="intake-step-label--full">Paper document review</span><span class="intake-step-label--short">Papers</span></li>
     <li data-step-indicator="4" aria-label="Step 4 of 5: Fees"><span class="intake-step-label--full">Fees</span><span class="intake-step-label--short">Fees</span></li>
     <li data-step-indicator="5" aria-label="Step 5 of 5: Review details"><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li>
   </ol>
@@ -28,28 +29,39 @@
 
     <% if (preEnrollmentSource) { %>
       <section class="form-section pre-enrollment-handoff" aria-labelledby="handoff-heading">
-        <h2 id="handoff-heading">Paper pre-enrollment for review</h2>
-        <p>This record is revision <%= preEnrollmentSource.version %>. The saved profile is authoritative; correct transcription errors in the paper record before conversion. Receipt counts stay separate from the enrollment checklist below.</p>
+        <h2 id="handoff-heading">Front-desk paper source</h2>
+        <p>Use the saved paper record as the source for this enrollment. Receipt counts stay separate from the registrar’s document review below.</p>
         <% if (String(values.preEnrollmentVersion || '') !== String(preEnrollmentSource.version) || preEnrollmentSource.status !== 'ready_for_registrar') { %><p class="form-alert" role="alert">The paper record changed after this enrollment form opened. Reload the source record before continuing; this form keeps its original revision and token.</p><% } %>
-        <h3>Saved front-desk profile</h3>
-        <dl class="pre-enrollment-summary">
-          <% for (const [label,value,wide] of [
-            ['Student name',[preEnrollmentSource.first_name,preEnrollmentSource.middle_name,preEnrollmentSource.last_name,preEnrollmentSource.suffix].filter(Boolean).join(' '),true],
-            ['LRN',preEnrollmentSource.lrn],['Email',preEnrollmentSource.email,true],['Birth date',preEnrollmentSource.birth_date],['Gender',preEnrollmentSource.sex],
-            ['Student contact number',preEnrollmentSource.student_contact_number],['Profile phone',preEnrollmentSource.profile_phone],
-            ['Birthplace',preEnrollmentSource.birthplace],['Facebook name',preEnrollmentSource.facebook_name,true],
-            ['Student address',savedAddress(preEnrollmentSource.address,preEnrollmentSource.address_block_lot_street_purok,preEnrollmentSource.address_barangay,preEnrollmentSource.address_city,preEnrollmentSource.address_province,preEnrollmentSource.address_zip),true],
-            ['Emergency contact person',preEnrollmentSource.emergency_contact_person],['Relationship',preEnrollmentSource.emergency_contact_relationship],
-            ['Emergency contact phone',preEnrollmentSource.emergency_contact_phone],
-            ['Emergency contact address',savedAddress(preEnrollmentSource.emergency_contact_address,preEnrollmentSource.emergency_contact_address_block_lot_street_purok,preEnrollmentSource.emergency_contact_address_barangay,preEnrollmentSource.emergency_contact_address_city,preEnrollmentSource.emergency_contact_address_province,preEnrollmentSource.emergency_contact_address_zip),true],
-            ['Mother',preEnrollmentSource.mother_name],['Mother phone',preEnrollmentSource.mother_phone],['Father',preEnrollmentSource.father_name],['Father phone',preEnrollmentSource.father_phone]
-          ]) { %><div class="<%= wide ? 'pre-enrollment-summary__wide' : '' %>"><dt><%= label %></dt><dd><%= value || '—' %></dd></div><% } %>
-        </dl>
-        <dl class="pre-enrollment-summary">
-          <% const applicantKindLabel = ({new:'New applicant',continuing:'Continuing student',readmission:'Returning after a break'})[preEnrollmentSource.applicant_kind] || 'Not recorded'; %>
-          <% for (const [label,value] of [['Applicant status',applicantKindLabel],['School year',preEnrollmentSource.school_year],['Target grade',preEnrollmentSource.target_grade_level],['Voucher type as written',preEnrollmentSource.voucher_type_text],['Voucher category as written',preEnrollmentSource.voucher_category_text],['Preferred track',preEnrollmentSource.preferred_track],['Preferred cluster',preEnrollmentSource.preferred_cluster],['Last grade level',preEnrollmentSource.prior_grade_level],['School attended',preEnrollmentSource.prior_school],['Student signature present',preEnrollmentSource.student_signature_present ? 'Yes' : 'No'],['Student signature date',preEnrollmentSource.student_signed_date],['Paper received by',preEnrollmentSource.received_by],['Paper received date',preEnrollmentSource.received_date]]) { %><div><dt><%= label %></dt><dd><%= value || '—' %></dd></div><% } %>
-        </dl>
-        <% if (preEnrollmentSource.applicant_kind === 'readmission') { %><p class="pre-enrollment-handoff__evaluation">Return evaluation: <%= preEnrollmentSource.readmission_evaluation?.status === 'accepted' ? 'Accepted' : 'Needs registrar review' %> · bound to revision <%= preEnrollmentSource.readmission_evaluation_version %> for <%= preEnrollmentSource.school_year %>, <%= preEnrollmentSource.target_grade_level %>.</p><% } %>
+        <% const applicantKindLabel = ({new:'New applicant',continuing:'Continuing student',readmission:'Returning after a break'})[preEnrollmentSource.applicant_kind] || 'Not recorded'; %>
+        <div class="pre-enrollment-handoff__quick-summary">
+          <p><strong><%= [preEnrollmentSource.first_name, preEnrollmentSource.middle_name, preEnrollmentSource.last_name, preEnrollmentSource.suffix].filter(Boolean).join(' ') || 'Student name not recorded' %></strong><% if (preEnrollmentSource.lrn) { %> · LRN <%= preEnrollmentSource.lrn %><% } %></p>
+          <dl class="pre-enrollment-summary pre-enrollment-summary--compact">
+            <% for (const [label,value] of [['Paper revision',preEnrollmentSource.version],['Applicant',applicantKindLabel],['School year',preEnrollmentSource.school_year],['Target grade',preEnrollmentSource.target_grade_level],['Preferred track',preEnrollmentSource.preferred_track],['Preferred cluster',preEnrollmentSource.preferred_cluster]]) { %><div><dt><%= label %></dt><dd><%= value || '—' %></dd></div><% } %>
+          </dl>
+          <a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(preEnrollmentSource.id) %>">Open paper record to correct details</a>
+        </div>
+        <details class="pre-enrollment-handoff__details" data-pre-enrollment-profile-details <%= Number(activeStep || 1) === 1 ? 'open' : '' %>>
+          <summary>Review the complete saved paper profile</summary>
+          <h3>Student and emergency-contact details</h3>
+          <dl class="pre-enrollment-summary">
+            <% for (const [label,value,wide] of [
+              ['Student name',[preEnrollmentSource.first_name,preEnrollmentSource.middle_name,preEnrollmentSource.last_name,preEnrollmentSource.suffix].filter(Boolean).join(' '),true],
+              ['LRN',preEnrollmentSource.lrn],['Email',preEnrollmentSource.email,true],['Birth date',preEnrollmentSource.birth_date],['Gender',preEnrollmentSource.sex],
+              ['Student contact number',preEnrollmentSource.student_contact_number],['Profile phone',preEnrollmentSource.profile_phone],
+              ['Birthplace',preEnrollmentSource.birthplace],['Facebook name',preEnrollmentSource.facebook_name,true],
+              ['Student address',savedAddress(preEnrollmentSource.address,preEnrollmentSource.address_block_lot_street_purok,preEnrollmentSource.address_barangay,preEnrollmentSource.address_city,preEnrollmentSource.address_province,preEnrollmentSource.address_zip),true],
+              ['Emergency contact person',preEnrollmentSource.emergency_contact_person],['Relationship',preEnrollmentSource.emergency_contact_relationship],
+              ['Emergency contact phone',preEnrollmentSource.emergency_contact_phone],
+              ['Emergency contact address',savedAddress(preEnrollmentSource.emergency_contact_address,preEnrollmentSource.emergency_contact_address_block_lot_street_purok,preEnrollmentSource.emergency_contact_address_barangay,preEnrollmentSource.emergency_contact_address_city,preEnrollmentSource.emergency_contact_address_province,preEnrollmentSource.emergency_contact_address_zip),true],
+              ['Mother',preEnrollmentSource.mother_name],['Mother phone',preEnrollmentSource.mother_phone],['Father',preEnrollmentSource.father_name],['Father phone',preEnrollmentSource.father_phone]
+            ]) { %><div class="<%= wide ? 'pre-enrollment-summary__wide' : '' %>"><dt><%= label %></dt><dd><%= value || '—' %></dd></div><% } %>
+          </dl>
+          <h3>Applicant and school history</h3>
+          <dl class="pre-enrollment-summary">
+            <% for (const [label,value] of [['Applicant status',applicantKindLabel],['School year',preEnrollmentSource.school_year],['Target grade',preEnrollmentSource.target_grade_level],['Voucher type as written',preEnrollmentSource.voucher_type_text],['Voucher category as written',preEnrollmentSource.voucher_category_text],['Preferred track',preEnrollmentSource.preferred_track],['Preferred cluster',preEnrollmentSource.preferred_cluster],['Last grade level',preEnrollmentSource.prior_grade_level],['School attended',preEnrollmentSource.prior_school],['Student signature present',preEnrollmentSource.student_signature_present ? 'Yes' : 'No'],['Student signature date',preEnrollmentSource.student_signed_date],['Paper received by',preEnrollmentSource.received_by],['Paper received date',preEnrollmentSource.received_date]]) { %><div><dt><%= label %></dt><dd><%= value || '—' %></dd></div><% } %>
+          </dl>
+          <% if (preEnrollmentSource.applicant_kind === 'readmission') { %><p class="pre-enrollment-handoff__evaluation">Return evaluation: <%= preEnrollmentSource.readmission_evaluation?.status === 'accepted' ? 'Accepted' : 'Needs registrar review' %> · bound to revision <%= preEnrollmentSource.readmission_evaluation_version %> for <%= preEnrollmentSource.school_year %>, <%= preEnrollmentSource.target_grade_level %>.</p><% } %>
+        </details>
         <details class="pre-enrollment-handoff__receipts"><summary>Paper receipts recorded · <%= (preEnrollmentSource.receipts || []).length %> requirement rows</summary>
           <ul><% for (const receipt of preEnrollmentSource.receipts || []) { const label = (preEnrollmentReceiptRequirements || []).find(([code]) => code === receipt.requirement_code)?.[1] || receipt.requirement_code; %><li><%= label %>: original <%= receipt.original_received ? `received${receipt.original_pieces ? ` (${receipt.original_pieces})` : ''}` : 'not recorded' %>; photocopy <%= receipt.photocopy_received ? `received${receipt.photocopy_pieces ? ` (${receipt.photocopy_pieces})` : ''}` : 'not recorded' %></li><% } %></ul>
         </details>
@@ -88,12 +100,7 @@
             <% } %>
           </div>
         <% } else { %><div id="returning-student-field" hidden><input id="annual-student-no" name="studentNo" disabled></div><% } %>
-        <div class="notice-panel" id="new-student-fields">
-          <h3>Saved front-desk profile</h3>
-          <dl class="pre-enrollment-summary">
-            <% for (const [label,value] of [['Name',[preEnrollmentSource.first_name,preEnrollmentSource.middle_name,preEnrollmentSource.last_name,preEnrollmentSource.suffix].filter(Boolean).join(' ')],['LRN',preEnrollmentSource.lrn],['Email',preEnrollmentSource.email],['Birth date',preEnrollmentSource.birth_date],['Gender',preEnrollmentSource.sex],['Phone',preEnrollmentSource.profile_phone],['Address',savedAddress(preEnrollmentSource.address,preEnrollmentSource.address_block_lot_street_purok,preEnrollmentSource.address_barangay,preEnrollmentSource.address_city,preEnrollmentSource.address_province,preEnrollmentSource.address_zip)],['Emergency contact',preEnrollmentSource.emergency_contact_person],['Emergency contact number',preEnrollmentSource.emergency_contact_phone],['Emergency contact address',savedAddress(preEnrollmentSource.emergency_contact_address,preEnrollmentSource.emergency_contact_address_block_lot_street_purok,preEnrollmentSource.emergency_contact_address_barangay,preEnrollmentSource.emergency_contact_address_city,preEnrollmentSource.emergency_contact_address_province,preEnrollmentSource.emergency_contact_address_zip)],['Mother',preEnrollmentSource.mother_name],['Father',preEnrollmentSource.father_name]]) { %><div><dt><%= label %></dt><dd><%= value || '—' %></dd></div><% } %>
-          </dl>
-        </div>
+        <div class="notice-panel" id="new-student-fields">The saved student details are shown in the paper profile above; do not re-enter them here.</div>
       <% } else { %>
         <p>Returning students keep their existing profile, login, and paper checklist history. <a href="/registrar/records" target="_blank" rel="noopener">Find a student by name or LRN</a> if you do not know the student number.</p>
       <div class="admin-form-grid">
@@ -145,13 +152,13 @@
         <p>Use this section for the school year. You can change individual terms when needed.</p>
         <div class="field"><label for="annual-section-mode">Sections</label><select id="annual-section-mode" name="sectionMode"><option value="same" <%= (values.sectionMode || 'same') === 'same' ? 'selected' : '' %>>Same section for all terms</option><option value="per_term" <%= values.sectionMode === 'per_term' ? 'selected' : '' %>>Different sections by term</option></select></div>
         <div class="field" id="annual-common-section-field"><label for="annual-common-section">Section for the entry term</label>
-          <select id="annual-common-section" name="annualSectionId" required><option value="">Choose section</option><% for (const section of sections) { %><option value="<%= section.id %>" data-year="<%= section.school_year %>" data-grade="<%= section.grade_level %>" data-term-number="<%= section.term_number %>" data-name="<%= section.name %>" data-cluster="<%= section.cluster || '' %>" data-strand="<%= section.strand || '' %>" <%= String(values.annualSectionId || values[`section${initialEntryTerm}Id`] || '') === String(section.id) ? 'selected' : '' %>><%= section.name %> · Term <%= section.term_number || 'unmapped' %><% if (section.cluster) { %> · Cluster <%= section.cluster %><% } %><% if (section.strand) { %> · <%= section.strand %><% } %><% if (section.adviser) { %> · Adviser <%= section.adviser %><% } %><% if (section.modality) { %> · <%= section.modality.replaceAll('_', ' ') %><% if (section.modular_subtype) { %> (<%= section.modular_subtype.replaceAll('_', ' ') %>)<% } %><% } %></option><% } %></select>
+            <select id="annual-common-section" name="annualSectionId" required><option value="">Choose section</option><% for (const section of sections) { %><option value="<%= section.id %>" data-year="<%= section.school_year %>" data-grade="<%= section.grade_level %>" data-term-number="<%= section.term_number %>" data-name="<%= section.name %>" data-cluster="<%= section.cluster || '' %>" data-strand="<%= section.strand || '' %>" <%= String(values.annualSectionId || values[`section${initialEntryTerm}Id`] || '') === String(section.id) ? 'selected' : '' %>><%= section.name %> · Term <%= section.term_number || 'unmapped' %><% if (section.cluster) { %> · Cluster <%= section.cluster %><% } %><% if (section.strand) { %> · <%= section.strand %><% } %><% if (section.adviser) { %> · Adviser <%= section.adviser %><% } %><% if (section.modality) { %> · <%= modalityLabel(section.modality, section.modular_subtype) %><% } %></option><% } %></select>
         </div>
         <ul id="annual-section-plan-preview" class="section-plan" aria-live="polite"></ul>
         <div class="admin-form-grid intake-term-sections">
           <% for (let termNumber = 1; termNumber <= 3; termNumber += 1) { %>
             <div class="field" data-placement-number="<%= termNumber %>"><label for="annual-section-<%= termNumber %>">Term <%= termNumber %> section <span class="muted-copy">(optional for future terms)</span></label>
-              <select id="annual-section-<%= termNumber %>" name="section<%= termNumber %>Id" data-term-select data-term-number="<%= termNumber %>"><option value="">Leave unassigned</option><% for (const section of sections) { %><option value="<%= section.id %>" data-year="<%= section.school_year %>" data-grade="<%= section.grade_level %>" data-term-number="<%= section.term_number %>" data-name="<%= section.name %>" data-cluster="<%= section.cluster || '' %>" data-strand="<%= section.strand || '' %>" <%= String(values[`section${termNumber}Id`] || '') === String(section.id) ? 'selected' : '' %>><%= section.name %> · Term <%= section.term_number || 'unmapped' %><% if (section.cluster) { %> · Cluster <%= section.cluster %><% } %><% if (section.strand) { %> · <%= section.strand %><% } %><% if (section.modality) { %> · <%= section.modality.replaceAll('_', ' ') %><% } %></option><% } %></select>
+              <select id="annual-section-<%= termNumber %>" name="section<%= termNumber %>Id" data-term-select data-term-number="<%= termNumber %>"><option value="">Leave unassigned</option><% for (const section of sections) { %><option value="<%= section.id %>" data-year="<%= section.school_year %>" data-grade="<%= section.grade_level %>" data-term-number="<%= section.term_number %>" data-name="<%= section.name %>" data-cluster="<%= section.cluster || '' %>" data-strand="<%= section.strand || '' %>" <%= String(values[`section${termNumber}Id`] || '') === String(section.id) ? 'selected' : '' %>><%= section.name %> · Term <%= section.term_number || 'unmapped' %><% if (section.cluster) { %> · Cluster <%= section.cluster %><% } %><% if (section.strand) { %> · <%= section.strand %><% } %><% if (section.modality) { %> · <%= modalityLabel(section.modality, section.modular_subtype) %><% } %></option><% } %></select>
               <input type="hidden" id="annual-section-<%= termNumber %>-override" name="section<%= termNumber %>Override" value="<%= values[`section${termNumber}Override`] || '' %>">
             </div>
           <% } %>
@@ -161,7 +168,7 @@
     </section>
 
     <section class="intake-step" data-step-panel="3" aria-labelledby="intake-documents-heading">
-      <div class="intake-step__heading"><h2 id="intake-documents-heading">Documents received</h2></div>
+      <div class="intake-step__heading"><h2 id="intake-documents-heading">Paper document review</h2></div>
       <p>Select a paper only after staff has received and checked it. Checking the box records that item as verified today; leave it unchecked when it was not received and checked. Existing history stays unchanged unless you select a row. Missing papers do not block enrollment.</p>
       <p class="muted-copy">Place submitted papers together in a long brown envelope; the envelope is a storage container and is not tracked. Enter only counts that apply to each paper, and leave counts blank if unknown. SF10 / Form 137 keeps its separate staff-only history. Do not upload scans here.</p>
       <div class="paper-checklist-rows">
