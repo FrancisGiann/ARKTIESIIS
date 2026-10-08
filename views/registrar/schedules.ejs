@@ -5,7 +5,10 @@
     <div><h1>Class schedules</h1><p>Choose a term, section, or assigned class to set and review its weekly meeting times.</p></div>
   </header>
   <% if (notice) { %><p class="notice" role="status"><%= notice %></p><% } %>
-  <% if (error) { %><p class="form-error" role="alert"><%= error %></p><% } %>
+  <% if (error) { %><div class="form-error" role="alert"><p><%= error %></p>
+    <% if (conflicts?.length) { %><ul><% for (const conflict of conflicts) { %><li><%= conflict.summary %></li><% } %></ul><% } %>
+    <% if (conflictsTruncated) { %><p>More matching class times were found. Adjust the schedule details and check again.</p><% } %>
+  </div><% } %>
   <% if (contextNotice) { %><p class="form-error" role="status"><%= contextNotice %></p><% } %>
 
   <section class="class-context-panel schedule-context-panel" aria-labelledby="schedule-context-title">
@@ -37,12 +40,13 @@
     <% if (!assignments.length) { %><p class="empty-state">No active teacher assignments match this context. <a class="table-action" href="/registrar/records/teacher-assignments?termId=<%= academicTermId || '' %><% if (selectedSectionId) { %>&amp;sectionId=<%= selectedSectionId %><% } %>#create-teacher-assignment-title">Create a teacher assignment</a> before setting class times.</p><% } %>
     <details class="schedule-create-disclosure" <%= showCreate || error ? 'open' : '' %>>
       <summary class="schedule-create-summary" id="schedule-create-title">Add a class time</summary>
-      <form class="schedule-create-form" method="post" action="/registrar/schedules" aria-labelledby="schedule-create-title" id="schedule-create-form">
+        <form class="schedule-create-form" method="post" action="/registrar/schedules" aria-labelledby="schedule-create-title" id="schedule-create-form" data-schedule-conflict-form data-conflict-preview-url="/registrar/schedules/conflicts/preview">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <input type="hidden" name="scheduleId" value="">
         <input type="hidden" name="termId" value="<%= academicTermId || '' %>">
         <input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>">
         <input type="hidden" name="filterAssignmentId" value="<%= selectedAssignmentId || '' %>">
-        <p>Choose a day, start and end time, and room. Conflicts are checked when saved.</p>
+        <p>Choose a day, start and end time, and room. Save checks for conflicts before adding the class time.</p>
         <label for="schedule-assignment">Assigned class</label>
         <select id="schedule-assignment" name="assignmentId" required <%= !assignments.length ? 'disabled' : '' %>>
           <option value="">Choose an active class</option>
@@ -61,7 +65,11 @@
           <div><label for="schedule-end">Ends</label><input id="schedule-end" name="endTime" type="time" required value="<%= values.endTime || '' %>"></div>
           <div><label for="schedule-room">Room <span class="field-optional">Optional</span></label><input id="schedule-room" name="room" maxlength="80" value="<%= values.room || '' %>" autocomplete="off"></div>
         </div>
+        <div class="schedule-conflict-feedback" data-schedule-conflict-feedback role="status" aria-live="polite" aria-atomic="true" hidden>
+          <p data-conflict-message></p><ul data-conflict-list></ul>
+        </div>
         <div class="schedule-form-actions">
+          <button class="button button--secondary" type="button" data-check-schedule-conflicts>Check conflicts</button>
           <button class="button button--primary" type="submit" <%= !assignments.length ? 'disabled' : '' %>>Add class time</button>
           <% if (academicTermId) { %><a class="table-action" href="/registrar/schedules?termId=<%= academicTermId %><% if (selectedSectionId) { %>&amp;sectionId=<%= selectedSectionId %><% } %><% if (selectedAssignmentId) { %>&amp;assignmentId=<%= selectedAssignmentId %><% } %>&amp;showCreate=1#schedule-create-title">Clear day, time, and room</a><% } %>
         </div>
@@ -122,8 +130,9 @@
                         <% if (isActiveAssignment) { %>
                           <details class="schedule-edit" <%= isEditing ? 'open' : '' %>>
                             <summary>Edit class time</summary>
-                            <form method="post" action="/registrar/schedules/<%= schedule.id %>">
+                            <form method="post" action="/registrar/schedules/<%= schedule.id %>" data-schedule-conflict-form data-conflict-preview-url="/registrar/schedules/conflicts/preview">
                               <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                              <input type="hidden" name="scheduleId" value="<%= schedule.id %>">
                               <input type="hidden" name="termId" value="<%= academicTermId || '' %>">
                               <input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>">
                               <input type="hidden" name="filterAssignmentId" value="<%= selectedAssignmentId || '' %>">
@@ -137,7 +146,10 @@
                               <label for="start-<%= schedule.id %>">Starts</label><input id="start-<%= schedule.id %>" type="time" name="startTime" required value="<%= isEditing ? values.startTime : schedule.start_time %>">
                               <label for="end-<%= schedule.id %>">Ends</label><input id="end-<%= schedule.id %>" type="time" name="endTime" required value="<%= isEditing ? values.endTime : schedule.end_time %>">
                               <label for="room-<%= schedule.id %>">Room <span class="field-optional">Optional</span></label><input id="room-<%= schedule.id %>" name="room" maxlength="80" value="<%= isEditing ? values.room : schedule.room || '' %>">
-                              <div class="schedule-form-actions"><button class="button button--secondary" type="submit">Save class time</button><a class="table-action" href="/registrar/schedules?termId=<%= academicTermId || '' %><% if (selectedSectionId) { %>&amp;sectionId=<%= selectedSectionId %><% } %><% if (selectedAssignmentId) { %>&amp;assignmentId=<%= selectedAssignmentId %><% } %>&amp;focusScheduleId=<%= schedule.id %>#schedule-<%= schedule.id %>">Cancel</a></div>
+                              <div class="schedule-conflict-feedback" data-schedule-conflict-feedback role="status" aria-live="polite" aria-atomic="true" hidden>
+                                <p data-conflict-message></p><ul data-conflict-list></ul>
+                              </div>
+                              <div class="schedule-form-actions"><button class="button button--secondary" type="button" data-check-schedule-conflicts>Check conflicts</button><button class="button button--secondary" type="submit">Save class time</button><a class="table-action" href="/registrar/schedules?termId=<%= academicTermId || '' %><% if (selectedSectionId) { %>&amp;sectionId=<%= selectedSectionId %><% } %><% if (selectedAssignmentId) { %>&amp;assignmentId=<%= selectedAssignmentId %><% } %>&amp;focusScheduleId=<%= schedule.id %>#schedule-<%= schedule.id %>">Cancel</a></div>
                             </form>
                             <form method="post" action="/registrar/schedules/<%= schedule.id %>/delete" class="schedule-delete-form">
                               <input type="hidden" name="_csrf" value="<%= csrfToken %>">
@@ -160,4 +172,5 @@
     <% } else { %><p class="empty-state">No class times match this context yet. Select an active class above to add its first time.</p><% } %>
   </section>
 </main>
+<script src="/js/registrar-schedule-conflicts.js"></script>
 <%- include('../partials/foot') %>

@@ -1,10 +1,16 @@
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
+const { formatStudentPlacement } = require('../utils/formatStudentPlacement');
+
+const MAX_CONFLICT_RESULTS = 10;
+const DAY_NAMES = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 class ClassScheduleError extends Error {
-  constructor(message, status = 400) {
+  constructor(message, status = 400, details = {}) {
     super(message);
     this.name = 'ClassScheduleError';
     this.status = status;
+    this.conflicts = Array.isArray(details.conflicts) ? details.conflicts : [];
+    this.conflictsTruncated = details.conflictsTruncated === true;
   }
 }
 
@@ -52,6 +58,76 @@ function validateSchedule(input = {}) {
   return { assignmentId, contextTermId, contextSectionId, dayOfWeek, startTime, endTime, room: room || null };
 }
 
+function toConflictDetails(rows = []) {
+  return rows.map((row) => {
+    const reasons = [];
+    if (row.section_conflict === true || row.section_conflict === 1) reasons.push('same section');
+    if (row.teacher_conflict === true || row.teacher_conflict === 1) reasons.push('same teacher');
+    if (row.room_conflict === true || row.room_conflict === 1) reasons.push('same room');
+    const section = formatStudentPlacement(row.grade_level, row.section_name) || 'Section unavailable';
+    const classLabel = [row.subject_code, row.subject_name].filter(Boolean).join(' · ') || 'Assigned class';
+    const teacher = typeof row.teacher_name === 'string' && row.teacher_name.trim()
+      ? row.teacher_name.trim() : 'Assigned teacher';
+    const room = typeof row.room === 'string' && row.room.trim() ? row.room.trim() : 'To be announced';
+    const dayLabel = DAY_NAMES[Number(row.day_of_week)] || 'Scheduled day';
+    const reasonLabel = reasons.length ? reasons.join(', ') : 'overlapping schedule';
+    const summary = `${dayLabel}, ${row.start_time}–${row.end_time}: ${classLabel} (${section}); Teacher: ${teacher}; Room: ${room}; shared: ${reasonLabel}.`;
+    return {
+      id: Number(row.id),
+      dayOfWeek: Number(row.day_of_week),
+      dayLabel,
+      startTime: row.start_time,
+      endTime: row.end_time,
+      subjectCode: row.subject_code || '',
+      subjectName: row.subject_name || '',
+      sectionLabel: section,
+      teacherName: teacher,
+      room: typeof row.room === 'string' ? row.room : '',
+      reasons,
+      summary
+    };
+  });
+}
+
+function conflictQuery(request, values, lockRows = false) {
+  const result = request
+    .input('assignmentId', values.sql.Int, values.assignmentId)
+    .input('scheduleId', values.sql.Int, values.scheduleId)
+    .input('dayOfWeek', values.sql.TinyInt, values.dayOfWeek)
+    .input('startTime', values.sql.VarChar(5), values.startTime)
+    .input('endTime', values.sql.VarChar(5), values.endTime)
+    .input('room', values.sql.NVarChar(80), values.room)
+    .input('sectionId', values.sql.Int, values.sectionId)
+    .input('teacherId', values.sql.Int, values.teacherId)
+    .input('academicTermId', values.sql.Int, values.academicTermId);
+  return result.query(`SELECT schedule.id, schedule.day_of_week,
+      TIME_FORMAT(schedule.start_time, '%H:%i') AS start_time,
+      TIME_FORMAT(schedule.end_time, '%H:%i') AS end_time, schedule.room,
+      section.grade_level, section.name AS section_name,
+      subject.subject_code, subject.subject_name,
+      COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(staff.first_name, ' ', staff.last_name))), ''), teacher.email, 'Assigned teacher') AS teacher_name,
+      CASE WHEN assigned_class.section_id = @sectionId THEN 1 ELSE 0 END AS section_conflict,
+      CASE WHEN assigned_class.teacher_id = @teacherId THEN 1 ELSE 0 END AS teacher_conflict,
+      CASE WHEN @room IS NOT NULL AND schedule.room = @room THEN 1 ELSE 0 END AS room_conflict
+    FROM class_schedules AS schedule
+    INNER JOIN teacher_assignments AS assigned_class ON assigned_class.id = schedule.assignment_id
+    LEFT JOIN sections AS section ON section.id = assigned_class.section_id
+      AND section.academic_term_id = assigned_class.academic_term_id
+    LEFT JOIN subjects AS subject ON subject.id = assigned_class.subject_id
+    LEFT JOIN users AS teacher ON teacher.id = assigned_class.teacher_id AND teacher.role = 'teacher'
+    LEFT JOIN staff_profiles AS staff ON staff.user_id = assigned_class.teacher_id
+    WHERE assigned_class.academic_term_id = @academicTermId AND assigned_class.is_active = 1
+      AND schedule.day_of_week = @dayOfWeek AND schedule.id <> COALESCE(@scheduleId, -1)
+      AND schedule.start_time < @endTime AND schedule.end_time > @startTime
+      AND (assigned_class.section_id = @sectionId OR assigned_class.teacher_id = @teacherId
+        OR (@room IS NOT NULL AND schedule.room = @room))
+    ORDER BY schedule.start_time, schedule.id LIMIT ${MAX_CONFLICT_RESULTS + 1}${lockRows ? ' FOR UPDATE' : ''}`);
+}
+
+function conflictsMessage(truncated) {
+  return `This class time conflicts with an existing schedule.${truncated ? ' More matching class times were found.' : ''}`;
+}
+
 function createClassScheduleService({
   getPool = defaultGetPool,
   sql = defaultSql,
@@ -82,6 +158,68 @@ function createClassScheduleService({
         WHERE id = @actorId AND is_active = 1 AND role = 'registrar' FOR UPDATE`);
     if (!result.recordset?.length) throw new ClassScheduleError('Your registrar access is no longer active. Sign in again.', 403);
     return result.recordset[0].id;
+  }
+
+  async function getActiveAssignment(request, assignmentId, lockRow = false) {
+    const assignmentResult = await request.input('assignmentId', sql.Int, assignmentId)
+      .query(`SELECT assignment.id, assignment.section_id, assignment.teacher_id, assignment.academic_term_id
+        FROM teacher_assignments AS assignment
+        INNER JOIN users AS teacher
+          ON teacher.id = assignment.teacher_id AND teacher.role = 'teacher' AND teacher.is_active = 1
+        WHERE assignment.id = @assignmentId AND assignment.is_active = 1${lockRow ? ' FOR UPDATE' : ''}`);
+    const assignment = assignmentResult.recordset?.[0];
+    if (!assignment) throw new ClassScheduleError('Choose an active teacher assignment.');
+    return assignment;
+  }
+
+  async function validateAssignmentContext(assignment, values) {
+    if (values.contextTermId && Number(assignment.academic_term_id) !== values.contextTermId) {
+      throw new ClassScheduleError('The selected class does not belong to the chosen term.', 409);
+    }
+    if (values.contextSectionId && Number(assignment.section_id) !== values.contextSectionId) {
+      throw new ClassScheduleError('The selected class does not belong to the chosen section.', 409);
+    }
+  }
+
+  async function previewScheduleConflicts(actorInput, scheduleInput, input) {
+    const actorId = positiveId(actorInput);
+    const scheduleId = scheduleInput === null || scheduleInput === '' ? null : positiveId(scheduleInput);
+    if (!actorId || (scheduleInput !== null && scheduleInput !== '' && !scheduleId)) {
+      throw new ClassScheduleError('Choose a valid class schedule.');
+    }
+    const values = validateSchedule(input);
+    const pool = await getPool();
+    const actor = await pool.request().input('actorId', sql.Int, actorId)
+      .query(`SELECT id FROM users
+        WHERE id = @actorId AND is_active = 1 AND role = 'registrar'`);
+    if (!actor.recordset?.length) throw new ClassScheduleError('Your registrar access is no longer active. Sign in again.', 403);
+    if (scheduleId) {
+      const existing = await pool.request().input('scheduleId', sql.Int, scheduleId)
+        .query('SELECT id FROM class_schedules WHERE id = @scheduleId');
+      if (!existing.recordset?.length) throw new ClassScheduleError('Class schedule not found.', 404);
+    }
+    const assignment = await getActiveAssignment(pool.request(), values.assignmentId);
+    await validateAssignmentContext(assignment, values);
+    const result = await conflictQuery(pool.request(), {
+      sql,
+      ...values,
+      scheduleId,
+      sectionId: assignment.section_id,
+      teacherId: assignment.teacher_id,
+      academicTermId: assignment.academic_term_id
+    });
+    const rows = result.recordset || [];
+    const conflictsTruncated = rows.length > MAX_CONFLICT_RESULTS;
+    const conflicts = toConflictDetails(rows.slice(0, MAX_CONFLICT_RESULTS));
+    return {
+      conflict: conflicts.length > 0,
+      conflicts,
+      conflictsTruncated,
+      roomChecked: Boolean(values.room),
+      message: conflicts.length
+        ? `${conflictsMessage(conflictsTruncated)} This check covers all sections in the selected term.${values.room ? '' : ' Room conflicts were not checked because no room was entered.'} Saving will check again.`
+        : `No conflicts were found right now. This check covers all sections in the selected term.${values.room ? '' : ' Room conflicts were not checked because no room was entered.'} Saving will check again.`
+    };
   }
 
   async function writeAudit(transaction, actorId, action, scheduleId, details = {}) {
@@ -251,42 +389,26 @@ function createClassScheduleService({
         if (!current) throw new ClassScheduleError('Class schedule not found.', 404);
       }
 
-      const assignmentResult = await transaction.request().input('assignmentId', sql.Int, values.assignmentId)
-        .query(`SELECT assignment.id, assignment.section_id, assignment.teacher_id, assignment.academic_term_id
-          FROM teacher_assignments AS assignment
-          INNER JOIN users AS teacher
-            ON teacher.id = assignment.teacher_id AND teacher.role = 'teacher' AND teacher.is_active = 1
-          WHERE assignment.id = @assignmentId AND assignment.is_active = 1 FOR UPDATE`);
-      const assignment = assignmentResult.recordset?.[0];
-      if (!assignment) throw new ClassScheduleError('Choose an active teacher assignment.');
-      if (values.contextTermId && Number(assignment.academic_term_id) !== values.contextTermId) {
-        throw new ClassScheduleError('The selected class does not belong to the chosen term.', 409);
-      }
-      if (values.contextSectionId && Number(assignment.section_id) !== values.contextSectionId) {
-        throw new ClassScheduleError('The selected class does not belong to the chosen section.', 409);
-      }
+      const assignment = await getActiveAssignment(transaction.request(), values.assignmentId, true);
+      await validateAssignmentContext(assignment, values);
 
-      const conflictResult = await transaction.request()
-        .input('assignmentId', sql.Int, values.assignmentId)
-        .input('scheduleId', sql.Int, scheduleId)
-        .input('dayOfWeek', sql.TinyInt, values.dayOfWeek)
-        .input('startTime', sql.VarChar(5), values.startTime)
-        .input('endTime', sql.VarChar(5), values.endTime)
-        .input('room', sql.NVarChar(80), values.room)
-        .input('sectionId', sql.Int, assignment.section_id)
-        .input('teacherId', sql.Int, assignment.teacher_id)
-        .input('academicTermId', sql.Int, assignment.academic_term_id)
-        .query(`SELECT schedule.id
-          FROM class_schedules AS schedule
-          INNER JOIN teacher_assignments AS assigned_class
-            ON assigned_class.id = schedule.assignment_id
-          WHERE assigned_class.academic_term_id = @academicTermId AND assigned_class.is_active = 1
-            AND schedule.day_of_week = @dayOfWeek AND schedule.id <> COALESCE(@scheduleId, -1)
-            AND schedule.start_time < @endTime AND schedule.end_time > @startTime
-            AND (assigned_class.section_id = @sectionId OR assigned_class.teacher_id = @teacherId
-              OR (@room IS NOT NULL AND schedule.room = @room)) LIMIT 1 FOR UPDATE`);
+      const conflictResult = await conflictQuery(transaction.request(), {
+        sql,
+        ...values,
+        scheduleId,
+        sectionId: assignment.section_id,
+        teacherId: assignment.teacher_id,
+        academicTermId: assignment.academic_term_id
+      }, true);
       if (conflictResult.recordset?.length) {
-        throw new ClassScheduleError('This time conflicts with another class for the section, teacher, or room.', 409);
+        const rows = conflictResult.recordset;
+        const conflictsTruncated = rows.length > MAX_CONFLICT_RESULTS;
+        const conflicts = toConflictDetails(rows.slice(0, MAX_CONFLICT_RESULTS));
+        const message = `${conflictsMessage(conflictsTruncated)}${values.room ? '' : ' Room conflicts were not checked because no room was entered.'}`;
+        throw new ClassScheduleError(message, 409, {
+          conflicts,
+          conflictsTruncated
+        });
       }
 
       const request = transaction.request()
@@ -342,7 +464,7 @@ function createClassScheduleService({
     });
   }
 
-  return { listRegistrarWorkspace, getOwnStudentSchedule, saveSchedule, deleteSchedule };
+  return { listRegistrarWorkspace, getOwnStudentSchedule, previewScheduleConflicts, saveSchedule, deleteSchedule };
 }
 
 module.exports = { ClassScheduleError, createClassScheduleService, positiveId, validateSchedule };

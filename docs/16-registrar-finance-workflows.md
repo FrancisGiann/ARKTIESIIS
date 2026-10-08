@@ -9,6 +9,10 @@
 - Database administrators use **User accounts** for sign-in access, **Student logins** for student sign-in accounts, and **Activity & documents** for the activity log and document workspace. The Activity log names the **Performed by** person or system for each recorded action; stored event names remain unchanged.
 - **Documents** are uploaded files. **Paper document records** track received or inspected paper copies separately; receipt, Paper clearance, Finance term account clearance, and document request fee review are distinct records.
 
+## Academic schedules
+
+At `/registrar/schedules`, registrars can check a complete class time while adding or editing it. The warning identifies the matching class, section, teacher, room, day, time, and whether the overlap shares a section, teacher, or room; room availability is checked only when a room is entered. Checks include other sections in the selected term even when the weekly view is filtered. Saving repeats the same check inside its transaction, so a schedule added after the preview is still rejected and the entered values and conflict details remain available for correction.
+
 ## Student record navigation
 
 The registrar's record list opens with search and results. Terms and sections are grouped under the records setup view. Opening a learner keeps their identity visible while staff move between Overview, Profile, Academics, Documents, and History. Overview is limited to current status; profile revisions and the existing document-request ledger have their own views. Profile account and enrollment controls are secondary to the learner's details.
