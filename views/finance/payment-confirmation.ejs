@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell finance-statement finance-payment-confirmation" id="main-content">
-  <% const payment = confirmation.payment; const studentName = [payment.first_name, payment.middle_name, payment.last_name, payment.suffix].filter(Boolean).join(' '); %>
+  <% const payment = confirmation.payment; const studentName = [payment.first_name, payment.middle_name, payment.last_name, payment.suffix].filter(Boolean).join(' '); const paymentReversed = payment.is_reversed === true || payment.is_reversed === 1 || payment.is_reversed === '1'; const receiptIssued = payment.receipt_issued === true || payment.receipt_issued === 1 || payment.receipt_issued === '1'; const appliedLabel = kind === 'legacy' ? 'Applied later' : 'Originally applied'; %>
   <header class="statement-heading">
     <div><p class="eyebrow"><%= kind === 'legacy' ? 'Earlier account payment' : 'Annual account payment' %></p><h1>Payment confirmation</h1>
       <p><strong><%= studentName %></strong> · Student no. <%= payment.student_no %></p></div>
@@ -20,19 +20,23 @@
       <% } else { %>
         <div><dt>Recorded date</dt><dd><%= formatFinanceDateTime(payment.created_at) %></dd></div>
       <% } %>
-      <div><dt>Original recorded amount</dt><dd>₱<%= formatMoney(payment.amount) %></dd></div>
+      <div><dt>Payment total</dt><dd>₱<%= formatMoney(payment.amount) %></dd></div>
       <div><dt>Current receipt/reference</dt><dd><%= payment.reference_no || 'No reference currently recorded' %></dd></div>
-      <% if (kind === 'annual') { %><div><dt>Current receipt status</dt><dd><%= payment.receipt_issued ? 'Marked issued' : 'Not marked issued' %></dd></div>
-        <div><dt>Current payment status</dt><dd><%= payment.is_reversed ? 'Reversed' : 'Recorded' %></dd></div><% } %>
+      <% if (kind === 'annual') { %><div><dt>Current receipt status</dt><dd><%= receiptIssued ? 'Marked issued' : 'Not marked issued' %></dd></div>
+        <div><dt>Current payment status</dt><dd><%= paymentReversed ? 'Reversed' : 'Recorded' %></dd></div>
+        <div><dt>Unused credit currently available</dt><dd><%= payment.current_available_credit == null ? 'Unavailable' : `₱${formatMoney(payment.current_available_credit)}` %></dd></div><% } %>
     </dl>
   </section>
   <section class="finance-panel" aria-labelledby="payment-confirmation-allocations">
-    <h2 id="payment-confirmation-allocations">Payment applications and current balances</h2>
+    <h2 id="payment-confirmation-allocations">What this payment was applied to</h2>
+    <p class="muted-copy">The payment total above is separate from its fee applications. Current fee balances below reflect the account today, not the balance when this payment was made.</p>
     <% if (confirmation.allocations.length) { %>
-      <div class="table-scroll"><table class="admin-table"><thead><tr><th>Fee or balance</th><th>Applied when saved</th><th>Applied now</th></tr></thead><tbody>
-        <% for (const allocation of confirmation.allocations) { %><tr><td data-label="Fee or balance"><%= allocation.target_label %></td><td data-label="Applied when saved">₱<%= formatMoney(allocation.original_amount) %></td><td data-label="Applied now">₱<%= formatMoney(allocation.current_net_amount) %></td></tr><% } %>
+      <div class="table-scroll"><table class="admin-table"><thead><tr><th>Fee / payment purpose</th><th><%= appliedLabel %></th><th>Currently applied</th><th>Current fee balance</th></tr></thead><tbody>
+        <% for (const allocation of confirmation.allocations) { %><tr><td data-label="Fee / payment purpose"><%= kind === 'legacy' ? `Applied later to ${allocation.target_label || 'fee details unavailable'}` : allocation.target_label || 'Balance details unavailable' %><% if (paymentReversed) { %><br><span class="muted-copy">Payment reversed; this application is no longer active.</span><% } else if (Number(allocation.released_amount) > 0) { %><br><span class="muted-copy">₱<%= formatMoney(allocation.released_amount) %> has since been removed from this application.</span><% } %></td><td data-label="<%= appliedLabel %>"><%= allocation.original_amount == null ? 'Unavailable' : `₱${formatMoney(allocation.original_amount)}` %></td><td data-label="Currently applied"><%= allocation.current_net_amount == null ? 'Unavailable' : `₱${formatMoney(allocation.current_net_amount)}` %></td><td data-label="Current fee balance"><%= allocation.current_due_amount == null ? 'Unavailable' : `₱${formatMoney(allocation.current_due_amount)}` %></td></tr><% } %>
       </tbody></table></div>
-    <% } else { %><p class="empty-state">This payment has not been applied to an assessed fee. The recorded amount remains in the original account history.</p><% } %>
+    <% } else if (kind === 'annual' && paymentReversed) { %><p class="empty-state">This payment is reversed and has no saved fee applications.</p>
+    <% } else if (kind === 'annual' && Number(payment.current_available_credit) > 0) { %><p class="empty-state">No fee application is linked to this payment. ₱<%= formatMoney(payment.current_available_credit) %> is currently available as unused payment credit.</p>
+    <% } else { %><p class="empty-state"><%= kind === 'legacy' ? 'No saved application details are available for this earlier payment, so its purpose cannot be confirmed from the available record.' : 'No saved fee application is linked to this payment. Its purpose is unavailable in the current record.' %></p><% } %>
   </section>
 </main>
 <script src="/js/statement-print.js" defer></script>

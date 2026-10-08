@@ -6,6 +6,7 @@ const { createAnnualFinanceCasesService } = require('./annualFinanceCasesService
 const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
 const { runSerializableTransaction } = require('./transactionRetry');
 const { FINANCE_STATUS, FINANCE_TERM_CLASSIFICATION_CTES, TRACKING_MODES } = require('./financeTermClassification');
+const { formatFeePurpose, formatAllocationPurpose, buildPaymentPurposeHistory } = require('../utils/paymentPurpose');
 
 const FEE_CATEGORIES = new Set(['tuition', 'miscellaneous', 'uniform', 'id', 'activity', 'retake', 'other']);
 const ID_PATTERN = /^\d{1,10}$/;
@@ -2101,13 +2102,15 @@ function createAnnualFinanceService({
         FROM finance_legacy_opening_charges AS opening
         INNER JOIN v_finance_opening_liability_due AS due ON due.opening_charge_id = opening.id
         WHERE opening.student_id = @studentId ORDER BY opening.created_at, opening.id`);
-    const allocationHistoryResult = access === 'student' ? { recordset: [] } : await transaction.request().input('studentId', sql.Int, studentId)
+    const allocationHistoryResult = await transaction.request().input('studentId', sql.Int, studentId)
       .query(`SELECT allocation.id AS allocation_id, allocation.payment_id, allocation.charge_id,
           allocation.legacy_opening_charge_id, payment.payment_date, payment.reference_no, payment.is_reversed,
           CAST(allocation.amount AS CHAR(40)) AS original_amount,
-          CAST(net.net_amount AS CHAR(40)) AS remaining_amount,
+          CAST(CASE WHEN payment.is_reversed = 1 THEN 0 ELSE net.net_amount END AS CHAR(40)) AS remaining_amount,
           CAST(allocation.amount - net.net_amount AS CHAR(40)) AS released_amount,
-          annual.school_year, enrollment.annual_term_number, term.term, charge.line_name, charge.installment,
+          annual.school_year, annual.grade_level, enrollment.annual_term_number, term.term,
+          charge.line_name, charge.fee_category, charge.installment,
+          CAST(COALESCE(charge_due.amount_due, opening_due.amount_due) AS CHAR(40)) AS current_due_amount,
           opening.source_label
         FROM finance_payment_allocations AS allocation
         INNER JOIN v_finance_net_payment_allocations AS net ON net.allocation_id = allocation.id
@@ -2116,16 +2119,20 @@ function createAnnualFinanceService({
         LEFT JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         LEFT JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
         LEFT JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
+        LEFT JOIN v_finance_assessed_charge_due AS charge_due ON charge_due.charge_id = allocation.charge_id
         LEFT JOIN finance_legacy_opening_charges AS opening ON opening.id = allocation.legacy_opening_charge_id
+        LEFT JOIN v_finance_opening_liability_due AS opening_due ON opening_due.opening_charge_id = opening.id
         WHERE payment.student_id = @studentId AND (net.net_amount > 0 OR allocation.amount > net.net_amount)
         ORDER BY payment.payment_date, allocation.id`);
-    const legacyReconciliationHistoryResult = access === 'student' ? { recordset: [] } : await transaction.request().input('studentId', sql.Int, studentId)
+    const legacyReconciliationHistoryResult = await transaction.request().input('studentId', sql.Int, studentId)
       .query(`SELECT reconciliation.id AS reconciliation_id, reconciliation.transaction_id,
+          reconciliation.charge_id,
           CAST(reconciliation.amount AS CHAR(40)) AS original_amount,
           CAST(net.net_amount AS CHAR(40)) AS remaining_amount,
           CAST(reconciliation.amount - net.net_amount AS CHAR(40)) AS released_amount,
-          legacy.created_at AS payment_date, legacy.reference_no, annual.school_year,
-          enrollment.annual_term_number, term.term, charge.line_name, charge.installment
+          legacy.created_at AS payment_date, legacy.reference_no, annual.school_year, annual.grade_level,
+          enrollment.annual_term_number, term.term, charge.line_name, charge.fee_category, charge.installment,
+          CAST(due.amount_due AS CHAR(40)) AS current_due_amount
         FROM finance_legacy_reconciliations AS reconciliation
         INNER JOIN v_finance_net_legacy_reconciliations AS net ON net.reconciliation_id = reconciliation.id
         INNER JOIN financial_transactions AS legacy ON legacy.id = reconciliation.transaction_id
@@ -2134,12 +2141,17 @@ function createAnnualFinanceService({
         INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
         INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
+        LEFT JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
         WHERE account.student_id = @studentId AND (net.net_amount > 0 OR reconciliation.amount > net.net_amount)
         ORDER BY legacy.created_at, reconciliation.id`);
-    const paymentMetadataResult = access === 'student' ? { recordset: [] } : await transaction.request().input('studentId', sql.Int, studentId)
+    const paymentMetadataResult = await transaction.request().input('studentId', sql.Int, studentId).input('isStudent', sql.Bit, access === 'student')
       .query(`SELECT payment.id AS payment_id, payment.payment_date, CAST(payment.amount AS CHAR(40)) AS amount,
-          payment.reference_no, payment.transmittal_reference, payment.receipt_issued, payment.private_remarks, payment.is_reversed
+          payment.reference_no, payment.receipt_issued, payment.is_reversed,
+          CAST(COALESCE(credit.available_credit, 0) AS CHAR(40)) AS current_available_credit,
+          CASE WHEN @isStudent = 1 THEN NULL ELSE payment.transmittal_reference END AS transmittal_reference,
+          CASE WHEN @isStudent = 1 THEN NULL ELSE payment.private_remarks END AS private_remarks
         FROM finance_payments AS payment
+        LEFT JOIN v_finance_payment_credit AS credit ON credit.payment_id = payment.id
         WHERE payment.student_id = @studentId ORDER BY payment.payment_date, payment.id`);
     const legacyCreditsResult = await transaction.request().input('studentId', sql.Int, studentId).input('isStudent', sql.Bit, access === 'student').query(`SELECT transaction_record.id AS transaction_id,
         transaction_record.reference_no, transaction_record.created_at,
@@ -2204,6 +2216,7 @@ function createAnnualFinanceService({
     const currentTermContext = currentTermContextResult.recordset?.[0] || null;
     const charges = (chargesResult.recordset || []).map((charge) => ({
       ...charge,
+      purpose_label: formatFeePurpose(charge),
       remaining_amount: formatMoneyCents(parseMoneyCents(String(charge.remaining_due || '0.00'), { allowNegative: true, allowZero: true }))
     }));
     const waivedCents = charges.reduce((sum, charge) => sum + parseMoneyCents(String(charge.waived_amount || '0.00'), { allowZero: true }), 0n);
@@ -2235,6 +2248,12 @@ function createAnnualFinanceService({
     const annualBalanceSchoolYear = [...annualByYear.keys()].sort().at(-1) || null;
     const annualBalanceCents = annualBalanceSchoolYear ? annualByYear.get(annualBalanceSchoolYear) : 0n;
     const totalBalanceCents = legacyCents + openingDueCents + allYearsAnnualBalanceCents;
+    const paymentPurposeHistory = buildPaymentPurposeHistory({
+      payments: paymentMetadataResult.recordset || [],
+      allocations: allocationHistoryResult.recordset || [],
+      legacyReconciliations: legacyReconciliationHistoryResult.recordset || [],
+      events: eventsResult.recordset || []
+    });
     return {
       student,
       summary: {
@@ -2258,9 +2277,10 @@ function createAnnualFinanceService({
       terms: termBalances,
       availablePayments: paymentOptionsResult.recordset || [],
       openingLiabilities: openingLiabilitiesResult.recordset || [],
-      allocationHistory: allocationHistoryResult.recordset || [],
-      legacyReconciliationHistory: legacyReconciliationHistoryResult.recordset || [],
-      payments: paymentMetadataResult.recordset || [],
+      paymentPurposeHistory,
+      allocationHistory: access === 'student' ? [] : allocationHistoryResult.recordset || [],
+      legacyReconciliationHistory: access === 'student' ? [] : legacyReconciliationHistoryResult.recordset || [],
+      payments: access === 'student' ? [] : paymentMetadataResult.recordset || [],
       legacyCredits: legacyCreditsResult.recordset || [],
       privateClearances: privateClearanceResult.recordset || [],
       adjustments: adjustmentsResult.recordset || [],
@@ -2283,18 +2303,22 @@ function createAnnualFinanceService({
       } else await requireFinanceActor(transaction.request(), actorInput);
       const paymentResult = await transaction.request().input('studentId', sql.Int, studentId).input('paymentId', sql.BigInt, paymentId)
         .query(`SELECT payment.id AS payment_id, payment.payment_date, CAST(payment.amount AS CHAR(40)) AS amount,
-            payment.reference_no, payment.receipt_issued, payment.is_reversed, student.id AS student_id,
+            payment.reference_no, payment.receipt_issued, payment.is_reversed,
+            CAST(COALESCE(credit.available_credit, 0) AS CHAR(40)) AS current_available_credit, student.id AS student_id,
             student.student_no, student.first_name, student.middle_name, student.last_name, student.suffix
           FROM finance_payments AS payment INNER JOIN students AS student ON student.id = payment.student_id
+          LEFT JOIN v_finance_payment_credit AS credit ON credit.payment_id = payment.id
           WHERE payment.student_id = @studentId AND payment.id = @paymentId`);
       const payment = paymentResult.recordset?.[0];
       if (!payment) throw new AnnualFinanceError('Payment not found for this student.', 404);
       const allocationResult = await transaction.request().input('paymentId', sql.BigInt, paymentId)
-        .query(`SELECT allocation.id AS allocation_id, CAST(allocation.amount AS CHAR(40)) AS original_amount,
+        .query(`SELECT allocation.id AS allocation_id, allocation.charge_id, allocation.legacy_opening_charge_id,
+            CAST(allocation.amount AS CHAR(40)) AS original_amount,
             CAST(CASE WHEN payment.is_reversed = 1 THEN 0 ELSE COALESCE(net.net_amount, 0) END AS CHAR(40)) AS current_net_amount,
-            COALESCE(CONCAT(annual.school_year, ' · Term ', enrollment.annual_term_number, ' · ', charge.line_name,
-              CASE WHEN LOWER(charge.line_name) = 'tuition' THEN CONCAT(' · ', charge.installment) ELSE '' END),
-              CONCAT('Verified prior balance · ', opening.source_label)) AS target_label
+            CAST(allocation.amount - COALESCE(net.net_amount, 0) AS CHAR(40)) AS released_amount,
+            annual.school_year, annual.grade_level, enrollment.annual_term_number,
+            charge.line_name, charge.fee_category, charge.installment, opening.source_label,
+            CAST(COALESCE(charge_due.amount_due, opening_due.amount_due) AS CHAR(40)) AS current_due_amount
           FROM finance_payment_allocations AS allocation
           INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
           LEFT JOIN v_finance_net_payment_allocations AS net ON net.allocation_id = allocation.id
@@ -2302,8 +2326,13 @@ function createAnnualFinanceService({
           LEFT JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
           LEFT JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
           LEFT JOIN finance_legacy_opening_charges AS opening ON opening.id = allocation.legacy_opening_charge_id
+          LEFT JOIN v_finance_assessed_charge_due AS charge_due ON charge_due.charge_id = allocation.charge_id
+          LEFT JOIN v_finance_opening_liability_due AS opening_due ON opening_due.opening_charge_id = opening.id
           WHERE allocation.payment_id = @paymentId ORDER BY allocation.id`);
-      return { payment, allocations: allocationResult.recordset || [] };
+      return { payment, allocations: (allocationResult.recordset || []).map((allocation) => ({
+        ...allocation,
+        target_label: allocation.charge_id != null ? formatFeePurpose(allocation) : formatAllocationPurpose(allocation)
+      })) };
     });
   }
 
@@ -2327,17 +2356,23 @@ function createAnnualFinanceService({
       const payment = paymentResult.recordset?.[0];
       if (!payment) throw new AnnualFinanceError('Legacy payment not found for this student.', 404);
       const allocationsResult = await transaction.request().input('transactionId', sql.Int, transactionId)
-        .query(`SELECT reconciliation.id AS allocation_id, CAST(reconciliation.amount AS CHAR(40)) AS original_amount,
+        .query(`SELECT reconciliation.id AS allocation_id, reconciliation.charge_id,
+            CAST(reconciliation.amount AS CHAR(40)) AS original_amount,
             CAST(COALESCE(net.net_amount, 0) AS CHAR(40)) AS current_net_amount,
-            CONCAT(annual.school_year, ' · Term ', enrollment.annual_term_number, ' · ', charge.line_name,
-              CASE WHEN LOWER(charge.line_name) = 'tuition' THEN CONCAT(' · ', charge.installment) ELSE '' END) AS target_label
+            CAST(reconciliation.amount - COALESCE(net.net_amount, 0) AS CHAR(40)) AS released_amount,
+            annual.school_year, annual.grade_level, enrollment.annual_term_number,
+            charge.line_name, charge.fee_category, charge.installment,
+            CAST(due.amount_due AS CHAR(40)) AS current_due_amount
           FROM finance_legacy_reconciliations AS reconciliation
           LEFT JOIN v_finance_net_legacy_reconciliations AS net ON net.reconciliation_id = reconciliation.id
           INNER JOIN assessed_charges AS charge ON charge.id = reconciliation.charge_id
           INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
           INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
+          LEFT JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
           WHERE reconciliation.transaction_id = @transactionId ORDER BY reconciliation.id`);
-      return { payment, allocations: allocationsResult.recordset || [] };
+      return { payment, allocations: (allocationsResult.recordset || []).map((allocation) => ({
+        ...allocation, target_label: formatFeePurpose(allocation)
+      })) };
     });
   }
 

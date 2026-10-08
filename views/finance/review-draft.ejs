@@ -41,9 +41,9 @@
     <% } %>
 
     <% if (draft.preview.allocationRows?.length) { %>
-      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Reviewed payment applications">
-        <table class="admin-table"><caption>Balances receiving this payment</caption><thead><tr><th>Fee or balance</th><th>School year and term</th><th>Amount applied</th><th>Due after</th></tr></thead>
-          <tbody><% for (const row of draft.preview.allocationRows) { %><tr><td data-label="Fee or balance"><%= row.targetReference %></td><td data-label="School year and term"><%= row.feeContext %></td><td data-label="Amount applied">₱<%= row.amount %></td><td data-label="Due after">₱<%= row.dueAfter %></td></tr><% } %></tbody>
+      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Reviewed payment purposes and applications">
+        <table class="admin-table"><caption>Payment purposes and amounts</caption><thead><tr><th>Fee / payment purpose</th><th>Current fee balance</th><th>Amount applied</th><th>Projected balance after payment</th></tr></thead>
+          <tbody><% for (const row of draft.preview.allocationRows) { %><tr><td data-label="Fee / payment purpose"><%= row.targetReference %></td><td data-label="Current fee balance"><%= row.dueBefore == null ? 'Unavailable' : `₱${row.dueBefore}` %><% if (row.feeContext) { %><br><span class="muted-copy"><%= row.feeContext %></span><% } %></td><td data-label="Amount applied">₱<%= row.amount %></td><td data-label="Projected balance after payment"><%= row.dueAfter == null ? 'Unavailable' : `₱${row.dueAfter}` %></td></tr><% } %></tbody>
         </table>
       </div>
     <% } else if (draft.actionType === 'annual_payment') { %>

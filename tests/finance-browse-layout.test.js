@@ -650,10 +650,30 @@ test('finance annual roster separates page data, classification, and balances in
   assert.match(paymentAllocations, /name="allocationMode" value="credit">Leave full amount as unused credit/);
   assert.match(paymentAllocations, /Applying it here does not record another payment/);
   assert.match(paymentAllocations, /Amount to apply \(PHP\)/);
-  assert.match(paymentAllocations, /<details class="finance-allocation-extra-details"[^>]*data-allocation-extra-details[\s\S]*?<summary>Additional fee allocations<\/summary>/);
+  assert.match(paymentAllocations, /Choose the purpose for each part of this payment[\s\S]*?school year, grade, term, fee, and tuition installment/);
+  assert.match(paymentAllocations, /<details class="finance-allocation-extra-details"[^>]*data-allocation-extra-details[\s\S]*?<summary>Additional payment purposes<\/summary>/);
   assert.match(paymentAllocations, /name="allocationTarget"/);
   assert.doesNotMatch(paymentDetails + paymentAllocations, /\shidden(?:\s|>)/, 'both steps stay available without JavaScript');
   assert.match(accountHtml, /src="\/js\/finance-payment-wizard\.js"/);
+
+  const paymentHistoryLocals = structuredClone(accountLocals);
+  paymentHistoryLocals.accountView = 'history';
+  paymentHistoryLocals.ledger.events = [{ event_type: 'payment', source_id: 501, event_date: new Date('2026-10-01T05:00:00Z'),
+    amount: '5000.00', reference_no: 'PAY-501' }];
+  paymentHistoryLocals.ledger.paymentPurposeHistory = {
+    payments: [{ payment_id: 501, amount: '5000.00', reference_no: 'PAY-501', is_reversed: false,
+      current_available_credit: '1000.00', allocations: [{ purpose: '2026-2027 · Grade 11 · Term 2 · Tuition · Prelim',
+        original_amount: '4000.00', current_amount: '4000.00', released_amount: '0.00', current_fee_balance: '1250.00' }] }],
+    earlier_payments: []
+  };
+  const paymentHistoryHtml = await renderFinanceView('annual-student', paymentHistoryLocals);
+  const paymentHistoryPanel = paymentHistoryHtml.match(/<section class="finance-panel" aria-labelledby="payment-reversal-title"[\s\S]*?<\/section>/)?.[0] || '';
+  assert.match(paymentHistoryPanel, /Payment history and purposes[\s\S]*?Payment #501 · total ₱5,000\.00/);
+  assert.match(paymentHistoryPanel, /2026-2027 · Grade 11 · Term 2 · Tuition · Prelim/);
+  assert.match(paymentHistoryPanel, /Current fee balance[\s\S]*?₱1,250\.00/);
+  assert.match(paymentHistoryPanel, /Unused credit currently available:<\/strong> ₱1,000\.00/,
+    'payment history accounts for the total even when part of it is applied');
+  assert.match(paymentHistoryPanel, /href="\/finance\/students\/22\/annual\/payments\/501\/confirmation">Open printable payment confirmation/);
 
   const recoveredPaymentLocals = structuredClone(accountLocals);
   recoveredPaymentLocals.accountView = 'payments';

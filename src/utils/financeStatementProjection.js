@@ -1,3 +1,5 @@
+const { safeStudentPaymentPurposeHistory } = require('./paymentPurpose');
+
 function moneyCents(value) {
   const match = /^(-?)(\d{1,10})(?:\.(\d{1,2}))?$/.exec(String(value ?? '0'));
   if (!match) return 0n;
@@ -69,6 +71,10 @@ function createStudentFinanceProjection(ledger) {
   };
   return {
     ...projected,
+    paymentPurposeHistory: safeStudentPaymentPurposeHistory(ledger.paymentPurposeHistory),
+    payments: [],
+    allocationHistory: [],
+    legacyReconciliationHistory: [],
     events: (ledger.events || []).map((event, index) => ({ event, safeEvent: projected.events[index] || {} }))
       .filter(({ event }) => !String(event.event_type || '').endsWith('private_remark_added'))
       .map(({ event, safeEvent }) => {

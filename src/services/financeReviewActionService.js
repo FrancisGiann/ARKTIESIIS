@@ -6,6 +6,7 @@ const { createAnnualFinanceService } = require('./annualFinanceService');
 const { createAnnualFinanceCasesService } = require('./annualFinanceCasesService');
 const { createStudentDocumentFinanceClearanceService } = require('./studentDocumentFinanceClearanceService');
 const { FinanceReviewDraftError, createFinanceReviewDraftService } = require('./financeReviewDraftService');
+const { formatFeePurpose } = require('../utils/paymentPurpose');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RETIRED_ACTION_TYPES = new Set(['legacy_account_create', 'legacy_transaction', 'legacy_enrollment_clearance']);
@@ -841,8 +842,6 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
         const targetRows = tableKind === 'charge'
           ? await req.query(`SELECT charge.id, annual.school_year, annual.grade_level, enrollment.annual_term_number,
               charge.line_name, charge.installment, charge.fee_category,
-              CONCAT(annual.school_year, ' · Term ', enrollment.annual_term_number, ' · ', charge.line_name,
-                CASE WHEN LOWER(charge.line_name) = 'tuition' THEN CONCAT(' · ', charge.installment) ELSE '' END) AS target_label,
               CAST(due.amount_due AS CHAR(40)) AS amount_due
             FROM assessed_charges AS charge INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
             INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
@@ -853,7 +852,10 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
               CAST(due.amount_due AS CHAR(40)) AS amount_due
             FROM finance_legacy_opening_charges AS opening INNER JOIN v_finance_opening_liability_due AS due ON due.opening_charge_id = opening.id
             WHERE opening.id IN (${names.join(', ')})`);
-        for (const target of targetRows.recordset || []) targets.set(`${tableKind}:${target.id}`, target);
+        for (const target of targetRows.recordset || []) {
+          if (tableKind === 'charge') target.target_label = formatFeePurpose(target);
+          targets.set(`${tableKind}:${target.id}`, target);
+        }
       }
       await readTargets(chargeIds, 'charge');
       await readTargets(openingIds, 'opening');
@@ -865,19 +867,27 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       }
       preview.editorOptions = { ...(preview.editorOptions || {}), allocationTargets: targetOptions };
       let appliedCents = 0n;
+      const dueAfterByTarget = new Map();
       preview.allocationRows = allocations.map((allocation) => {
         const key = allocation.chargeId ? `charge:${allocation.chargeId}` : `opening:${allocation.openingLiabilityId}`;
         const target = targets.get(key);
         const [whole = '0', fraction = ''] = String(allocation.amount || '0').split('.');
         const amountCents = /^\d+$/.test(whole) && /^\d{0,2}$/.test(fraction) ? BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0')) : 0n;
         appliedCents += amountCents;
-        const currentDue = target?.amount_due ? (() => { const [units, cents = ''] = String(target.amount_due).split('.'); return BigInt(units) * 100n + BigInt(cents.padEnd(2, '0')); })() : 0n;
-        const dueAfter = currentDue > amountCents ? currentDue - amountCents : 0n;
-        const feeContext = target?.line_name ? `${target.school_year} · Term ${target.annual_term_number} · ${target.line_name} · ${target.installment}`
-          : target?.source_label ? `Confirmed previous balance · ${target.source_label}` : 'Balance requires review';
+        const currentDue = target?.amount_due == null ? null : (() => {
+          const match = /^(\d{1,10})(?:\.(\d{1,2}))?$/.exec(String(target.amount_due));
+          return match ? BigInt(match[1]) * 100n + BigInt((match[2] || '').padEnd(2, '0')) : null;
+        })();
+        const usedBefore = dueAfterByTarget.get(key) || 0n;
+        if (currentDue != null) dueAfterByTarget.set(key, usedBefore + amountCents);
+        const dueAfter = currentDue == null ? null : currentDue > usedBefore + amountCents ? currentDue - usedBefore - amountCents : 0n;
+        const feeContext = target?.line_name
+          ? [target.school_year, target.grade_level, `Term ${target.annual_term_number}`].filter(Boolean).join(' · ')
+          : target?.source_label ? `Confirmed previous balance · ${target.source_label}` : 'Balance details unavailable';
         return { targetReference: target ? String(target.target_label) : 'Balance no longer available',
           feeContext, amount: `${amountCents / 100n}.${String(amountCents % 100n).padStart(2, '0')}`,
-          dueBefore: target?.amount_due || '0.00', dueAfter: `${dueAfter / 100n}.${String(dueAfter % 100n).padStart(2, '0')}` };
+          dueBefore: currentDue == null ? null : `${currentDue / 100n}.${String(currentDue % 100n).padStart(2, '0')}`,
+          dueAfter: dueAfter == null ? null : `${dueAfter / 100n}.${String(dueAfter % 100n).padStart(2, '0')}` };
       });
       const cashCents = /^\d{1,10}(?:\.\d{1,2})?$/.test(String(input.amount || ''))
         ? (() => { const [units, cents = ''] = String(input.amount).split('.'); return BigInt(units) * 100n + BigInt(cents.padEnd(2, '0')); })() : 0n;

@@ -79,7 +79,21 @@ test('student pages are separate, read-only destinations bound to the authentica
       { school_year: '2026-2027', term: 'Term 3', is_current: false, enrollment_status: 'pending_payment', term_scope_status: 'applicable',
         registrar_confirmation_id: null, signed_clearance_status: null, outstanding: '3990.00' }
     ],
-    events: financeEvents
+    events: financeEvents,
+    paymentPurposeHistory: {
+      payments: [{ payment_id: 71, payment_date: new Date('2026-10-01T05:00:00Z'), amount: '5000.00', reference_no: 'PAY-71',
+        receipt_issued: true, is_reversed: false, current_available_credit: '1500.00', transmittal_reference: 'PRIVATE-TRANS',
+        private_remarks: 'PRIVATE-PAYMENT-NOTE', allocations: [
+          { purpose: '2026-2027 · Grade 11 · Term 2 · Tuition · Prelim', original_amount: '2500.00', current_amount: '2500.00',
+            released_amount: '0.00', current_fee_balance: '1800.00', private_reason: 'PRIVATE-CORRECTION' },
+          { purpose: '2025-2026 · Grade 12 · Term 1 · Miscellaneous fee', original_amount: '1500.00', current_amount: '1000.00',
+            released_amount: '500.00', current_fee_balance: null }
+        ] }],
+      earlier_payments: [{ transaction_id: 90, payment_date: new Date('2025-04-01T05:00:00Z'), amount: '75.00',
+        allocations: [{ purpose: '2024-2025 · Grade 12 · Term 3 · Tuition · Finals', original_amount: '75.00', current_amount: '50.00',
+          released_amount: '25.00', current_fee_balance: '100.00' }] },
+      { transaction_id: 91, payment_date: new Date('2025-05-01T05:00:00Z'), amount: '40.00', allocations: [] }]
+    }
   };
   const student = {
     id: 55, student_no: 'SHS-2026-0042', first_name: 'Rae', middle_name: null, last_name: 'Student', suffix: null,
@@ -166,6 +180,17 @@ test('student pages are separate, read-only destinations bound to the authentica
     assert.match(financeHtml, /Confirmed by registrar/);
     assert.match(financeHtml, /Term account clearance[\s\S]*?Recorded/);
     assert.match(financeHtml, /Term account clearance is separate from the registrar’s paper clearance and does not change the amount due/);
+    const paymentPurposeHistory = financeHtml.match(/<section class="student-finance-activity" aria-labelledby="finance-payment-purpose-title">([\s\S]*?)<\/section>/)?.[1];
+    assert.ok(paymentPurposeHistory, 'payment purpose history is directly available from the read-only ledger');
+    assert.match(paymentPurposeHistory, /Payment #71 · total ₱5,000\.00/);
+    assert.match(paymentPurposeHistory, /2026-2027 · Grade 11 · Term 2 · Tuition · Prelim/);
+    assert.match(paymentPurposeHistory, /2025-2026 · Grade 12 · Term 1 · Miscellaneous fee/);
+    assert.match(paymentPurposeHistory, /Unused credit currently available:[\s\S]*?₱1,500\.00/);
+    assert.match(paymentPurposeHistory, /Current fee balance[\s\S]*?₱1,800\.00[\s\S]*?Unavailable/);
+    assert.match(paymentPurposeHistory, /Earlier account payment #90[\s\S]*?Term 3 · Tuition · Finals/);
+    assert.match(paymentPurposeHistory, /Earlier account payment #91[\s\S]*?Purpose is not recorded in the available history/);
+    assert.match(paymentPurposeHistory, /href="\/student\/finance\/payments\/71\/confirmation">Open printable payment confirmation/);
+    assert.doesNotMatch(paymentPurposeHistory, /PRIVATE-TRANS|PRIVATE-PAYMENT-NOTE|PRIVATE-CORRECTION/);
     assert.doesNotMatch(financeHtml, /<form[^>]+action="\/finance\/students\/|Add adjustment|Append comment|Private staff note/);
     const recentActivity = financeHtml.match(/<ol class="student-finance-activity-list">([\s\S]*?)<\/ol>/)?.[1];
     assert.ok(recentActivity, 'recent activity preview is present');

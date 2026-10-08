@@ -134,6 +134,40 @@
         <% } %>
       </section>
 
+      <% const paymentPurposeHistory = annualLedger.paymentPurposeHistory || {}; const studentPayments = paymentPurposeHistory.payments || []; const earlierPayments = paymentPurposeHistory.earlier_payments || []; %>
+      <section class="student-finance-activity" aria-labelledby="finance-payment-purpose-title">
+        <div class="student-finance-section-heading">
+          <div><h3 id="finance-payment-purpose-title">Payment history and purposes</h3><p>Each payment total is separate from its saved fee applications. Current fee balances reflect the account today.</p></div>
+        </div>
+        <% if (studentPayments.length || earlierPayments.length) { %>
+          <ol class="student-finance-activity-list student-finance-payment-list">
+            <% for (const payment of studentPayments) { const paymentDate = new Date(payment.payment_date); const paymentReversed = payment.is_reversed === true || payment.is_reversed === 1 || payment.is_reversed === '1'; %>
+              <li class="student-finance-activity-item">
+                <div class="student-finance-activity-item__entry"><strong>Payment #<%= payment.payment_id %> · total <%= pesoAmount(payment.amount) %></strong><span><%= Number.isFinite(paymentDate.getTime()) ? paymentDate.toLocaleDateString() : 'Date not recorded' %> · <%= paymentReversed ? 'Reversed' : 'Recorded' %></span></div>
+                <div class="student-finance-activity-item__details"><span><%= payment.reference_no ? `Current reference: ${payment.reference_no}` : 'No current reference recorded' %><%= payment.receipt_issued ? ' · Receipt marked issued' : '' %></span><a href="/student/finance/payments/<%= payment.payment_id %>/confirmation">Open printable payment confirmation</a></div>
+                <% if (payment.allocations.length) { %>
+                  <div class="table-scroll"><table class="portal-table student-finance-history__table"><thead><tr><th scope="col">Fee / payment purpose</th><th scope="col">Originally applied</th><th scope="col">Currently applied</th><th scope="col">Current fee balance</th></tr></thead><tbody>
+                    <% for (const allocation of payment.allocations) { %><tr><td data-label="Fee / payment purpose"><%= allocation.purpose %><% if (paymentReversed) { %><br><span class="muted-copy">Payment reversed; this application is no longer active.</span><% } else if (Number(allocation.released_amount) > 0) { %><br><span class="muted-copy">₱<%= formatMoney(allocation.released_amount) %> has since been removed from this application.</span><% } %></td><td data-label="Originally applied"><%= allocation.original_amount == null ? 'Unavailable' : pesoAmount(allocation.original_amount) %></td><td data-label="Currently applied"><%= allocation.current_amount == null ? 'Unavailable' : pesoAmount(allocation.current_amount) %></td><td data-label="Current fee balance"><%= allocation.current_fee_balance == null ? 'Unavailable' : pesoAmount(allocation.current_fee_balance) %></td></tr><% } %>
+                  </tbody></table></div>
+                <% } else if (paymentReversed) { %><p>This payment is reversed and has no saved fee applications.</p>
+                <% } else if (payment.current_available_credit != null) { %><p>No fee application is linked to this payment.</p>
+                <% } else { %><p>No saved fee application is linked to this payment. Its purpose is unavailable in the current record.</p><% } %>
+                <% if (paymentReversed) { %><p><strong>Unused credit currently available:</strong> ₱0.00 · Payment reversed</p>
+                <% } else if (payment.current_available_credit != null) { %><p><strong>Unused credit currently available:</strong> <%= pesoAmount(payment.current_available_credit) %></p><% } %>
+              </li>
+            <% } %>
+            <% for (const payment of earlierPayments) { const paymentDate = new Date(payment.payment_date); %>
+              <li class="student-finance-activity-item">
+                <div class="student-finance-activity-item__entry"><strong>Earlier account payment #<%= payment.transaction_id %> · total <%= pesoAmount(payment.amount) %></strong><span><%= Number.isFinite(paymentDate.getTime()) ? paymentDate.toLocaleDateString() : 'Date not recorded' %></span></div>
+                <div class="student-finance-activity-item__details"><span>Earlier account record</span></div>
+                <% if (payment.allocations.length) { %><ul class="document-review-history"><% for (const allocation of payment.allocations) { %><li><strong><%= allocation.purpose %></strong><span>Amount applied later <%= allocation.original_amount == null ? 'Unavailable' : pesoAmount(allocation.original_amount) %> · currently applied <%= allocation.current_amount == null ? 'Unavailable' : pesoAmount(allocation.current_amount) %><% if (Number(allocation.released_amount) > 0) { %> · removed <%= pesoAmount(allocation.released_amount) %><% } %></span></li><% } %></ul>
+                <% } else { %><p>Purpose is not recorded in the available history.</p><% } %>
+              </li>
+            <% } %>
+          </ol>
+        <% } else { %><p class="student-finance-empty">No payment records are available yet.</p><% } %>
+      </section>
+
       <section class="student-finance-activity" aria-labelledby="finance-activity-title">
         <div class="student-finance-section-heading">
           <div>
