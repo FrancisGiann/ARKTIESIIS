@@ -2,6 +2,7 @@
 
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 const { FINANCE_STATUS, FINANCE_TERM_CLASSIFICATION_CTES, TRACKING_MODES } = require('./financeTermClassification');
+const { PAYMENT_STATUS_LABELS } = require('../utils/financeStatusPresentation');
 
 class FinanceDashboardError extends Error {
   constructor(message, status = 400) {
@@ -27,7 +28,7 @@ const STATUS_LABELS = Object.freeze([
   { status: FINANCE_STATUS.PARTIAL, label: 'Partially paid' },
   { status: FINANCE_STATUS.FULL, label: 'Fully paid' },
   { status: FINANCE_STATUS.NO_PAYMENT_REQUIRED, label: 'No payment required' },
-  { status: FINANCE_STATUS.NEEDS_REVIEW, label: 'Needs review' }
+  { status: FINANCE_STATUS.NEEDS_REVIEW, label: PAYMENT_STATUS_LABELS[FINANCE_STATUS.NEEDS_REVIEW] }
 ]);
 
 function createFinanceDashboardService({ getPool = defaultGetPool, sql = defaultSql } = {}) {

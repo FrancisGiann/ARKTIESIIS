@@ -15,6 +15,7 @@ const {
 const { FinanceReviewDraftError } = require('../services/financeReviewDraftService');
 const { actionByPath, createFinanceReviewActionService, normalizeActionInput, normalizeFinanceReturnContext } = require('../services/financeReviewActionService');
 const { createStatementProjection } = require('../utils/financeStatementProjection');
+const { paymentStatusPresentation } = require('../utils/financeStatusPresentation');
 const { formatFinanceDateTime, manilaWeekStartDate } = require('../utils/financeDateTime');
 const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
 
@@ -557,7 +558,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       return res.status(status).set('Cache-Control', 'private, no-store').render('finance/annual-roster', {
         title: 'Student accounts', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
         rows, filters: req.query, schoolYears: result.options.schoolYears, terms: result.options.terms, sections: result.options.sections,
-        pagination: result.pagination || null,
+        pagination: result.pagination || null, paymentStatusPresentation,
         error, notice: req.query.notice === 'saved' ? 'Finance update saved.' : null
       });
     } catch (loadError) {
@@ -672,6 +673,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         hasPreviouslyConfirmedBalance: accountProjection.summary.showPreviouslyConfirmedBalance,
         chargeBreakdown: accountProjection.charges, chargeGroups: accountProjection.chargeGroups, schedules,
         financeCases, preview, openingPreview, tokens, error, paymentValues, preservedValues, failedAction, notice: req.query.notice || null,
+        paymentStatusPresentation,
         accountView, accountTabs, backHref: `/finance${backParams.size ? `?${backParams.toString()}` : ''}`
       });
     } catch (loadError) {

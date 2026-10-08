@@ -8,13 +8,14 @@ const { AnnualFinanceError, createAnnualFinanceService } = require('../src/servi
 const { FinanceReportsError } = require('../src/services/annualFinanceReportsService');
 const { formatMoney } = require('../src/utils/formatMoney');
 const { createStatementProjection } = require('../src/utils/financeStatementProjection');
+const { paymentStatusPresentation } = require('../src/utils/financeStatusPresentation');
 
 const viewsDirectory = path.join(__dirname, '../views/finance');
 
 async function renderFinanceView(name, locals) {
   return ejs.renderFile(path.join(viewsDirectory, name + '.ejs'), {
     title: 'Finance test', formatMoney, failedAction: null, preservedValues: [], paymentValues: null,
-    clearanceValues: {}, transactionValues: {}, formValues: {}, ...locals
+    clearanceValues: {}, transactionValues: {}, formValues: {}, paymentStatusPresentation, ...locals
   });
 }
 
@@ -134,7 +135,7 @@ test('finance account and reports load failures return support references withou
 
 test('annual account route passes authoritative fee projection values to the finance view', async () => {
   const ledger = {
-    student: { id: 22, first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null, student_no: 'S-22' },
+    student: { id: 22, first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null, student_no: 'S-22', lrn: '001234567890' },
     summary: { unattributedLegacyBalance: '0.00', openingLiabilityDue: '0.00' },
     charges: [{ charge_id: 81, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1',
       line_name: 'Tuition', fee_category: 'tuition', installment: 'Whole term', amount: '100.00',
@@ -175,19 +176,37 @@ test('annual account route passes authoritative fee projection values to the fin
 
 test('finance ledger returns authoritative student status for archived read-only account rendering', async () => {
   const statements = [];
+  const studentIdentityQueries = [];
   const transaction = {
     request() {
+      const values = {};
       return {
-        input() { return this; },
+        input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           statements.push(statement);
           if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'finance' }] };
-          if (statement.includes('SELECT id, student_no, first_name, middle_name, last_name, suffix, status FROM students')) {
-            return { recordset: [{ id: 22, student_no: 'S-22', first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null, status: 'archived' }] };
+          if (statement.includes('SELECT student.id FROM students AS student')) return { recordset: [{ id: 22 }] };
+          if (statement.includes('CASE WHEN @isStudent = 1 THEN NULL ELSE lrn END AS lrn')) {
+            studentIdentityQueries.push({ statement, isStudent: values.isStudent });
+            return { recordset: [{ id: 22, student_no: 'S-22', lrn: values.isStudent ? null : '001234567890', first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null, status: 'archived' }] };
           }
           if (statement.includes('AS available_credit')) return { recordset: [{
             unattributed_legacy_balance: '0.00', opening_liability_due: '0.00', assessed_charges: '0.00',
             adjustments: '0.00', annual_payments: '0.00', legacy_reconciled_amount: '0.00', available_credit: '0.00'
+          }] };
+          if (statement.includes('FROM FinanceTermClassification AS classification') && statement.includes('classification.student_id = @studentId')) {
+            return { recordset: [{ enrollment_id: 99, assessment_id: 101, registrar_confirmation_id: null,
+              assessed_charge_count: 3, tuition_line_count: 1, canonical_tuition_count: 0,
+              dp_count: 0, prelim_count: 0, midterm_count: 0, finals_count: 0,
+              whole_tracking_available: 0, installment_tracking_available: 0,
+              whole_status: 'needs_review', dp_status: 'needs_review', prelim_status: 'needs_review',
+              midterm_status: 'needs_review', finals_status: 'needs_review' }] };
+          }
+          if (statement.includes('SELECT enrollment.id AS enrollment_id')) return { recordset: [{
+            enrollment_id: 99, annual_enrollment_id: 77, school_year: '2026-2027', grade_level: 'Grade 11',
+            voucher_code: 'PUB', intake_status: 'active', entry_term_number: 1, assessment_id: 101,
+            annual_term_number: 1, term_scope_status: 'applicable', enrollment_status: 'enrolled',
+            term: 'Term 1', is_current: 1, outstanding: '100.00', registrar_confirmation_id: 555
           }] };
           return { recordset: [] };
         }
@@ -203,8 +222,20 @@ test('finance ledger returns authoritative student status for archived read-only
 
   const ledger = await service.getStudentLedger(7, 22, 'finance');
   assert.equal(ledger.student.status, 'archived');
-  assert.ok(statements.some((statement) => /suffix, status FROM students WHERE id = @studentId/.test(statement)),
-    'archive state comes from the student record loaded by the authoritative ledger query');
+  assert.equal(ledger.student.lrn, '001234567890', 'the finance account identity preserves LRN leading zeroes');
+  assert.equal(ledger.terms[0].paymentClassification.assessment_id, 101);
+  assert.equal(ledger.terms[0].paymentClassification.registrar_confirmation_id, null,
+    'account status evidence uses the assessment-matched confirmation, not a separate enrollment confirmation');
+  assert.equal(ledger.terms[0].registrar_confirmation_id, 555,
+    'the existing registrar enrollment field retains its separate historical meaning');
+  assert.ok(statements.some((statement) => statement.includes('FinanceTermClassification AS classification')),
+    'Finance account details read the authoritative status evidence');
+  assert.ok(statements.some((statement) => /student_no, CASE WHEN @isStudent = 1 THEN NULL ELSE lrn END AS lrn,[\s\S]*suffix, status[\s\S]*FROM students WHERE id = @studentId/.test(statement)),
+    'student identity and archive state come from the authoritative ledger query');
+
+  const ownLedger = await service.getStudentLedger(7, 22, 'student');
+  assert.equal(ownLedger.student.lrn, null, 'the shared student-safe ledger projection does not expose the Finance LRN field');
+  assert.equal(studentIdentityQueries.at(-1).isStudent, true);
 });
 
 test('annual roster tags the default count query phase and omits an unused finance classification CTE', async () => {
@@ -345,7 +376,7 @@ test('finance annual roster separates page data, classification, and balances in
   const annualRows = [
     {
       annual_enrollment_id: 10, student_id: 22, school_year: '2026-2027', grade_level: 'Grade 11',
-      voucher_code: 'ESC', voucher_category: 'A', intake_status: 'active', student_no: 'S-22',
+      voucher_code: 'ESC', voucher_category: 'A', intake_status: 'active', student_no: 'S-22', lrn: '001234567890',
       first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null,
       registrar_confirmation_id: 14, assessed_voucher_code: 'PUB', assessed_schedule_version: 2,
       voucher_review_required: true, voucher_review_reason: 'Assessment snapshot differs.',
@@ -356,7 +387,7 @@ test('finance annual roster separates page data, classification, and balances in
     },
     {
       annual_enrollment_id: 10, student_id: 22, school_year: '2026-2027', grade_level: 'Grade 11',
-      voucher_code: 'ESC', voucher_category: 'A', intake_status: 'active', student_no: 'S-22',
+      voucher_code: 'ESC', voucher_category: 'A', intake_status: 'active', student_no: 'S-22', lrn: '001234567890',
       first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null,
       registrar_confirmation_id: 14, assessed_voucher_code: 'PUB', assessed_schedule_version: 2,
       voucher_review_required: true, voucher_review_reason: 'Assessment snapshot differs.',
@@ -374,15 +405,21 @@ test('finance annual roster separates page data, classification, and balances in
         async query(statement) {
           observed.push({ statement, values: { ...values } });
           if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'finance' }] };
+          if (statement.includes('SELECT COUNT(*) AS total_records')) return { recordset: [{ total_records: 1 }] };
           if (statement.includes('COUNT(DISTINCT annual.id)')) return { recordset: [{ total_records: 41 }] };
+          if (statement.includes('SELECT classification.annual_enrollment_id, classification.school_year')) {
+            return { recordset: [{ annual_enrollment_id: 10, school_year: '2026-2027', last_name: 'Kim', first_name: 'Ari' }] };
+          }
           if (statement.includes('SELECT DISTINCT annual.id AS annual_enrollment_id')) {
             return { recordset: [{ annual_enrollment_id: 10, school_year: '2026-2027', last_name: 'Kim', first_name: 'Ari' }] };
           }
           if (statement.includes('FROM FinanceTermClassification AS classification')
               && statement.includes('classification.annual_enrollment_id IN')) {
             return { recordset: [
-              { enrollment_id: 81, whole_status: 'needs_attention', required_amount: '3000.00', applied_amount: '499.99', amount_due: '2500.01', whole_tracking_available: 1 },
-              { enrollment_id: 82, whole_status: 'current', required_amount: '2000.00', applied_amount: '750.00', amount_due: '1250.00', whole_tracking_available: 1 }
+              { enrollment_id: 81, assessment_id: 15, registrar_confirmation_id: null, assessed_charge_count: 4,
+                whole_status: 'needs_review', required_amount: '3000.00', applied_amount: '499.99', amount_due: '2500.01', whole_tracking_available: 0 },
+              { enrollment_id: 82, assessment_id: 15, registrar_confirmation_id: 14, assessed_charge_count: 4,
+                whole_status: 'fully_paid', required_amount: '2000.00', applied_amount: '2000.00', amount_due: '0.00', whole_tracking_available: 1 }
             ] };
           }
           if (statement.includes('voucher_review_required') && statement.includes('FROM annual_enrollments AS annual')) return { recordset: annualRows };
@@ -415,10 +452,15 @@ test('finance annual roster separates page data, classification, and balances in
   assert.equal(result.pagination.from, 41);
   assert.equal(result.pagination.to, 41);
   assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].student_no, 'S-22');
+  assert.equal(result.rows[0].lrn, '001234567890');
   assert.equal(result.rows[0].placements.length, 2);
   assert.equal(result.rows[0].annual_balance, '12345.67');
   assert.equal(result.rows[0].placements[0].current_term_due, '2500.01');
-  assert.equal(result.rows[0].placements[1].finance_status, 'current');
+  assert.equal(result.rows[0].placements[0].finance_status, 'needs_review');
+  assert.equal(result.rows[0].placements[0].registrar_confirmation_id, 14, 'the separate enrollment display keeps its existing confirmation field');
+  assert.equal(result.rows[0].placements[0].matching_assessment_confirmation_id, null, 'status reasons use the assessment-matched confirmation');
+  assert.equal(result.rows[0].placements[1].finance_status, 'fully_paid');
   assert.equal(result.rows[0].unattributed_legacy_balance, '0.00');
   assert.equal(result.rows[0].opening_liability_due, '0.00');
   const dataQuery = observed.find(({ statement }) => statement.includes('voucher_review_required') && statement.includes('FROM annual_enrollments AS annual'));
@@ -444,7 +486,26 @@ test('finance annual roster separates page data, classification, and balances in
   assert.equal(dataQuery.values.placementStatus, null);
   assert.equal(pageIdsQuery.values.searchPattern, '%Ari%');
   assert.equal(pageIdsQuery.values.schoolYear, '2026-2027');
+
+  const filteredResult = await service.listRosterPage(7, {
+    search: 'Ari', schoolYear: '2026-2027', termId: '1', financeStatus: 'needs_review'
+  });
+  assert.equal(filteredResult.pagination.totalRecords, 1, 'the status-filtered count remains authoritative');
+  assert.equal(filteredResult.rows[0].annual_balance, '12345.67', 'the school-year balance includes authoritative due across all terms');
+  assert.equal(filteredResult.rows[0].placements[0].current_term_due, '2500.01', 'the filtered placement keeps its own assessed due');
+  assert.equal(filteredResult.rows[0].unattributed_legacy_balance, '0.00');
+  assert.equal(filteredResult.rows[0].opening_liability_due, '0.00');
+  const filteredCount = observed.find(({ statement }) => statement.includes('SELECT COUNT(*) AS total_records'));
+  const filteredPage = observed.find(({ statement }) => statement.includes('SELECT classification.annual_enrollment_id, classification.school_year'));
+  const filteredBalance = observed.filter(({ statement }) => statement.includes('FROM assessed_charges AS charge')).at(-1);
+  assert.equal(filteredCount.values.financeStatus, 'needs_review');
+  assert.equal(filteredCount.values.termId, 1);
+  assert.equal(filteredPage.values.financeStatus, 'needs_review');
+  assert.equal(filteredBalance.values.assessedAnnualId0, 10);
+  assert.doesNotMatch(filteredBalance.statement, /termId|schoolYear/, 'annual due is projected over every charge in the selected annual record');
   assert.deepEqual(snapshotEvents, [
+    { action: 'begin', isolation: 'REPEATABLE READ' },
+    { action: 'commit' },
     { action: 'begin', isolation: 'REPEATABLE READ' },
     { action: 'commit' }
   ]);
@@ -455,7 +516,7 @@ test('finance annual roster separates page data, classification, and balances in
 
   const html = await renderFinanceView('annual-roster', {
     rows: result.rows,
-    filters: { search: 'Ari', schoolYear: '2026-2027', termId: '1' },
+    filters: { search: '001234567890', schoolYear: '2026-2027', termId: '1' },
     schoolYears: result.options.schoolYears,
     terms: result.options.terms,
     sections: result.options.sections,
@@ -467,14 +528,29 @@ test('finance annual roster separates page data, classification, and balances in
   assert.match(record, /School-year balance[\s\S]*₱12,345\.67/);
   assert.match(record, /Voucher review[\s\S]*Required/);
   assert.match(record, /Voucher type ESC · 2 term placements/);
+  assert.match(record, /<dt>Entire term due<\/dt><dd>Unavailable or not assessed<\/dd>/,
+    'amounts stay unavailable when the matching registrar confirmation is missing');
   assert.match(record, /Open student account/);
+  assert.match(record, /Student number: S-22/);
+  assert.match(record, /LRN: 001234567890/);
   assert.doesNotMatch(record, /Category A|voucher category/i);
   assert.doesNotMatch(record, /Legacy balance|Opening liability/);
   assert.match(html, /Earlier account balance<\/dt><dd>₱0\.00/);
   assert.match(html, /Confirmed previous balance<\/dt><dd>₱0\.00/);
   assert.match(html, /account for a school year/);
+  assert.match(html, /Student name, number, or LRN/);
+  assert.match(html, /Use the full LRN for a more precise match\. Check the student identifiers before opening an account\./);
+  assert.match(html, /name="search" maxlength="100" value="001234567890"/);
+  assert.match(html, /search=001234567890/);
+  assert.match(html, /backSearch=001234567890/);
   assert.doesNotMatch(record, /No review flag/);
   assert.match(html, /Pending activation/);
+  assert.match(html, /value="needs_review"\s*>Payment status unavailable/);
+  assert.match(html, /Awaiting registrar confirmation/);
+  assert.match(html, /<dt>Payment status<\/dt><dd>Awaiting registrar confirmation<br><span class="muted-copy">The registrar must confirm enrollment using the current fee assessment\.<\/span><\/dd>/);
+  assert.match(html, /Earlier confirmation recorded/);
+  assert.doesNotMatch(html, /Why unavailable/);
+  assert.match(html, /Fully paid/);
   assert.doesNotMatch(html, /Term 1 · Term 1|pending payment/);
   assert.match(html, /schoolYear=2026-2027/);
   assert.match(html, /termId=1/);
@@ -487,12 +563,14 @@ test('finance annual roster separates page data, classification, and balances in
       voucher_category: 'A', intake_status: 'active', assessment_id: null, schedule_version: 2,
       term: 'Term 2', annual_term_number: 2, enrollment_id: 81, enrollment_status: 'enrolled',
       term_scope_status: 'applicable', outstanding: '40.00', signed_clearance_status: null, is_current: '1',
-      voucher_review_required: false, section_name: 'Grade 11 ABM A'
+      voucher_review_required: false, section_name: 'Grade 11 ABM A', paymentClassification: {
+        whole_status: 'needs_review', assessment_id: null, registrar_confirmation_id: null, assessed_charge_count: 0
+      }
     }]
   };
   const accountLocals = {
     ledger: {
-      student: { id: 22, first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null, student_no: 'S-22', status: 'active' },
+      student: { id: 22, first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null, student_no: 'S-22', lrn: '001234567890', status: 'active' },
       summary: {
         annualBalanceSchoolYear: '2026-2027', annualBalance: '40.00', allYearsAnnualBalance: '125.00',
         annualWaivedAmount: '10.00', unattributedLegacyBalance: '15.00', openingLiabilityDue: '20.00',
@@ -525,11 +603,14 @@ test('finance annual roster separates page data, classification, and balances in
   accountLocals.chargeGroups = accountProjection.chargeGroups;
   const accountHtml = await renderFinanceView('annual-student', accountLocals);
   assert.match(accountHtml, /aria-current="page">Overview<\/a>/);
+  assert.match(accountHtml, /Student number: S-22 · LRN: 001234567890/);
   assert.match(accountHtml, /href="\/finance\/students\/22\/annual\?view=payments&amp;backSchoolYear=2026-2027&amp;backTermId=1">Record a payment<\/a>/);
   assert.match(accountHtml, /class="button button--secondary finance-statement-action" href="\/finance\/students\/22\/statement">Statement of Account<\/a>/);
   assert.match(accountHtml, /aria-current="page">Overview<\/a>[\s\S]*?>Payments<\/a>[\s\S]*?>Fees<\/a>[\s\S]*?>Term account clearance<\/a>[\s\S]*?>History<\/a>/);
   assert.doesNotMatch(accountHtml, /aria-current=(?:&#34;|&quot;)page(?:&#34;|&quot;)/);
   assert.match(accountHtml, /Grade 11 · Voucher type ESC/);
+  assert.match(accountHtml, /Payment status:<\/strong> Fees not assessed<br><span class="muted-copy">Record an annual assessment to add this school year’s fees\.<\/span>/);
+  assert.doesNotMatch(accountHtml, /Why unavailable/);
   assert.doesNotMatch(accountHtml, /Category A|voucher category/i);
   const balancePanel = accountHtml.match(/<section class="finance-panel" aria-labelledby="annual-balance-heading"[\s\S]*?<\/section>/)?.[0] || '';
   const visibleBalance = balancePanel.split('<details class="finance-balance-summary-details"')[0];
@@ -539,6 +620,36 @@ test('finance annual roster separates page data, classification, and balances in
   assert.match(visibleBalance, /Confirmed previous balance[\s\S]*?₱20\.00/);
   assert.match(visibleBalance, /Unused payment credit[\s\S]*?₱50\.00/);
   assert.match(balancePanel, /<summary>Term balance context<\/summary>[\s\S]*?already included[\s\S]*?Latest school-year balance · 2026-2027[\s\S]*?₱40\.00[\s\S]*?Current term · Term 2 · 2026-2027[\s\S]*?₱40\.00[\s\S]*?Earlier terms and school years[\s\S]*?₱85\.00/);
+
+  const mismatchedConfirmationLocals = structuredClone(accountLocals);
+  Object.assign(mismatchedConfirmationLocals.ledger.terms[0], {
+    assessment_id: 202,
+    registrar_confirmation_id: 9002,
+    paymentClassification: {
+      finance_status: 'needs_review', whole_status: 'needs_review', dp_status: 'needs_review',
+      assessment_id: 202, registrar_confirmation_id: null, assessed_charge_count: 4,
+      whole_tracking_available: 0, installment_tracking_available: 0
+    }
+  });
+  const mismatchedConfirmationHtml = await renderFinanceView('annual-student', mismatchedConfirmationLocals);
+  assert.match(mismatchedConfirmationHtml, /Payment status · Entire term:<\/strong> Awaiting registrar confirmation/);
+  assert.match(mismatchedConfirmationHtml, /Earlier confirmation recorded/);
+  assert.doesNotMatch(mismatchedConfirmationHtml, /Confirmed by registrar/);
+
+  const emptyAssessedAccountLocals = structuredClone(accountLocals);
+  emptyAssessedAccountLocals.ledger.terms[0].assessment_id = 202;
+  emptyAssessedAccountLocals.ledger.terms[0].paymentClassification = {
+    finance_status: 'needs_review', whole_status: 'needs_review', assessment_id: 202,
+    registrar_confirmation_id: 9202, assessed_charge_count: 0
+  };
+  emptyAssessedAccountLocals.ledger.charges = [];
+  emptyAssessedAccountLocals.chargeBreakdown = [];
+  emptyAssessedAccountLocals.chargeGroups = [];
+  const emptyAssessedAccountHtml = await renderFinanceView('annual-student', emptyAssessedAccountLocals);
+  const emptyAssessedBreakdown = emptyAssessedAccountHtml.match(/<section class="finance-panel" aria-labelledby="charge-history-title" data-finance-view="overview charges">[\s\S]*?<\/section>/)?.[0] || '';
+  assert.match(emptyAssessedAccountHtml, /Payment status · Entire term:<\/strong> Fees not recorded/);
+  assert.match(emptyAssessedBreakdown, /No fee details are available for this account/);
+  assert.doesNotMatch(emptyAssessedBreakdown, /No school-year fees have been assessed/);
 
   const feeBreakdown = accountHtml.match(/<section class="finance-panel" aria-labelledby="charge-history-title" data-finance-view="overview charges">[\s\S]*?<\/section>/)?.[0] || '';
   assert.match(feeBreakdown, /Fee breakdown[\s\S]*?fee amount − approved coverage \+ adjustments − payments applied = remaining due[\s\S]*?Adjustments can increase or reduce a fee/);
@@ -587,10 +698,27 @@ test('finance annual roster separates page data, classification, and balances in
     assert.match(archivedHtml, /Archived student financial history is read-only/);
     assert.doesNotMatch(archivedHtml, /<form\b[^>]*method="post"/i, `${accountView} does not offer mutation controls for archived accounts`);
     assert.match(archivedHtml, /Statement of Account/, 'historical statement remains available');
+    assert.doesNotMatch(archivedHtml, /Record an annual assessment to add this school year’s fees\.|The registrar must confirm enrollment using the current fee assessment\.|Open the account to check the fees and enrollment confirmation\.|Check the fee assessment and enrollment confirmation\./,
+      `${accountView} does not show action guidance for an archived account`);
     if (accountView === 'overview') assert.doesNotMatch(archivedHtml, />Record a payment<\/a>/);
     if (accountView === 'payments') assert.match(archivedHtml, /Payment records and applications are available in History/);
     if (accountView === 'history') assert.match(archivedHtml, /Payment #501/);
   }
+  const archivedAssessmentLocals = structuredClone(archivedLocals);
+  Object.assign(archivedAssessmentLocals.ledger.terms[0], {
+    assessment_id: 202,
+    registrar_confirmation_id: 9002,
+    paymentClassification: {
+      finance_status: 'needs_review', whole_status: 'needs_review', assessment_id: 202,
+      registrar_confirmation_id: null, assessed_charge_count: 4,
+      whole_tracking_available: 0, installment_tracking_available: 0
+    }
+  });
+  const archivedAssessmentHtml = await renderFinanceView('annual-student', archivedAssessmentLocals);
+  assert.match(archivedAssessmentHtml, /Payment status · Entire term:<\/strong> Awaiting registrar confirmation/);
+  assert.match(archivedAssessmentHtml, /Earlier confirmation recorded/);
+  assert.doesNotMatch(archivedAssessmentHtml, /The registrar must confirm enrollment using the current fee assessment\./);
+  assert.match(archivedAssessmentHtml, /Archived student financial history is read-only/);
   const transferredLocals = structuredClone(accountLocals);
   transferredLocals.accountView = 'clearance';
   transferredLocals.ledger.terms[0].enrollment_status = 'transferred';
@@ -694,14 +822,26 @@ test('finance annual roster separates page data, classification, and balances in
       gradeLevels: ['Grade 11'], sections: [{ id: 9, name: 'STEM A' }], voucherCodes: ['ESC'],
       selectedGrade: '', selectedSectionId: '', selectedVoucher: '', totalEligible: 2,
       needsSchoolYearSelection: false, needsTermSelection: false,
-      statusCounts: [{ status: 'unpaid', label: 'Unpaid', count: 1 }],
+      statusCounts: [
+        { status: 'unpaid', label: 'Unpaid', count: 1 },
+        { status: 'needs_review', label: 'Payment status unavailable', count: 2 }
+      ],
       queueCounts: { departureReview: 0, documentClearance: 0, savedReviews: 0 }
     }
   });
   assert.match(overviewHtml, /Find a student account or review payment status for a term/);
   assert.match(overviewHtml, /<form class="finance-overview-search" method="get" action="\/finance" role="search"[\s\S]*?name="search" maxlength="100"[\s\S]*?<button class="button button--primary" type="submit">Find student<\/button>/);
+  assert.match(overviewHtml, /Student name, number, or LRN/);
+  assert.match(overviewHtml, /aria-describedby="finance-overview-search-help"/);
+  assert.match(overviewHtml, /Use the full LRN for a more precise match/);
   assert.match(overviewHtml, /href="\/finance\?schoolYear=2026-2027&amp;termId=41&amp;installment=whole&amp;financeStatus=unpaid/,
     'term-status shortcuts continue into the filtered student-account list');
+  assert.match(overviewHtml, /aria-label="Open 2 Payment status unavailable student accounts for Term 1, 2026-2027, Entire term"/);
+  assert.match(overviewHtml, /href="\/finance\?schoolYear=2026-2027&amp;termId=41&amp;installment=whole&amp;financeStatus=needs_review"[^>]*aria-label="Open 2 Payment status unavailable student accounts/,
+    'the plain-language overview card keeps its needs_review filtered-account link');
+  const mobileOverviewCss = readFileSync(path.join(__dirname, '../public/css/app.css'), 'utf8');
+  assert.match(mobileOverviewCss, /@media \(max-width: 380px\)[\s\S]*?\.finance-payment-status--needs_review \{ grid-column: 1 \/ -1; \}/,
+    'the unavailable-status card gets enough width to keep its label intact on narrow phones');
 });
 
 test('finance disclosures keep report, schedule, and zero-charge departure details available', async () => {

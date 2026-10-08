@@ -138,7 +138,8 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     }
 
     const [migrationRows] = await appPool.execute('SELECT version FROM schema_migrations ORDER BY version');
-    assert.equal(migrationRows.at(-1)?.version, 'v2.012', 'the test database includes the new review-draft migration');
+    assert.ok(migrationRows.some(({ version }) => version === 'v2.012'),
+      'the test database includes the review-draft migration before applying compatible later migrations');
 
     const [actorResult] = await appPool.execute(
       "INSERT INTO users (email, password_hash, role, is_active) VALUES (?, 'integration-only', 'finance', 1)",
@@ -149,9 +150,17 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       "INSERT INTO academic_terms (school_year, term, is_current) VALUES ('2026-2027', 'Term 1', 1)"
     );
     const termId = Number(termResult.insertId);
+    const [secondTermResult] = await appPool.execute(
+      "INSERT INTO academic_terms (school_year, term, is_current) VALUES ('2026-2027', 'Term 2', 0)"
+    );
+    const secondTermId = Number(secondTermResult.insertId);
     await appPool.execute(
       'INSERT INTO school_year_term_order (school_year, term_number, academic_term_id, configured_by) VALUES (?, 1, ?, ?)',
       ['2026-2027', termId, actorId]
+    );
+    await appPool.execute(
+      'INSERT INTO school_year_term_order (school_year, term_number, academic_term_id, configured_by) VALUES (?, 2, ?, ?)',
+      ['2026-2027', secondTermId, actorId]
     );
     const scheduleKey = crypto.randomUUID();
     const [scheduleResult] = await appPool.execute(
@@ -288,6 +297,18 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     };
     await addAnnualPaymentAllocation(assessedScenarios.partial, 'DP', '25.00');
     await addAnnualPaymentAllocation(assessedScenarios.full, 'DP', '100.00');
+    // The roster status filter will show only Term 1, while its school-year balance must include Term 2.
+    const [secondTermPlacement] = await appPool.execute(
+      "INSERT INTO enrollments (student_id, academic_term_id, enrollment_status, annual_enrollment_id, annual_term_number, term_scope_status) VALUES (?, ?, 'enrolled', ?, 2, 'applicable')",
+      [assessedScenarios.full.studentId, secondTermId, assessedScenarios.full.annualId]
+    );
+    await appPool.execute(
+      `INSERT INTO assessed_charges
+        (assessment_id, annual_enrollment_id, enrollment_id, schedule_line_id, fee_category, line_name, installment,
+         amount, gross_amount, waived_amount)
+       VALUES (?, ?, ?, NULL, 'tuition', 'Term 2 tuition', 'Whole term', 200.00, 200.00, 0.00)`,
+      [assessedScenarios.full.assessmentId, assessedScenarios.full.annualId, Number(secondTermPlacement.insertId)]
+    );
     for (const installment of ['DP', 'Prelim', 'Midterm', 'Finals']) {
       await addAnnualPaymentAllocation(assessedScenarios.settled, installment, '100.00');
     }
@@ -383,7 +404,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       migrationConnection.release();
     }
     const [migratedVersions] = await appPool.execute('SELECT version FROM schema_migrations ORDER BY version');
-    assert.equal(migratedVersions.at(-1)?.version, 'v2.013');
+    assert.ok(migratedVersions.some(({ version }) => version === 'v2.013'));
     const [migratedDueRows] = await appPool.execute(`SELECT charge.id AS charge_id, charge.annual_enrollment_id,
         charge.enrollment_id, CAST(due.amount_due AS CHAR(40)) AS amount_due,
         CAST(due.annual_allocated AS CHAR(40)) AS annual_allocated,
@@ -574,7 +595,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       migration014Connection.release();
     }
     const [migratedVersions014] = await appPool.execute('SELECT version FROM schema_migrations ORDER BY version');
-    assert.equal(migratedVersions014.at(-1)?.version, 'v2.014');
+    assert.ok(migratedVersions014.some(({ version }) => version === 'v2.014'));
     await reportReadPool.end();
     reportReadPool = mysql.createPool({
       socketPath, user: databaseUser, password: '', database: databaseName,
@@ -724,7 +745,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
 
     const expectedRosterBalances = [
       ['FIN-REDESIGN-PARTIAL', '375.00', 'partially_paid'],
-      ['FIN-REDESIGN-FULL', '300.00', 'partially_paid'],
+      ['FIN-REDESIGN-FULL', '500.00', 'partially_paid', '300.00'],
       ['FIN-REDESIGN-SETTLED', '0.00', 'fully_paid'],
       ['FIN-REDESIGN-WAIVED', '0.00', 'no_payment_required'],
       ['FIN-REDESIGN-REVERSED', '400.00', 'unpaid'],
@@ -733,21 +754,36 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       ['FIN-REDESIGN-LEGACY', '330.00', 'partially_paid'],
       ['FIN-REDESIGN-01', '0.00', 'needs_review']
     ];
-    for (const [studentNo, expectedBalance, expectedStatus] of expectedRosterBalances) {
+    for (const [studentNo, expectedBalance, expectedStatus, expectedTermDue = expectedBalance] of expectedRosterBalances) {
       const roster = await annual.listRosterPage(actorId, { schoolYear: '2026-2027', search: studentNo });
       const row = roster.rows.find((candidate) => candidate.student_no === studentNo);
       assert.ok(row, `${studentNo} appears in the default roster page`);
       assert.equal(row.annual_balance, expectedBalance, `${studentNo} assessed charges retain authoritative due semantics`);
-      assert.equal(row.placements[0]?.current_term_due, expectedBalance, `${studentNo} term due remains scoped to its only placement`);
+      assert.equal(row.placements[0]?.current_term_due, expectedTermDue, `${studentNo} term due remains scoped to its displayed placement`);
       assert.equal(row.placements[0]?.finance_status, expectedStatus, `${studentNo} classification remains shared with the dashboard`);
     }
     const legacyRoster = await annual.listRosterPage(actorId, { schoolYear: '2026-2027', search: 'FIN-REDESIGN-LEGACY' });
     assert.equal(legacyRoster.rows[0]?.unattributed_legacy_balance, '-10.00', 'legacy account view retains signed account balance after opening-liability subtraction');
     const statusFilteredRoster = await annual.listRosterPage(actorId, {
-      schoolYear: '2026-2027', search: 'FIN-REDESIGN-FULL', financeStatus: 'partially_paid'
+      schoolYear: '2026-2027', termId: String(termId), search: 'FIN-REDESIGN-FULL', financeStatus: 'partially_paid'
     });
-    assert.equal(statusFilteredRoster.rows[0]?.annual_balance, null, 'status-filtered rosters continue to omit financial balances');
-    assert.equal(statusFilteredRoster.rows[0]?.placements[0]?.current_term_due, null);
+    const statusFilteredRow = statusFilteredRoster.rows[0];
+    assert.ok(statusFilteredRow, 'the status-filtered roster keeps the matching assessed annual');
+    const filteredLedger = await annual.getStudentLedger(actorId, Number(statusFilteredRow.student_id), 'finance');
+    assert.equal(statusFilteredRow.annual_balance, filteredLedger.summary.annualBalance,
+      'status-filtered roster shows the authoritative full school-year balance across all terms');
+    assert.equal(statusFilteredRow.annual_balance, '500.00',
+      'the school-year balance includes the $200.00 Term 2 charge even though only Term 1 matched the filters');
+    assert.equal(statusFilteredRow.placements.length, 1, 'the selected term filter still limits displayed placement rows');
+    assert.equal(statusFilteredRow.placements[0]?.term, 'Term 1');
+    assert.equal(statusFilteredRow.placements[0]?.current_term_due, '300.00',
+      'the displayed term due stays limited to the matching placement');
+    assert.equal(statusFilteredRow.unattributed_legacy_balance, filteredLedger.summary.unattributedLegacyBalance,
+      'status-filtered roster retains the linked earlier-account balance');
+    assert.equal(statusFilteredRow.opening_liability_due, filteredLedger.summary.openingLiabilityDue,
+      'status-filtered roster retains the confirmed previous balance');
+    assert.notEqual(statusFilteredRow.placements[0]?.current_term_due, null,
+      'status-filtered roster retains authoritative due for its matching placement');
 
     const defaultOverview = await dashboard.getOverview(actorId, {});
     assert.equal(defaultOverview.selectedTermId, String(termId));
@@ -755,7 +791,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
     await directGetHandler(router, '/overview')(requestFor(), overviewResponse);
     assert.equal(overviewResponse.statusCode, 200, overviewResponse.renderError?.stack || overviewResponse.html);
     assert.equal(overviewResponse.view, 'finance/overview');
-    assert.match(overviewResponse.html, /Ari|Needs review/);
+    assert.match(overviewResponse.html, /Ari|Payment status unavailable/);
     const reviewLink = [...overviewResponse.html.matchAll(/href="(\/finance\?[^\"]*financeStatus=needs_review[^\"]*)"/g)]
       .map((match) => match[1].replaceAll('&amp;', '&'))[0];
     assert.ok(reviewLink, 'the needs-review card links to a roster with current term filters');

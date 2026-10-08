@@ -2308,6 +2308,7 @@ label { font-size: 0.84rem; }
 @media (max-width: 380px) {
   .finance-overview-search { grid-template-columns: minmax(0, 1fr); }
   .finance-overview-search .button { width: 100%; }
+  .finance-payment-status--needs_review { grid-column: 1 / -1; }
 }
 
 @media (max-width: 430px) {

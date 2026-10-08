@@ -279,8 +279,8 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     assert.match(overviewHtml, /Document request fee review/);
     assert.match(overviewHtml, /Unfinished reviews/);
     assert.match(overviewHtml, /Other finance tasks/);
-    assert.match(overviewHtml, /Counts cover enrollment records for this term\. Selecting a status changes the list, not the counts\./);
-    assert.match(overviewHtml, /Earlier account balances are separate from term amounts\. Unused payment credit stays separate until applied\./);
+    assert.match(overviewHtml, /Counts cover enrollment records for this term\. Selecting a status opens matching accounts without changing the counts\./);
+    assert.match(overviewHtml, /Earlier account balances and unused payment credit stay separate from term amounts until credit is applied\./);
     assert.doesNotMatch(overviewHtml, /Finance · Current work|placements match| placements<\/p>/);
     assert.doesNotMatch(overviewHtml, /Legacy account history|href="\/finance\/legacy/);
     assert.equal([...overviewHtml.matchAll(/<li><a href="\/finance\//g)].length, 3);

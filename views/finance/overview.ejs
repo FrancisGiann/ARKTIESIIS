@@ -3,7 +3,7 @@
   <header class="dashboard-heading">
     <div><h1>Finance overview</h1><p>Find a student account or review payment status for a term.</p></div>
     <form class="finance-overview-search" method="get" action="/finance" role="search" aria-label="Find a student account">
-      <label class="field" for="finance-overview-search"><span>Student name or number</span><input id="finance-overview-search" type="search" name="search" maxlength="100" autocomplete="off" required></label>
+      <label class="field" for="finance-overview-search"><span>Student name, number, or LRN</span><input id="finance-overview-search" type="search" name="search" maxlength="100" autocomplete="off" aria-describedby="finance-overview-search-help" required><small id="finance-overview-search-help" class="muted-copy">Use the full LRN for a more precise match. Check the student identifiers before opening an account.</small></label>
       <button class="button button--primary" type="submit">Find student</button>
     </form>
   </header>
@@ -49,7 +49,7 @@
     <% } %>
     <details class="finance-overview-method">
       <summary>How payment status is determined</summary>
-      <p>Counts cover enrollment records for this term. Selecting a status changes the list, not the counts. Balances include recorded charges and adjustments after payments are applied or reversed. Entire term uses whole-term assessments. Each payment period needs an assessed Down payment, Preliminary, Midterm, and Finals tuition line; missing or unclear lines, or missing registrar confirmation, need review. Earlier account balances are separate from term amounts. Unused payment credit stays separate until applied.</p>
+      <p>Counts cover enrollment records for this term. Selecting a status opens matching accounts without changing the counts. Payment status uses recorded fees and adjustments after payments are applied or reversed. “Payment status unavailable” means the fee assessment, its registrar confirmation, or payment-period details are missing. Open an account to see the known reason. If an older account has a whole-term amount but no payment-period breakdown, select Entire term. Earlier account balances and unused payment credit stay separate from term amounts until credit is applied.</p>
     </details>
   </section>
 

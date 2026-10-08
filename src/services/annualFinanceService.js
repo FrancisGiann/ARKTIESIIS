@@ -1938,7 +1938,10 @@ function createAnnualFinanceService({
       await requireFinanceActor(transaction.request(), actorInput);
     }
     const eventsRequest = transaction.request().input('studentId', sql.Int, studentId).input('isStudent', sql.Bit, access === 'student');
-    const studentResult = await transaction.request().input('studentId', sql.Int, studentId).query(`SELECT id, student_no, first_name, middle_name, last_name, suffix, status FROM students WHERE id = @studentId`);
+    const studentResult = await transaction.request().input('studentId', sql.Int, studentId).input('isStudent', sql.Bit, access === 'student')
+      .query(`SELECT id, student_no, CASE WHEN @isStudent = 1 THEN NULL ELSE lrn END AS lrn,
+          first_name, middle_name, last_name, suffix, status
+        FROM students WHERE id = @studentId`);
     const summaryResult = await transaction.request().input('studentId', sql.Int, studentId)
       .query(STUDENT_LEDGER_SUMMARY_SQL);
     const chargesResult = await transaction.request().input('studentId', sql.Int, studentId).query(`SELECT charge.id AS charge_id, charge.enrollment_id,
@@ -2083,6 +2086,19 @@ function createAnnualFinanceService({
           AND voucher_event.event_rank = 1
         LEFT JOIN latest_clearance_event AS clearance ON clearance.enrollment_id = enrollment.id AND clearance.event_rank = 1
         WHERE annual.student_id = @studentId ORDER BY annual.school_year DESC, enrollment.annual_term_number`);
+    const financeClassificationsResult = access === 'student'
+      ? { recordset: [] }
+      : await transaction.request().input('studentId', sql.Int, studentId)
+        .query(`SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
+          WITH ${FINANCE_TERM_CLASSIFICATION_CTES}
+          SELECT classification.enrollment_id, classification.assessment_id,
+            classification.registrar_confirmation_id, classification.assessed_charge_count,
+            classification.tuition_line_count, classification.canonical_tuition_count,
+            classification.dp_count, classification.prelim_count, classification.midterm_count, classification.finals_count,
+            classification.whole_tracking_available, classification.installment_tracking_available,
+            classification.whole_status, classification.dp_status, classification.prelim_status,
+            classification.midterm_status, classification.finals_status
+          FROM FinanceTermClassification AS classification WHERE classification.student_id = @studentId`);
     const currentTermContextResult = await transaction.request().query(`SELECT term.school_year,
         termOrder.term_number AS current_term_number
       FROM academic_terms AS term
@@ -2212,7 +2228,33 @@ function createAnnualFinanceService({
     const adjustmentsCents = parseMoneyCents(String(summary.adjustments || '0.00'), { allowNegative: true, allowZero: true });
     const paymentsCents = parseMoneyCents(String(summary.annual_payments || '0.00'), { allowZero: true });
     const legacyReconciledCents = parseMoneyCents(String(summary.legacy_reconciled_amount || '0.00'), { allowZero: true });
-    const termRows = termsResult.recordset || [];
+    const financeClassificationByEnrollmentId = new Map((financeClassificationsResult.recordset || [])
+      .map((classification) => [Number(classification.enrollment_id), classification]));
+    const termRows = (termsResult.recordset || []).map((term) => {
+      if (access === 'student') return term;
+      const classification = financeClassificationByEnrollmentId.get(Number(term.enrollment_id));
+      return {
+        ...term,
+        paymentClassification: classification ? {
+          assessment_id: classification.assessment_id,
+          registrar_confirmation_id: classification.registrar_confirmation_id,
+          assessed_charge_count: classification.assessed_charge_count,
+          tuition_line_count: classification.tuition_line_count,
+          canonical_tuition_count: classification.canonical_tuition_count,
+          dp_count: classification.dp_count,
+          prelim_count: classification.prelim_count,
+          midterm_count: classification.midterm_count,
+          finals_count: classification.finals_count,
+          whole_tracking_available: classification.whole_tracking_available,
+          installment_tracking_available: classification.installment_tracking_available,
+          whole_status: classification.whole_status,
+          dp_status: classification.dp_status,
+          prelim_status: classification.prelim_status,
+          midterm_status: classification.midterm_status,
+          finals_status: classification.finals_status
+        } : null
+      };
+    });
     const currentTermContext = currentTermContextResult.recordset?.[0] || null;
     const charges = (chargesResult.recordset || []).map((charge) => ({
       ...charge,
@@ -2408,7 +2450,7 @@ function createAnnualFinanceService({
       .input('strand', sql.NVarChar(100), strand)
       .input('placementStatus', sql.NVarChar(30), status);
     const [result, filterOptions] = await Promise.all([request.query(`SELECT annual.id AS annual_enrollment_id, annual.student_id, annual.school_year, annual.grade_level,
-          annual.voucher_code, annual.voucher_category, annual.intake_status, student.student_no,
+          annual.voucher_code, annual.voucher_category, annual.intake_status, student.student_no, student.lrn,
           student.first_name, student.middle_name, student.last_name, student.suffix,
           enrollment.id AS enrollment_id, enrollment.annual_term_number, enrollment.enrollment_status, enrollment.term_scope_status,
           term.id AS term_id, term.term, section.id AS section_id, section.name AS section_name, section.cluster, section.strand,
@@ -2451,6 +2493,7 @@ function createAnnualFinanceService({
           WHERE clearance_event.event_rank = 1) AS clearance ON clearance.enrollment_id = enrollment.id
         WHERE annual.intake_status <> 'legacy'
           AND (@searchPattern IS NULL OR student.student_no LIKE @searchPattern ESCAPE '~'
+            OR student.lrn LIKE @searchPattern ESCAPE '~'
             OR CONCAT_WS(' ', student.first_name, NULLIF(student.middle_name, ''), student.last_name, NULLIF(student.suffix, '')) LIKE @searchPattern ESCAPE '~')
           AND (@schoolYear IS NULL OR annual.school_year = @schoolYear)
           AND (@gradeLevel IS NULL OR annual.grade_level = @gradeLevel)
@@ -2526,6 +2569,7 @@ function createAnnualFinanceService({
         LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id`;
       const matchingWhere = `annual.intake_status <> 'legacy'
           AND (@searchPattern IS NULL OR student.student_no LIKE @searchPattern ESCAPE '~'
+            OR student.lrn LIKE @searchPattern ESCAPE '~'
             OR CONCAT_WS(' ', student.first_name, NULLIF(student.middle_name, ''), student.last_name, NULLIF(student.suffix, '')) LIKE @searchPattern ESCAPE '~')
           AND (@schoolYear IS NULL OR annual.school_year = @schoolYear)
           AND (@gradeLevel IS NULL OR annual.grade_level = @gradeLevel)
@@ -2587,6 +2631,7 @@ function createAnnualFinanceService({
           AND classification.student_status = 'active'
           AND classification.${statusColumn} = @financeStatus
           AND (@searchPattern IS NULL OR student.student_no LIKE @searchPattern ESCAPE '~'
+            OR student.lrn LIKE @searchPattern ESCAPE '~'
             OR CONCAT_WS(' ', student.first_name, NULLIF(student.middle_name, ''), student.last_name, NULLIF(student.suffix, '')) LIKE @searchPattern ESCAPE '~')`;
         const statusCount = await runFinanceRosterQuery(bindRosterFilters(request()), 'status_count', `SET STATEMENT optimizer_switch='derived_merge=off,condition_pushdown_for_derived=off' FOR
           WITH ${FINANCE_TERM_CLASSIFICATION_CTES}
@@ -2652,7 +2697,7 @@ function createAnnualFinanceService({
         const pageIdPlaceholders = bindAnnualIds(pageDataRequest, annualIds, 'pageAnnualId');
         const pageDataRowsResult = await runFinanceRosterQuery(pageDataRequest, 'page_data', `SELECT annual.id AS annual_enrollment_id,
             annual.student_id, annual.school_year, annual.grade_level,
-            annual.voucher_code, annual.voucher_category, annual.intake_status, student.student_no,
+            annual.voucher_code, annual.voucher_category, annual.intake_status, student.student_no, student.lrn,
             student.first_name, student.middle_name, student.last_name, student.suffix,
             enrollment.id AS enrollment_id, enrollment.annual_term_number,
             enrollment.enrollment_status, enrollment.term_scope_status,
@@ -2703,49 +2748,48 @@ function createAnnualFinanceService({
           financeClassificationByEnrollmentId.set(Number(row.enrollment_id), row);
         }
 
-        if (!financeStatus) {
-          const annualBalanceRequest = request();
-          const annualBalanceIds = bindAnnualIds(annualBalanceRequest, annualIds, 'assessedAnnualId');
-          const assessedCharges = await runFinanceRosterQuery(annualBalanceRequest, 'assessed_charge_balances', `SELECT charge.annual_enrollment_id,
-              charge.enrollment_id, CAST(due.amount_due AS CHAR(40)) AS amount_due
-            FROM assessed_charges AS charge
-            INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
-            WHERE charge.annual_enrollment_id IN (${annualBalanceIds.join(', ')})`);
-          for (const row of assessedCharges.recordset || []) {
-            const annualId = Number(row.annual_enrollment_id);
-            const enrollmentId = Number(row.enrollment_id);
-            const cents = parseMoneyCents(String(row.amount_due ?? '0.00'), { allowNegative: true, allowZero: true });
-            if (Number.isSafeInteger(annualId) && annualId > 0) {
-              annualBalanceById.set(annualId, (annualBalanceById.get(annualId) || 0n) + cents);
-            }
-            if (Number.isSafeInteger(enrollmentId) && enrollmentId > 0) {
-              termDueByEnrollmentId.set(enrollmentId, (termDueByEnrollmentId.get(enrollmentId) || 0n) + cents);
-            }
+        // These annual IDs already reflect the school-year roster filter; sum every term in each selected annual.
+        const annualBalanceRequest = request();
+        const annualBalanceIds = bindAnnualIds(annualBalanceRequest, annualIds, 'assessedAnnualId');
+        const assessedCharges = await runFinanceRosterQuery(annualBalanceRequest, 'assessed_charge_balances', `SELECT charge.annual_enrollment_id,
+            charge.enrollment_id, CAST(due.amount_due AS CHAR(40)) AS amount_due
+          FROM assessed_charges AS charge
+          INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
+          WHERE charge.annual_enrollment_id IN (${annualBalanceIds.join(', ')})`);
+        for (const row of assessedCharges.recordset || []) {
+          const annualId = Number(row.annual_enrollment_id);
+          const enrollmentId = Number(row.enrollment_id);
+          const cents = parseMoneyCents(String(row.amount_due ?? '0.00'), { allowNegative: true, allowZero: true });
+          if (Number.isSafeInteger(annualId) && annualId > 0) {
+            annualBalanceById.set(annualId, (annualBalanceById.get(annualId) || 0n) + cents);
           }
-          for (const [annualId, cents] of annualBalanceById) annualBalanceById.set(annualId, formatMoneyCents(cents));
-          for (const [enrollmentId, cents] of termDueByEnrollmentId) termDueByEnrollmentId.set(enrollmentId, formatMoneyCents(cents));
-
-          const studentIds = [...new Set(pageDataRows.map((row) => Number(row.student_id))
-            .filter((studentId) => Number.isSafeInteger(studentId) && studentId > 0))];
-          if (studentIds.length) {
-            const legacyRequest = request();
-            const legacyIds = bindAnnualIds(legacyRequest, studentIds, 'legacyStudentId');
-            const legacyBalances = await runFinanceRosterQuery(legacyRequest, 'legacy_account_balances', `SELECT student_id,
-                CAST(remaining_legacy_balance AS CHAR(40)) AS remaining_legacy_balance
-              FROM v_finance_legacy_account_balance
-              WHERE student_id IN (${legacyIds.join(', ')})`);
-            const legacyTotals = formatMoneyTotals(legacyBalances.recordset, 'student_id', 'remaining_legacy_balance');
-            for (const [studentId, value] of legacyTotals) legacyBalanceByStudentId.set(studentId, value);
-
-            const openingRequest = request();
-            const openingIds = bindAnnualIds(openingRequest, studentIds, 'openingStudentId');
-            const openingLiabilities = await runFinanceRosterQuery(openingRequest, 'opening_liability_balances', `SELECT student_id,
-                CAST(amount_due AS CHAR(40)) AS amount_due
-              FROM v_finance_opening_liability_due
-              WHERE student_id IN (${openingIds.join(', ')})`);
-            const openingTotals = formatMoneyTotals(openingLiabilities.recordset, 'student_id', 'amount_due');
-            for (const [studentId, value] of openingTotals) openingDueByStudentId.set(studentId, value);
+          if (Number.isSafeInteger(enrollmentId) && enrollmentId > 0) {
+            termDueByEnrollmentId.set(enrollmentId, (termDueByEnrollmentId.get(enrollmentId) || 0n) + cents);
           }
+        }
+        for (const [annualId, cents] of annualBalanceById) annualBalanceById.set(annualId, formatMoneyCents(cents));
+        for (const [enrollmentId, cents] of termDueByEnrollmentId) termDueByEnrollmentId.set(enrollmentId, formatMoneyCents(cents));
+
+        const studentIds = [...new Set(pageDataRows.map((row) => Number(row.student_id))
+          .filter((studentId) => Number.isSafeInteger(studentId) && studentId > 0))];
+        if (studentIds.length) {
+          const legacyRequest = request();
+          const legacyIds = bindAnnualIds(legacyRequest, studentIds, 'legacyStudentId');
+          const legacyBalances = await runFinanceRosterQuery(legacyRequest, 'legacy_account_balances', `SELECT student_id,
+              CAST(remaining_legacy_balance AS CHAR(40)) AS remaining_legacy_balance
+            FROM v_finance_legacy_account_balance
+            WHERE student_id IN (${legacyIds.join(', ')})`);
+          const legacyTotals = formatMoneyTotals(legacyBalances.recordset, 'student_id', 'remaining_legacy_balance');
+          for (const [studentId, value] of legacyTotals) legacyBalanceByStudentId.set(studentId, value);
+
+          const openingRequest = request();
+          const openingIds = bindAnnualIds(openingRequest, studentIds, 'openingStudentId');
+          const openingLiabilities = await runFinanceRosterQuery(openingRequest, 'opening_liability_balances', `SELECT student_id,
+              CAST(amount_due AS CHAR(40)) AS amount_due
+            FROM v_finance_opening_liability_due
+            WHERE student_id IN (${openingIds.join(', ')})`);
+          const openingTotals = formatMoneyTotals(openingLiabilities.recordset, 'student_id', 'amount_due');
+          for (const [studentId, value] of openingTotals) openingDueByStudentId.set(studentId, value);
         }
       }
 
@@ -2763,6 +2807,7 @@ function createAnnualFinanceService({
             voucher_category: row.voucher_category,
             intake_status: row.intake_status,
             student_no: row.student_no,
+            lrn: row.lrn,
             first_name: row.first_name,
             middle_name: row.middle_name,
             last_name: row.last_name,
@@ -2772,9 +2817,9 @@ function createAnnualFinanceService({
             assessed_schedule_version: row.assessed_schedule_version,
             voucher_review_required: row.voucher_review_required,
             voucher_review_reason: row.voucher_review_reason,
-            annual_balance: financeStatus ? null : annualBalanceById.get(annualId) || '0.00',
-            unattributed_legacy_balance: financeStatus ? null : legacyBalanceByStudentId.get(studentId) || '0.00',
-            opening_liability_due: financeStatus ? null : openingDueByStudentId.get(studentId) || '0.00',
+            annual_balance: annualBalanceById.get(annualId) || '0.00',
+            unattributed_legacy_balance: legacyBalanceByStudentId.get(studentId) || '0.00',
+            opening_liability_due: openingDueByStudentId.get(studentId) || '0.00',
             placements: []
           };
           annualRows.set(annualId, annual);
@@ -2800,8 +2845,19 @@ function createAnnualFinanceService({
             classified_applied: classified?.[amountColumns.applied] ?? classified?.classified_applied ?? null,
             classified_due: classified?.[amountColumns.due] ?? classified?.classified_due ?? null,
             tracking_available: classified?.[availabilityColumn] ?? null,
-            current_term_due: financeStatus ? null : termDueByEnrollmentId.get(Number(row.enrollment_id)) || '0.00',
+            current_term_due: termDueByEnrollmentId.get(Number(row.enrollment_id)) || '0.00',
             registrar_confirmation_id: row.registrar_confirmation_id,
+            matching_assessment_confirmation_id: classified?.registrar_confirmation_id,
+            assessment_id: classified?.assessment_id,
+            assessed_charge_count: classified?.assessed_charge_count,
+            tuition_line_count: classified?.tuition_line_count,
+            canonical_tuition_count: classified?.canonical_tuition_count,
+            dp_count: classified?.dp_count,
+            prelim_count: classified?.prelim_count,
+            midterm_count: classified?.midterm_count,
+            finals_count: classified?.finals_count,
+            whole_tracking_available: classified?.whole_tracking_available,
+            installment_tracking_available: classified?.installment_tracking_available,
             signed_clearance_status: row.signed_clearance_status
           });
         }
