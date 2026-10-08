@@ -176,6 +176,7 @@ function sameGrade(left, right) {
 }
 
 function gradeValuesEqual(left, right) {
+  if (left === null || left === undefined || left === '' || right === null || right === undefined || right === '') return false;
   return Number.isFinite(Number(left)) && Number.isFinite(Number(right)) && Number(left) === Number(right);
 }
 
@@ -564,6 +565,7 @@ function createGradeImportService({
         eligible: rows.filter((row) => !row.issue && row.studentId).length,
         unresolved: rows.filter((row) => Boolean(row.issue)).length,
         conflicts: rows.reduce((count, row) => count + row.grades.filter((grade) => grade.existingGradeId
+          && grade.gradeValue !== null && grade.gradeValue !== undefined
           && !gradeValuesEqual(grade.gradeValue, grade.existingGradeValue)).length, 0)
       }
     };

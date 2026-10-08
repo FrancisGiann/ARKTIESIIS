@@ -5,6 +5,7 @@ const bcrypt = require('bcrypt');
 const { createApp: createApplication } = require('../src/app');
 const { lastRecordedEnrollment } = require('../src/routes/studentRecords');
 const { StudentDocumentRequestError } = require('../src/services/studentDocumentRequestService');
+const { TermClearanceError, TermClearanceSummaryUnavailableError } = require('../src/services/termClearanceService');
 const { ReadmissionError, deriveReturnEligibility } = require('../src/services/readmissionService');
 const {
   StudentRecordsError,
@@ -814,6 +815,62 @@ test('database administrators can search the master list and open a unified prof
     const denied = await fetch(`${baseUrl}/registrar/records/students/12`, { headers: { cookie } });
     assert.equal(denied.status, 403);
     assert.equal(deniedReads, 0);
+  });
+});
+
+test('student overview isolates a known clearance schema mismatch, preserves authorization refusals, and surfaces real failures', async () => {
+  let summaryResult = 'v017';
+  const termClearanceService = {
+    async getStudentClearanceOverview(actorId, studentId) {
+      assert.equal(actorId, 7);
+      assert.equal(studentId, 12);
+      if (summaryResult === 'v017') throw new TermClearanceSummaryUnavailableError();
+      if (summaryResult === 'forbidden') throw new TermClearanceError('Active registrar access is required.', 403);
+      if (summaryResult === 'unexpected') throw new Error('connection reset');
+      return { totalRecords: 1, completed: 1, pending: 0, incomplete: 0, notReviewed: 0, notAttended: 0, notApplicable: 0 };
+    }
+  };
+  const app = createApp({
+    databasePool: makeAuthPool('database_admin'), environment,
+    studentRecordsService: { async getStudent(id) {
+      return { student: { id, student_no: 'S-12', first_name: 'Jamie', last_name: 'Lee', status: 'active' }, annualEnrollments: [] };
+    } },
+    academicRecordsService: { async getStudentAcademicRecord(id) {
+      return { student: { id, student_no: 'S-12', first_name: 'Jamie', last_name: 'Lee', status: 'active' }, subjects: [], enrollments: [] };
+    } },
+    documentRequestService: { async getStudentRequests() { return []; } },
+    documentClearanceService: { async getRegistrarData() { return { financeSummary: { status: 'Needs finance review', outstanding: null }, requests: [] }; } },
+    readmissionService: {
+      async listForStudent() { return []; },
+      async getStudentReturnEligibility() { return { eligible: false }; }
+    },
+    termClearanceService
+  });
+  await withServer(app, async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'database_admin');
+    const options = { headers: { cookie } };
+    const unavailable = await fetch(`${baseUrl}/registrar/records/students/12`, options);
+    const unavailableHtml = await unavailable.text();
+    assert.equal(unavailable.status, 200);
+    assert.match(unavailableHtml, /Jamie Lee/);
+    assert.match(unavailableHtml, /Paper-clearance status is temporarily unavailable/);
+    assert.match(unavailableHtml, /No completion status is inferred/);
+    assert.doesNotMatch(unavailableHtml, /Not completed:<\/strong>|Completed:<\/strong>/);
+
+    summaryResult = 'forbidden';
+    const forbidden = await fetch(`${baseUrl}/registrar/records/students/12`, options);
+    assert.equal(forbidden.status, 403, 'the service recheck is still an authorization refusal');
+    assert.match(await forbidden.text(), /Active registrar access is required/);
+
+    summaryResult = 'unexpected';
+    const failed = await fetch(`${baseUrl}/registrar/records/students/12`, options);
+    assert.equal(failed.status, 503, 'unexpected database failures are not converted into fake status data');
+    assert.match(await failed.text(), /The student record could not be loaded/);
+
+    summaryResult = 'v018';
+    const available = await fetch(`${baseUrl}/registrar/records/students/12`, options);
+    assert.equal(available.status, 200);
+    assert.match(await available.text(), /Completed:<\/strong> 1/);
   });
 });
 

@@ -6,7 +6,9 @@ const { inflateRawSync } = require('node:zlib');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { StudentSetupError, MAX_BULK_ROWS, createStudentSetupService } = require('../services/studentSetupService');
 const { AnnualEnrollmentError, createAnnualEnrollmentService } = require('../services/annualEnrollmentService');
-const { TermClearanceError, createTermClearanceService } = require('../services/termClearanceService');
+const {
+  TermClearanceError, TermClearanceSummaryUnavailableError, createTermClearanceService
+} = require('../services/termClearanceService');
 const { PreEnrollmentError, RECEIPT_REQUIREMENTS } = require('../services/preEnrollmentService');
 const { AnnualFinanceError } = require('../services/annualFinanceService');
 const { PhysicalChecklistError, createPhysicalChecklistService } = require('../services/physicalChecklistService');
@@ -22,6 +24,7 @@ const MAX_XLSX_TOTAL_BYTES = 16 * 1024 * 1024;
 const PREVIEW_TTL_MS = 10 * 60 * 1000;
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const INTAKE_IDEMPOTENCY_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE = 'Paper-clearance prerequisite data is unavailable in the installed schema. Enrollment confirmation and term activation remain blocked until a database administrator verifies the clearance migration.';
 const readSheet = require('read-excel-file/node').readSheet;
 
 class WorkbookError extends Error {
@@ -688,6 +691,15 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         confirmationComplete: Boolean(record.parent.registrar_confirmation_id)
       });
     } catch (loadError) {
+      if (loadError instanceof TermClearanceSummaryUnavailableError) {
+        return setPrivateHeaders(res).status(503).render('records/annual-intake-review', {
+          title: 'Review enrollment details', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+          annualId, record: null, checklist: null, preview: null, error: CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE,
+          prerequisiteReview: null, sourceOptions: null,
+          values: { idempotencyKey: crypto.randomUUID(), sourceBindingIdempotencyKey: crypto.randomUUID() },
+          confirmationComplete: false
+        });
+      }
       if (loadError instanceof AnnualEnrollmentError || loadError instanceof AnnualFinanceError || loadError instanceof PhysicalChecklistError || loadError instanceof TermClearanceError) {
         return setPrivateHeaders(res).status(loadError.status).render('records/annual-intake-review', {
           title: 'Review enrollment details', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
@@ -722,6 +734,12 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         review, error, idempotencyKey: crypto.randomUUID()
       });
     } catch (loadError) {
+      if (loadError instanceof TermClearanceSummaryUnavailableError) {
+        return setPrivateHeaders(res).status(503).render('records/annual-term-activation-review', {
+          title: 'Review term activation', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+          review: null, error: CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE, idempotencyKey: crypto.randomUUID()
+        });
+      }
       if (loadError instanceof TermClearanceError || loadError instanceof AnnualEnrollmentError) {
         return setPrivateHeaders(res).status(loadError.status).render('records/annual-term-activation-review', {
           title: 'Review term activation', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
@@ -832,6 +850,9 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         confirmationUrl, printedAt: new Date(), summaryUnavailable
       });
     } catch (error) {
+      if (error instanceof TermClearanceSummaryUnavailableError) {
+        return renderFinalReview(req, res, req.params.annualId, { status: 503, error: CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE, values: req.body || {} });
+      }
       if (error instanceof AnnualEnrollmentError || error instanceof AnnualFinanceError) {
         return renderFinalReview(req, res, req.params.annualId, { status: error.status, error: error.message, values: req.body || {} });
       }
@@ -966,6 +987,9 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       const enrollment = await service.finalizeAnnualTerm(req.authUser.id, req.params.enrollmentId, req.body || {});
       return setPrivateHeaders(res).render('records/enrollment-print', { title: 'Enrollment Form', enrollment, printedAt: new Date() });
     } catch (error) {
+      if (error instanceof TermClearanceSummaryUnavailableError) {
+        return renderActivationReview(req, res, req.params.enrollmentId, { status: 503, error: CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE });
+      }
       if (error instanceof AnnualEnrollmentError || error instanceof TermClearanceError) return renderActivationReview(req, res, req.params.enrollmentId, { status: error.status, error: error.message });
       return res.status(503).render('error', { title: 'Enrollments unavailable', message: 'The term placement could not be finalized.' });
     }

@@ -354,7 +354,19 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
       async create(actorId) { calls.push(['create', actorId]); return { id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261' }; },
       async update(actorId, id, version, input) { calls.push(['update', actorId]); updateInputs.push(input); throw new PreEnrollmentError('The correction needs a current accepted evaluation.', 409); },
       async listAcceptedReadmissionChoices(actorId, schoolYear) { choicesCalls.push([actorId, schoolYear]); return [acceptedChoice]; },
-      async get(actorId, id) { calls.push(['get', actorId]); return detailRecord(id, id === 'b342bc01-2a68-4f19-a7fd-4d5bb1d83261' ? 'enrollment_started' : 'ready_for_registrar'); }
+      async get(actorId, id) {
+        calls.push(['get', actorId]);
+        const record = detailRecord(id, ['b342bc01-2a68-4f19-a7fd-4d5bb1d83261', 'd342bc01-2a68-4f19-a7fd-4d5bb1d83261', 'e342bc01-2a68-4f19-a7fd-4d5bb1d83261'].includes(id)
+          ? 'enrollment_started' : 'ready_for_registrar');
+        if (['b342bc01-2a68-4f19-a7fd-4d5bb1d83261', 'd342bc01-2a68-4f19-a7fd-4d5bb1d83261'].includes(id)) {
+          record.linkedAnnualEnrollment = {
+            id: id === 'd342bc01-2a68-4f19-a7fd-4d5bb1d83261' ? 72 : 71,
+            intake_status: id === 'd342bc01-2a68-4f19-a7fd-4d5bb1d83261' ? 'enrolled' : 'pending',
+            school_year: '2026-2027', grade_level: 'Grade 11'
+          };
+        }
+        return record;
+      }
     }
   }));
   app.post('/registrar/intake', requireRole('registrar'), (_req, res) => res.status(204).end());
@@ -450,9 +462,41 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.equal(updateInputs[0].emergencyContactPhone, '09181234567');
     const startedDetail = await fetch(`${origin}/pre-enrollments/b342bc01-2a68-4f19-a7fd-4d5bb1d83261`);
     const startedHtml = await startedDetail.text();
-    assert.match(startedHtml, /Enrollment started/);
-    assert.match(startedHtml, /Read-only after annual enrollment starts/);
+    assert.match(startedHtml, /Student details can no longer be changed here after enrollment is prepared/);
+    assert.match(startedHtml, /<h2 id="enrollment-state-heading">Enrollment status<\/h2>/);
+    assert.match(startedHtml, /Awaiting registrar confirmation/);
+    assert.match(startedHtml, /The registrar still needs to review and confirm this enrollment/);
     assert.doesNotMatch(startedHtml, /Correct paper record|Start enrollment/);
+    assert.doesNotMatch(startedHtml, /\/registrar\/intake\/71\/review|\/registrar\/intake\/71\/manage/,
+      'front desk does not receive a registrar workflow link');
+    const unknownDetail = await fetch(`${origin}/pre-enrollments/e342bc01-2a68-4f19-a7fd-4d5bb1d83261`);
+    const unknownHtml = await unknownDetail.text();
+    assert.match(unknownHtml, /Enrollment status unavailable/);
+    assert.match(unknownHtml, /No confirmation is inferred; ask the registrar to check this record/);
+    assert.doesNotMatch(unknownHtml, /\/registrar\/intake\//);
+    const registrarStartedDetail = await fetch(`${origin}/pre-enrollments/b342bc01-2a68-4f19-a7fd-4d5bb1d83261`, {
+      headers: { 'x-test-role': 'registrar' }
+    });
+    const registrarStartedHtml = await registrarStartedDetail.text();
+    assert.equal(registrarStartedDetail.status, 200);
+    assert.match(registrarStartedHtml, /Awaiting registrar confirmation/);
+    assert.match(registrarStartedHtml, /The registrar still needs to review and confirm this enrollment/);
+    assert.match(registrarStartedHtml, /href="\/registrar\/intake\/71\/review">Review for confirmation/);
+    assert.doesNotMatch(registrarStartedHtml, /Enrollment confirmed/);
+    const registrarConfirmedDetail = await fetch(`${origin}/pre-enrollments/d342bc01-2a68-4f19-a7fd-4d5bb1d83261`, {
+      headers: { 'x-test-role': 'registrar' }
+    });
+    const registrarConfirmedHtml = await registrarConfirmedDetail.text();
+    assert.equal(registrarConfirmedDetail.status, 200);
+    assert.match(registrarConfirmedHtml, /class="status-chip pre-enrollment-status pre-enrollment-status--ready">Enrollment confirmed/);
+    assert.match(registrarConfirmedHtml, /Enrollment is confirmed for this school year\. Each term is activated separately/);
+    assert.match(registrarConfirmedHtml, /href="\/registrar\/intake\/72\/manage">Open enrollment/);
+    assert.doesNotMatch(registrarConfirmedHtml, /href="\/registrar\/intake\/72\/review/);
+    const frontDeskConfirmed = await fetch(`${origin}/pre-enrollments/d342bc01-2a68-4f19-a7fd-4d5bb1d83261`);
+    const frontDeskConfirmedHtml = await frontDeskConfirmed.text();
+    assert.match(frontDeskConfirmedHtml, /class="status-chip pre-enrollment-status pre-enrollment-status--ready">Enrollment confirmed/);
+    assert.match(frontDeskConfirmedHtml, /Enrollment is confirmed for this school year\. Each term is activated separately/);
+    assert.doesNotMatch(frontDeskConfirmedHtml, /\/registrar\/intake\//);
     const startedEditHtml = await (await fetch(`${origin}/pre-enrollments/b342bc01-2a68-4f19-a7fd-4d5bb1d83261/edit`)).text();
     assert.match(startedEditHtml, /Annual enrollment has started\. This paper record is read-only\./);
     assert.doesNotMatch(startedEditHtml, /emergencyContactSameAsStudent/);
@@ -464,6 +508,12 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     const adminDetail = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261`, { headers: adminHeaders });
     assert.equal(adminDetail.status, 200);
     assert.doesNotMatch(await adminDetail.text(), /Correct paper record|Start enrollment/);
+    const adminConfirmed = await fetch(`${origin}/pre-enrollments/d342bc01-2a68-4f19-a7fd-4d5bb1d83261`, { headers: adminHeaders });
+    const adminConfirmedHtml = await adminConfirmed.text();
+    assert.match(adminConfirmedHtml, /class="status-chip pre-enrollment-status pre-enrollment-status--ready">Enrollment confirmed/);
+    assert.doesNotMatch(adminConfirmedHtml, /\/registrar\/intake\//);
+    const adminPending = await fetch(`${origin}/pre-enrollments/b342bc01-2a68-4f19-a7fd-4d5bb1d83261`, { headers: adminHeaders });
+    assert.match(await adminPending.text(), /Awaiting registrar confirmation/);
     assert.equal((await fetch(`${origin}/pre-enrollments/new`, { headers: adminHeaders })).status, 403);
     const adminCreate = await fetch(`${origin}/pre-enrollments`, {
       method: 'POST', headers: { ...adminHeaders, 'content-type': 'application/x-www-form-urlencoded' },

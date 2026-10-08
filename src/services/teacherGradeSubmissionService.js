@@ -619,7 +619,9 @@ function createTeacherGradeSubmissionService({
         eligible: rows.filter((row) => !row.issue && row.studentId && row.studentSubjectId).length,
         unresolved: rows.filter((row) => Boolean(row.issue)).length,
         conflicts: rows.reduce((count, row) => count + row.grades.filter((grade) => grade.existingGradeId
-          && Number(grade.existingGradeValue) !== Number(grade.gradeValue)).length, 0)
+          && grade.gradeValue !== null && grade.gradeValue !== undefined
+          && (grade.existingGradeValue === null || grade.existingGradeValue === undefined
+            || Number(grade.existingGradeValue) !== Number(grade.gradeValue))).length, 0)
       }
     };
   }

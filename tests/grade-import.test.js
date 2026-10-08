@@ -2,8 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const { once } = require('node:events');
 const bcrypt = require('bcrypt');
+const ejs = require('ejs');
 const readExcelFile = require('read-excel-file/node').default;
 const { createApp } = require('../src/app');
 const {
@@ -44,6 +46,179 @@ function requestFor(queryHandler) {
 async function workbookSheets(filePath = FIXTURE) {
   return readExcelFile(fs.readFileSync(filePath));
 }
+
+function selectionCheckbox({ checked = false, disabled = false } = {}) {
+  const listeners = new Map();
+  return {
+    checked, disabled, indeterminate: false,
+    addEventListener(event, listener) { listeners.set(event, listener); },
+    change() { listeners.get('change')?.(); }
+  };
+}
+
+function runGradeImportSelection({ selectableRows = [], specialReviewRows = [] } = {}) {
+  const selectAll = selectionCheckbox();
+  selectAll.getAttribute = (name) => name === 'aria-controls' ? 'grade-preview-table' : null;
+  const countMessage = { textContent: '' };
+  const table = {
+    querySelectorAll(selector) {
+      assert.equal(selector, '[data-grade-import-row][data-bulk-selectable="true"]');
+      return [...selectableRows, ...specialReviewRows].filter((row) => row.bulkSelectable === 'true');
+    }
+  };
+  const selection = {
+    hidden: true,
+    querySelector(selector) {
+      if (selector === '[data-grade-select-all]') return selectAll;
+      if (selector === '[data-grade-selection-count]') return countMessage;
+      return null;
+    },
+    querySelectorAll(selector) {
+      assert.equal(selector, '[data-grade-import-row][data-bulk-selectable="true"]');
+      return [];
+    }
+  };
+  const script = fs.readFileSync(path.join(__dirname, '../public/js/grade-import-selection.js'), 'utf8');
+  vm.runInNewContext(script, {
+    document: {
+      querySelectorAll: () => [selection],
+      getElementById(id) { return id === 'grade-preview-table' ? table : null; }
+    }
+  });
+  return { selection, selectAll, countMessage };
+}
+
+function previewRows() {
+  const grades = [
+    { gradingPeriod: 'Term 1', gradeValue: 89 }, { gradingPeriod: 'Term 2', gradeValue: 90 },
+    { gradingPeriod: 'Term 3', gradeValue: 91 }, { gradingPeriod: 'Final Grade', gradeValue: 90 }
+  ];
+  return [
+    { sourceRow: 17, studentId: 44, studentNo: 'S-44', studentName: 'Jamie Garcia', workbookName: 'Jamie Garcia', issue: null, nameMismatch: false, grades },
+    { sourceRow: 18, studentId: 45, studentNo: 'S-45', studentName: 'Riley Garcia', workbookName: 'Riley Garza', issue: null, nameMismatch: true, grades },
+    { sourceRow: 19, studentId: 46, studentNo: 'S-46', studentName: 'Casey Garcia', workbookName: 'Casey Garcia', issue: null, nameMismatch: false,
+      grades: [{ ...grades[0], existingGradeId: 50, existingGradeValue: 80 }, ...grades.slice(1)] },
+    { sourceRow: 20, studentId: null, studentNo: null, studentName: null, workbookName: 'Unknown learner', issue: 'No active student match.', nameMismatch: false, grades },
+    { sourceRow: 21, studentId: 47, studentNo: 'S-47', studentName: 'Morgan Garcia', workbookName: 'Morgan Garcia', issue: null, nameMismatch: false,
+      grades: [{ ...grades[0], gradeValue: 0, existingGradeId: 51, existingGradeValue: null }, ...grades.slice(1)] },
+    { sourceRow: 22, studentId: 48, studentNo: 'S-48', studentName: 'Alex Garcia', workbookName: 'Alex Garcia', issue: null, nameMismatch: false,
+      grades: [{ ...grades[0], gradeValue: null, existingGradeId: 52, existingGradeValue: 75 }, ...grades.slice(1)] }
+  ];
+}
+
+async function renderGradePreview(view, rows, contextMismatch = false) {
+  const file = path.join(__dirname, `../views/records/${view}.ejs`);
+  const locals = {
+    title: 'Grade preview', csrfToken: 'csrf-token', error: null, notice: null, summary: null,
+    formatStudentPlacement: (gradeLevel, sectionName) => `${gradeLevel} · ${sectionName}`
+  };
+  if (view === 'teacher-grade-review') {
+    locals.submission = {
+      id: 'submission-id', school_year: '2026-2027', term: 'Term 1', grade_level: 'Grade 11',
+      section_name: 'STEM A', subject_name: 'Oral Communication', teacher_first_name: 'Taylor', teacher_last_name: 'Lee',
+      submitted_at: new Date('2026-09-01T00:00:00Z'), revision_number: 1, contextMismatch,
+      rows, history: [], counts: { eligible: 3, unresolved: 1, conflicts: 1 }
+    };
+  } else {
+    locals.preview = {
+      id: 'preview-id', schoolYear: '2026-2027', gradeLevel: 'Grade 11', sectionName: 'STEM A',
+      subjectName: 'Oral Communication', expiresAt: new Date('2026-09-01T00:00:00Z'), contextMismatch,
+      rows, counts: { eligible: 3, unresolved: 1, conflicts: 1 }
+    };
+  }
+  return ejs.renderFile(file, locals);
+}
+
+test('select all selects and clears eligible rows while exposing mixed state and skipping special-review rows', () => {
+  const first = selectionCheckbox();
+  first.bulkSelectable = 'true';
+  const second = selectionCheckbox();
+  second.bulkSelectable = 'true';
+  const mismatch = selectionCheckbox();
+  mismatch.bulkSelectable = 'false';
+  const conflict = selectionCheckbox();
+  conflict.bulkSelectable = 'false';
+  const { selection, selectAll, countMessage } = runGradeImportSelection({
+    selectableRows: [first, second], specialReviewRows: [mismatch, conflict]
+  });
+
+  assert.equal(selection.hidden, false);
+  assert.equal(selectAll.disabled, false);
+  assert.equal(countMessage.textContent, '0 of 2 rows selected.');
+  selectAll.checked = true;
+  selectAll.change();
+  assert.equal(first.checked, true);
+  assert.equal(second.checked, true);
+  assert.equal(mismatch.checked, false);
+  assert.equal(conflict.checked, false);
+  assert.equal(selectAll.checked, true);
+  assert.equal(selectAll.indeterminate, false);
+  assert.equal(countMessage.textContent, '2 of 2 rows selected.');
+
+  first.checked = false;
+  first.change();
+  assert.equal(selectAll.checked, false);
+  assert.equal(selectAll.indeterminate, true);
+  assert.equal(countMessage.textContent, '1 of 2 rows selected.');
+
+  selectAll.checked = false;
+  selectAll.change();
+  assert.equal(first.checked, false);
+  assert.equal(second.checked, false);
+  assert.equal(selectAll.indeterminate, false);
+  assert.equal(countMessage.textContent, '0 of 2 rows selected.');
+});
+
+test('select all disables for empty or disabled eligible row sets', () => {
+  const empty = runGradeImportSelection();
+  assert.equal(empty.selection.hidden, false);
+  assert.equal(empty.selectAll.disabled, true);
+  assert.equal(empty.countMessage.textContent, 'No rows are ready for selection.');
+
+  const disabledRow = selectionCheckbox({ disabled: true });
+  disabledRow.bulkSelectable = 'true';
+  const { selection, selectAll, countMessage } = runGradeImportSelection({ selectableRows: [disabledRow] });
+
+  assert.equal(selection.hidden, false);
+  assert.equal(selectAll.disabled, true);
+  assert.equal(countMessage.textContent, 'No rows are ready for selection.');
+  selectAll.change();
+  assert.equal(disabledRow.checked, false);
+  assert.equal(selectAll.checked, false);
+  assert.equal(selectAll.indeterminate, false);
+});
+
+test('both grade preview templates mark validation, name, conflict, and context rows for safe bulk selection', async () => {
+  const rows = previewRows();
+  for (const view of ['teacher-grade-review', 'grade-import']) {
+    const html = await renderGradePreview(view, rows);
+    assert.match(html, /<label class="field--check" for="(?:teacher-grade-select-all|grade-import-select-all)"><input id="(?:teacher-grade-select-all|grade-import-select-all)"[^>]*type="checkbox"[^>]*><span>Select all<\/span><\/label>/);
+    const selectAll = html.match(/<input id="(?:teacher-grade-select-all|grade-import-select-all)"[^>]*data-grade-select-all[^>]*aria-controls="([^"]+)"/);
+    assert.ok(selectAll, 'the master checkbox exposes its controlled table');
+    const wrapperStart = html.indexOf('<div class="grade-import-preview__select-all"');
+    const wrapperEnd = html.indexOf('</div>', wrapperStart) + '</div>'.length;
+    const tableStart = html.indexOf(`<table id="${selectAll[1]}"`);
+    const formStart = html.lastIndexOf('<form', wrapperStart);
+    const formEnd = html.indexOf('</form>', tableStart);
+    assert.ok(wrapperStart >= 0 && wrapperEnd > wrapperStart);
+    assert.doesNotMatch(html.slice(wrapperStart, wrapperEnd), /name="includeRow_/,
+      'row controls must not be nested inside the select-all wrapper');
+    assert.ok(tableStart > wrapperEnd, 'the aria-controlled table is a sibling after the control wrapper');
+    assert.ok(formStart >= 0 && formStart < wrapperStart && formEnd > tableStart,
+      'the control and table remain associated inside the same review form');
+    assert.match(html, /name="includeRow_17"[^>]*data-bulk-selectable="true"/);
+    assert.match(html, /name="includeRow_18"[^>]*data-bulk-selectable="false"/);
+    assert.match(html, /name="includeRow_19"[^>]*data-bulk-selectable="false"/);
+    assert.doesNotMatch(html, /name="includeRow_20"/);
+    assert.match(html, /Only rows ready to import are selected\. Review name differences and existing-grade conflicts individually\./);
+    assert.match(html, /name="includeRow_21"[^>]*data-bulk-selectable="false"/);
+    assert.match(html, /name="includeRow_22"[^>]*data-bulk-selectable="true"/);
+    assert.match(html, /name="action_21_term1"/);
+
+    const mismatchedContext = await renderGradePreview(view, [rows[0]], true);
+    assert.match(mismatchedContext, /name="includeRow_17"[^>]*data-bulk-selectable="false"/);
+  }
+});
 
 test('corrected SSHS fixture parses cached formula results and validates workbook identity', async () => {
   const workbook = await workbookSheets();
@@ -248,7 +423,7 @@ test('preview always supplies four table cells when a cached grade is absent', a
   ]);
 });
 
-function confirmationHarness({ existingGrades = [], nameMismatch = false, failAtInsert = 0, insertError = null, omitGradePeriod = null,
+function confirmationHarness({ existingGrades = [], incomingGrades = null, nameMismatch = false, failAtInsert = 0, insertError = null, omitGradePeriod = null,
   currentRecordsOverride = null, submissionMode = false, activeAssignment = true, submitterIsTeacher = true } = {}) {
   const state = {
     commits: 0, rollbacks: 0, previewExists: true, inserts: 0, replaces: 0, audits: [],
@@ -269,10 +444,10 @@ function confirmationHarness({ existingGrades = [], nameMismatch = false, failAt
     grade_level: 'Grade 11', student_subject_id: 88, subject_id: 77,
     subject_name: 'Oral Communication', grade_id: null, grading_period: null, grade_value: null
   });
-  const grades = [
+  const grades = (incomingGrades || [
     { period: 'Term 1', value: 89 }, { period: 'Term 2', value: 90 },
     { period: 'Term 3', value: 91 }, { period: 'Final Grade', value: 90 }
-  ].map((grade) => {
+  ]).map((grade) => {
     const existing = existingGrades.find(({ period }) => period === grade.period);
     return {
       grading_period: grade.period, grade_value: grade.value,
@@ -383,6 +558,37 @@ test('confirmation requires explicit inclusion and reasoned review/replacement w
   assert.equal(excluded.rowsProcessed, 0);
   assert.equal(excluded.excluded, 1);
   assert.equal(noInclude.state.persistedInserts, 0);
+});
+
+test('a published zero conflicts with a blank existing grade and needs a reason to replace it', async () => {
+  const existingGrades = [{ id: 101, period: 'Term 1', value: null }];
+  const incomingGrades = [
+    { period: 'Term 1', value: 0 }, { period: 'Term 2', value: 90 },
+    { period: 'Term 3', value: 91 }, { period: 'Final Grade', value: 90 }
+  ];
+  const skipped = confirmationHarness({ existingGrades, incomingGrades });
+  const skipResult = await skipped.service.confirmPreview({
+    actorId: 7, sessionId: 'session-a', previewId: skipped.header.id,
+    decisions: [fullDecision()]
+  });
+  assert.deepEqual(skipResult, { inserted: 3, replaced: 0, skipped: 1, excluded: 0, rowsProcessed: 1 });
+  assert.equal(skipped.state.persistedReplaces, 0);
+
+  const missingReason = confirmationHarness({ existingGrades, incomingGrades });
+  await assert.rejects(missingReason.service.confirmPreview({
+    actorId: 7, sessionId: 'session-a', previewId: missingReason.header.id,
+    decisions: [fullDecision({ grades: { 'Term 1': { action: 'replace' } } })]
+  }), /must be 5–500 printable characters/);
+  assert.equal(missingReason.state.rollbacks, 1);
+  assert.equal(missingReason.state.persistedReplaces, 0);
+
+  const replaced = confirmationHarness({ existingGrades, incomingGrades });
+  const replaceResult = await replaced.service.confirmPreview({
+    actorId: 7, sessionId: 'session-a', previewId: replaced.header.id,
+    decisions: [fullDecision({ grades: { 'Term 1': { action: 'replace', reason: 'Verified published zero.' } } })]
+  });
+  assert.deepEqual(replaceResult, { inserted: 3, replaced: 1, skipped: 0, excluded: 0, rowsProcessed: 1 });
+  assert.equal(replaced.state.persistedReplaces, 1);
 });
 
 test('confirmation rejects missing review reasons and rolls back all grade writes on a mid-transaction failure', async () => {

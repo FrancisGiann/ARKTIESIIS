@@ -58,6 +58,12 @@
       <a class="text-link" href="/registrar/records/students/<%= student.id %>/clearance">Open paper clearance</a>
     </article>
   </section><% } %>
+  <% if (clearanceOverviewUnavailable) { %><section class="student-record-status-grid student-record-clearance-summary" aria-label="Paper clearance status">
+    <article class="admin-section"><h2>Paper clearance status</h2>
+      <p class="empty-state" role="status">Paper-clearance status is temporarily unavailable. No completion status is inferred.</p>
+      <a class="text-link" href="/registrar/records/students/<%= student.id %>/clearance">Open paper clearance</a>
+    </article>
+  </section><% } %>
   <section class="student-record-status-grid" aria-label="Document request finance summary">
     <article class="admin-section"><h2>Document request finance status</h2>
       <p><strong><%= financeSummary.status %></strong></p>

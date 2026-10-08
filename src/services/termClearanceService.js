@@ -12,6 +12,38 @@ class TermClearanceError extends Error {
   }
 }
 
+class TermClearanceSummaryUnavailableError extends Error {
+  constructor() {
+    super('The paper-clearance summary is unavailable.');
+    this.name = 'TermClearanceSummaryUnavailableError';
+  }
+}
+
+function isMissingRecordingModeColumn(error) {
+  const message = `${error?.message || ''} ${error?.sqlMessage || ''}`;
+  const isUnknownColumn = error?.code === 'ER_BAD_FIELD_ERROR'
+    || Number(error?.errno) === 1054 || error?.sqlState === '42S22';
+  return isUnknownColumn && /\brecording_mode\b/i.test(message);
+}
+
+async function queryClearanceSummary(request, statement) {
+  try {
+    return await request.query(statement);
+  } catch (error) {
+    if (isMissingRecordingModeColumn(error)) throw new TermClearanceSummaryUnavailableError();
+    throw error;
+  }
+}
+
+async function withClearanceSchemaCompatibility(operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (isMissingRecordingModeColumn(error)) throw new TermClearanceSummaryUnavailableError();
+    throw error;
+  }
+}
+
 function idValue(value, label) {
   const text = typeof value === 'number' ? String(value) : value;
   if (typeof text !== 'string' || !/^\d{1,10}$/.test(text)) throw new TermClearanceError(`Choose a valid ${label}.`);
@@ -1442,11 +1474,11 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
   }
 
   async function getAnnualPrerequisiteReview(actorInput, annualInput) {
-    return runTransaction((transaction) => annualReviewInTransaction(transaction, actorInput, annualInput));
+    return withClearanceSchemaCompatibility(() => runTransaction((transaction) => annualReviewInTransaction(transaction, actorInput, annualInput)));
   }
 
   async function assertAnnualEntryPrerequisitesInTransaction(transaction, { actorId, annualId, expectedFingerprint = null } = {}) {
-    const review = await annualReviewInTransaction(transaction, actorId, annualId);
+    const review = await withClearanceSchemaCompatibility(() => annualReviewInTransaction(transaction, actorId, annualId));
     if (expectedFingerprint && review.fingerprint !== expectedFingerprint) {
       throw new TermClearanceError('The reviewed term-clearance prerequisites changed after the annual review. Reload the final review before confirming.', 409);
     }
@@ -1492,17 +1524,17 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
   }
 
   async function getTermActivationReview(actorInput, enrollmentInput) {
-    return runTransaction(async (transaction) => {
+    return withClearanceSchemaCompatibility(() => runTransaction(async (transaction) => {
       const review = await termReviewInTransaction(transaction, actorInput, enrollmentInput);
       const finalized = await transaction.request().input('enrollmentId', sql.Int, idValue(enrollmentInput, 'enrollment'))
         .query('SELECT finalized_at FROM annual_term_finalizations WHERE enrollment_id = @enrollmentId');
       const row = finalized.recordset?.[0];
       return { ...review, alreadyFinalized: Boolean(row), finalizedAt: row?.finalized_at || null };
-    });
+    }));
   }
 
   async function assertTermPrerequisitesInTransaction(transaction, { actorId, enrollmentId, expectedFingerprint = null } = {}) {
-    const review = await termReviewInTransaction(transaction, actorId, enrollmentId);
+    const review = await withClearanceSchemaCompatibility(() => termReviewInTransaction(transaction, actorId, enrollmentId));
     if (expectedFingerprint && review.fingerprint !== expectedFingerprint) {
       throw new TermClearanceError('The reviewed paper-clearance prerequisites changed after this activation form was loaded. Reload the annual enrollment list.', 409);
     }
@@ -1752,7 +1784,7 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     const queryFilters = { ...filters };
     const baseSql = clearanceDashboardRecordsSql();
     const countsRequest = bindClearanceDashboardFilters(pool.request(), queryFilters, currentPosition, { sqlAdapter: sql });
-    const countsResult = await countsRequest.query(`SELECT COUNT(*) AS total_records,
+    const countsResult = await queryClearanceSummary(countsRequest, `SELECT COUNT(*) AS total_records,
         COALESCE(SUM(clearance_state = 'complete'), 0) AS completed_records,
         COALESCE(SUM(clearance_state = 'incomplete'), 0) AS incomplete_records,
         COALESCE(SUM(clearance_state = 'not_reviewed'), 0) AS not_reviewed_records,
@@ -1772,7 +1804,7 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
       .input('statusFilter', sql.NVarChar(30), filters.status)
       .input('rowLimit', sql.Int, CLEARANCE_DASHBOARD_PAGE_SIZE)
       .input('rowOffset', sql.Int, offset);
-    const rowsResult = await rowsRequest.query(`SELECT dashboard_records.* FROM (${baseSql}) AS dashboard_records
+    const rowsResult = await queryClearanceSummary(rowsRequest, `SELECT dashboard_records.* FROM (${baseSql}) AS dashboard_records
       WHERE @statusFilter = 'all'
         OR (@statusFilter = 'pending' AND dashboard_records.clearance_state IN ('incomplete', 'not_reviewed'))
         OR dashboard_records.clearance_state = @statusFilter
@@ -1818,7 +1850,7 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     const currentPosition = resolveCurrentAcademicPosition(currentResult.recordset || []);
     const filters = { search: '', schoolYear: null, termId: null };
     const request = bindClearanceDashboardFilters(pool.request(), filters, currentPosition, { sqlAdapter: sql, studentId });
-    const aggregate = await request.query(`SELECT COUNT(*) AS total_records,
+    const aggregate = await queryClearanceSummary(request, `SELECT COUNT(*) AS total_records,
         COALESCE(SUM(clearance_state = 'complete'), 0) AS completed_records,
         COALESCE(SUM(clearance_state = 'incomplete'), 0) AS incomplete_records,
         COALESCE(SUM(clearance_state = 'not_reviewed'), 0) AS not_reviewed_records,
@@ -1899,6 +1931,6 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     bindContinuitySource, getOwnStudentProgress };
 }
 
-module.exports = { TermClearanceError, createTermClearanceService, cleanTemplateInput, cleanReconciliation,
+module.exports = { TermClearanceError, TermClearanceSummaryUnavailableError, createTermClearanceService, cleanTemplateInput, cleanReconciliation,
   cleanItemUpdates, completeFromCounts, awaitingRegistrarConfirmation, clearanceEventSummary, isPastAcademicTerm,
   normalizeClearanceDashboardFilters, resolveCurrentAcademicPosition };

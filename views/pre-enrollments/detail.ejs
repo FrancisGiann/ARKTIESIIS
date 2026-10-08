@@ -3,7 +3,7 @@
   const statusLabels = {
     draft: 'Draft',
     ready_for_registrar: 'Ready for registrar',
-    enrollment_started: 'Enrollment started'
+    enrollment_started: 'Enrollment status unavailable'
   };
   const eventLabels = {
     created: 'Record created',
@@ -46,8 +46,19 @@
   };
   const statusClass = record.status === 'ready_for_registrar'
     ? 'pre-enrollment-status--ready'
-    : record.status === 'enrollment_started' ? 'pre-enrollment-status--started' : 'pre-enrollment-status--draft';
+    : record.status === 'enrollment_started' && record.linkedAnnualEnrollment?.intake_status === 'enrolled'
+      ? 'pre-enrollment-status--ready'
+      : record.status === 'enrollment_started' ? 'pre-enrollment-status--started' : 'pre-enrollment-status--draft';
   const applicantKindLabels = { new: 'New applicant', continuing: 'Continuing student', readmission: 'Returning after a break' };
+  const annualStatusLabels = {
+    pending: 'Awaiting registrar confirmation', enrolled: 'Enrollment confirmed',
+    cancelled: 'Cancelled', dropped: 'Dropped', transferred: 'Transferred', legacy: 'Historical record'
+  };
+  const linkedAnnualStatusLabel = record.linkedAnnualEnrollment
+    ? annualStatusLabels[record.linkedAnnualEnrollment.intake_status] || 'Enrollment status unavailable'
+    : 'Enrollment status unavailable';
+  const displayStatusLabel = record.status === 'enrollment_started'
+    ? linkedAnnualStatusLabel : statusLabels[record.status] || 'Draft';
 %>
 <main class="page-shell dashboard-page admin-page records-page pre-enrollment-page pre-enrollment-detail-page" id="main-content">
   <a class="context-back" href="/pre-enrollments">Back to pre-enrollment records</a>
@@ -56,7 +67,7 @@
       <h1><%= fullName || 'Pre-enrollment record' %></h1>
       <div class="pre-enrollment-detail-heading__meta" aria-label="Record summary">
         <span>School year <strong><%= record.school_year || '—' %></strong></span>
-        <span class="status-chip pre-enrollment-status <%= statusClass %>"><%= statusLabels[record.status] || 'Draft' %></span>
+        <span class="status-chip pre-enrollment-status <%= statusClass %>"><%= displayStatusLabel %></span>
         <span>Revision <strong><%= record.version %></strong></span>
       </div>
     </div>
@@ -68,12 +79,31 @@
         <a class="button button--primary" href="/registrar/intake/new?preEnrollmentId=<%= encodeURIComponent(record.id) %>">Start enrollment</a>
       <% } %>
       <% if (record.status === 'enrollment_started') { %>
-        <p class="pre-enrollment-readonly-note">Read-only after annual enrollment starts.</p>
+        <p class="pre-enrollment-readonly-note">Student details can no longer be changed here after enrollment is prepared.</p>
       <% } %>
     </div>
   </header>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+
+  <% if (record.status === 'enrollment_started') { %>
+    <section class="form-section pre-enrollment-panel" aria-labelledby="enrollment-state-heading">
+      <div class="pre-enrollment-panel__heading"><h2 id="enrollment-state-heading">Enrollment status</h2></div>
+      <% if (record.linkedAnnualEnrollment) { %>
+        <p><strong><%= annualStatusLabels[record.linkedAnnualEnrollment.intake_status] || 'Enrollment status unavailable' %></strong>
+          · <%= record.linkedAnnualEnrollment.school_year || 'School year unavailable' %> · <%= record.linkedAnnualEnrollment.grade_level || 'Grade unavailable' %></p>
+        <% if (record.linkedAnnualEnrollment.intake_status === 'pending') { %>
+          <p class="muted-copy">The registrar still needs to review and confirm this enrollment.</p>
+          <% if (currentUser.role === 'registrar') { %><a class="button button--primary" href="/registrar/intake/<%= encodeURIComponent(record.linkedAnnualEnrollment.id) %>/review">Review for confirmation</a><% } %>
+        <% } else if (record.linkedAnnualEnrollment.intake_status === 'enrolled') { %>
+          <p class="muted-copy">Enrollment is confirmed for this school year. Each term is activated separately.</p>
+          <% if (currentUser.role === 'registrar') { %><a class="button button--secondary" href="/registrar/intake/<%= encodeURIComponent(record.linkedAnnualEnrollment.id) %>/manage">Open enrollment</a><% } %>
+        <% } %>
+      <% } else { %>
+        <p class="form-alert" role="status">Enrollment status is unavailable. No confirmation is inferred; ask the registrar to check this record.</p>
+      <% } %>
+    </section>
+  <% } %>
 
   <section class="form-section pre-enrollment-panel" aria-labelledby="paper-details-heading">
     <div class="pre-enrollment-panel__heading">

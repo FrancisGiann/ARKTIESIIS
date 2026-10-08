@@ -16,6 +16,7 @@ const { createAnnualEnrollmentService } = require('../src/services/annualEnrollm
 const { AnnualEnrollmentError } = require('../src/services/annualEnrollmentService');
 const { latestBirthDate } = require('../src/services/studentRecordsService');
 const { validateTransaction, createFinanceService } = require('../src/services/financeService');
+const { TermClearanceSummaryUnavailableError } = require('../src/services/termClearanceService');
 
 function fakeSql() {
   return {
@@ -109,6 +110,30 @@ test('bulk roster validation reports missing fields and case-insensitive duplica
   assert.throws(() => normalizeBulkRows(Array.from({ length: 101 }, (_, index) => ({
     rowNumber: index + 2, studentNo: 'ST-' + index, email: 'student' + index + '@example.edu'
   }))), /1 to 100 student rows/);
+});
+
+test('term activation stays blocked with a clear message when clearance schema lacks recording_mode', async () => {
+  const app = express();
+  app.set('views', path.resolve(__dirname, '../views'));
+  app.set('view engine', 'ejs');
+  app.use((req, _res, next) => {
+    req.authUser = { id: registrar.id, role: 'registrar' };
+    req.session = {};
+    next();
+  });
+  app.use('/registrar/intake', createAnnualStudentIntakeRouter({
+    annualEnrollmentService: {},
+    termClearanceService: { async getTermActivationReview() { throw new TermClearanceSummaryUnavailableError(); } }
+  }));
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/registrar/intake/45/activation-review`);
+    const html = await response.text();
+    assert.equal(response.status, 503);
+    assert.match(html, /Paper-clearance prerequisite data is unavailable in the installed schema/);
+    assert.match(html, /Enrollment confirmation and term activation remain blocked/);
+    assert.match(html, /This term cannot be activated/);
+    assert.doesNotMatch(html, /Activate term|action="\/registrar\/intake\/45\/finalize/);
+  });
 });
 
 test('bulk setup revalidates all rows and rolls back if a student became linked', async () => {

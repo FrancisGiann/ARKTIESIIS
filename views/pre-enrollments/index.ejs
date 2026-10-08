@@ -14,14 +14,16 @@
   <p class="muted-copy" role="status"><%= pagination.totalRecords %> record<%= pagination.totalRecords === 1 ? '' : 's' %></p>
   <% if (rows.length) { %>
     <ul class="records-student-list pre-enrollment-record-list" aria-label="Pre-enrollment records">
-      <% for (const row of rows) { const statusClass = row.status === 'ready_for_registrar' ? 'pre-enrollment-status--ready' : row.status === 'enrollment_started' ? 'pre-enrollment-status--started' : 'pre-enrollment-status--draft'; const fullName = [row.first_name, row.middle_name, row.last_name, row.suffix].filter(Boolean).join(' ') || 'Name not recorded'; %>
+      <% for (const row of rows) { const statusClass = row.status === 'ready_for_registrar' || row.status === 'enrollment_started' && row.linked_annual_status === 'enrolled' ? 'pre-enrollment-status--ready' : row.status === 'enrollment_started' ? 'pre-enrollment-status--started' : 'pre-enrollment-status--draft'; const fullName = [row.first_name, row.middle_name, row.last_name, row.suffix].filter(Boolean).join(' ') || 'Name not recorded'; %>
         <li class="records-student-list__item pre-enrollment-record-list__item">
           <div class="records-student-main pre-enrollment-record-list__identity">
             <strong><%= fullName %></strong>
             <span class="pre-enrollment-record-list__lrn">LRN <%= row.lrn || 'Not recorded' %></span>
           </div>
           <div class="pre-enrollment-record-list__year"><span class="muted-copy">School year</span><strong><%= row.school_year %></strong></div>
-          <div class="pre-enrollment-record-list__status"><span class="muted-copy">Status</span><span class="status-chip pre-enrollment-status <%= statusClass %>"><%= ({draft:'Draft',ready_for_registrar:'Ready for registrar',enrollment_started:'Enrollment started'})[row.status] %></span></div>
+          <div class="pre-enrollment-record-list__status"><span class="muted-copy">Status</span><span class="status-chip pre-enrollment-status <%= statusClass %>"><%= row.status === 'enrollment_started'
+            ? ({pending:'Awaiting registrar confirmation',enrolled:'Enrollment confirmed',cancelled:'Annual record cancelled',dropped:'Annual record dropped',transferred:'Annual record transferred',legacy:'Historical annual record'})[row.linked_annual_status] || 'Annual record status unavailable'
+            : ({draft:'Draft',ready_for_registrar:'Ready for registrar'})[row.status] %></span></div>
           <div class="pre-enrollment-record-list__updated"><span class="muted-copy">Last updated</span><span><%= row.updated_at %></span><small>By <%= [row.recorder_first_name,row.recorder_last_name].filter(Boolean).join(' ') || 'staff account' %></small></div>
           <a class="button button--secondary records-student-open" aria-label="Open pre-enrollment record for <%= fullName %>" href="/pre-enrollments/<%= encodeURIComponent(row.id) %>">Open record</a>
         </li>

@@ -8,7 +8,8 @@ const { once } = require('node:events');
 const express = require('express');
 const { requireRole } = require('../src/middleware/roles');
 const {
-  TermClearanceError, cleanTemplateInput, cleanReconciliation, cleanItemUpdates,
+  TermClearanceError, TermClearanceSummaryUnavailableError, createTermClearanceService,
+  cleanTemplateInput, cleanReconciliation, cleanItemUpdates,
   completeFromCounts, awaitingRegistrarConfirmation, clearanceEventSummary, isPastAcademicTerm,
   normalizeClearanceDashboardFilters, resolveCurrentAcademicPosition
 } = require('../src/services/termClearanceService');
@@ -79,11 +80,99 @@ test('paper-confirmation completion requires a saved inspection date but no temp
 });
 
 test('legacy signature checklist writers are retired from the normal service API', async () => {
-  const { createTermClearanceService } = require('../src/services/termClearanceService');
   const service = createTermClearanceService({ getPool: async () => { throw new Error('should not reach the database'); } });
   await assert.rejects(service.createTemplateVersion(1, {}), { status: 410 });
   await assert.rejects(service.createTermClearance(1, 1, {}), { status: 410 });
   await assert.rejects(service.updateTermClearance(1, 1, {}), { status: 410 });
+});
+
+test('clearance summary distinguishes a v017 recording-mode mismatch from v018 data and unrelated database failures', async () => {
+  const makeService = ({ schema = 'v018', failure = null } = {}) => {
+    const queries = [];
+    const sql = { Int: 'INT', TinyInt: 'TINYINT', NVarChar: (size) => `NVARCHAR(${size})` };
+    const getPool = async () => ({ request() {
+      const values = {};
+      return {
+        input(name, _type, value) { values[name] = value; return this; },
+        async query(statement) {
+          queries.push(statement);
+          if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+          if (statement.includes('FROM academic_terms AS term')) return { recordset: [] };
+          if (statement.includes('@studentId')) assert.equal(values.studentId, 12);
+          assert.match(statement, /recording_mode/);
+          if (failure) throw failure;
+          if (schema === 'v017') {
+            const error = new Error("Unknown column 'clearance.recording_mode' in 'field list'");
+            error.code = 'ER_BAD_FIELD_ERROR';
+            error.errno = 1054;
+            error.sqlState = '42S22';
+            throw error;
+          }
+          return { recordset: [{ total_records: 3, completed_records: 1, pending_records: 2,
+            incomplete_records: 1, not_reviewed_records: 1, not_attended_records: 0, not_applicable_records: 0 }] };
+        }
+      };
+    } });
+    return { service: createTermClearanceService({ getPool, sql }), queries };
+  };
+
+  const current = makeService({ schema: 'v018' });
+  assert.deepEqual(await current.service.getStudentClearanceOverview(7, 12), {
+    totalRecords: 3, completed: 1, pending: 2, incomplete: 1, notReviewed: 1, notAttended: 0, notApplicable: 0
+  });
+  assert.ok(current.queries.some((query) => query.includes('recording_mode')));
+
+  const oldSchema = makeService({ schema: 'v017' });
+  await assert.rejects(oldSchema.service.getStudentClearanceOverview(7, 12), TermClearanceSummaryUnavailableError);
+  assert.ok(oldSchema.queries.some((query) => query.includes('recording_mode')));
+  await assert.rejects(oldSchema.service.getClearanceDashboard(7, {}), TermClearanceSummaryUnavailableError,
+    'the dedicated workspace also identifies the specific schema incompatibility');
+
+  const outage = new Error('connection reset');
+  const failed = makeService({ failure: outage });
+  await assert.rejects(failed.service.getStudentClearanceOverview(7, 12), (error) => error === outage,
+    'unexpected database failures remain errors instead of turning into an empty or complete summary');
+});
+
+test('term activation prerequisite review stays unavailable on v017 instead of treating missing mode as complete', async () => {
+  let rolledBack = 0;
+  const sql = {
+    Int: 'INT', TinyInt: 'TINYINT', NVarChar: (size) => `NVARCHAR(${size})`,
+    ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' }
+  };
+  const transactionFactory = () => ({
+    async begin() {},
+    request() {
+      const values = {};
+      return {
+        input(name, _type, value) { values[name] = value; return this; },
+        async query(statement) {
+          if (statement.includes('SELECT student_id FROM enrollments')) return { recordset: [{ student_id: 12 }] };
+          if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+          if (statement.includes('SELECT id, status FROM students')) return { recordset: [{ id: 12, status: 'active' }] };
+          if (statement.includes('WHERE enrollment.id = @enrollmentId FOR UPDATE')) return { recordset: [{
+            enrollment_id: 45, student_id: 12, annual_enrollment_id: 88, academic_term_id: 6,
+            annual_term_number: 2, enrollment_status: 'pending_payment', term_scope_status: 'applicable', section_id: 3,
+            school_year: '2026-2027', grade_level: 'Grade 11', entry_term_number: 1, intake_status: 'enrolled',
+            student_status: 'active', student_no: 'S-12', first_name: 'Jamie', last_name: 'Lee', term_label: 'Second Term', section_name: 'A'
+          }] };
+          if (statement.includes('SELECT order_row.term_number')) return { recordset: [1, 2, 3].map((term_number) => ({ term_number, academic_term_id: term_number, term: `Term ${term_number}` })) };
+          if (statement.includes('WHERE term.is_current = 1')) return { recordset: [{ academic_term_id: 6, school_year: '2026-2027', term_number: 2 }] };
+          if (statement.includes('clearance.recording_mode')) {
+            const error = new Error("Unknown column 'clearance.recording_mode' in 'field list'");
+            error.code = 'ER_BAD_FIELD_ERROR'; error.errno = 1054; error.sqlState = '42S22';
+            throw error;
+          }
+          throw new Error(`Unexpected query: ${statement}`);
+        }
+      };
+    },
+    async commit() {},
+    async rollback() { rolledBack += 1; }
+  });
+  const service = createTermClearanceService({ getPool: async () => ({}), sql, transactionFactory });
+  await assert.rejects(service.getTermActivationReview(7, 45), TermClearanceSummaryUnavailableError);
+  assert.equal(rolledBack, 1, 'the review transaction is rolled back when prerequisite state is unreadable');
 });
 
 test('clearance dashboard filters preserve an explicit all-terms scope and reject malformed values', () => {
@@ -317,6 +406,41 @@ test('clearance overview route keeps explicit scope, paginates all terms, and en
       { actorId: '17', filters: { search: 'No matching student', schoolYear: '', termId: '', status: 'all' } },
       { actorId: '18', filters: { search: '', schoolYear: '', termId: '', status: 'pending', page: '2' } }
     ]);
+  });
+});
+
+test('clearance workspace reports the specific installed-schema mismatch without showing fabricated counts', async () => {
+  const router = createStudentRecordsRouter({
+    studentRecordsService: {}, academicRecordsService: {}, documentRequestService: {}, documentClearanceService: {},
+    gradeOverviewService: {}, readmissionService: {},
+    termClearanceService: {
+      async getClearanceDashboard() { throw new TermClearanceSummaryUnavailableError(); },
+      async getStudentClearance() { throw new TermClearanceSummaryUnavailableError(); }
+    }
+  });
+  const app = express();
+  app.set('view engine', 'ejs');
+  app.set('views', require('node:path').resolve(__dirname, '../views'));
+  app.use('/registrar/records', (req, _res, next) => {
+    req.authUser = { id: 17, role: 'registrar' };
+    req.session = {};
+    next();
+  }, requireRole('registrar', 'database_admin'), router);
+  await withServer(app, async (url) => {
+    const response = await fetch(`${url}/registrar/records/clearance`);
+    const html = await response.text();
+    assert.equal(response.status, 503);
+    assert.match(html, /Paper clearance unavailable/);
+    assert.match(html, /status cannot be read from the installed schema/);
+    assert.match(html, /No status was changed/);
+    assert.match(html, /verify the clearance migration/);
+    assert.doesNotMatch(html, /Not completed:<\/strong> 0|Completed:<\/strong> 0/);
+
+    const studentResponse = await fetch(`${url}/registrar/records/students/12/clearance`);
+    const studentHtml = await studentResponse.text();
+    assert.equal(studentResponse.status, 503);
+    assert.match(studentHtml, /Paper-clearance status cannot be read from the installed schema/);
+    assert.match(studentHtml, /No status was changed/);
   });
 });
 

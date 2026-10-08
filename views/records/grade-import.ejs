@@ -40,12 +40,17 @@
       <p><%= preview.counts.eligible %> matched rows, <%= preview.counts.unresolved %> excluded rows, and <%= preview.counts.conflicts %> grade conflicts.</p>
       <form class="form-stack" method="post" action="/registrar/records/grade-import/<%= preview.id %>/confirm" data-submitting-message="Saving the selected grades. Please wait.">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <div class="grade-import-preview__select-all" data-grade-import-selection hidden>
+          <label class="field--check" for="grade-import-select-all"><input id="grade-import-select-all" data-grade-select-all type="checkbox" aria-controls="grade-import-preview-rows"><span>Select all</span></label>
+          <p class="field-help" data-grade-selection-count aria-live="polite"></p>
+          <p class="field-help">Only rows ready to import are selected. Review name differences and existing-grade conflicts individually.</p>
+        </div>
         <div class="table-scroll grade-import-preview__table-scroll" tabindex="0" aria-label="Grade import preview">
-          <table class="admin-table grade-import-preview__table">
+          <table id="grade-import-preview-rows" class="admin-table grade-import-preview__table">
             <caption class="visually-hidden">Student matches and cached term and final grades from the workbook</caption>
             <thead><tr><th scope="col">Workbook row</th><th scope="col">Student match</th><th scope="col">Workbook name</th><th scope="col">Term 1</th><th scope="col">Term 2</th><th scope="col">Term 3</th><th scope="col">Final</th><th scope="col">Review and include</th></tr></thead>
             <tbody>
-              <% for (const row of preview.rows) { %>
+              <% for (const row of preview.rows) { const hasGradeConflict = row.grades.some((grade) => grade.existingGradeId && grade.gradeValue != null && (grade.existingGradeValue == null || Number(grade.existingGradeValue) !== Number(grade.gradeValue))); const bulkSelectable = !preview.contextMismatch && !row.issue && !row.nameMismatch && !hasGradeConflict; %>
                 <tr>
                   <td data-label="Workbook row"><%= row.sourceRow %></td>
                   <td data-label="Student match"><% if (row.studentId) { %><strong><%= row.studentNo %></strong><br><%= row.studentName %><% } else { %>No active student match<% } %></td>
@@ -54,7 +59,7 @@
                     <td data-label="<%= grade.gradingPeriod %>">
                       <strong class="grade-import-preview__grade-value"><%= grade.gradeValue ?? '—' %></strong>
                       <% if (grade.gradeValue == null) { %><small class="field-help grade-import-preview__grade-state grade-import-preview__grade-state--missing">Missing</small>
-                      <% } else if (grade.existingGradeId && Number(grade.existingGradeValue) === Number(grade.gradeValue)) { %><small class="field-help grade-import-preview__grade-state">Already matches</small>
+                      <% } else if (grade.existingGradeId && grade.existingGradeValue != null && Number(grade.existingGradeValue) === Number(grade.gradeValue)) { %><small class="field-help grade-import-preview__grade-state">Already matches</small>
                       <% } else if (grade.existingGradeId) { %>
                         <small class="field-help grade-import-preview__grade-state">Existing: <%= grade.existingGradeValue ?? 'blank' %></small>
                         <label class="visually-hidden" for="action-<%= row.sourceRow %>-<%= grade.gradingPeriod.replaceAll(' ', '-') %>">Conflict action for <%= grade.gradingPeriod %></label>
@@ -75,7 +80,7 @@
                         <label class="visually-hidden" for="name-reason-<%= row.sourceRow %>">Reason for name-mismatch override</label>
                         <input id="name-reason-<%= row.sourceRow %>" name="nameReason_<%= row.sourceRow %>" type="text" maxlength="500" placeholder="Reason if including this learner">
                       <% } %>
-                      <label class="checkbox-field"><input name="includeRow_<%= row.sourceRow %>" value="yes" type="checkbox"><span>Include these grades</span></label>
+                      <label class="checkbox-field"><input name="includeRow_<%= row.sourceRow %>" value="yes" type="checkbox" data-grade-import-row data-bulk-selectable="<%= bulkSelectable ? 'true' : 'false' %>"><span>Include these grades</span></label>
                     <% } %>
                   </td>
                 </tr>
@@ -89,4 +94,5 @@
     </section>
   <% } %>
 </main>
+<script src="/js/grade-import-selection.js" defer></script>
 <%- include('../partials/foot') %>

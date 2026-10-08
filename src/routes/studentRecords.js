@@ -11,7 +11,9 @@ const {
 } = require('../services/studentDocumentFinanceClearanceService');
 const { RegistrarGradeOverviewError, createRegistrarGradeOverviewService } = require('../services/registrarGradeOverviewService');
 const { ReadmissionError, createReadmissionService } = require('../services/readmissionService');
-const { TermClearanceError, createTermClearanceService } = require('../services/termClearanceService');
+const {
+  TermClearanceError, TermClearanceSummaryUnavailableError, createTermClearanceService
+} = require('../services/termClearanceService');
 const {
   StudentRecordsError,
   createStudentRecordsService,
@@ -33,6 +35,8 @@ const notices = {
   documentRequestUpdated: 'Document request updated.',
   documentRequestCorrected: 'Document request details corrected.',
 };
+
+const CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE = 'Paper-clearance status cannot be read from the installed schema. No status was changed. Ask a database administrator to verify the clearance migration.';
 
 function studentValues(input = {}) {
   return {
@@ -340,7 +344,13 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     const studentId = normalizeRecordId(req.params.id);
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
     try {
-      const [record, academicRecord, documentRequestRows, revisions, clearanceData, returnEvaluations, returnEligibility, clearanceOverview] = await Promise.all([
+      const clearanceOverviewPromise = view === 'overview' && termClearances.getStudentClearanceOverview
+        ? termClearances.getStudentClearanceOverview(req.authUser.id, studentId).then((overview) => ({ overview, unavailable: false })).catch((loadError) => {
+          if (loadError instanceof TermClearanceSummaryUnavailableError) return { overview: null, unavailable: true };
+          throw loadError;
+        })
+        : Promise.resolve({ overview: null, unavailable: false });
+      const [record, academicRecord, documentRequestRows, revisions, clearanceData, returnEvaluations, returnEligibility, clearanceResult] = await Promise.all([
         service.getStudent(studentId),
         academics.getStudentAcademicRecord(studentId),
         documentRequests.getStudentRequests ? documentRequests.getStudentRequests(req.authUser.id, studentId) : [],
@@ -348,8 +358,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         documentClearance.getRegistrarData(req.authUser.id, studentId),
         readmissions.listForStudent ? readmissions.listForStudent(req.authUser.id, studentId) : [],
         readmissions.getStudentReturnEligibility ? readmissions.getStudentReturnEligibility(req.authUser.id, studentId) : { eligible: false },
-        view === 'overview' && termClearances.getStudentClearanceOverview
-          ? termClearances.getStudentClearanceOverview(req.authUser.id, studentId) : null
+        clearanceOverviewPromise
       ]);
       if (!record || !academicRecord) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
       const lastEnrollment = lastRecordedEnrollment(academicRecord.enrollments, returnEligibility);
@@ -369,12 +378,18 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         student: record.student, enrollments: academicRecord.enrollments,
         annualEnrollments: record.annualEnrollments || [], lastEnrollment,
         documentRequests: documentRequestRows, profileRevisions: revisions,
-        clearanceOverview,
+        clearanceOverview: clearanceResult.overview,
+        clearanceOverviewUnavailable: clearanceResult.unavailable,
         financeSummary: clearanceData.financeSummary, requestClearanceData,
         newDocumentRequestKey: requestIdempotencyKey || crypto.randomUUID(), requestIdempotencyKeys, correctionIdempotencyKeys,
         claimSlipIdempotencyKeys
       });
-    } catch {
+    } catch (loadError) {
+      if (loadError instanceof TermClearanceError) {
+        return res.status(loadError.status).render('error', {
+          title: loadError.status === 403 ? 'Forbidden' : 'Student record unavailable', message: loadError.message
+        });
+      }
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The student record could not be loaded.' });
     }
   }
@@ -408,6 +423,11 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
           : req.query?.notice === 'saved' ? 'Paper clearance status saved.' : null
       });
     } catch (loadError) {
+      if (loadError instanceof TermClearanceSummaryUnavailableError) {
+        return res.status(503).render('error', {
+          title: 'Paper clearance unavailable', message: CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE
+        });
+      }
       if (loadError instanceof TermClearanceError) return res.status(loadError.status).render('error', { title: 'Paper clearance unavailable', message: loadError.message });
       return res.status(503).render('error', { title: 'Paper clearance unavailable', message: 'Student paper-clearance records could not be loaded.' });
     }
@@ -420,6 +440,11 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         title: 'Clearance', currentUser: req.authUser, ...dashboard
       });
     } catch (loadError) {
+      if (loadError instanceof TermClearanceSummaryUnavailableError) {
+        return res.status(503).render('error', {
+          title: 'Paper clearance unavailable', message: CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE
+        });
+      }
       if (loadError instanceof TermClearanceError) {
         return res.status(loadError.status).render('error', { title: 'Clearance unavailable', message: loadError.message });
       }

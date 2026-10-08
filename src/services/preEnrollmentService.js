@@ -570,8 +570,17 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
     const actorId = normalizeActorId(actorInput);
     const recordId = normalizeUuid(recordIdInput, 'pre-enrollment record');
     const pool = await getPool();
-    await requireActor(pool.request(), actorId, READ_ROLES);
-    return loadDetail(pool, recordId);
+    const actor = await requireActor(pool.request(), actorId, READ_ROLES);
+    const record = await loadDetail(pool, recordId);
+    if (READ_ROLES.has(actor.role) && record.status === 'enrollment_started') {
+      const linkedResult = await pool.request().input('recordId', sql.Char(36), recordId)
+        .query(`SELECT id, intake_status, school_year, grade_level
+          FROM annual_enrollments WHERE pre_enrollment_id = @recordId LIMIT 2`);
+      const linkedRows = linkedResult.recordset || [];
+      record.linkedAnnualEnrollment = linkedRows.length === 1 ? linkedRows[0] : null;
+      record.linkedAnnualEnrollmentAmbiguous = linkedRows.length > 1;
+    }
+    return record;
   }
 
   async function getActorDisplayName(actorInput) {
@@ -605,8 +614,11 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
       .input('offset', sql.Int, (safePage - 1) * PAGE_SIZE)
       .query(`SELECT entry.id, entry.school_year, entry.first_name, entry.middle_name, entry.last_name,
           entry.suffix, entry.lrn, entry.status, entry.version, entry.updated_at,
+          annual.intake_status AS linked_annual_status,
           staff.first_name AS recorder_first_name, staff.last_name AS recorder_last_name
-        FROM pre_enrollments AS entry LEFT JOIN staff_profiles AS staff ON staff.user_id = entry.updated_by
+        FROM pre_enrollments AS entry
+        LEFT JOIN annual_enrollments AS annual ON annual.pre_enrollment_id = entry.id
+        LEFT JOIN staff_profiles AS staff ON staff.user_id = entry.updated_by
         ${where} ORDER BY entry.updated_at DESC, entry.id DESC LIMIT @pageSize OFFSET @offset`);
     return { rows: rows.recordset || [], filters: { search, schoolYear, status }, pagination: {
       page: safePage, pageSize: PAGE_SIZE, totalRecords, totalPages,
