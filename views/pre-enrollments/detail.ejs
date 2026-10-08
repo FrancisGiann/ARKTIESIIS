@@ -14,6 +14,14 @@
   const statusLabel = (value) => statusLabels[value] || String(value || 'None').replaceAll('_', ' ').replace(/\b\w/g, (character) => character.toUpperCase());
   const fieldLabel = (value) => String(value || '').replaceAll('_', ' ').replace(/\b\w/g, (character) => character.toUpperCase());
   const fullName = [record.first_name, record.middle_name, record.last_name, record.suffix].filter(Boolean).join(' ');
+  const syntheticDemoFixture = (record.events || []).some((event) => {
+    let details = event.details_json;
+    if (typeof details === 'string') {
+      try { details = JSON.parse(details); } catch { return false; }
+    }
+    return ['hostinger-demo-legacy-intake-v1', 'hostinger-demo-legacy-intake-v2']
+      .includes(details?.demoFixture?.fixtureType);
+  });
   const formatAddress = (formatted, blockLot, barangay, city, province, zip) => {
     const fields = [
       ['Block and lot, street/purok', blockLot], ['Barangay', barangay], ['City', city],
@@ -85,6 +93,10 @@
   </header>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+
+  <% if (syntheticDemoFixture) { %>
+    <p class="form-alert" role="note"><strong>Synthetic demo intake record.</strong> Contact, preference, previous-school, signature, and date fields are fixture values. No paper form, actual signature, received receipt, or paper clearance was inspected or recorded. The student profile and posted finance history were preserved.</p>
+  <% } %>
 
   <% if (record.status === 'enrollment_started') { %>
     <section class="form-section pre-enrollment-panel" aria-labelledby="enrollment-state-heading">

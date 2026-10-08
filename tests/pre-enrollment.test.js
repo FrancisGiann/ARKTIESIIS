@@ -358,6 +358,12 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
         calls.push(['get', actorId]);
         const record = detailRecord(id, ['b342bc01-2a68-4f19-a7fd-4d5bb1d83261', 'd342bc01-2a68-4f19-a7fd-4d5bb1d83261', 'e342bc01-2a68-4f19-a7fd-4d5bb1d83261'].includes(id)
           ? 'enrollment_started' : 'ready_for_registrar');
+        if (id === 'f342bc01-2a68-4f19-a7fd-4d5bb1d83261') {
+          record.events = [{
+            ...record.events[0],
+            details_json: JSON.stringify({ demoFixture: { fixtureType: 'hostinger-demo-legacy-intake-v2' } })
+          }];
+        }
         if (['b342bc01-2a68-4f19-a7fd-4d5bb1d83261', 'd342bc01-2a68-4f19-a7fd-4d5bb1d83261'].includes(id)) {
           record.linkedAnnualEnrollment = {
             id: id === 'd342bc01-2a68-4f19-a7fd-4d5bb1d83261' ? 72 : 71,
@@ -422,6 +428,13 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.doesNotMatch(detailHtml, /ready_for_registrar|submitted_ready/);
     assert.doesNotMatch(detailHtml, /Start enrollment/, 'front desk can correct a ready record but cannot start enrollment');
     assert.match(detailHtml, /Correct paper record/);
+    assert.doesNotMatch(detailHtml, /Synthetic demo intake record/);
+
+    const syntheticDetail = await fetch(`${origin}/pre-enrollments/f342bc01-2a68-4f19-a7fd-4d5bb1d83261`);
+    assert.equal(syntheticDetail.status, 200);
+    const syntheticDetailHtml = await syntheticDetail.text();
+    assert.match(syntheticDetailHtml, /Synthetic demo intake record/);
+    assert.match(syntheticDetailHtml, /No paper form, actual signature, received receipt, or paper clearance was inspected or recorded/);
 
     const registrarDetail = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261`, {
       headers: { 'x-test-role': 'registrar' }
