@@ -1899,7 +1899,7 @@ label { font-size: 0.84rem; }
 }
 
 /* Finance browse surfaces keep the common task visible and reveal term-level work on demand. */
-.finance-roster-filters { display: grid; gap: 0.75rem; }
+.finance-roster-filters { display: grid; gap: 0.45rem; }
 .finance-roster-primary-filters {
   display: grid;
   grid-template-columns: minmax(14rem, 1.35fr) repeat(2, minmax(9rem, 0.75fr)) auto;
@@ -1909,8 +1909,13 @@ label { font-size: 0.84rem; }
 .finance-roster-primary-filters .field, .finance-roster-filter-grid .field { min-width: 0; margin: 0; }
 .finance-roster-primary-filters input, .finance-roster-primary-filters select,
 .finance-roster-filter-grid input, .finance-roster-filter-grid select { width: 100%; min-width: 0; }
+.finance-roster-primary-filters input, .finance-roster-primary-filters select,
+.finance-roster-primary-filters .button { min-height: 44px; }
 .finance-roster-primary-filters .button { white-space: nowrap; }
-.finance-roster-more-filters { padding-top: 0.35rem; border-top: 1px solid var(--line); }
+.finance-roster-search-help { max-width: 68ch; margin: 0; }
+.finance-roster-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 1rem; padding-top: 0.2rem; border-top: 1px solid var(--line); }
+.finance-roster-more-filters { min-width: 0; }
+.finance-roster-more-filters[open] { flex: 1 0 100%; }
 .finance-roster-more-filters > summary {
   width: fit-content;
   min-height: 2.75rem;
@@ -1934,7 +1939,7 @@ label { font-size: 0.84rem; }
   border-radius: 0.2rem;
 }
 .finance-roster-filter-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.7rem; padding: 0.3rem 0 0.15rem; }
-.finance-roster-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.7rem; }
+.finance-roster-filter-actions > .table-action { min-height: 2.75rem; display: inline-flex; align-items: center; }
 .finance-roster-pagination { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.65rem 1rem; margin-bottom: 0.8rem; }
 .finance-roster-pagination > p, .finance-roster-result-count { margin: 0; color: var(--muted); font-size: 0.85rem; }
 .finance-roster-pagination nav { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
@@ -2108,8 +2113,6 @@ label { font-size: 0.84rem; }
   .workspace-body--finance .app-header__user form { flex: 0 0 auto; }
   .finance-roster-primary-filters, .finance-roster-filter-grid { grid-template-columns: minmax(0, 1fr); }
   .finance-roster-primary-filters .button { width: 100%; grid-column: auto; }
-  .finance-roster-filter-actions { align-items: stretch; flex-direction: column; }
-  .finance-roster-filter-actions .button, .finance-roster-filter-actions .table-action { width: 100%; text-align: center; }
   .finance-roster-pagination { align-items: stretch; flex-direction: column; }
   .finance-roster-pagination nav { justify-content: space-between; }
   .finance-departure-case > summary { grid-template-columns: minmax(0, 1fr); padding: 0.8rem; }
@@ -2146,10 +2149,11 @@ label { font-size: 0.84rem; }
 .finance-detail-page .finance-account-action { margin-top: 0.5rem; }
 .finance-detail-page .finance-account-action > summary { display: list-item; width: fit-content; min-height: 2.75rem; padding-block: 0.35rem; color: var(--accent); cursor: pointer; font-size: 0.84rem; font-weight: 700; }
 .finance-detail-page .finance-account-action > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 0.2rem; }
-.finance-overview-search { display: grid; grid-template-columns: minmax(12rem, 1fr) auto; align-items: end; gap: 0.55rem; width: min(100%, 27rem); margin: 0; }
+.finance-overview-search { display: grid; grid-template-columns: minmax(12rem, 1fr) auto; align-items: end; gap: 0.25rem 0.55rem; width: min(100%, 27rem); margin: 0; }
 .finance-overview-search .field { min-width: 0; }
-.finance-overview-search input, .finance-overview-search .button { min-height: 2.75rem; }
+.finance-overview-search input, .finance-overview-search .button { min-height: 44px; }
 .finance-overview-search .button { white-space: nowrap; }
+.finance-overview-search > .muted-copy { grid-column: 1 / -1; margin: 0; }
 .finance-allocation-extra-details { padding-top: 0.3rem; margin-top: 0.35rem; border-top: 1px solid var(--line); }
 .finance-allocation-extra-details > summary { display: list-item; width: fit-content; min-height: 2.75rem; padding-block: 0.55rem; color: var(--accent); cursor: pointer; font-size: 0.84rem; font-weight: 700; }
 .finance-allocation-extra-details > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 0.2rem; }
