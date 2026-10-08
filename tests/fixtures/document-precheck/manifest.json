@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "sampleType": "synthetic",
+  "samples": [
+    {
+      "id": "good_moral_clear",
+      "file": "good-moral-clear.pdf",
+      "mimeType": "application/pdf",
+      "documentType": "good_moral",
+      "student": { "firstName": "Jamie", "lastName": "Garcia" },
+      "expected": {
+        "extractionStatus": "extracted",
+        "studentName": "Jamie Garcia",
+        "linkedMatch": true,
+        "precheckCode": "precheck_pass"
+      }
+    },
+    {
+      "id": "good_moral_surname_first",
+      "file": "good-moral-surname-first.pdf",
+      "mimeType": "application/pdf",
+      "documentType": "good_moral",
+      "student": { "firstName": "Jamie", "middleName": "M", "lastName": "Garcia" },
+      "expected": {
+        "extractionStatus": "extracted",
+        "studentName": "Garcia, Jamie M.",
+        "linkedMatch": true,
+        "precheckCode": "precheck_pass"
+      }
+    },
+    {
+      "id": "good_moral_mismatched_identity",
+      "file": "good-moral-mismatch.pdf",
+      "mimeType": "application/pdf",
+      "documentType": "good_moral",
+      "student": { "firstName": "Jamie", "lastName": "Garcia" },
+      "expected": {
+        "extractionStatus": "extracted",
+        "studentName": "Alex Smith",
+        "linkedMatch": false,
+        "precheckCode": "precheck_attention"
+      }
+    },
+    {
+      "id": "good_moral_missing_name",
+      "file": "good-moral-missing-name.pdf",
+      "mimeType": "application/pdf",
+      "documentType": "good_moral",
+      "student": { "firstName": "Jamie", "lastName": "Garcia" },
+      "expected": {
+        "extractionStatus": "extracted",
+        "studentName": null,
+        "linkedMatch": false,
+        "precheckCode": "precheck_attention"
+      }
+    },
+    {
+      "id": "good_moral_negated_context",
+      "file": "good-moral-negated.pdf",
+      "mimeType": "application/pdf",
+      "documentType": "good_moral",
+      "student": { "firstName": "Jamie", "lastName": "Garcia" },
+      "expected": {
+        "extractionStatus": "extracted",
+        "studentName": "Jamie Garcia",
+        "linkedMatch": true,
+        "precheckCode": "precheck_attention"
+      }
+    },
+    {
+      "id": "good_moral_unrelated_context",
+      "file": "good-moral-unrelated.pdf",
+      "mimeType": "application/pdf",
+      "documentType": "good_moral",
+      "student": { "firstName": "Jamie", "lastName": "Garcia" },
+      "expected": {
+        "extractionStatus": "extracted",
+        "studentName": "Jamie Garcia",
+        "linkedMatch": true,
+        "precheckCode": "precheck_attention"
+      }
+    }
+  ]
+}

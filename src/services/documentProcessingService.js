@@ -4,7 +4,7 @@ const { constants: fsConstants } = require('node:fs');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 const defaultEnvironment = require('../config/environment');
 const { createGeminiFieldExtractionService, MAX_INLINE_FILE_BYTES } = require('./geminiFieldExtractionService');
-const { linkedStudentNameFound } = require('./documentValidationService');
+const { evaluateExtractedFields } = require('./documentValidationService');
 
 const MIME_BY_EXTENSION = new Map([
   ['.pdf', 'application/pdf'],
@@ -228,15 +228,6 @@ function createDocumentProcessingService({
     };
   }
 
-  function matchesLinkedStudent(extractedName, student = {}) {
-    if (typeof extractedName !== 'string' || extractedName.length > 240
-      || /[,;|/\n\r]|\b(?:and|&|or)\b/i.test(extractedName)) return false;
-    const normalizedTokens = extractedName.normalize('NFKD')
-      .replace(/[\u0300-\u036f]/g, '').toLowerCase().match(/[a-z0-9]+/g) || [];
-    if (normalizedTokens.length < 2 || normalizedTokens.length > 8) return false;
-    return linkedStudentNameFound(extractedName, student);
-  }
-
   function evaluateFieldExtraction(document, extraction, fileFormatPassed) {
     if (extraction?.status !== 'extracted' || !extraction.fields) {
       return {
@@ -246,37 +237,7 @@ function createDocumentProcessingService({
         studentNameMatchesLinkedRecord: null
       };
     }
-    const fields = extraction.fields;
-    const studentName = typeof fields.studentName === 'string' ? fields.studentName.slice(0, 240) : '';
-    const normalizedFields = { studentName };
-    let studentNameMatchesLinkedRecord = studentName
-      ? matchesLinkedStudent(studentName, document.student)
-      : false;
-    let requiredFieldsPresent = Boolean(studentName) && studentNameMatchesLinkedRecord;
-    if (document.document_type === 'good_moral') {
-      const issuingSchoolName = typeof fields.issuingSchoolName === 'string' ? fields.issuingSchoolName.slice(0, 240) : '';
-      const goodMoralContextEvidence = typeof fields.goodMoralContextEvidence === 'string'
-        ? fields.goodMoralContextEvidence.slice(0, 240)
-        : '';
-      const goodMoralLayoutEvidence = typeof fields.goodMoralLayoutEvidence === 'string'
-        ? fields.goodMoralLayoutEvidence.slice(0, 240)
-        : '';
-      normalizedFields.issuingSchoolName = issuingSchoolName;
-      normalizedFields.goodMoralContextEvidence = goodMoralContextEvidence;
-      normalizedFields.goodMoralLayoutEvidence = goodMoralLayoutEvidence;
-      const hasGoodMoralContext = /\b(?:good moral|moral character|good character|character certificate|good conduct)\b/i
-        .test(goodMoralContextEvidence);
-      const hasSurroundingContent = goodMoralLayoutEvidence.length >= 30;
-      requiredFieldsPresent = requiredFieldsPresent && Boolean(issuingSchoolName)
-        && hasGoodMoralContext && hasSurroundingContent;
-    }
-    return {
-      status: 'extracted',
-      code: requiredFieldsPresent && fileFormatPassed ? 'precheck_pass' : 'precheck_attention',
-      fields: normalizedFields,
-      studentNameMatchesLinkedRecord,
-      requiredFieldsPresent
-    };
+    return evaluateExtractedFields(document.document_type, extraction.fields, document.student, fileFormatPassed);
   }
 
   async function saveOutcome(documentId, outcome) {

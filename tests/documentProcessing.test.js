@@ -183,7 +183,11 @@ test('student-name comparison rejects distant tokens and multi-name model output
   try {
     for (const studentName of [
       'Jamie describes a long set of unrelated details before Garcia',
-      'Jamie Garcia and Alex Smith'
+      'Jamie Garcia and Alex Smith',
+      'Jamie & Garcia',
+      'Jamie Garcia, Alex Smith',
+      'Garcia,, Jamie',
+      'Garcia, Jamie, Alex'
     ]) {
       const harness = makeHarness();
       await fs.writeFile(path.join(storageDirectory, STORED_PDF), Buffer.from('%PDF-1.7\nsource'));
@@ -195,6 +199,88 @@ test('student-name comparison rejects distant tokens and multi-name model output
       assert.equal(summary.gemini.studentNameMatchesLinkedRecord, false, studentName);
       assert.equal(result.code, 'precheck_attention', studentName);
       assert.equal(result.status, 'needs_review', studentName);
+    }
+  } finally {
+    await fs.rm(storageDirectory, { recursive: true, force: true });
+  }
+});
+
+test('field matching accepts surname-first and diacritic name variants', async () => {
+  const storageDirectory = await temporaryStorage();
+  try {
+    for (const studentName of ['Garcia, Jamie', 'García, Jámie M.', 'Garcia Jamie', 'Garcia J. Jamie']) {
+      const harness = makeHarness();
+      await fs.writeFile(path.join(storageDirectory, STORED_PDF), Buffer.from('%PDF-1.7\nsource'));
+      const service = createService(harness, storageDirectory, async () => ({
+        status: 'extracted', code: 'extracted', fields: { ...VALID_GOOD_MORAL_FIELDS, studentName }
+      }));
+      const result = await service.processPendingDocument(84);
+      const summary = JSON.parse(harness.state.validations[0].validationJson);
+      assert.equal(summary.gemini.studentNameMatchesLinkedRecord, true, studentName);
+      assert.equal(result.code, 'precheck_pass', studentName);
+    }
+  } finally {
+    await fs.rm(storageDirectory, { recursive: true, force: true });
+  }
+});
+
+test('Good Moral negative, uncertain, unrelated, and layout-only evidence stays at attention', async () => {
+  const storageDirectory = await temporaryStorage();
+  try {
+    const cases = [
+      { context: 'This certifies that the student is not of good moral character.', layout: VALID_GOOD_MORAL_FIELDS.goodMoralLayoutEvidence },
+      { context: 'This is not a certificate of good moral character.', layout: VALID_GOOD_MORAL_FIELDS.goodMoralLayoutEvidence },
+      { context: 'Maybe this is a Good Moral Certificate.', layout: VALID_GOOD_MORAL_FIELDS.goodMoralLayoutEvidence },
+      { context: 'A document mentions good moral character in passing.', layout: VALID_GOOD_MORAL_FIELDS.goodMoralLayoutEvidence },
+      { context: 'The page says this is a Good Moral Certificate.', layout: VALID_GOOD_MORAL_FIELDS.goodMoralLayoutEvidence },
+      { context: VALID_GOOD_MORAL_FIELDS.goodMoralContextEvidence, layout: 'No certificate title, student details or statement are present.' },
+      { context: VALID_GOOD_MORAL_FIELDS.goodMoralContextEvidence, layout: 'A large border and unrelated text are visible. '.repeat(3) }
+    ];
+    for (const item of cases) {
+      const harness = makeHarness();
+      await fs.writeFile(path.join(storageDirectory, STORED_PDF), Buffer.from('%PDF-1.7\nsource'));
+      const service = createService(harness, storageDirectory, async () => ({
+        status: 'extracted', code: 'extracted', fields: {
+          ...VALID_GOOD_MORAL_FIELDS,
+          goodMoralContextEvidence: item.context,
+          goodMoralLayoutEvidence: item.layout
+        }
+      }));
+      const result = await service.processPendingDocument(84);
+      const summary = JSON.parse(harness.state.validations[0].validationJson);
+      assert.equal(result.code, 'precheck_attention', item.context || item.layout);
+      assert.equal(summary.gemini.requiredFieldsPresent, false, item.context || item.layout);
+    }
+  } finally {
+    await fs.rm(storageDirectory, { recursive: true, force: true });
+  }
+});
+
+test('Good Moral affirmative title and non-derogatory context wording remain eligible', async () => {
+  const storageDirectory = await temporaryStorage();
+  try {
+    for (const context of [
+      'Certificate of Good Moral',
+      'Moral Character Certificate',
+      'Certificate of Good Character',
+      'Jamie Garcia is of good character.',
+      'The student has maintained good moral character.',
+      'This certifies that the student has no derogatory record.',
+      'This certificate confirms the student has not been involved in misconduct.',
+      'This certifies that Jamie Garcia has no derogatory record and is of good moral character.',
+      'Jamie Garcia has not been involved in misconduct and has maintained good moral character.'
+    ]) {
+      const harness = makeHarness();
+      await fs.writeFile(path.join(storageDirectory, STORED_PDF), Buffer.from('%PDF-1.7\nsource'));
+      const service = createService(harness, storageDirectory, async () => ({
+        status: 'extracted', code: 'extracted', fields: {
+          ...VALID_GOOD_MORAL_FIELDS,
+          goodMoralContextEvidence: context,
+          goodMoralLayoutEvidence: 'No logo or seal is visible. The certificate title appears above student details and the statement.'
+        }
+      }));
+      const result = await service.processPendingDocument(84);
+      assert.equal(result.code, 'precheck_pass', context);
     }
   } finally {
     await fs.rm(storageDirectory, { recursive: true, force: true });

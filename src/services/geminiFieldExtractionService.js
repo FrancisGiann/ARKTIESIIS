@@ -45,8 +45,8 @@ function promptFor(documentType) {
       'Return an empty string for any requested field that is missing, unreadable, or uncertain. Do not infer or complete text.',
       'student_name: the student name visibly stated as the subject of the certificate.',
       'issuing_school_name: the school or institution visibly identified as issuing the certificate; return empty if unclear.',
-      'good_moral_context_evidence: an exact visible title or substantive statement showing that this is a Good Moral or character certificate. Names and school details alone are not evidence.',
-      'good_moral_layout_evidence: a short description of the visible page context around that title or statement, showing certificate content beyond isolated name and school lines. Do not rely on or describe logos, seals, signatures, or authenticity.',
+      'good_moral_context_evidence: copy an exact affirmative visible certificate title or substantive positive character statement. Return empty for negated, contradictory, uncertain, or unreadable evidence and for your own commentary or summary. Names and school details alone are not evidence.',
+      'good_moral_layout_evidence: briefly describe visible certificate components around the title or statement, such as its heading, body statement, student details, or date. Return empty if the surrounding certificate content is unclear or absent. Do not rely on or describe logos, seals, signatures, or authenticity.',
       'Do not require a particular template, logo, seal, signature, or layout. Do not classify authenticity, detect forgery, or verify an issuer.'
     ].join(' ');
   }
@@ -197,8 +197,7 @@ function createGeminiFieldExtractionService({
             generationConfig: {
               responseMimeType: 'application/json',
               responseSchema: schemaFor(documentType),
-              maxOutputTokens: 512,
-              temperature: 0
+              maxOutputTokens: 512
             }
           }),
           signal: controller.signal

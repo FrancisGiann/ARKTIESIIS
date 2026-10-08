@@ -44,10 +44,16 @@ test('Gemini adapter sends a bounded inline Good Moral PDF request with structur
   assert.equal(request.body.contents[0].parts[0].inline_data.mime_type, 'application/pdf');
   assert.equal(Buffer.from(request.body.contents[0].parts[0].inline_data.data, 'base64').toString(), '%PDF-1.7\nvisible contents');
   assert.equal(request.body.generationConfig.responseMimeType, 'application/json');
+  assert.equal(request.body.generationConfig.temperature, undefined);
+  assert.equal(request.body.generationConfig.topP, undefined);
+  assert.equal(request.body.generationConfig.topK, undefined);
+  assert.equal(request.body.generationConfig.candidateCount, undefined);
   assert.deepEqual(request.body.generationConfig.responseSchema.required, [
     'student_name', 'issuing_school_name', 'good_moral_context_evidence', 'good_moral_layout_evidence'
   ]);
   assert.match(request.body.contents[0].parts[1].text, /Names and school details alone are not evidence/);
+  assert.match(request.body.contents[0].parts[1].text, /negated, contradictory, uncertain/);
+  assert.match(request.body.contents[0].parts[1].text, /copy an exact affirmative visible certificate title/);
   assert.match(request.body.contents[0].parts[1].text, /Do not require a particular template/);
 });
 

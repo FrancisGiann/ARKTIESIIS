@@ -1,0 +1,66 @@
+{
+  "evaluationDate": "2026-10-08T12:35:02.968Z",
+  "model": "gemini-3.5-flash-lite",
+  "evaluationType": "synthetic",
+  "sampleCount": 6,
+  "providerCalls": 6,
+  "processedCount": 6,
+  "skippedSamples": 0,
+  "usableExtractedResultCount": 6,
+  "unavailableResultCount": 0,
+  "extraction": {
+    "statusMatches": 6,
+    "statusErrors": 0,
+    "statusComparisonDenominator": 6,
+    "labeledStudentNames": 5,
+    "exactNameMatches": 5,
+    "nameExtractionErrors": 0,
+    "unavailableNameAbstentions": 0,
+    "skippedNameSamples": 0,
+    "normalizedExactNameRate": {
+      "numerator": 5,
+      "denominator": 5,
+      "rate": 1
+    },
+    "expectedMissingNameSamples": 1,
+    "emptyNameOutputsForMissingLabels": 1,
+    "unexpectedNameOutputsForMissingLabels": 0,
+    "unavailableMissingNameSamples": 0,
+    "skippedMissingNameSamples": 0
+  },
+  "linkedNameComparison": {
+    "truePositive": 4,
+    "falseNegative": 0,
+    "falsePositive": 0,
+    "trueNegative": 2,
+    "abstentionsForMatch": 0,
+    "abstentionsForNonMatch": 0,
+    "skippedForMatch": 0,
+    "skippedForNonMatch": 0,
+    "expectedMatchSamples": 4,
+    "expectedNonMatchSamples": 2,
+    "determinateMatchDenominator": 4,
+    "determinateNonMatchDenominator": 2,
+    "falsePositiveRate": {
+      "numerator": 0,
+      "denominator": 2,
+      "rate": 0
+    },
+    "falseNegativeRate": {
+      "numerator": 0,
+      "denominator": 4,
+      "rate": 0
+    }
+  },
+  "precheckCodeMatches": 6,
+  "precheckCodeEvaluatedCount": 6,
+  "latencyMs": {
+    "callCount": 6,
+    "mean": 2235.4,
+    "p50": 2032.2,
+    "p95": 2912,
+    "max": 2912
+  },
+  "representativeSchoolAccuracyMeasured": false,
+  "limitations": "This run used only fictional synthetic PDFs and does not measure representative school accuracy."
+}
