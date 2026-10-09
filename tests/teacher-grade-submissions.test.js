@@ -498,7 +498,7 @@ test('teacher upload, preview, durable submission, and registrar approval routes
     section_name: 'STEM A', subject_id: 77, subject_code: 'ENG11', subject_name: 'Oral Communication' };
   const gradeImportService = {
     async listImportContexts(actorId) { return actorId === 7 ? [context] : []; },
-    async createPreview(input) { calls.push(['preview', input.originalFilename, input.buffer.length]); return HTTP_PREVIEW; },
+    async createPreview(input) { calls.push(['preview', input.originalFilename, input.buffer.length, input.contextKey]); return HTTP_PREVIEW; },
     async getPreview() { return HTTP_PREVIEW; },
     async confirmPreview(input) { calls.push(['approve', input.actorId, input.submissionId, input.decisions]); return { inserted: 4 }; }
   };
@@ -555,13 +555,27 @@ test('teacher upload, preview, durable submission, and registrar approval routes
       })).status, 403);
       assert.equal(calls.some(([action]) => action === 'preview'), false);
 
+      const extraFieldForm = new FormData();
+      extraFieldForm.set('_csrf', token);
+      extraFieldForm.set('contextKey', context.key);
+      extraFieldForm.set('unexpected', 'extra');
+      extraFieldForm.set('workbook', new Blob([workbookBytes], { type: mime }), 'grades.xlsx');
+      const extraFieldResponse = await fetch(`${baseUrl}/teacher/grades/12/preview`, {
+        method: 'POST', headers: { cookie: teacherCookie }, body: extraFieldForm
+      });
+      assert.equal(extraFieldResponse.status, 400, 'the multipart limit permits the two rendered fields and rejects an extra field');
+      assert.equal(calls.some(([action]) => action === 'preview'), false, 'unexpected fields stop before the parser service');
+
       const workbookForm = new FormData();
       workbookForm.set('_csrf', token);
+      workbookForm.set('contextKey', 'forged-context-key');
       workbookForm.set('workbook', new Blob([workbookBytes], { type: mime }), 'grades.xlsx');
       const previewResponse = await fetch(`${baseUrl}/teacher/grades/12/preview`, {
         method: 'POST', headers: { cookie: teacherCookie }, body: workbookForm
       });
       assert.equal(previewResponse.status, 200);
+      assert.equal(calls.find(([action]) => action === 'preview')[3], context.key,
+        'the assignment context comes from the server and cannot be changed by a forged form field');
       const previewHtml = await previewResponse.text();
       assert.match(previewHtml, /No grades are written until the registrar approves it/);
       assert.match(previewHtml, /Jamie Garcia/);

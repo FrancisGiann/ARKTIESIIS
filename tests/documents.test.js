@@ -94,7 +94,7 @@ test('shared student document tabs preserve staff Requests context without expos
   assert.match(stylesheet, /\.student-document-sections a \{ min-height: 2\.75rem;/);
 });
 
-function transactionHarness({ actorRole = 'student', ownStudentId = 44, previousOwnerId = 7, previousDocumentType = 'good_moral', previousUploadSource = actorRole === 'student' ? 'student' : 'registrar', previousIsLegacyArchive = false, failAt = null, correctionAction = 'correction_requested', hasRevision = false, hasCorrectedSubmission = false, originalSubmissionExists = false, latestSubmissionStatus = originalSubmissionExists ? 'needs_review' : null, latestSubmissionRows = null, documentStatus = 'needs_review', ocrResultStatus = 'needs_review', validationJson = JSON.stringify({ advisoryChecks: [{ key: 'linked_student_name', found: true }] }), originalFilename = 'report.pdf', storedFilename = '5dd677e1-87fb-4214-a7c1-27aca233ae1f.pdf', previousDecision = null, id = 90, fileSystem } = {}) {
+function transactionHarness({ actorRole = 'student', ownStudentId = 44, previousOwnerId = 7, previousDocumentType = 'good_moral', previousUploadSource = actorRole === 'student' ? 'student' : 'registrar', previousIsLegacyArchive = false, failAt = null, correctionAction = 'correction_requested', hasRevision = false, hasCorrectedSubmission = false, hasNewerReportCard = false, originalSubmissionExists = false, latestSubmissionStatus = originalSubmissionExists ? 'needs_review' : null, latestSubmissionRows = null, documentStatus = 'needs_review', ocrResultStatus = 'needs_review', validationJson = JSON.stringify({ advisoryChecks: [{ key: 'linked_student_name', found: true }] }), originalFilename = 'report.pdf', storedFilename = '5dd677e1-87fb-4214-a7c1-27aca233ae1f.pdf', previousDecision = null, id = 90, fileSystem } = {}) {
   const state = { queries: [], inserted: [], events: [], decisions: [], form137Statuses: [], previousSchoolReportCardStatuses: [], deletedRows: [], documentExists: true, committed: false, rolledBack: false, id, documentStatus, previousDecision };
   const transactionFactory = () => ({
     async begin(isolation) {
@@ -132,16 +132,19 @@ function transactionHarness({ actorRole = 'student', ownStudentId = 44, previous
           if (statement.includes('WHERE supersedes_document_id = @documentId') && statement.includes('FOR UPDATE')) return { recordset: hasCorrectedSubmission ? [{ id: 91 }] : [] };
           if (statement.includes('v_document_latest_validation')) return { recordset: [{ id: values.documentId, student_id: 44, document_type: previousDocumentType, is_legacy_archive: previousIsLegacyArchive ? 1 : 0, status: state.documentStatus, original_filename: originalFilename, mime_type: 'application/pdf', result_status: ocrResultStatus, validation_json: validationJson, precheck_attempt_count: 1 }] };
           if (statement.includes('SELECT id FROM documents') && statement.includes('supersedes_document_id')) return { recordset: hasRevision ? [{ id: 91 }] : [] };
+          if (statement.includes("AND document_type = 'report_card' AND is_legacy_archive = 0")) return { recordset: hasNewerReportCard ? [{ id: 92 }] : [] };
           if (statement.includes('FROM students') && statement.includes('WHERE user_id = @actorId')) return { recordset: ownStudentId ? [{ id: ownStudentId }] : [] };
           if (statement.includes('FROM students') && statement.includes('WHERE id = @studentId')) return { recordset: [{ id: values.studentId }] };
           if (statement.includes('SELECT id, status FROM documents') && statement.includes('student_id = @studentId')) {
             if (previousDocumentType === 'report_card' && previousIsLegacyArchive) return { recordset: [] };
             return { recordset: latestSubmissionRows || (latestSubmissionStatus ? [{ id: 12, status: latestSubmissionStatus }] : []) };
           }
-          if (statement.includes('FROM documents AS d')) return { recordset: [{ id: values.documentId, student_id: 44, document_type: previousDocumentType, upload_source: previousUploadSource, is_legacy_archive: previousIsLegacyArchive ? 1 : 0, status: state.documentStatus, original_filename: originalFilename, mime_type: 'application/pdf', result_status: ocrResultStatus, validation_json: validationJson, student_user_id: previousOwnerId }] };
+          if (statement.includes('FROM documents AS d')) return { recordset: [{ id: values.documentId, student_id: 44, document_type: previousDocumentType, upload_source: previousUploadSource, is_legacy_archive: previousIsLegacyArchive ? 1 : 0, status: state.documentStatus, created_at: new Date('2026-10-01T00:00:00Z'), original_filename: originalFilename, mime_type: 'application/pdf', result_status: ocrResultStatus, validation_json: validationJson, student_user_id: previousOwnerId }] };
           if (statement.includes('FROM documents')) return { recordset: [{ id: values.documentId, student_id: 44, document_type: 'good_moral' }] };
           if (statement.includes('FROM document_validations AS validation')) return { recordset: [{ id: 1, processor: 'gemini-document-precheck-v2', extracted_text: '', validation_json: validationJson, result_status: ocrResultStatus, created_at: new Date(), precheck_attempt_count: 1 }] };
-          if (statement.includes('FROM document_decision_events')) return { recordset: state.previousDecision ? [{ decision_type: state.previousDecision }] : [] };
+          if (statement.includes('FROM document_decision_events')) return { recordset: state.previousDecision
+            ? [statement.includes('AS action_type') ? { action_type: state.previousDecision } : { decision_type: state.previousDecision }]
+            : [] };
           if (statement.includes('FROM document_review_events')) return { recordset: correctionAction ? [{ action_type: correctionAction }] : [] };
           if (statement.includes('INSERT INTO documents')) {
             if (failAt === 'insert') throw new Error('database details are private');
@@ -407,6 +410,22 @@ test('student re-upload creates a linked immutable submission only after a corre
     assert.equal(activeReportCard.state.inserted[0].values.supersedesDocumentId, 12);
     assert.equal(activeReportCard.state.inserted[0].values.initialStatus, 'pending');
 
+    const revokedReportCardRequest = transactionHarness({
+      previousDocumentType: 'report_card', previousUploadSource: 'student', previousDecision: 'rejected', correctionAction: 'correction_requested'
+    });
+    await assert.rejects(serviceWithStorage(revokedReportCardRequest, directory).reupload(7, '12', makeFile()), /has not been requested/);
+    assert.equal(revokedReportCardRequest.state.inserted.length, 0, 'a later final decision revokes the earlier review-event request');
+    const closedReportCardRequest = transactionHarness({
+      previousDocumentType: 'report_card', previousUploadSource: 'student', previousDecision: 'correction_requested', documentStatus: 'valid'
+    });
+    await assert.rejects(serviceWithStorage(closedReportCardRequest, directory).reupload(7, '12', makeFile()), /review remains open/);
+    assert.equal(closedReportCardRequest.state.inserted.length, 0, 'a verified report card cannot be re-uploaded under an old correction request');
+    const olderReportCardRequest = transactionHarness({
+      previousDocumentType: 'report_card', previousUploadSource: 'student', previousDecision: 'correction_requested', hasNewerReportCard: true
+    });
+    await assert.rejects(serviceWithStorage(olderReportCardRequest, directory).reupload(7, '12', makeFile()), /older report-card submission/);
+    assert.equal(olderReportCardRequest.state.inserted.length, 0, 'an older version cannot use its correction after a newer report card exists');
+
     const noRequest = transactionHarness({ correctionAction: null });
     await assert.rejects(serviceWithStorage(noRequest, directory).reupload(7, '12', makeFile()), /has not been requested/);
     assert.equal(noRequest.state.inserted.length, 0);
@@ -467,6 +486,13 @@ test('student document lists include both student and staff PSA submissions for 
   assert.match(listSql, /s\.user_id = @actorId AND \(/);
   assert.match(listSql, /d\.document_type IN \('good_moral', 'psa_birth_certificate'\)/);
   assert.match(listSql, /d\.document_type = 'report_card' AND d\.is_legacy_archive = 0 AND d\.upload_source = 'student'/);
+  assert.match(listSql, /CASE WHEN \(d\.document_type = 'report_card'/);
+  assert.match(listSql, /AS student_can_view_source/);
+  assert.match(listSql, /v_document_latest_decision_event AS current_decision/);
+  assert.match(listSql, /v_document_latest_review_event AS current_review/);
+  assert.match(listSql, /NOT EXISTS \(SELECT 1 FROM documents AS corrected/);
+  assert.match(listSql, /newer_report_card/);
+  assert.match(listSql, /d\.status IN \('needs_review', 'failed'\)/);
   assert.match(listSql, /THEN latest\.instruction ELSE NULL END AS latest_review_instruction/);
   assert.match(listSql, /d\.upload_source = 'student'/, 'student-facing list query excludes internal PSA instructions by upload origin');
   assert.match(listSql, /latest_decision\.decision_type AS latest_decision_type/);
@@ -1580,13 +1606,14 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
       if (Buffer.isBuffer(file?.buffer)) uploadedBuffers.push(file.buffer);
       calls.push(['upload', actorId, body.documentType, file?.originalname]);
       const id = actorId !== 1 ? 18 : body.documentType === 'psa_birth_certificate' ? 23 : body.documentType === 'report_card' ? 27 : 15;
-      return { id, status: 'pending' };
+      return { id, documentType: body.documentType, status: 'pending' };
     },
     async reupload(actorId, documentId, file) {
       if (documentId === '24' && actorId === 1) throw new DocumentServiceError('Document not found.', 404);
       if (documentId === '24') throw new DocumentServiceError('Historical report cards are read-only archive records.', 409);
       calls.push(['reupload', actorId, documentId, file?.originalname]);
-      return { id: actorId === 1 ? 17 : 19 };
+      if (documentId === '28') return { id: 29, documentType: 'report_card', status: 'pending' };
+      return { id: actorId === 1 ? 17 : 19, documentType: documentId === '23' ? 'psa_birth_certificate' : 'good_moral', status: 'pending' };
     },
     async decideDocument(...args) {
       decisionCalls.push(args);
@@ -1607,12 +1634,13 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
       const isRetryablePrecheck = numericDocumentId === 25;
       const isRestrictedDocumentType = numericDocumentId === 16 || isHistoricalForm137;
       const isStudentPsa = numericDocumentId === 23;
-      const isReportCard = numericDocumentId === 24 || numericDocumentId === 27;
-      const isActiveReportCard = numericDocumentId === 27;
+      const isReportCard = [24, 27, 28, 29].includes(numericDocumentId);
+      const isActiveReportCard = [27, 28, 29].includes(numericDocumentId);
+      const isReportCardCorrection = numericDocumentId === 28;
       const isArchivedReportCard = numericDocumentId === 24;
-      const finalDecision = numericDocumentId === 20 || numericDocumentId === 26 ? 'rejected' : 'verified';
-      const hasFinalDecision = [20, 21, 26].includes(numericDocumentId);
-      if (actorId === 1 && (isRestrictedDocumentType || isArchivedReportCard)) return null;
+      const finalDecision = numericDocumentId === 20 || numericDocumentId === 26 || numericDocumentId === 29 ? 'rejected' : 'verified';
+      const hasFinalDecision = [20, 21, 26, 29].includes(numericDocumentId);
+      if (actorId === 1 && (isRestrictedDocumentType || isArchivedReportCard || (isReportCard && !isReportCardCorrection))) return null;
       return {
         id: numericDocumentId, student_id: 44, student_user_id: 1, student_no: 'S-1',
         first_name: 'Test', middle_name: null, last_name: 'Student', document_type: isHistoricalForm137 ? 'form_137' : isRestrictedDocumentType || isStudentPsa ? 'psa_birth_certificate' : isReportCard ? 'report_card' : 'good_moral',
@@ -1620,7 +1648,9 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
         file_size_bytes: 1000, uploaded_by: isRestrictedDocumentType ? 2 : 1, uploader_role: isRestrictedDocumentType ? 'registrar' : 'student', upload_source: isRestrictedDocumentType ? 'registrar' : 'student',
         status: numericDocumentId === 20 || numericDocumentId === 26 ? 'rejected' : numericDocumentId === 21 ? 'valid' : 'needs_review', supersedes_document_id: null, created_at: new Date(),
         history: [{ id: numericDocumentId, original_filename: 'moral.pdf', mime_type: 'application/pdf', status: 'needs_review', supersedes_document_id: null, created_at: new Date() }],
-        reviewEvents: [{ id: 1, action_type: 'correction_requested', instruction: 'Upload a clearer file <script>alert(1)</script>', created_at: new Date(), reviewer_name: 'Registrar' }],
+        reviewEvents: numericDocumentId === 29
+          ? [{ id: 1, action_type: 'correction_requested', instruction: 'An older correction request.', created_at: new Date(), reviewer_name: 'Registrar' }]
+          : [{ id: 1, action_type: 'correction_requested', instruction: 'Upload a clearer file <script>alert(1)</script>', created_at: new Date(), reviewer_name: 'Registrar' }],
         validation: actorId === 1 || isHistoricalForm137 ? null : isActiveReportCard ? {
           processor: 'Gemini field extraction',
           legacyOcrOnly: false,
@@ -1650,7 +1680,9 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
           canRetryPrecheck: isRetryablePrecheck,
           precheckRetriesRemaining: isRetryablePrecheck ? 2 : 0
         },
-        decisions: hasFinalDecision ? [
+        decisions: isReportCardCorrection
+          ? [{ id: 3, decision_type: 'correction_requested', reason: 'Upload a clearer report card.', created_at: new Date(), reviewer_name: null }]
+          : hasFinalDecision ? [
           { id: 2, decision_type: finalDecision, reason: numericDocumentId === 20 ? 'The submitted certificate is unreadable <script>alert(1)</script>.' : numericDocumentId === 26 ? '   ' : null, created_at: new Date(), reviewer_name: null },
           { id: 1, decision_type: 'correction_requested', reason: 'Upload a clearer file.', created_at: new Date(Date.now() - 1000), reviewer_name: null }
         ] : [],
@@ -1769,10 +1801,22 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     assert.equal(studentNewerActive.status, 200);
     assert.doesNotMatch(studentNewerActiveHtml, /option value="good_moral"/);
 
+    listedDocuments = [{
+      id: 27, document_type: 'report_card', original_filename: 'private-report-card.pdf', status: 'needs_review',
+      student_can_view_source: 0, created_at: new Date('2026-10-01T10:00:00Z')
+    }];
+    const studentReportCardMetadata = await fetch(`${baseUrl}/documents`, { headers: { cookie: studentCookie } });
+    const studentReportCardMetadataHtml = await studentReportCardMetadata.text();
+    assert.equal(studentReportCardMetadata.status, 200);
+    assert.match(studentReportCardMetadataHtml, /Awaiting staff review/);
+    assert.match(studentReportCardMetadataHtml, /Available after staff requests a correction/);
+    assert.doesNotMatch(studentReportCardMetadataHtml, /private-report-card\.pdf/);
+    assert.doesNotMatch(studentReportCardMetadataHtml, /href="\/documents\/27"/);
+
     listedDocuments = [
       { id: 15, document_type: 'good_moral', status: 'needs_review' },
       { id: 23, document_type: 'psa_birth_certificate', status: 'valid' },
-      { id: 27, document_type: 'report_card', is_legacy_archive: 0, status: 'needs_review' }
+      { id: 27, document_type: 'report_card', is_legacy_archive: 0, status: 'needs_review', student_can_view_source: 0 }
     ];
     const studentAllTypesUsed = await fetch(`${baseUrl}/documents`, { headers: { cookie: studentCookie } });
     const studentAllTypesUsedHtml = await studentAllTypesUsed.text();
@@ -1817,20 +1861,61 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     const processingCountBeforeStudentReportCard = processingCalls.length;
     const acceptedReportCard = await fetch(`${baseUrl}/documents`, { method: 'POST', headers: { cookie: studentCookie }, body: studentReportCard, redirect: 'manual' });
     assert.equal(acceptedReportCard.status, 303);
-    assert.equal(acceptedReportCard.headers.get('location'), '/documents/27?notice=uploaded');
+    assert.equal(acceptedReportCard.headers.get('location'), '/documents?notice=uploaded');
     assert.equal(calls.some(([action, actorId, type]) => action === 'upload' && actorId === 1 && type === 'report_card'), true);
     assert.equal(processingCalls.length, processingCountBeforeStudentReportCard + 1, 'active report-card upload queues the limited Gemini precheck');
     assert.ok(uploadedBuffers[1].every((byte) => byte === 0), 'the upload route clears the report-card multipart buffer');
+    listedDocuments = [{
+      id: 27, document_type: 'report_card', original_filename: 'private-report-card.pdf', status: 'pending',
+      student_can_view_source: 0, created_at: new Date('2026-10-01T10:00:00Z')
+    }];
+    const reportCardUploadList = await fetch(`${baseUrl}/documents?notice=uploaded`, { headers: { cookie: studentCookie } });
+    const reportCardUploadListHtml = await reportCardUploadList.text();
+    assert.equal(reportCardUploadList.status, 200, 'a new report-card upload returns to the safe list rather than its locked detail page');
+    assert.match(reportCardUploadListHtml, /Document uploaded\./);
+    assert.match(reportCardUploadListHtml, /Waiting for field precheck/);
+    assert.doesNotMatch(reportCardUploadListHtml, /private-report-card\.pdf|href="\/documents\/27"/);
 
     const activeReportCardDetail = await fetch(`${baseUrl}/documents/27?notice=uploaded`, { headers: { cookie: studentCookie } });
     const activeReportCardHtml = await activeReportCardDetail.text();
-    assert.equal(activeReportCardDetail.status, 200);
-    assert.match(activeReportCardHtml, /Staff review/);
-    assert.match(activeReportCardHtml, /limited precheck/);
-    assert.match(activeReportCardHtml, /does not extract grades/);
-    assert.doesNotMatch(activeReportCardHtml, /Automated precheck|precheck-retry/);
-    assert.match(activeReportCardHtml, /action="\/documents\/27\/reupload"/);
-    assert.doesNotMatch(activeReportCardHtml, /opaque-stored-name/);
+    assert.equal(activeReportCardDetail.status, 404, 'owned report-card detail stays unavailable before staff requests a correction');
+    assert.doesNotMatch(activeReportCardHtml, /Source document|Download file|preview/);
+
+    const correctedReportCardDetail = await fetch(`${baseUrl}/documents/28`, { headers: { cookie: studentCookie } });
+    const correctedReportCardHtml = await correctedReportCardDetail.text();
+    assert.equal(correctedReportCardDetail.status, 200);
+    assert.match(correctedReportCardHtml, /Staff review/);
+    assert.match(correctedReportCardHtml, /limited precheck/);
+    assert.match(correctedReportCardHtml, /does not extract grades/);
+    assert.match(correctedReportCardHtml, /href="\/documents\/28\/download"/);
+    assert.match(correctedReportCardHtml, /href="\/documents\/28\/preview"/);
+    assert.match(correctedReportCardHtml, /action="\/documents\/28\/reupload"/);
+    assert.doesNotMatch(correctedReportCardHtml, /opaque-stored-name/);
+
+    const reportCardCorrection = new FormData();
+    reportCardCorrection.set('_csrf', csrfFromHtml(correctedReportCardHtml));
+    reportCardCorrection.set('document', new Blob([Buffer.from('%PDF-1.7\ncorrected report card')], { type: 'application/pdf' }), 'corrected-report.pdf');
+    const correctedReportCardUpload = await fetch(`${baseUrl}/documents/28/reupload`, {
+      method: 'POST', headers: { cookie: studentCookie }, body: reportCardCorrection, redirect: 'manual'
+    });
+    assert.equal(correctedReportCardUpload.status, 303);
+    assert.equal(correctedReportCardUpload.headers.get('location'), '/documents?notice=uploaded');
+    listedDocuments = [{
+      id: 29, document_type: 'report_card', original_filename: 'corrected-report.pdf', status: 'pending',
+      student_can_view_source: 0, created_at: new Date('2026-10-02T10:00:00Z')
+    }];
+    const correctedReportCardList = await fetch(`${baseUrl}/documents?notice=uploaded`, { headers: { cookie: studentCookie } });
+    const correctedReportCardListHtml = await correctedReportCardList.text();
+    assert.equal(correctedReportCardList.status, 200, 'a successful report-card correction returns to the safe status list');
+    assert.match(correctedReportCardListHtml, /Document uploaded\./);
+    assert.match(correctedReportCardListHtml, /Waiting for field precheck/);
+    assert.doesNotMatch(correctedReportCardListHtml, /corrected-report\.pdf|href="\/documents\/29"/);
+    assert.equal((await fetch(`${baseUrl}/documents/29`, { headers: { cookie: studentCookie } })).status, 404,
+      'new pending report-card version remains unreadable after correction submission');
+    listedDocuments = [];
+
+    const supersededCorrection = await fetch(`${baseUrl}/documents/29`, { headers: { cookie: studentCookie } });
+    assert.equal(supersededCorrection.status, 404, 'an older correction request cannot grant access after a final decision');
 
     const studentDetail = await fetch(`${baseUrl}/documents/15`, { headers: { cookie: studentCookie } });
     const studentDetailHtml = await studentDetail.text();
@@ -2871,11 +2956,38 @@ test('authorized student download opens the opaque private file only after curre
   }
 });
 
-test('students can read only their own active student-origin report cards, never archive rows or Form 137', async () => {
+test('students can read active report-card sources only under the current correction request', async () => {
   const directory = await temporaryDirectory();
   const reportFilename = `${crypto.randomUUID()}.pdf`;
   const reportContents = Buffer.from('%PDF-1.7\nstudent-owned report card');
   const calls = [];
+  const reportCardRows = {
+    91: { id: 91, student_id: 44, document_type: 'report_card', is_legacy_archive: 0, original_filename: 'my-report-card.pdf', stored_filename: reportFilename, mime_type: 'application/pdf', file_size_bytes: reportContents.length, uploaded_by: 7, upload_source: 'student', status: 'needs_review', student_user_id: 7, student_no: 'S-44', first_name: 'Test', middle_name: null, last_name: 'Student', uploader_role: 'student', created_at: new Date('2026-10-01T00:00:00Z') },
+    92: { id: 92, student_id: 45, document_type: 'report_card', is_legacy_archive: 0, upload_source: 'student', student_user_id: 8, uploader_role: 'student' },
+    94: { id: 94, student_id: 44, document_type: 'report_card', is_legacy_archive: 1, upload_source: 'student', student_user_id: 7, uploader_role: 'student' },
+    95: { id: 95, student_id: 44, document_type: 'report_card', is_legacy_archive: 0, upload_source: 'registrar', student_user_id: 7, uploader_role: 'registrar' },
+    96: { id: 96, student_id: 44, document_type: 'report_card', is_legacy_archive: 0, original_filename: 'correctable-report-card.pdf', stored_filename: reportFilename, mime_type: 'application/pdf', file_size_bytes: reportContents.length, uploaded_by: 7, upload_source: 'student', status: 'needs_review', student_user_id: 7, student_no: 'S-44', first_name: 'Test', middle_name: null, last_name: 'Student', uploader_role: 'student', created_at: new Date('2026-10-02T00:00:00Z') },
+    97: { id: 97, student_id: 44, document_type: 'report_card', is_legacy_archive: 0, upload_source: 'student', status: 'rejected', student_user_id: 7, uploader_role: 'student', created_at: new Date('2026-10-03T00:00:00Z') },
+    98: { id: 98, student_id: 44, document_type: 'report_card', is_legacy_archive: 0, upload_source: 'student', status: 'needs_review', student_user_id: 7, uploader_role: 'student', created_at: new Date('2026-10-04T00:00:00Z') },
+    99: { id: 99, student_id: 44, document_type: 'report_card', is_legacy_archive: 0, upload_source: 'student', status: 'valid', student_user_id: 7, uploader_role: 'student', created_at: new Date('2026-10-05T00:00:00Z') },
+    100: { id: 100, student_id: 44, document_type: 'report_card', is_legacy_archive: 0, original_filename: 'legacy-correction-report.pdf', stored_filename: reportFilename, mime_type: 'application/pdf', file_size_bytes: reportContents.length, uploaded_by: 7, upload_source: 'student', status: 'failed', student_user_id: 7, student_no: 'S-44', first_name: 'Test', middle_name: null, last_name: 'Student', uploader_role: 'student', created_at: new Date('2026-10-06T00:00:00Z') },
+    101: { id: 101, student_id: 44, document_type: 'report_card', is_legacy_archive: 0, upload_source: 'student', status: 'needs_review', student_user_id: 7, uploader_role: 'student', created_at: new Date('2026-10-07T00:00:00Z') }
+  };
+  const latestDecisions = {
+    96: [{ id: 4, decision_type: 'correction_requested', reason: 'Upload a clearer report card.', created_at: new Date(), reviewer_name: null }],
+    97: [{ id: 5, decision_type: 'rejected', reason: 'Final rejection.', created_at: new Date(), reviewer_name: null }],
+    98: [{ id: 6, decision_type: 'correction_requested', reason: 'Upload a clearer report card.', created_at: new Date(), reviewer_name: null }],
+    99: [{ id: 7, decision_type: 'correction_requested', reason: 'Upload a clearer report card.', created_at: new Date(), reviewer_name: null }]
+  };
+  const latestReviewEvents = {
+    97: [{ id: 1, action_type: 'correction_requested', instruction: 'An older correction instruction.', created_at: new Date(), reviewer_name: null }],
+    98: [{ id: 2, action_type: 'correction_requested', instruction: 'Upload a clearer report card.', created_at: new Date(), reviewer_name: null }],
+    99: [{ id: 3, action_type: 'correction_requested', instruction: 'Upload a clearer report card.', created_at: new Date(), reviewer_name: null }],
+    100: [{ id: 8, action_type: 'correction_requested', instruction: 'Legacy review event request.', created_at: new Date(), reviewer_name: null }],
+    101: [{ id: 9, action_type: 'correction_requested', instruction: 'Older request.', created_at: new Date(), reviewer_name: null }]
+  };
+  const hasCorrectedChild = new Set([98]);
+  const hasNewerReportCard = new Set([101]);
   const pool = {
     request() {
       const values = {};
@@ -2883,29 +2995,42 @@ test('students can read only their own active student-origin report cards, never
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           calls.push({ statement, values: { ...values } });
-          if (statement.startsWith('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'student' }] };
+          if (statement.startsWith('SELECT id, role FROM users')) return { recordset: [{ id: values.actorId, role: values.actorId === 9 ? 'registrar' : 'student' }] };
           if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.id = @documentId')) {
             const rows = {
               88: { id: 88, document_type: 'psa_birth_certificate', upload_source: 'registrar', student_user_id: 7, uploader_role: 'student' },
               89: { id: 89, document_type: 'psa_birth_certificate', upload_source: 'student', student_user_id: 7, uploader_role: 'registrar' },
               90: { id: 90, document_type: 'psa_birth_certificate', upload_source: 'registrar', student_user_id: 8, uploader_role: 'registrar' },
-              91: { id: 91, student_id: 44, document_type: 'report_card', is_legacy_archive: 0, original_filename: 'my-report-card.pdf', stored_filename: reportFilename, mime_type: 'application/pdf', file_size_bytes: reportContents.length, uploaded_by: 7, upload_source: 'student', status: 'needs_review', student_user_id: 7, student_no: 'S-44', first_name: 'Test', middle_name: null, last_name: 'Student', uploader_role: 'student' },
-              92: { id: 92, student_id: 45, document_type: 'report_card', is_legacy_archive: 0, upload_source: 'student', student_user_id: 8, uploader_role: 'student' },
-              94: { id: 94, student_id: 44, document_type: 'report_card', is_legacy_archive: 1, upload_source: 'student', student_user_id: 7, uploader_role: 'student' },
-              95: { id: 95, student_id: 44, document_type: 'report_card', is_legacy_archive: 0, upload_source: 'registrar', student_user_id: 7, uploader_role: 'registrar' },
+              ...reportCardRows,
               93: { id: 93, document_type: 'form_137', upload_source: 'registrar', student_user_id: 7, uploader_role: 'registrar' }
             };
             const row = rows[values.documentId];
             const studentTypeFilter = statement.includes("d.document_type IN ('good_moral', 'psa_birth_certificate')")
-              && statement.includes("d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'");
-            const allowedType = ['good_moral', 'psa_birth_certificate'].includes(row?.document_type)
-              || (row?.document_type === 'report_card' && row.is_legacy_archive === 0 && row.upload_source === 'student');
-            return { recordset: studentTypeFilter && row?.student_user_id === values.actorId && allowedType ? [row] : [] };
+              && statement.includes('v_document_latest_decision_event AS current_decision')
+              && statement.includes('v_document_latest_review_event AS current_review')
+              && statement.includes('NOT EXISTS (SELECT 1 FROM documents AS corrected')
+              && statement.includes('newer_report_card');
+            const allowedType = values.actorId === 9 || ['good_moral', 'psa_birth_certificate'].includes(row?.document_type)
+              || (row?.document_type === 'report_card' && row.is_legacy_archive === 0 && row.upload_source === 'student'
+                && ['needs_review', 'failed'].includes(row.status)
+                && !hasCorrectedChild.has(row.id) && !hasNewerReportCard.has(row.id)
+                && ((latestDecisions[row.id]?.[0]?.decision_type === 'correction_requested')
+                  || (!latestDecisions[row.id] && latestReviewEvents[row.id]?.[0]?.action_type === 'correction_requested')));
+            const ownerOrStaff = values.actorId === 9 || row?.student_user_id === values.actorId;
+            return { recordset: studentTypeFilter && ownerOrStaff && allowedType ? [row] : [] };
           }
-          if (statement.includes('FROM documents AS history_document')) return { recordset: [] };
+          if (statement.includes('FROM documents AS history_document')) return { recordset: [
+            { id: values.documentId, original_filename: 'my-report-card.pdf', mime_type: 'application/pdf', is_legacy_archive: 0,
+              status: 'needs_review', supersedes_document_id: null, created_at: new Date(), student_can_view_source: 1,
+              latest_review_action: null, latest_decision_type: 'correction_requested' },
+            { id: 81, original_filename: 'older-version.pdf', mime_type: 'application/pdf', is_legacy_archive: 0,
+              status: 'valid', supersedes_document_id: null, created_at: new Date(), student_can_view_source: 0,
+              latest_review_action: null, latest_decision_type: 'verified' }
+          ] };
+          if (statement.includes('FROM document_validations AS validation')) return { recordset: [] };
           if (statement.includes('FROM documents AS d') && statement.includes('WHERE d.student_id = @studentId')) return { recordset: [] };
-          if (statement.includes('FROM document_review_events AS e')) return { recordset: [] };
-          if (statement.includes('FROM document_decision_events AS e')) return { recordset: [] };
+          if (statement.includes('FROM document_review_events AS e')) return { recordset: latestReviewEvents[values.documentId] || [] };
+          if (statement.includes('FROM document_decision_events AS e')) return { recordset: latestDecisions[values.documentId] || [] };
           throw new Error(`Unexpected PSA read SQL: ${statement}`);
         }
       };
@@ -2917,29 +3042,47 @@ test('students can read only their own active student-origin report cards, never
   assert.equal((await service.getDocument(7, '88')).upload_source, 'registrar');
   assert.equal((await service.getDocument(7, '89')).upload_source, 'student', 'student can open their own PSA submission');
   assert.equal(await service.getDocument(7, '90'), null, 'another student PSA is not exposed');
-  const ownReportCard = await service.getDocument(7, '91');
-  assert.equal(ownReportCard.document_type, 'report_card', 'a student can open their active student-origin report card');
+  assert.equal(await service.getDocument(7, '91'), null, 'pending report card is not readable before a correction request');
+  const ownReportCard = await service.getDocument(7, '96');
+  assert.equal(ownReportCard.document_type, 'report_card', 'a current correction request permits its own active student-origin report card');
   assert.equal(ownReportCard.isArchivedReportCard, false);
-  const reportDownload = await service.openDownload(7, '91');
+  assert.deepEqual(ownReportCard.history.find(({ id }) => id === 81), {
+    id: 81, original_filename: null, mime_type: null, is_legacy_archive: 0,
+    status: 'valid', supersedes_document_id: null, created_at: ownReportCard.history.find(({ id }) => id === 81).created_at,
+    student_can_view_source: 0, latest_review_action: null, latest_decision_type: 'verified'
+  }, 'an authorized current page does not expose source metadata for older report-card versions without a current correction');
+  const reportDownload = await service.openDownload(7, '96');
   try {
     assert.equal((await reportDownload.fileHandle.readFile()).toString(), reportContents.toString());
-    assert.equal(reportDownload.document.original_filename, 'my-report-card.pdf');
+    assert.equal(reportDownload.document.original_filename, 'correctable-report-card.pdf');
   } finally {
     await reportDownload.fileHandle.close();
   }
+  assert.equal(await service.getDocument(7, '97'), null, 'a final rejection revokes an older review-event correction');
+  assert.equal(await service.getDocument(7, '98'), null, 'a superseded report-card version is not readable');
+  assert.equal(await service.getDocument(7, '99'), null, 'a verified report-card version does not retain an older correction grant');
+  assert.equal((await service.getDocument(7, '100')).document_type, 'report_card', 'legacy review correction works only when there is no decision history');
+  assert.equal(await service.getDocument(7, '101'), null, 'a correction request on an older version does not grant access after a newer report card');
   assert.equal(await service.getDocument(7, '92'), null, 'another student report card is not exposed');
   assert.equal(await service.getDocument(7, '94'), null, 'a student cannot open a legacy report-card archive');
   assert.equal(await service.getDocument(7, '95'), null, 'a student cannot open a staff-origin report card');
   assert.equal(await service.getDocument(7, '93'), null, 'a student cannot open a Form 137 file');
+  assert.equal((await service.getDocument(9, '91')).document_type, 'report_card', 'authorized staff retain access regardless of student correction state');
   assert.equal(await service.openDownload(7, '94').catch((error) => error.status), 404);
   await assert.rejects(service.openDownload(7, '93'), (error) => error instanceof DocumentServiceError && error.status === 404);
+  await assert.rejects(service.openDownload(7, '91'), (error) => error instanceof DocumentServiceError && error.status === 404);
   const documentQuery = calls.find(({ statement }) => statement.includes('WHERE d.id = @documentId'));
   assert.match(documentQuery.statement, /s\.user_id = @actorId/);
   assert.match(documentQuery.statement, /d\.document_type IN \('good_moral', 'psa_birth_certificate'\)/);
-  assert.match(documentQuery.statement, /d\.document_type = 'report_card' AND d\.is_legacy_archive = 0 AND d\.upload_source = 'student'/);
+  assert.match(documentQuery.statement, /v_document_latest_decision_event AS current_decision/);
+  assert.match(documentQuery.statement, /v_document_latest_review_event AS current_review/);
+  assert.match(documentQuery.statement, /NOT EXISTS \(SELECT 1 FROM documents AS corrected/);
+  assert.match(documentQuery.statement, /newer_report_card/);
+  assert.match(documentQuery.statement, /d\.status IN \('needs_review', 'failed'\)/);
   const historyQuery = calls.find(({ statement }) => statement.includes('FROM documents AS history_document'));
   assert.match(historyQuery.statement, /history_document\.is_legacy_archive = 0 AND history_document\.upload_source = 'student'/);
-  assert.equal(calls.filter(({ statement }) => statement.includes('WHERE d.id = @documentId')).length, 11);
+  assert.match(historyQuery.statement, /CASE WHEN \(history_document\.document_type = 'report_card'/);
+  assert.match(historyQuery.statement, /THEN history_document\.original_filename ELSE NULL END AS original_filename/);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

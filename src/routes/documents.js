@@ -301,6 +301,9 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       }
       const result = await service.upload(req.authUser.id, req.body, req.file);
       if (result.status === 'pending') processingService.schedulePendingProcessing();
+      if (req.authUser.role === 'student' && result.documentType === 'report_card') {
+        return res.redirect(303, '/documents?notice=uploaded');
+      }
       return res.redirect(303, `/documents/${result.id}?notice=uploaded`);
     } catch (error) {
       return renderError(res, error, 'The document could not be uploaded.');
@@ -567,6 +570,9 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       }
       const result = await service.reupload(req.authUser.id, req.params.id, req.file);
       if (result.status === 'pending') processingService.schedulePendingProcessing();
+      if (req.authUser.role === 'student' && result.documentType === 'report_card') {
+        return res.redirect(303, '/documents?notice=uploaded');
+      }
       return res.redirect(303, `/documents/${result.id}?notice=uploaded`);
     } catch (error) {
       return renderError(res, error, 'The corrected document could not be uploaded.');

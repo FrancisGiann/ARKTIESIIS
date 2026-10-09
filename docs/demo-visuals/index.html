@@ -1,0 +1,1293 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <meta name="theme-color" content="#f7f8fa">
+  <title>ARKTIESIIS Demo Visual Guide</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f7f8fa;
+      --white: #ffffff;
+      --ink: #202a34;
+      --muted: #46515d;
+      --rule: #d3dbe3;
+      --crimson: #76232c;
+      --focus: #8a2634;
+      --frontdesk: #754400;
+      --registrar: #76232c;
+      --teacher: #204e75;
+      --finance: #075c55;
+      --student: #533675;
+      --system: #46515d;
+      --admin: #283642;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { background: var(--paper); }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background: var(--paper);
+      color: var(--ink);
+      line-height: 1.45;
+    }
+
+    button, a { font: inherit; }
+
+    button, a { -webkit-tap-highlight-color: transparent; }
+
+    a { color: var(--crimson); text-underline-offset: 0.18em; }
+
+    button {
+      color: var(--ink);
+      background: var(--white);
+      border: 1px solid #aab5c0;
+      border-radius: 10px;
+      cursor: pointer;
+    }
+
+    button:hover, a:hover { text-decoration-thickness: 2px; }
+
+    button:disabled {
+      color: #59636e;
+      background: #edf0f3;
+      border-color: #c8d0d8;
+      cursor: not-allowed;
+    }
+
+    :focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 3px;
+    }
+
+    ::selection { color: #fff; background: #76232c; }
+
+    .site-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 17px 30px 13px;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    .identity { min-width: 0; }
+
+    .identity-name {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.3;
+      font-weight: 700;
+      letter-spacing: -0.018em;
+    }
+
+    .identity-sub {
+      margin: 3px 0 0;
+      color: #3d4853;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+
+    .site-header-note {
+      margin: 0;
+      color: #37424e;
+      font-size: 14px;
+      font-weight: 650;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .top-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 10px 30px 9px;
+    }
+
+    .action-button, .action-link {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 8px 13px;
+      color: #26313b;
+      background: #fff;
+      border: 1px solid #aeb9c4;
+      border-radius: 9px;
+      font-size: 14px;
+      font-weight: 650;
+      text-decoration: none;
+    }
+
+    .action-primary {
+      color: #fff;
+      background: var(--crimson);
+      border-color: var(--crimson);
+    }
+
+    .process-navigation {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 5px 30px 14px;
+    }
+
+    .nav-label {
+      margin: 0 0 7px;
+      color: #34404b;
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: 0.045em;
+      text-transform: uppercase;
+    }
+
+    .process-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .process-nav-button {
+      min-height: 38px;
+      padding: 7px 12px;
+      color: #27313a;
+      border-color: #c4cdd6;
+      font-size: 14px;
+      font-weight: 650;
+    }
+
+    .process-nav-button[aria-current="page"] {
+      color: #fff;
+      background: var(--crimson);
+      border-color: var(--crimson);
+    }
+
+    main {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 0 30px 44px;
+    }
+
+    .diagram-section { min-width: 0; }
+
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .diagram-wrap {
+      width: 100%;
+      min-width: 0;
+      overflow: hidden;
+      background: var(--white);
+      border: 1px solid #d0d8e0;
+      border-radius: 12px;
+    }
+
+    .flow-svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #fff;
+    }
+
+    .flow-svg text {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      fill: #202a34;
+      text-rendering: geometricPrecision;
+    }
+
+    .chart-title { display: block; }
+
+    .flow-node { cursor: pointer; }
+
+    .node-frame {
+      fill: #fff;
+      stroke: #b8c2cc;
+      stroke-width: 2;
+    }
+
+    .node-accent { stroke-width: 5; stroke-linecap: round; }
+
+    .node-number { fill: var(--role-ink, #46515d); }
+    .node-number-text { fill: #fff !important; font-weight: 750; text-anchor: middle; }
+    .node-actor { fill: var(--role-ink, #46515d) !important; font-weight: 700; }
+    .node-title { fill: #202a34 !important; font-weight: 730; }
+    .node-action { fill: #34404b !important; font-weight: 500; }
+    .node-result { fill: var(--role-ink, #46515d) !important; font-weight: 680; }
+
+    .flow-node[data-active="true"] .node-frame {
+      fill: #fffaf8;
+      stroke: var(--role-ink, #76232c);
+      stroke-width: 4;
+    }
+
+    .flow-node[data-active="true"] .node-accent { stroke-width: 8; }
+
+    .flow-node:focus .node-frame, .role-lane:focus .role-row-frame {
+      stroke: #76232c;
+      stroke-width: 5;
+    }
+
+    .edge-line {
+      fill: none;
+      stroke: #586775;
+      stroke-width: 4;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .edge-return { stroke: #76232c; stroke-dasharray: 10 8; }
+    .edge-optional { stroke: #754400; stroke-dasharray: 10 8; }
+    .edge-branch { stroke: #52616f; stroke-dasharray: 2 0; }
+    .edge-label { fill: #35414c !important; font-size: 18px; font-weight: 700; }
+
+    .note-frame { fill: #f1f4f6; stroke: #c6d0d8; stroke-width: 1.5; }
+    .note-title { fill: #33404b !important; font-size: 18px; font-weight: 750; }
+    .note-body { fill: #27323c !important; font-size: 19px; font-weight: 500; }
+
+    .step-controls {
+      margin: 14px 0 0;
+      padding: 0 0 11px;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    .step-heading {
+      margin: 0 0 8px;
+      font-size: 16px;
+      line-height: 1.3;
+      font-weight: 720;
+    }
+
+    .step-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .step-button {
+      min-height: 38px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border-color: #c4cdd6;
+      font-size: 13px;
+      font-weight: 630;
+      text-align: left;
+    }
+
+    .step-button[aria-pressed="true"] {
+      color: #fff;
+      background: var(--crimson);
+      border-color: var(--crimson);
+    }
+
+    .step-index {
+      width: 24px;
+      height: 24px;
+      display: inline-grid;
+      flex: 0 0 24px;
+      place-items: center;
+      color: #fff;
+      background: #46515d;
+      border-radius: 50%;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 750;
+    }
+
+    .step-button[aria-pressed="true"] .step-index { color: var(--crimson); background: #fff; }
+
+    .presenter-panel {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(230px, 0.7fr);
+      gap: 18px 26px;
+      padding: 13px 2px 5px;
+    }
+
+    .presenter-panel h3 {
+      margin: 0 0 5px;
+      color: #35414c;
+      font-size: 12px;
+      font-weight: 760;
+      letter-spacing: 0.035em;
+      text-transform: uppercase;
+    }
+
+    .presenter-panel p { margin: 0; }
+
+    .say-line {
+      max-width: 72ch;
+      font-size: 16px;
+      line-height: 1.5;
+      font-weight: 540;
+    }
+
+    .screen-detail {
+      min-width: 0;
+      color: #34404b;
+      font-size: 14px;
+    }
+
+    .screen-detail summary {
+      width: fit-content;
+      min-height: 38px;
+      display: flex;
+      align-items: center;
+      color: var(--crimson);
+      cursor: pointer;
+      font-weight: 680;
+      text-decoration: underline;
+      text-underline-offset: 0.18em;
+    }
+
+    .screen-detail p { padding: 3px 0 0; overflow-wrap: anywhere; }
+
+    .related-flows {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 10px;
+    }
+
+    .related-flows button {
+      min-height: 36px;
+      padding: 6px 10px;
+      color: var(--crimson);
+      border-color: #b5c0ca;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .step-moving-controls {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 11px;
+    }
+
+    .step-moving-controls button {
+      min-width: 120px;
+      min-height: 42px;
+      padding: 8px 13px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .site-footer {
+      max-width: 1600px;
+      margin: 0 auto;
+      padding: 13px 30px 20px;
+      color: #42505d;
+      border-top: 1px solid var(--rule);
+      font-size: 13px;
+    }
+
+    .site-footer p { margin: 0; }
+
+    @media (max-width: 720px) {
+      .site-header { align-items: flex-start; padding: 13px 16px 11px; }
+      .identity-name { max-width: 32ch; font-size: 16px; }
+      .identity-sub { font-size: 12px; }
+      .site-header-note { display: none; }
+      .top-actions { justify-content: flex-start; gap: 6px; padding: 9px 16px; }
+      .action-button, .action-link { min-height: 39px; padding: 7px 10px; font-size: 13px; }
+      .process-navigation { padding: 6px 16px 12px; }
+      .process-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+      .process-nav-button { width: 100%; min-height: 42px; padding: 7px 8px; font-size: 13px; text-align: left; }
+      main { padding: 0 12px 30px; }
+      .diagram-wrap { border-radius: 9px; }
+      .presenter-panel { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+      .say-line { font-size: 15px; }
+      .site-footer { padding: 12px 16px 18px; }
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      .node-frame { transition: stroke 130ms ease-out, fill 130ms ease-out; }
+      button, a { transition: background-color 130ms ease-out, color 130ms ease-out; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
+
+    @media print {
+      @page { size: landscape; margin: 0.32in; }
+      html, body { width: auto; min-width: 0; background: #fff; }
+      .site-header, .top-actions, .process-navigation, .step-controls, .site-footer { display: none !important; }
+      main { max-width: none; margin: 0; padding: 0; }
+      .diagram-section, .diagram-section[hidden] { display: block !important; break-after: page; page-break-after: always; }
+      .diagram-section:last-child { break-after: auto; page-break-after: auto; }
+      .visually-hidden { display: none !important; }
+      .diagram-wrap { overflow: visible; border: 0; border-radius: 0; }
+      .flow-svg { width: auto; height: 6.75in; max-width: 100%; margin: 0 auto; }
+      .presenter-panel, .step-moving-controls { display: none !important; }
+    }
+
+    body.export-chart {
+      width: 1600px;
+      height: 900px;
+      min-width: 1600px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    body.export-chart .site-header,
+    body.export-chart .top-actions,
+    body.export-chart .process-navigation,
+    body.export-chart .step-controls,
+    body.export-chart .presenter-panel,
+    body.export-chart .step-moving-controls,
+    body.export-chart .site-footer { display: none !important; }
+
+    body.export-chart main { width: 1600px; max-width: none; height: 900px; margin: 0; padding: 0; }
+    body.export-chart .diagram-section, body.export-chart .diagram-section[hidden] { display: none !important; }
+    body.export-chart .diagram-section[data-export-active="true"] { display: block !important; }
+    body.export-chart .diagram-wrap { width: 1600px; height: 900px; overflow: hidden; border: 0; border-radius: 0; }
+    body.export-chart .flow-svg { width: 1600px; height: 900px; }
+    body.export-chart .chart-title { display: block; }
+  </style>
+</head>
+<body>
+  <header class="site-header">
+    <div class="identity">
+      <p class="identity-name">Ark Technological Institute Education System Incorporated</p>
+      <p class="identity-sub">Lucena Branch · ARKTIESIIS</p>
+    </div>
+    <p class="site-header-note">Demo visual guide</p>
+  </header>
+
+  <div class="top-actions" aria-label="Guide actions">
+    <button class="action-button action-primary" id="print-all" type="button">Print all diagrams</button>
+    <a class="action-link" href="demo-visual-guide.pdf" download>Download PDF</a>
+    <a class="action-link" href="demo-visual-guide-bundle.zip" download>Download ZIP</a>
+    <a class="action-link" id="download-chart" href="charts/enrollment.png" download>Download current PNG</a>
+  </div>
+
+  <nav class="process-navigation" aria-label="Browse workflows">
+    <p class="nav-label">Browse workflows</p>
+    <ul class="process-list" id="process-list"></ul>
+  </nav>
+
+  <main id="main-content">
+    <div id="diagram-sections"></div>
+  </main>
+
+  <footer class="site-footer">
+    <p>Workflow illustrations describe the current thesis prototype. Use synthetic records for demonstrations; staff make all enrollment, document, and grade decisions.</p>
+  </footer>
+
+  <script>
+    (() => {
+      "use strict";
+
+      const roleStyles = {
+        front_desk: { ink: "#754400", pale: "#fff3dc", label: "Front desk" },
+        registrar: { ink: "#76232c", pale: "#faeeee", label: "Registrar" },
+        teacher: { ink: "#204e75", pale: "#edf4fa", label: "Teacher" },
+        finance: { ink: "#075c55", pale: "#eaf5f3", label: "Finance" },
+        student: { ink: "#533675", pale: "#f2eef8", label: "Student" },
+        system: { ink: "#46515d", pale: "#f0f2f4", label: "System" },
+        admin: { ink: "#283642", pale: "#edf0f2", label: "Database admin" },
+        applicant: { ink: "#533675", pale: "#f2eef8", label: "Applicant" },
+        authorized: { ink: "#76232c", pale: "#faeeee", label: "Authorized staff" },
+        user: { ink: "#46515d", pale: "#f0f2f4", label: "User" }
+      };
+
+      const diagrams = [
+        {
+          id: "enrollment", title: "New student enrollment", nav: "Enrollment", kind: "flow",
+          summary: "Paper pre-enrollment moves through registrar review before the entry term is enrolled.",
+          related: ["return-after-break", "login-access", "payments", "paper-clearance"],
+          nodes: [
+            { id: "applicant-form", actor: "applicant", title: "Complete paper form", action: "Applicant submits the paper intake form.", result: "Paper source begins.", say: "Start with the applicant's paper source; no student account exists yet.", screen: "Applicant's printed paper pre-enrollment form." },
+            { id: "save-paper", actor: "front_desk", title: "Save paper intake", action: "Front desk enters fields and document counts.", result: "Paper only; no student number, login, or charges.", say: "Receipt counts record what arrived; saving paper creates no student, student number, login, enrollment, fee assessment, or charge.", screen: "Pre-enrollment records (/pre-enrollments) → Save. A complete entry can be marked Ready for registrar." },
+            { id: "save-review", actor: "registrar", title: "Save and review fees", action: "Registrar starts review from saved intake.", result: "Student number assigned; login inactive.", say: "For a new applicant, this creates the pending student intake and inactive linked login, without assessed charges.", screen: "Student → Enrollment → Paper document review → Fees → Save and review fees." },
+            { id: "review-fees", actor: "registrar", title: "Review matching fees", action: "Registrar checks placement and fee schedule.", result: "Fee snapshot; no charges yet.", say: "The matching approved schedule and optional fees are previewed before any assessment is posted.", screen: "Review fees / Review details. Check student, grade, voucher, entry term, section, date, paper evidence, and the fee snapshot." },
+            { id: "confirm-enrollment", actor: "registrar", title: "Confirm enrollment", action: "Registrar confirms the reviewed assessment.", result: "Entry term enrolled; eligible new login active.", say: "The registrar confirms the reviewed enrollment. Confirmation posts assessed fees and activates the eligible new login; Finance payment and account clearance are separate.", screen: "Confirm enrollment." }
+          ],
+          edges: [
+            { from: "applicant-form", to: "save-paper" }, { from: "save-paper", to: "save-review" },
+            { from: "save-review", to: "review-fees" }, { from: "review-fees", to: "confirm-enrollment" }
+          ],
+          notes: [
+            { title: "Setup comes first", body: "Configure the fee schedule, school year, term, and valid section before registrar intake." },
+            { title: "Credential is private", body: "Confirmation posts assessed fees, enrolls the term, and activates the new login. Temporary password appears once in private; never emailed or printed. Email 2FA and password change follow." },
+            { title: "Existing learners", body: "Continuing students reuse their profile and login. Applicable prior paper clearance can gate later activation; an interrupted return uses its own accepted evaluation flow." }
+          ]
+        },
+        {
+          id: "return-after-break", title: "Return after a break", nav: "Return after a break", kind: "flow",
+          summary: "A registrar evaluates an eligible saved student before the front desk links a fresh paper intake.",
+          related: ["enrollment", "paper-clearance", "login-access"],
+          nodes: [
+            { id: "return-eligible", actor: "registrar", title: "Open eligible record", action: "Registrar opens an eligible saved record.", result: "Existing profile is retained.", say: "A return evaluation starts with an eligible saved learner, not a new student account.", screen: "Student records → Open record → Evaluate return." },
+            { id: "evaluate-return", actor: "registrar", title: "Evaluate return", action: "Registrar records a human return evaluation.", result: "Evaluation awaits review.", say: "The system provides an evaluation workflow; it does not make an automatic readmission or equivalency decision.", screen: "Evaluate return." },
+            { id: "review-return", actor: "registrar", title: "Review prior progress", action: "Registrar reviews progress, subjects, and availability.", result: "Human review informs decision.", say: "The registrar reviews prior progress and the current curriculum and subject availability before deciding.", screen: "Review the saved return evaluation and its supporting academic history." },
+            { id: "accept-return", actor: "registrar", title: "Accept evaluation", action: "Registrar records an accepted evaluation.", result: "Fresh paper source can be linked.", say: "Only an accepted human evaluation allows the new paper intake to link to this return.", screen: "Accept the return evaluation." },
+            { id: "fresh-intake", actor: "front_desk", title: "Link fresh paper intake", action: "Front desk links paper intake to acceptance.", result: "Fresh intake; existing profile.", say: "Front desk records a fresh paper source and links it to the accepted evaluation.", screen: "Pre-enrollment records → new paper record → link the accepted return evaluation." },
+            { id: "reuse-login", actor: "registrar", title: "Reuse profile and login", action: "Registrar confirms intake with existing profile.", result: "No new login or password reset.", say: "The registrar reuses the existing profile and login, then follows the enrollment review steps.", screen: "Student → Enrollment → Paper document review → Fees. Continue with the enrollment flow." }
+          ],
+          edges: [
+            { from: "return-eligible", to: "evaluate-return" }, { from: "evaluate-return", to: "review-return" },
+            { from: "review-return", to: "accept-return" }, { from: "accept-return", to: "fresh-intake" },
+            { from: "fresh-intake", to: "reuse-login" }
+          ],
+          notes: [
+            { title: "Human evaluation", body: "Prior progress, curriculum, required subjects, and availability inform the registrar's decision; no equivalency or admissions decision is automatic." },
+            { title: "Account stays", body: "The existing student profile and login are reused. This return path does not issue new credentials or reset the password." }
+          ]
+        },
+        {
+          id: "digital-documents", title: "Digital documents and staff review", nav: "Digital documents", kind: "flow",
+          summary: "Student uploads receive bounded file and field suggestions, followed by staff source inspection and a human decision.",
+          related: ["physical-documents", "login-access", "roles"],
+          nodes: [
+            { id: "upload-own", actor: "student", title: "Upload own document", action: "Student uploads a permitted file for their own record.", result: "Linked to the student's own record.", say: "Students upload only permitted documents for their own linked record.", screen: "Documents → Upload a digital document. Choose Good Moral Certificate, PSA birth certificate, or previous-school report-card scan." },
+            { id: "format-check", actor: "system", title: "Check supported format", action: "System checks PDF, JPEG, or PNG format.", result: "Private submission is queued.", say: "The configured file-format check is narrow and does not establish that a document is authentic.", screen: "The configured upload accepts PDF, JPEG, and PNG files within its size limit." },
+            { id: "bounded-precheck", actor: "system", title: "Suggest visible fields", action: "Gemini suggests fields; app compares name with record.", result: "Report cards: visible name only.", say: "Gemini provides bounded field suggestions; the app compares the suggested student name with the linked record. Report-card extraction is limited to the visible student name; no grades or academic results are extracted.", screen: "Automated precheck. Good Moral and PSA use configured fields; Good Moral can include certificate-context clues. Report cards use visible-name comparison only." },
+            { id: "inspect-source", actor: "authorized", title: "Inspect source and checklist", action: "Staff inspects the source and checks the list.", result: "Human decision is still required.", say: "Staff inspect the source and make the final decision; an AI result never accepts a document.", screen: "Document review → Source document → Automated precheck → staff checklist." },
+            { id: "verify-submission", actor: "authorized", title: "Record staff verification", action: "Staff records a verification decision.", result: "Staff decision recorded.", say: "Only the authorized staff decision records acceptance.", screen: "Record staff verification." },
+            { id: "request-correction", actor: "authorized", title: "Request correction", action: "Staff sends a correction instruction.", result: "Student can replace own upload.", say: "A correction request returns the submission to the student for a new version and another review.", screen: "Request correction." },
+            { id: "replace-document", actor: "student", title: "Upload corrected version", action: "Student uploads a corrected replacement.", result: "Checks and staff review repeat.", say: "The replacement goes through the same format, precheck, and staff review steps.", screen: "Open the submission → Upload corrected document." },
+            { id: "reject-submission", actor: "authorized", title: "Reject submission", action: "Staff records a rejection after review.", result: "Submission remains in its history.", say: "Staff can reject the submission after source review; AI findings alone do not decide it.", screen: "Reject submission." }
+          ],
+          edges: [
+            { from: "upload-own", to: "format-check" }, { from: "format-check", to: "bounded-precheck" },
+            { from: "bounded-precheck", to: "inspect-source" },
+            { from: "inspect-source", to: "verify-submission", label: "staff verifies" },
+            { from: "inspect-source", to: "request-correction", label: "correction" },
+            { from: "request-correction", to: "replace-document" },
+            { from: "replace-document", to: "format-check", kind: "return" },
+            { from: "inspect-source", to: "reject-submission", label: "staff rejects" }
+          ],
+          notes: [
+            { title: "AI boundary", body: "Suggestions cannot prove authenticity, detect forgery, verify signatures or seals, or perform forensic analysis." },
+            { title: "Report-card scope", body: "Visible student name and configured file format only. No grades, marks, subjects, attendance, or other academic results." },
+            { title: "Provider unavailable", body: "The submission remains reviewable. Staff can inspect it manually; verification after unavailable checks needs a reason." }
+          ]
+        },
+        {
+          id: "teacher-grades", title: "Teacher workbook to approved grades", nav: "Teacher grades", kind: "flow",
+          summary: "The teacher submits a recognized workbook, and registrar approval is the step that writes selected grades.",
+          related: ["digital-documents", "roles", "login-access"],
+          nodes: [
+            { id: "class-context", actor: "registrar", title: "Set class context", action: "Registrar sets the active class context.", result: "Active assignment is ready.", say: "The workbook must match a current class assignment and learner context.", screen: "Academic setup → active term, section, subject, and teacher assignment." },
+            { id: "open-class", actor: "teacher", title: "Open assigned class", action: "Teacher opens an assigned class.", result: "Only assigned class context is available.", say: "Teachers submit within their assigned class, term, section, and subject.", screen: "My classes → Open class → Submit class grades." },
+            { id: "preview-workbook", actor: "teacher", title: "Preview workbook", action: "Teacher checks learner matches and issues.", result: "Preview does not write grades.", say: "Preview identifies matches and issues, but it does not write grades.", screen: "Corrected SSHS E-Class Record (.xlsx) → Preview workbook." },
+            { id: "submit-workbook", actor: "teacher", title: "Submit for review", action: "Teacher submits the workbook for review.", result: "Review item created; no grades yet.", say: "Submission creates a review item. Registrar approval remains the publication gate.", screen: "Submit workbook for registrar review." },
+            { id: "review-workbook", actor: "registrar", title: "Review and select rows", action: "Registrar checks matches, conflicts, and rows.", result: "Only selected rows can be approved.", say: "The registrar checks the class and learner matches, then chooses which eligible rows to include.", screen: "Grade review → Teacher grade submissions → Review workbook → Include these grades." },
+            { id: "approve-grades", actor: "registrar", title: "Approve selected grades", action: "Registrar approves selected grades for import.", result: "Grades are written now.", say: "Registrar approval rechecks the current class, enrollment, matches, and grade state before import.", screen: "Approve and import selected grades." },
+            { id: "view-grades", actor: "student", title: "View approved grades", action: "Student views their own approved grades.", result: "Only published grades appear.", say: "The student sees grades after registrar approval.", screen: "Grades → My grades." }
+          ],
+          edges: [
+            { from: "class-context", to: "open-class" }, { from: "open-class", to: "preview-workbook" },
+            { from: "preview-workbook", to: "submit-workbook" }, { from: "submit-workbook", to: "review-workbook" },
+            { from: "review-workbook", to: "approve-grades", label: "approved rows" },
+            { from: "approve-grades", to: "view-grades" },
+            { from: "review-workbook", to: "preview-workbook", kind: "return", label: "correction and revision" }
+          ],
+          notes: [
+            { title: "Correction path", body: "A registrar correction request returns a revised workbook through teacher preview and submission." },
+            { title: "Grade source", body: "Report-card scans, Good Moral, PSA, and Form 137 suggestions never write grades." }
+          ]
+        },
+        {
+          id: "payments", title: "Assessed fees, payments, and balances", nav: "Payments", kind: "flow",
+          summary: "Finance records money received and its allocation; students see only their own safe account view.",
+          related: ["enrollment", "document-requests", "roles"],
+          nodes: [
+            { id: "assessed-fees", actor: "registrar", title: "Post assessed fees", action: "Enrollment posts the reviewed fee assessment.", result: "Applicable fee charges enter the ledger.", say: "The payment flow starts with fees assessed during registrar confirmation.", screen: "Student account → Overview → assessed annual and term fees." },
+            { id: "record-payment", actor: "finance", title: "Enter payment details", action: "Finance enters amount, date, and receipt reference.", result: "Details await review and save.", say: "Entering payment details does not commit a ledger payment. Finance saves it after allocation review.", screen: "Finance overview → Student accounts → Open student account → Record a payment → Details." },
+            { id: "allocate-payment", actor: "finance", title: "Allocate payment", action: "Finance applies payment to chosen fees or terms.", result: "Unused amount remains credit.", say: "Finance allocates the payment; any unused amount remains payment credit.", screen: "Apply payment → choose the intended fees, year, or term." },
+            { id: "review-payment", actor: "finance", title: "Review and save", action: "Finance reviews allocation and saves.", result: "Ledger and balance update.", say: "The review confirms which charges the payment covers and what remains due.", screen: "Review → Saved." },
+            { id: "shared-account", actor: "system", title: "Update account view", action: "Ledger reflects fees paid and amounts due.", result: "Statement is an account summary.", say: "The Statement of Account summarizes the ledger; it is not an official receipt.", screen: "Statement of Account → Print statement." },
+            { id: "student-account", actor: "student", title: "View own fees", action: "Student views their own balance and activity.", result: "Private finance notes stay with staff.", say: "Students see their own financial view without private Finance notes or payment arrangements.", screen: "Fees & payments." }
+          ],
+          edges: [
+            { from: "assessed-fees", to: "record-payment" }, { from: "record-payment", to: "allocate-payment" },
+            { from: "allocate-payment", to: "review-payment" }, { from: "review-payment", to: "shared-account" },
+            { from: "shared-account", to: "student-account" }
+          ],
+          notes: [
+            { title: "Credit is not new cash", body: "Applying existing credit does not record another payment. An unapplied amount remains credit." },
+            { title: "Statement of Account", body: "It is an account summary, not an official receipt. A reviewed payment arrangement does not erase debt." }
+          ]
+        },
+        {
+          id: "paper-clearance", title: "Paper clearance and later-term activation", nav: "Paper clearance", kind: "flow",
+          summary: "A registrar inspects the returned paper form and records one whole-paper completion attestation.",
+          related: ["enrollment", "return-after-break", "roles"],
+          nodes: [
+            { id: "return-signed-form", actor: "student", title: "Return signed paper form", action: "Student returns the completed paper form.", result: "Paper is ready for registrar inspection.", say: "The student returns the physically signed form for inspection.", screen: "Student provides the printed paper form to the registrar." },
+            { id: "inspect-paper", actor: "registrar", title: "Inspect whole paper", action: "Registrar inspects the returned paper in person.", result: "One whole-form review.", say: "The current UI records inspection of the whole form, not progress on each signature.", screen: "Paper clearance → Open paper clearance." },
+            { id: "save-paper-clearance", actor: "registrar", title: "Save completion attestation", action: "Registrar records whole-form completion.", result: "Operator, date, and history are recorded.", say: "This attestation records the registrar's physical inspection and completion decision.", screen: "Paper clearance completed → Save clearance status." },
+            { id: "activation-gate", actor: "system", title: "Check activation requirements", action: "System checks annual, section, and prior-term rules.", result: "Applicable attended terms must be complete.", say: "Activation requires annual confirmation, a valid section, and completion of applicable earlier attended terms.", screen: "Review term activation shows the required earlier-term paper statuses." },
+            { id: "activate-term", actor: "registrar", title: "Activate selected term", action: "Registrar activates term after required checks.", result: "Term placement becomes active.", say: "When required paper clearance and setup are complete, the registrar activates the selected term.", screen: "Activate term." },
+            { id: "exclude-term", actor: "registrar", title: "Record term not attended", action: "Registrar records a reasoned exception.", result: "Excluded term is not marked completed.", say: "Not attended is a reasoned applicability exclusion; it is never recorded as Completed.", screen: "Record term not attended. A reason is required." }
+          ],
+          edges: [
+            { from: "return-signed-form", to: "inspect-paper" }, { from: "inspect-paper", to: "save-paper-clearance" },
+            { from: "save-paper-clearance", to: "activation-gate" },
+            { from: "activation-gate", to: "activate-term", label: "requirements met" },
+            { from: "activation-gate", to: "exclude-term", label: "eligible exception" },
+            { from: "exclude-term", to: "activate-term", kind: "return", label: "recheck other terms" }
+          ],
+          notes: [
+            { title: "Whole-paper status", body: "Current v2.018 workflow records one registrar attestation. v2.017 signature evidence remains historical and read-only." },
+            { title: "Separate decisions", body: "Paper clearance is separate from Finance term account clearance and document request fee review." }
+          ]
+        },
+        {
+          id: "document-requests", title: "Document request and handover", nav: "Document requests", kind: "flow",
+          summary: "A specific Finance fee decision precedes registrar processing and the logged handover.",
+          related: ["payments", "roles", "login-access"],
+          nodes: [
+            { id: "record-request", actor: "registrar", title: "Record document request", action: "Registrar records the requested document.", result: "A request enters its own ledger.", say: "This workflow tracks a specific request from intake through release.", screen: "Student records → Open record → Requests → Record document request." },
+            { id: "fee-decision", actor: "finance", title: "Review request fee", action: "Finance approves or holds the request fee.", result: "A reviewed arrangement can leave debt owed.", say: "Finance makes the fee decision for this request. An arrangement does not cancel a balance.", screen: "Document request fee review → Requests awaiting a fee decision." },
+            { id: "process-request", actor: "registrar", title: "Process approved request", action: "Registrar processes the reviewed request.", result: "Request is prepared for release.", say: "After fee approval, the registrar handles the request and prepares the handover.", screen: "Registrar request queue → processing." },
+            { id: "ready-claim", actor: "registrar", title: "Mark ready and prepare slip", action: "Registrar marks ready and saves a claim slip.", result: "Claim instructions are recorded.", say: "A ready request can include a claim slip for the student.", screen: "ready → save or print claim slip when appropriate." },
+            { id: "record-release", actor: "registrar", title: "Record handover", action: "Registrar records release date and recipient.", result: "Request history shows handover.", say: "The system records who received the requested item and when.", screen: "released → record release date and recipient." }
+          ],
+          edges: [
+            { from: "record-request", to: "fee-decision" }, { from: "fee-decision", to: "process-request", label: "approved" },
+            { from: "process-request", to: "ready-claim" }, { from: "ready-claim", to: "record-release" }
+          ],
+          notes: [
+            { title: "If held", body: "A Finance hold pauses processing until the fee decision is resolved." },
+            { title: "Keep scope clear", body: "This logs a request and handover. It does not generate or send a document file, and it is not term clearance." }
+          ]
+        },
+        {
+          id: "physical-documents", title: "Physical report card and Form 137 records", nav: "Physical documents", kind: "physical",
+          summary: "The paper report-card history and staff-only Form 137 history are separate from digital scans and grades.",
+          related: ["digital-documents", "teacher-grades", "roles"],
+          lanes: [
+            {
+              id: "paper-copy", title: "Previous-school report-card paper copy", nodes: [
+                { id: "paper-copy-inspect", actor: "authorized", title: "Inspect paper copy", action: "Staff inspects the physical report-card copy.", result: "Paper channel only.", say: "This is the staff-recorded physical paper-copy history, separate from a student's digital scan.", screen: "Student record → Documents → Save paper-copy status." },
+                { id: "paper-copy-save", actor: "authorized", title: "Save paper-copy status", action: "Staff saves status and paper-copy history.", result: "No grade import occurs.", say: "The physical status records receipt and review history; it never writes grades.", screen: "Save paper-copy status." },
+                { id: "paper-copy-student", actor: "student", title: "View latest status and date", action: "Student sees the latest status and date.", result: "Staff notes remain private.", say: "The student sees the latest status and date without staff notes.", screen: "Student Documents page → previous-school report-card paper-copy status." }
+              ]
+            },
+            {
+              id: "form-137", title: "Form 137 physical record and optional scan", nodes: [
+                { id: "form137-inspect", actor: "authorized", title: "Inspect physical Form 137", action: "Authorized staff inspects the physical record.", result: "Staff-only workflow.", say: "Form 137 status and scans are restricted to authorized staff.", screen: "Student record → Documents → Form 137." },
+                { id: "form137-save", actor: "authorized", title: "Save physical status", action: "Staff records Form 137 status and history.", result: "Students cannot view it.", say: "The physical Form 137 status remains staff-only.", screen: "Save Form 137 status." },
+                { id: "form137-scan", actor: "authorized", title: "Send optional scan", action: "Staff sends optional scan to Gemini in memory.", result: "Scan and results are not retained.", say: "The optional scan is transient: it is not saved as a file or database row.", screen: "Send temporary scan for suggestions." },
+                { id: "form137-result", actor: "system", title: "Return bounded suggestions", action: "Gemini returns bounded suggestions to staff.", result: "Staff-only; no grades written.", say: "Form 137 suggestions never become grades or a student-visible document record.", screen: "Transient precheck result in the staff Form 137 workflow." }
+              ],
+              edges: [
+                { from: "form137-inspect", to: "form137-save" },
+                { from: "form137-inspect", to: "form137-scan", kind: "optional", label: "OPTIONAL SCAN" },
+                { from: "form137-scan", to: "form137-result" }
+              ]
+            }
+          ],
+          notes: [
+            { title: "Separate channels", body: "Paper report-card status and digital scans have separate histories. Neither channel is a grade source." },
+            { title: "Form 137 boundary", body: "Only authorized staff can inspect its physical status or transient suggestions. No scan/result file or database row is saved." }
+          ]
+        },
+        {
+          id: "login-access", title: "Sign-in and email two-factor authentication", nav: "Login and access", kind: "flow",
+          summary: "Credentials and email verification lead to a role workspace; a temporary student password changes only when required.",
+          related: ["roles", "enrollment", "return-after-break"],
+          nodes: [
+            { id: "enter-credentials", actor: "user", title: "Enter credentials", action: "User submits current email and password.", result: "Sign-in begins.", say: "The user's account identifies their role; protected actions also check record ownership.", screen: "Sign in → enter account email and password." },
+            { id: "email-code", actor: "system", title: "Send six-digit code", action: "System emails a six-digit verification code.", result: "Code is time-limited.", say: "Email 2FA is part of the sign-in flow.", screen: "Verification code is sent to the account email." },
+            { id: "verify-code", actor: "user", title: "Verify email code", action: "User enters the six-digit code.", result: "Identity check completes.", say: "The code confirms access to the email account before the workspace opens.", screen: "Enter verification code → Verify." },
+            { id: "change-temp-password", actor: "student", title: "Change temporary password", action: "Student changes password only when required.", result: "Only required for temporary credentials.", say: "A temporary password is changed when required; existing users do not receive new temporary credentials on every sign-in.", screen: "Change temporary password when prompted after first activation." },
+            { id: "open-workspace", actor: "system", title: "Open role workspace", action: "System opens the authorized role workspace.", result: "Role and record checks protect each action.", say: "The server checks each protected action. Hiding a menu item alone is not authorization.", screen: "Role-specific workspace navigation." }
+          ],
+          edges: [
+            { from: "enter-credentials", to: "email-code" }, { from: "email-code", to: "verify-code" },
+            { from: "verify-code", to: "change-temp-password", label: "if required" },
+            { from: "verify-code", to: "open-workspace", label: "normal sign-in" },
+            { from: "change-temp-password", to: "open-workspace", label: "after change" }
+          ],
+          notes: [
+            { title: "Temporary password", body: "The change step appears only when required, such as after first activation. It is not repeated for every login." },
+            { title: "Access is checked", body: "Role authorization and student-record ownership are enforced for protected actions on the server." }
+          ]
+        },
+        {
+          id: "roles", title: "Who owns each part of the workflow?", nav: "Role overview", kind: "roles",
+          summary: "Each role has a defined lane, action, and result; the front desk does not have student-master or staff-decision access.",
+          rows: [
+            { id: "role-front-desk", role: "front_desk", action: "Transcribe paper intake and received-document counts.", result: "No student-master, document, finance, or account access.", say: "Front desk transcribes the paper intake and received counts only; saving it does not create a student, login, enrollment, or bill.", related: ["enrollment", "return-after-break"] },
+            { id: "role-registrar", role: "registrar", action: "Review enrollment, academics, documents, and grades.", result: "Owns enrollment and staff document and grade decisions.", say: "The registrar manages enrollment and academic review, inspects documents, records paper clearance, and approves teacher grade submissions.", related: ["enrollment", "return-after-break", "digital-documents", "teacher-grades", "paper-clearance", "document-requests", "physical-documents"] },
+            { id: "role-teacher", role: "teacher", action: "Teach assigned classes; submit the corrected workbook.", result: "Submits only; registrar approves grades.", say: "Teacher preview and submission prepare a review item; registrar approval is required before grades are written.", related: ["teacher-grades", "login-access"] },
+            { id: "role-finance", role: "finance", action: "Manage fees, payments, account clearance, and request fees.", result: "Owns finance decisions; does not enroll students.", say: "Finance maintains assessed fees and payments while keeping term account clearance and request fee review separate.", related: ["payments", "document-requests", "enrollment"] },
+            { id: "role-student", role: "student", action: "View own records and upload permitted documents.", result: "Own records only; Form 137 is staff-only.", say: "Students see their own enrollment, approved grades, finance view, and permitted documents.", related: ["login-access", "digital-documents", "teacher-grades", "payments", "physical-documents"] },
+            { id: "role-admin", role: "admin", action: "Manage accounts, audit activity, and oversee records.", result: "Oversight; cannot bypass grade approval.", say: "Database administration supports accounts and oversight; it does not bypass the registrar's grade-import workflow.", related: ["login-access", "roles", "digital-documents", "payments"] }
+          ]
+        }
+      ];
+
+      const byId = new Map(diagrams.map((diagram) => [diagram.id, diagram]));
+      const nav = document.getElementById("process-list");
+      const sections = document.getElementById("diagram-sections");
+      const mobileLayout = window.matchMedia("(max-width: 720px)");
+      const roleMap = byId.get("roles");
+      let activeDiagramId = "enrollment";
+      let activeStepId = "";
+      let layoutIsMobile = mobileLayout.matches;
+      const measureCanvas = document.createElement("canvas");
+      const measureContext = measureCanvas.getContext("2d");
+      const chartFontFamily = "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, (character) => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        })[character]);
+      }
+
+      function roleLabel(role) { return roleStyles[role]?.label || "System"; }
+
+      function wrapText(value, maxWidth, fontSize = 16, fontWeight = 500) {
+        measureContext.font = `${fontWeight} ${fontSize}px ${chartFontFamily}`;
+        const words = String(value).split(/\s+/);
+        const lines = [];
+        let line = "";
+        const measure = (text) => measureContext.measureText(text).width;
+        words.forEach((word) => {
+          const candidate = line ? `${line} ${word}` : word;
+          if (measure(candidate) <= maxWidth) {
+            line = candidate;
+            return;
+          }
+          if (line) {
+            lines.push(line);
+            line = "";
+          }
+          if (measure(word) <= maxWidth) {
+            line = word;
+            return;
+          }
+          let fragment = "";
+          Array.from(word).forEach((character) => {
+            if (fragment && measure(fragment + character) > maxWidth) {
+              lines.push(fragment);
+              fragment = character;
+            } else fragment += character;
+          });
+          line = fragment;
+        });
+        if (line) lines.push(line);
+        return lines;
+      }
+
+      function svgText(lines, x, y, className, fontSize, lineHeight) {
+        const weight = className === "node-title" ? 730 : className === "node-result" ? 680
+          : className === "chart-heading-title" || className === "chart-section-heading" ? 760 : 500;
+        return `<text class="${className}" x="${x}" y="${y}" font-size="${fontSize}" style="font-size:${fontSize}px;font-weight:${weight}">${lines.map((line, index) => `<tspan x="${x}" dy="${index ? lineHeight : 0}">${escapeHtml(line)}</tspan>`).join("")}</text>`;
+      }
+
+      function chartHeading(diagram, mobile = false) {
+        const identity = mobile
+          ? `<text x="42" y="158" font-size="21" font-weight="630" fill="#3d4853">Ark Technological Institute Education System</text><text x="42" y="185" font-size="21" font-weight="630" fill="#3d4853">Incorporated · Lucena Branch</text>`
+          : `<text x="67" y="111" font-size="21" font-weight="630" fill="#3d4853">Ark Technological Institute Education System Incorporated · Lucena Branch</text>`;
+        const title = mobile
+          ? svgText(wrapText(diagram.title, 720, 42, 760), 40, 72, "chart-heading-title", 42, 47)
+          : `<text x="64" y="72" font-size="42" font-weight="760" letter-spacing="-0.7">${escapeHtml(diagram.title)}</text>`;
+        return `<g class="chart-title" aria-hidden="true">
+          ${title}
+          ${identity}
+        </g>`;
+      }
+
+      function frameHeader(diagram) {
+        return `<title id="title-${diagram.id}">${escapeHtml(diagram.title)}</title>
+          <desc id="desc-${diagram.id}">${escapeHtml(diagram.summary)} Each numbered action can be selected to highlight its presenter note.</desc>`;
+      }
+
+      function nodePosition(node, index, total, mobile) {
+        if (mobile) return { x: 40, y: 230 + index * 420, w: 720, h: 360 };
+        const position = node.pos || [index % 4, Math.floor(index / 4)];
+        const order = position[1] % 2 === 0 ? position[0] : 3 - position[0];
+        const displayCol = position[1] % 2 === 0 ? position[0] : 3 - position[0];
+        const displayOrder = order;
+        return { x: 45 + displayCol * 390, y: 168 + position[1] * 318, w: 320, h: 205, row: position[1], col: displayCol, order: displayOrder };
+      }
+
+      function getPositions(diagram, mobile) {
+        const positions = new Map();
+        diagram.nodes.forEach((node, index) => positions.set(node.id, nodePosition(node, index, diagram.nodes.length, mobile)));
+        return positions;
+      }
+
+      function drawNode(node, index, position, mobile, activeId, roleRow) {
+        const role = roleStyles[node.actor] || roleStyles.system;
+        const x = position.x;
+        const y = position.y;
+        const w = position.w;
+        const h = position.h;
+        const scale = mobile ? 1.7 : 1;
+        const numR = 21 * scale;
+        const actorFont = 21 * scale;
+        const titleFont = (mobile ? 23 : 24) * scale;
+        const actionFont = (mobile ? 20 : 19) * scale;
+        const resultFont = (mobile ? 20 : 17) * scale;
+        const titleLines = wrapText(node.title, w - 48 * scale, titleFont, 730);
+        const actionLines = wrapText(node.action, w - 48 * scale, actionFont, 500);
+        const resultLines = wrapText(node.result, w - 48 * scale, resultFont, 680);
+        const top = y + 27 * scale;
+        const titleY = y + (mobile ? 134 : 68);
+        const titleLineHeight = mobile ? 45 : 27;
+        const actionLineHeight = mobile ? 38 : 22;
+        const resultLineHeight = mobile ? 38 : 18;
+        const actionY = titleY + titleLines.length * titleLineHeight + (mobile ? 8 : 3);
+        const resultY = y + h - (mobile ? 16 : 12) - (resultLines.length - 1) * resultLineHeight;
+        const accessible = `${roleLabel(node.actor)}. Step ${index + 1}: ${node.title}. ${node.action} ${node.result}`;
+        const dataId = roleRow ? `data-role-id="${escapeHtml(node.id)}"` : `data-step-id="${escapeHtml(node.id)}"`;
+        const active = activeId === node.id;
+        return `<g class="${roleRow ? "role-lane" : "flow-node"}" ${dataId} role="button" tabindex="0" aria-label="${escapeHtml(accessible)}" aria-pressed="${active ? "true" : "false"}" data-active="${active ? "true" : "false"}" style="--role-ink:${role.ink}">
+          <rect class="${roleRow ? "role-row-frame" : "node-frame"}" x="${x}" y="${y}" width="${w}" height="${h}" rx="12" fill="#fff" stroke="#b8c2cc" stroke-width="2"/>
+          ${roleRow ? "" : `<line class="node-accent" x1="${x + 15}" y1="${y + 4}" x2="${x + w - 15}" y2="${y + 4}" stroke="${role.ink}"/>`}
+          <circle class="node-number" cx="${x + 28 * scale}" cy="${top}" r="${numR}" fill="${role.ink}"/>
+          <text class="node-number-text" x="${x + 28 * scale}" y="${top + 7 * scale}" font-size="${21 * scale}">${index + 1}</text>
+          <text class="node-actor" x="${x + 60 * scale}" y="${top + 7 * scale}" font-size="${actorFont}" fill="${role.ink}">${escapeHtml(roleLabel(node.actor))}</text>
+          ${svgText(titleLines, x + 20 * scale, titleY, "node-title", titleFont, titleLineHeight)}
+          ${svgText(actionLines, x + 20 * scale, actionY, "node-action", actionFont, actionLineHeight)}
+          ${svgText(resultLines, x + 20 * scale, resultY, "node-result", resultFont, resultLineHeight)}
+        </g>`;
+      }
+
+      function drawEdge(edge, positions, diagram, mobile) {
+        const source = positions.get(edge.from);
+        const target = positions.get(edge.to);
+        if (!source || !target) return "";
+        const sourceIndex = diagram.nodes.findIndex((node) => node.id === edge.from);
+        const targetIndex = diagram.nodes.findIndex((node) => node.id === edge.to);
+        let d = "";
+        let labelPosition = null;
+        if (mobile) {
+          if (edge.kind === "return" || targetIndex < sourceIndex) {
+            const rail = 18;
+            const sy = source.y + source.h / 2;
+            const ty = target.y + target.h / 2;
+            d = `M ${source.x} ${sy} H ${rail} V ${ty} H ${target.x}`;
+          } else if (targetIndex === sourceIndex + 1) {
+            const sx = source.x + source.w / 2;
+            const sy = source.y + source.h;
+            const tx = target.x + target.w / 2;
+            d = `M ${sx} ${sy} V ${target.y - 24} H ${tx} V ${target.y - 5}`;
+          } else {
+            const rail = 782;
+            const sy = source.y + source.h / 2;
+            const ty = target.y + target.h / 2;
+            d = `M ${source.x + source.w} ${sy} H ${rail} V ${ty} H ${target.x + target.w}`;
+          }
+        } else if (edge.kind === "return" || target.y < source.y) {
+          const tx = target.x + target.w / 2;
+          if (edge.from === "replace-document" && edge.to === "format-check") {
+            const sx = source.x + source.w / 2;
+            const sy = source.y + source.h;
+            d = `M ${sx} ${sy} V 708 H 22 V 132 H ${tx} V ${target.y - 8}`;
+          } else {
+            const railX = 1570;
+            const railY = 80;
+            const sx = source.x + source.w;
+            const sy = source.y + source.h / 2;
+            d = `M ${sx} ${sy} H ${railX} V ${railY} H ${tx} V ${target.y - 8}`;
+            labelPosition = [1320, railY - 8];
+          }
+        } else if (Math.abs(source.y - target.y) < 4) {
+          const forward = target.x > source.x;
+          const sx = forward ? source.x + source.w : source.x;
+          const tx = forward ? target.x : target.x + target.w;
+          const y = source.y + source.h / 2;
+          const bend = forward ? sx + (tx - sx) / 2 : sx - (sx - tx) / 2;
+          d = `M ${sx} ${y} H ${bend} H ${tx}`;
+          if (edge.label) labelPosition = [bend, source.y - 10];
+        } else {
+          const sx = source.x + source.w / 2;
+          const sy = source.y + source.h;
+          const tx = target.x + target.w / 2;
+          const ty = target.y;
+          const railY = sy + Math.max(20, Math.min(62, (ty - sy) / 2));
+          d = `M ${sx} ${sy} V ${railY} H ${tx} V ${ty - 8}`;
+          labelPosition = [Math.min(sx, tx) + Math.abs(tx - sx) / 2, railY - 9];
+        }
+        const returnClass = edge.kind === "return" ? "edge-line edge-return" : edge.label ? "edge-line edge-branch" : "edge-line";
+        const label = edge.label && !mobile && labelPosition
+          ? `<text class="edge-label" x="${labelPosition[0]}" y="${labelPosition[1]}" text-anchor="middle">${escapeHtml(edge.label)}</text>`
+          : "";
+        return `<path class="${returnClass}" d="${d}" marker-end="url(#arrow-${diagram.id})" aria-hidden="true"/>${label}`;
+      }
+
+      function drawNotes(notes, mobile, startY) {
+        if (!notes?.length) return { content: "", endY: startY };
+        if (mobile) {
+          const w = 720;
+          const h = 360;
+          const gap = 20;
+          const content = notes.map((note, index) => {
+            const y = startY + index * (h + gap);
+            const bodyLines = wrapText(note.body, 576, 34, 500);
+            return `<g><rect class="note-frame" x="40" y="${y}" width="${w}" height="${h}" rx="12"/>
+              <text class="note-title" x="62" y="${y + 48}" font-size="36">${escapeHtml(note.title)}</text>
+              ${svgText(bodyLines, 62, y + 96, "note-body", 34, 40)}</g>`;
+          }).join("");
+          return { content, endY: startY + notes.length * (h + gap) };
+        }
+        const gap = 18;
+        const count = notes.length;
+        const w = (1510 - gap * (count - 1)) / count;
+        const h = 170;
+        const y = startY;
+        const content = notes.map((note, index) => {
+          const x = 45 + index * (w + gap);
+          const bodyLines = wrapText(note.body, (w - 40) * 0.88, 18, 500);
+          return `<g><rect class="note-frame" x="${x}" y="${y}" width="${w}" height="${h}" rx="11"/>
+            <text class="note-title" x="${x + 20}" y="${y + 31}">${escapeHtml(note.title)}</text>
+            ${svgText(bodyLines, x + 20, y + 64, "note-body", 18, 23)}</g>`;
+        }).join("");
+        return { content, endY: startY + h };
+      }
+
+      function flowSvg(diagram, mobile, activeId) {
+        const positions = getPositions(diagram, mobile);
+        const defs = `<defs><marker id="arrow-${diagram.id}" viewBox="0 0 10 10" refX="8.4" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#586775"/></marker></defs>`;
+        const links = diagram.edges.map((edge) => drawEdge(edge, positions, diagram, mobile)).join("");
+        const cards = diagram.nodes.map((node, index) => drawNode(node, index, positions.get(node.id), mobile, activeId, false)).join("");
+        if (mobile) {
+          const notesStart = 230 + diagram.nodes.length * 420 + 28;
+          const notes = drawNotes(diagram.notes, true, notesStart);
+          const height = Math.max(900, notes.endY + 24);
+          return `<svg class="flow-svg" viewBox="0 0 800 ${height}" role="group" aria-labelledby="title-${diagram.id} desc-${diagram.id}" xmlns="http://www.w3.org/2000/svg">${frameHeader(diagram)}${defs}${chartHeading(diagram, true)}${links}${cards}${notes.content}</svg>`;
+        }
+        const notes = drawNotes(diagram.notes, false, 718);
+        return `<svg class="flow-svg" viewBox="0 0 1600 900" role="group" aria-labelledby="title-${diagram.id} desc-${diagram.id}" xmlns="http://www.w3.org/2000/svg">${frameHeader(diagram)}${defs}${chartHeading(diagram)}${links}${cards}${notes.content}</svg>`;
+      }
+
+      function roleSvg(diagram, mobile, activeId) {
+        const rows = diagram.rows;
+        const laneContent = rows.map((row, index) => {
+          const role = roleStyles[row.role];
+          const accessible = `${role.label}. ${row.action} ${row.result}`;
+          if (mobile) {
+            const y = 230 + index * 350;
+            const actionLines = wrapText(row.action, 630, 34, 500);
+            const resultLines = wrapText(row.result, 570, 34, 680);
+            return `<g class="role-lane" data-role-id="${row.id}" role="button" tabindex="0" aria-label="${escapeHtml(accessible)}" aria-pressed="${activeId === row.id}" data-active="${activeId === row.id}" style="--role-ink:${role.ink}">
+              <rect class="role-row-frame" x="40" y="${y}" width="720" height="320" rx="12" fill="#fff" stroke="#b8c2cc" stroke-width="2"/>
+              <rect x="58" y="${y + 15}" width="684" height="50" rx="8" fill="${role.pale}"/>
+              <text x="76" y="${y + 51}" font-size="36" font-weight="750" fill="${role.ink}">${escapeHtml(role.label)}</text>
+              ${svgText(actionLines, 62, y + 108, "node-action", 34, 38)}
+              <path d="M 62 ${y + 203} H 116" stroke="${role.ink}" stroke-width="3" marker-end="url(#role-arrow-${diagram.id})"/>
+              ${svgText(resultLines, 132, y + 228, "node-result", 34, 40)}
+            </g>`;
+          }
+          const y = 142 + index * 93;
+          const actionLines = wrapText(row.action, 660, 22, 500);
+          const resultLines = wrapText(row.result, 370, 19, 680);
+          const active = activeId === row.id;
+          return `<g class="role-lane" data-role-id="${row.id}" role="button" tabindex="0" aria-label="${escapeHtml(accessible)}" aria-pressed="${active}" data-active="${active}" style="--role-ink:${role.ink}">
+            <rect class="role-row-frame" x="42" y="${y}" width="1512" height="87" rx="10" fill="${active ? "#fffaf8" : "#fff"}" stroke="${active ? role.ink : "#c7d0d8"}" stroke-width="${active ? 3 : 1.5}"/>
+            <rect x="58" y="${y + 16}" width="225" height="54" rx="8" fill="${role.pale}"/>
+            <text x="76" y="${y + 51}" font-size="24" font-weight="760" fill="${role.ink}">${escapeHtml(role.label)}</text>
+            ${svgText(actionLines, 320, y + 37, "node-action", 22, 25)}
+            <path d="M 1042 ${y + 44} H 1130" fill="none" stroke="${role.ink}" stroke-width="3" marker-end="url(#role-arrow-${diagram.id})"/>
+            ${svgText(resultLines, 1160, y + 35, "node-result", 19, 23)}
+          </g>`;
+        }).join("");
+        const defs = `<defs><marker id="role-arrow-${diagram.id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#586775"/></marker></defs>`;
+        if (mobile) {
+          const notes = drawNotes([{ title: "Ownership matters", body: "Each role has its own authorized work. Front desk records paper intake only; it does not inspect the student master or make staff decisions." }], true, 230 + rows.length * 350 + 24);
+          const height = notes.endY + 20;
+          return `<svg class="flow-svg" viewBox="0 0 800 ${height}" role="group" aria-labelledby="title-${diagram.id} desc-${diagram.id}" xmlns="http://www.w3.org/2000/svg">${frameHeader(diagram)}${defs}${chartHeading(diagram, true)}${laneContent}${notes.content}</svg>`;
+        }
+        const notes = drawNotes([{ title: "Ownership matters", body: "Role checks protect each action. Front desk records paper intake and receipt counts only; it has no student-master, document-decision, finance, or account-administration access." }], false, 718);
+        return `<svg class="flow-svg" viewBox="0 0 1600 900" role="group" aria-labelledby="title-${diagram.id} desc-${diagram.id}" xmlns="http://www.w3.org/2000/svg">${frameHeader(diagram)}${defs}${chartHeading(diagram)}${laneContent}${notes.content}</svg>`;
+      }
+
+      function physicalSvg(diagram, mobile, activeId) {
+        const flattened = diagram.lanes.flatMap((lane) => lane.nodes);
+        const parts = [];
+        let height = 900;
+        const defs = `<defs><marker id="physical-arrow-${diagram.id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#586775"/></marker></defs>`;
+        if (mobile) {
+          let y = 230;
+          diagram.lanes.forEach((lane, laneIndex) => {
+            const laneTitleLines = wrapText(lane.title, 720, 36, 760);
+            parts.push(svgText(laneTitleLines, 42, y, "chart-section-heading", 36, 44));
+            y += laneTitleLines.length * 44 + 10;
+            const lanePositions = new Map();
+            lane.nodes.forEach((node, index) => {
+              const position = { x: 40, y, w: 720, h: 360 };
+              lanePositions.set(node.id, position);
+              parts.push(drawNode(node, flattened.findIndex((item) => item.id === node.id), position, true, activeId, false));
+              y += 420;
+            });
+            const edges = lane.edges || lane.nodes.slice(1).map((node, index) => ({ from: lane.nodes[index].id, to: node.id }));
+            edges.forEach((edge) => {
+              const source = lanePositions.get(edge.from);
+              const target = lanePositions.get(edge.to);
+              if (!source || !target) return;
+              const sourceIndex = lane.nodes.findIndex((node) => node.id === edge.from);
+              const targetIndex = lane.nodes.findIndex((node) => node.id === edge.to);
+              let path;
+              if (edge.kind === "optional") {
+                path = `M ${source.x + source.w} ${source.y + source.h / 2} H 782 V ${target.y + target.h / 2} H ${target.x + target.w}`;
+              } else if (targetIndex === sourceIndex + 1) {
+                path = `M 400 ${source.y + source.h} V ${target.y - 8}`;
+              } else if (targetIndex > sourceIndex) {
+                path = `M ${source.x + source.w} ${source.y + source.h / 2} H 782 V ${target.y + target.h / 2} H ${target.x + target.w}`;
+              } else {
+                path = `M ${source.x} ${source.y + source.h / 2} H 18 V ${target.y + target.h / 2} H ${target.x}`;
+              }
+              const edgeClass = edge.kind === "optional" ? "edge-line edge-optional" : "edge-line";
+              parts.push(`<path class="${edgeClass}" d="${path}" marker-end="url(#physical-arrow-${diagram.id})" aria-hidden="true"/>`);
+            });
+            if (laneIndex < diagram.lanes.length - 1) y += 24;
+          });
+            const notes = drawNotes(diagram.notes, true, y + 14);
+          height = notes.endY + 22;
+          parts.push(notes.content);
+          return `<svg class="flow-svg" viewBox="0 0 800 ${height}" role="group" aria-labelledby="title-${diagram.id} desc-${diagram.id}" xmlns="http://www.w3.org/2000/svg">${frameHeader(diagram)}${defs}${chartHeading(diagram, true)}${parts.join("")}</svg>`;
+        }
+        diagram.lanes.forEach((lane, laneIndex) => {
+          const rowTop = laneIndex === 0 ? 160 : 478;
+          const laneRole = laneIndex === 0 ? "#204e75" : "#76232c";
+          parts.push(`<text x="52" y="${rowTop - 18}" font-size="27" font-weight="760" fill="#283642">${escapeHtml(lane.title)}</text>`);
+          const count = lane.nodes.length;
+          const w = count === 3 ? 420 : 330;
+          const gap = count === 3 ? 105 : 70;
+          const total = count * w + (count - 1) * gap;
+          const start = (1600 - total) / 2;
+          const lanePositions = new Map();
+          lane.nodes.forEach((node, index) => {
+            const x = start + index * (w + gap);
+            const position = { x, y: rowTop, w, h: 205 };
+            lanePositions.set(node.id, position);
+            parts.push(drawNode(node, flattened.findIndex((item) => item.id === node.id), position, false, activeId, false));
+          });
+          const edges = lane.edges || lane.nodes.slice(1).map((node, index) => ({ from: lane.nodes[index].id, to: node.id }));
+          edges.forEach((edge) => {
+            const source = lanePositions.get(edge.from);
+            const target = lanePositions.get(edge.to);
+            if (!source || !target) return;
+            let path;
+            let label = "";
+            if (edge.kind === "optional") {
+              const railY = rowTop + 248;
+              const fromX = source.x + source.w / 2;
+              const toX = target.x + target.w / 2;
+              path = `M ${fromX} ${source.y + source.h} V ${railY} H ${toX} V ${target.y + target.h + 8}`;
+              label = `<text class="edge-label" x="${(fromX + toX) / 2}" y="${railY - 10}" text-anchor="middle">${escapeHtml(edge.label || "OPTIONAL")}</text>`;
+            } else {
+              path = `M ${source.x + source.w} ${source.y + source.h / 2} H ${target.x - 10}`;
+            }
+            const edgeClass = edge.kind === "optional" ? "edge-line edge-optional" : "edge-line";
+            parts.push(`<path class="${edgeClass}" d="${path}" marker-end="url(#physical-arrow-${diagram.id})" aria-hidden="true"/>${label}`);
+          });
+        });
+        const notes = drawNotes(diagram.notes, false, 740);
+        parts.push(notes.content);
+        return `<svg class="flow-svg" viewBox="0 0 1600 930" role="group" aria-labelledby="title-${diagram.id} desc-${diagram.id}" xmlns="http://www.w3.org/2000/svg">${frameHeader(diagram)}${defs}${chartHeading(diagram)}${parts.join("")}</svg>`;
+      }
+
+      function makeSection(diagram) {
+        const article = document.createElement("article");
+        article.className = "diagram-section";
+        article.id = `diagram-section-${diagram.id}`;
+        article.dataset.diagramId = diagram.id;
+        article.hidden = true;
+        article.innerHTML = `<h2 class="visually-hidden">${escapeHtml(diagram.title)}</h2>
+          <div class="diagram-wrap" aria-label="${escapeHtml(diagram.title)} diagram"></div>
+          <div class="step-controls" aria-label="Select a diagram step">
+            <h3 class="step-heading" id="step-heading-${diagram.id}">${diagram.kind === "roles" ? "Choose a role lane" : "Choose a numbered step"}</h3>
+            <ol class="step-list"></ol>
+          </div>
+          <section class="presenter-panel" aria-live="polite" aria-atomic="true">
+            <div><h3>Say this</h3><p class="say-line"></p><div class="related-flows" hidden></div></div>
+            <details class="screen-detail" hidden><summary>What to click</summary><p></p></details>
+          </section>
+          <div class="step-moving-controls"><button type="button" class="previous-step">Previous step</button><button type="button" class="next-step">Next step</button></div>`;
+        sections.appendChild(article);
+        renderSection(article, diagram, layoutIsMobile);
+        return article;
+      }
+
+      function itemsFor(diagram) {
+        if (diagram.kind === "roles") return diagram.rows.map((row) => ({ ...row, title: roleLabel(row.role), action: row.action, result: row.result, actor: row.role, screen: "" }));
+        if (diagram.kind === "physical") return diagram.lanes.flatMap((lane) => lane.nodes);
+        return diagram.nodes;
+      }
+
+      function renderSection(article, diagram, mobile) {
+        const items = itemsFor(diagram);
+        const currentItem = items.find((item) => item.id === activeStepId) || items[0];
+        activeStepId = currentItem.id;
+        const svg = diagram.kind === "roles" ? roleSvg(diagram, mobile, activeStepId)
+          : diagram.kind === "physical" ? physicalSvg(diagram, mobile, activeStepId)
+            : flowSvg(diagram, mobile, activeStepId);
+        article.querySelector(".diagram-wrap").innerHTML = svg;
+        article.querySelector(".step-list").innerHTML = items.map((item, index) => `<li><button type="button" class="step-button" data-step-control="${escapeHtml(item.id)}" aria-pressed="${item.id === activeStepId}"><span class="step-index">${index + 1}</span><span>${escapeHtml(item.title)}</span></button></li>`).join("");
+        article.querySelector(".say-line").textContent = currentItem.say || "Select a role to see its responsibilities and related flows.";
+        const detail = article.querySelector(".screen-detail");
+        if (currentItem.screen) {
+          detail.hidden = false;
+          detail.open = false;
+          detail.querySelector("p").textContent = currentItem.screen;
+        } else {
+          detail.hidden = true;
+        }
+        const links = article.querySelector(".related-flows");
+        if (diagram.kind === "roles" && currentItem.related?.length) {
+          links.hidden = false;
+          links.setAttribute("aria-label", "Related workflow diagrams");
+          links.innerHTML = currentItem.related.map((id) => {
+            const target = byId.get(id);
+            return target ? `<button type="button" data-open-diagram="${id}">Open ${escapeHtml(target.nav)}</button>` : "";
+          }).join("");
+        } else {
+          links.hidden = true;
+          links.innerHTML = "";
+        }
+        const previous = article.querySelector(".previous-step");
+        const next = article.querySelector(".next-step");
+        const currentIndex = items.findIndex((item) => item.id === currentItem.id);
+        previous.disabled = currentIndex <= 0;
+        next.disabled = currentIndex >= items.length - 1;
+        previous.setAttribute("aria-label", currentIndex <= 0 ? "No previous step" : `Previous step: ${items[currentIndex - 1].title}`);
+        next.setAttribute("aria-label", currentIndex >= items.length - 1 ? "No next step" : `Next step: ${items[currentIndex + 1].title}`);
+      }
+
+      function setActiveStep(stepId) {
+        const diagram = byId.get(activeDiagramId);
+        const article = document.getElementById(`diagram-section-${activeDiagramId}`);
+        if (!diagram || !article) return;
+        const items = itemsFor(diagram);
+        if (!items.some((item) => item.id === stepId)) return;
+        const focused = document.activeElement;
+        const focusTarget = focused?.dataset?.stepId ? `[data-step-id="${focused.dataset.stepId}"]`
+          : focused?.dataset?.roleId ? `[data-role-id="${focused.dataset.roleId}"]`
+            : focused?.dataset?.stepControl ? `[data-step-control="${focused.dataset.stepControl}"]` : "";
+        activeStepId = stepId;
+        renderSection(article, diagram, layoutIsMobile);
+        if (focusTarget) article.querySelector(focusTarget)?.focus();
+      }
+
+      function setActiveDiagram(id) {
+        if (!byId.has(id)) return;
+        activeDiagramId = id;
+        const diagram = byId.get(id);
+        activeStepId = itemsFor(diagram)[0]?.id || "";
+        document.querySelectorAll(".diagram-section").forEach((article) => {
+          article.hidden = article.dataset.diagramId !== id;
+        });
+        document.querySelectorAll(".process-nav-button").forEach((button) => {
+          if (button.dataset.diagramId === id) button.setAttribute("aria-current", "page");
+          else button.removeAttribute("aria-current");
+        });
+        const article = document.getElementById(`diagram-section-${id}`);
+        renderSection(article, diagram, layoutIsMobile);
+        document.getElementById("download-chart").href = `charts/${id}.png`;
+        document.getElementById("download-chart").setAttribute("download", `${id}.png`);
+        document.title = `${diagram.title} · ARKTIESIIS Demo Visual Guide`;
+      }
+
+      diagrams.forEach((diagram) => {
+        const item = document.createElement("li");
+        item.innerHTML = `<button class="process-nav-button" type="button" data-diagram-id="${diagram.id}" aria-label="Open ${escapeHtml(diagram.nav)} diagram">${escapeHtml(diagram.nav)}</button>`;
+        nav.appendChild(item);
+        makeSection(diagram);
+      });
+
+      nav.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-diagram-id]");
+        if (button) setActiveDiagram(button.dataset.diagramId);
+      });
+
+      sections.addEventListener("click", (event) => {
+        const openButton = event.target.closest("[data-open-diagram]");
+        if (openButton) {
+          setActiveDiagram(openButton.dataset.openDiagram);
+          document.querySelector(`[data-diagram-id="${openButton.dataset.openDiagram}"]`)?.focus();
+          return;
+        }
+        const stepButton = event.target.closest("[data-step-control]");
+        if (stepButton) {
+          setActiveStep(stepButton.dataset.stepControl);
+          return;
+        }
+        const node = event.target.closest("[data-step-id], [data-role-id]");
+        if (node) setActiveStep(node.dataset.stepId || node.dataset.roleId);
+      });
+
+      sections.addEventListener("keydown", (event) => {
+        const node = event.target.closest("[data-step-id], [data-role-id]");
+        if (node && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          setActiveStep(node.dataset.stepId || node.dataset.roleId);
+        }
+      });
+
+      document.querySelectorAll(".previous-step, .next-step").forEach((button) => {
+        button.addEventListener("click", () => {
+          const diagram = byId.get(activeDiagramId);
+          const items = itemsFor(diagram);
+          const index = items.findIndex((item) => item.id === activeStepId);
+          const target = button.classList.contains("previous-step") ? index - 1 : index + 1;
+          if (items[target]) setActiveStep(items[target].id);
+        });
+      });
+
+      document.getElementById("print-all").addEventListener("click", () => window.print());
+
+      mobileLayout.addEventListener?.("change", (event) => {
+        layoutIsMobile = event.matches;
+        const article = document.getElementById(`diagram-section-${activeDiagramId}`);
+        renderSection(article, byId.get(activeDiagramId), layoutIsMobile);
+      });
+
+      const query = new URLSearchParams(window.location.search);
+      const exportId = query.get("chart");
+      if (exportId && byId.has(exportId)) {
+        document.body.classList.add("export-chart");
+        document.querySelectorAll(".diagram-section").forEach((article) => {
+          article.dataset.exportActive = article.dataset.diagramId === exportId ? "true" : "false";
+        });
+        setActiveDiagram(exportId);
+        document.getElementById(`diagram-section-${exportId}`).dataset.exportActive = "true";
+      } else {
+        const requestedView = query.get("process");
+        setActiveDiagram(requestedView && byId.has(requestedView) ? requestedView : "enrollment");
+      }
+    })();
+  </script>
+</body>
+</html>

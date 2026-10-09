@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const {
   HOSTINGER_SEED_MARKER,
   EXPANSION_MARKER,
+  REQUIRED_VERSIONS,
   REQUIRED_OBJECTS,
   ExpansionError,
   buildExpansionPlan,
@@ -66,9 +67,11 @@ function createInitialState() {
 }
 
 class FakeMariaDbConnection {
-  constructor({ failTable = null, initialState = createInitialState() } = {}) {
+  constructor({ failTable = null, initialState = createInitialState(), schemaVersions = null, missingObject = null } = {}) {
     this.db = { state: initialState };
     this.failTable = failTable;
+    this.schemaVersions = schemaVersions || Array.from({ length: 11 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`);
+    this.missingObject = missingObject;
     this.snapshot = null;
     this.inserts = new Map();
     this.statements = [];
@@ -108,10 +111,10 @@ class FakeMariaDbConnection {
     if (statement.includes('GET_LOCK')) return [[{ acquired: 1 }], []];
     if (statement.includes('RELEASE_LOCK')) return [[{ released: 1 }], []];
     if (statement === 'SELECT version FROM schema_migrations ORDER BY version') {
-      return [Array.from({ length: 11 }, (_, index) => ({ version: `v2.${String(index + 1).padStart(3, '0')}` })), []];
+      return [this.schemaVersions.map((version) => ({ version })), []];
     }
     if (statement.includes('information_schema.tables')) {
-      return [REQUIRED_OBJECTS.map((table_name) => ({ table_name })), []];
+      return [REQUIRED_OBJECTS.filter((table_name) => table_name !== this.missingObject).map((table_name) => ({ table_name })), []];
     }
     if (statement.includes('FROM audit_logs AS marker')) {
       const marker = this.table('audit_logs').find((row) => row.entity_type === values[0] && row.entity_id === values[1]);
@@ -342,6 +345,15 @@ test('production target rejects local, development, root-user, and password-only
     database: { ...productionConfiguration.database, user: 'root' } }), /hPanel database/);
 });
 
+test('expansion schema inventory matches its pinned v2.011 rehearsal boundary', () => {
+  assert.equal(REQUIRED_VERSIONS.at(-1), 'v2.011');
+  assert.ok(REQUIRED_OBJECTS.includes('student_document_claim_slips'));
+  for (const laterMigrationObject of [
+    'finance_review_drafts', 'pre_enrollments', 'readmission_evaluations', 'term_clearance_templates',
+    'student_term_clearances', 'annual_term_finalizations'
+  ]) assert.equal(REQUIRED_OBJECTS.includes(laterMigrationObject), false, `${laterMigrationObject} is newer than v2.011`);
+});
+
 test('expansion plan contains 99 fictional unlinked student identities and connected academic/finance counts', () => {
   const plan = buildExpansionPlan({ today: '2026-10-02T00:00:00.000Z' });
   assert.equal(plan.students.length, 99);
@@ -372,6 +384,24 @@ test('dry run verifies the seeded target and returns counts without inserting ro
   const result = await runExpansion({ ...harness(connection), options: options('dry-run'), today: '2026-10-02T00:00:00.000Z' });
   assert.equal(result.mode, 'dry-run');
   assert.equal(result.counts.students, 99);
+  assert.equal(connection.inserts.size, 0);
+  assert.equal(connection.released, true);
+});
+
+test('expansion refuses a schema newer than its pinned v2.011 support boundary', async () => {
+  const connection = new FakeMariaDbConnection({
+    schemaVersions: [...REQUIRED_VERSIONS, 'v2.012']
+  });
+  await assert.rejects(runExpansion({ ...harness(connection), options: options('dry-run') }),
+    (error) => error instanceof ExpansionError && /complete MariaDB v2\.011 schema/.test(error.message));
+  assert.equal(connection.inserts.size, 0, 'unsupported schemas are rejected before demo data writes');
+  assert.equal(connection.released, true);
+});
+
+test('expansion rejects a missing v2.011-critical object before any demo data writes', async () => {
+  const connection = new FakeMariaDbConnection({ missingObject: 'student_document_claim_slips' });
+  await assert.rejects(runExpansion({ ...harness(connection), options: options('dry-run') }),
+    (error) => error instanceof ExpansionError && /missing expected MariaDB demo schema objects/.test(error.message));
   assert.equal(connection.inserts.size, 0);
   assert.equal(connection.released, true);
 });

@@ -3,6 +3,7 @@ const path = require('node:path');
 const defaultEnvironment = require('../config/environment');
 const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
 const readExcelFile = require('read-excel-file/node').default;
+const { XlsxArchiveError, inspectXlsxArchive } = require('../utils/inspectXlsxArchive');
 
 const PREVIEW_TTL_MS = 30 * 60 * 1000;
 const SCHOOL_YEAR = '2026-2027';
@@ -185,7 +186,8 @@ function createGradeImportService({
   sql = defaultSql,
   transactionFactory = (pool) => new sql.Transaction(pool),
   secret = defaultEnvironment.sessionSecret,
-  now = () => Date.now()
+  now = () => Date.now(),
+  workbookReader = readExcelFile
 } = {}) {
   async function requireRegistrar(request, actorId) {
     const actor = await request.input('actorId', sql.Int, actorId)
@@ -245,6 +247,12 @@ function createGradeImportService({
     if (!Buffer.isBuffer(buffer) || buffer.length < 4 || buffer.length > 5 * 1024 * 1024) {
       throw new GradeImportError('Choose an XLSX workbook no larger than 5 MB.');
     }
+    try {
+      inspectXlsxArchive(buffer);
+    } catch (error) {
+      if (error instanceof XlsxArchiveError) throw new GradeImportError(error.message);
+      throw new GradeImportError('The workbook archive is invalid or exceeds the supported expanded size.');
+    }
     let storedOriginalFilename = null;
     if (originalFilename !== null && originalFilename !== undefined) {
       if (typeof originalFilename !== 'string') throw new GradeImportError('The workbook filename is invalid.');
@@ -257,7 +265,7 @@ function createGradeImportService({
     }
     let workbook;
     try {
-      workbook = await readExcelFile(buffer);
+      workbook = await workbookReader(buffer);
     } catch {
       throw new GradeImportError('The workbook could not be read. Upload a valid corrected SSHS XLSX file.');
     }

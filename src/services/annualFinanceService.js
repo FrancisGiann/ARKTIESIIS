@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
 const { parseMoneyCents, formatMoneyCents } = require('./financeService');
-const { normalizeId, normalizeSearchTerm } = require('./financeService');
+const { FinanceServiceError, normalizeId, normalizeSearchTerm } = require('./financeService');
 const { createAnnualFinanceCasesService } = require('./annualFinanceCasesService');
 const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
 const { runSerializableTransaction } = require('./transactionRetry');
@@ -116,6 +116,15 @@ class AnnualFinanceError extends Error {
     super(message);
     this.name = 'AnnualFinanceError';
     this.status = status;
+  }
+}
+
+function normalizeAnnualSearchTerm(value) {
+  try {
+    return normalizeSearchTerm(value);
+  } catch (error) {
+    if (error instanceof FinanceServiceError) throw new AnnualFinanceError(error.message, error.status);
+    throw error;
   }
 }
 
@@ -2419,7 +2428,7 @@ function createAnnualFinanceService({
   }
 
   async function listRoster(actorInput, filters = {}) {
-    const searchTerm = normalizeSearchTerm(filters.search || '');
+    const searchTerm = normalizeAnnualSearchTerm(filters.search || '');
     const schoolYear = filters.schoolYear ? cleanText(filters.schoolYear, 'School year', 20) : null;
     const gradeLevel = filters.gradeLevel ? cleanText(filters.gradeLevel, 'Grade level', 50) : null;
     const voucherCode = filters.voucherCode ? cleanText(filters.voucherCode, 'Voucher', 10) : null;
@@ -2529,7 +2538,7 @@ function createAnnualFinanceService({
   }
 
   async function listRosterPage(actorInput, filters = {}) {
-    const searchTerm = normalizeSearchTerm(filters.search || '');
+    const searchTerm = normalizeAnnualSearchTerm(filters.search || '');
     const schoolYear = filters.schoolYear ? cleanText(filters.schoolYear, 'School year', 20) : null;
     const gradeLevel = filters.gradeLevel ? cleanText(filters.gradeLevel, 'Grade level', 50) : null;
     const voucherCode = filters.voucherCode ? cleanText(filters.voucherCode, 'Voucher', 10) : null;

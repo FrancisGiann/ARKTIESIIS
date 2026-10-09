@@ -18,7 +18,7 @@ function createTeacherGradeSubmissionRouter({ gradeImportService, teacherGradeSu
   const service = teacherGradeSubmissionService;
   const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { files: 1, fileSize: 5 * 1024 * 1024, fields: 1, parts: 2 }
+    limits: { files: 1, fileSize: 5 * 1024 * 1024, fields: 2, fieldSize: 256, parts: 3 }
   }).single('workbook');
 
   router.use((_req, res, next) => {

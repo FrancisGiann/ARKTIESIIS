@@ -4,7 +4,7 @@ const { once } = require('node:events');
 const bcrypt = require('bcrypt');
 const { createApp } = require('../src/app');
 const { ACTION_WRITERS, SAFE_ACTIONS, actionByPath, createFinanceReviewActionService, normalizeActionInput, normalizeFinanceReturnContext, financeActionContext } = require('../src/services/financeReviewActionService');
-const { AnnualFinanceError } = require('../src/services/annualFinanceService');
+const { AnnualFinanceError, createAnnualFinanceService } = require('../src/services/annualFinanceService');
 const { FinanceReviewDraftError } = require('../src/services/financeReviewDraftService');
 const {
   FinanceServiceError,
@@ -1023,6 +1023,21 @@ test('finance routes retire legacy account entry and preserve annual account acc
     assert.equal(adminReviewProbe.starts.length, 0);
   });
   assert.equal(calls.length, serviceCallsBeforeDeniedRequests, 'database administrator redirects and retired paths need no legacy service call');
+});
+
+test('invalid finance roster text returns a controlled 400 instead of a service-unavailable response', async () => {
+  const annualFinanceService = createAnnualFinanceService({
+    getPool: async () => { throw new Error('malformed search must be rejected before database access'); },
+    sql: fakeSql()
+  });
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, annualFinanceService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'finance');
+    const response = await fetch(`${baseUrl}/finance?search=%00`, { headers: { cookie } });
+    const html = await response.text();
+    assert.equal(response.status, 400);
+    assert.match(html, /Search must be 100 printable characters or fewer\./);
+    assert.doesNotMatch(html, /Service Unavailable|malformed search must be rejected/);
+  });
 });
 
 test('annual account charge links retain browse filters and supplementary validation returns to Charges with entered values', async () => {

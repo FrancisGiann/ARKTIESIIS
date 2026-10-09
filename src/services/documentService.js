@@ -26,6 +26,27 @@ const ACTIONABLE_REGISTRAR_REVIEW_SQL = `d.status = 'needs_review'
           AND (newer.created_at > d.created_at OR (newer.created_at = d.created_at AND newer.id > d.id))
       ))
   )`;
+
+function studentReportCardSourceAccessSql(documentAlias) {
+  return `(${documentAlias}.document_type = 'report_card'
+    AND ${documentAlias}.is_legacy_archive = 0 AND ${documentAlias}.upload_source = 'student'
+    AND ${documentAlias}.status IN ('needs_review', 'failed')
+    AND NOT EXISTS (SELECT 1 FROM documents AS corrected
+      WHERE corrected.supersedes_document_id = ${documentAlias}.id)
+    AND NOT EXISTS (SELECT 1 FROM documents AS newer_report_card
+      WHERE newer_report_card.student_id = ${documentAlias}.student_id
+        AND newer_report_card.document_type = 'report_card' AND newer_report_card.is_legacy_archive = 0
+        AND (newer_report_card.created_at > ${documentAlias}.created_at
+          OR (newer_report_card.created_at = ${documentAlias}.created_at AND newer_report_card.id > ${documentAlias}.id)))
+    AND (EXISTS (SELECT 1 FROM v_document_latest_decision_event AS current_decision
+        WHERE current_decision.document_id = ${documentAlias}.id
+          AND current_decision.decision_type = 'correction_requested')
+      OR (NOT EXISTS (SELECT 1 FROM document_decision_events AS prior_decision
+          WHERE prior_decision.document_id = ${documentAlias}.id)
+        AND EXISTS (SELECT 1 FROM v_document_latest_review_event AS current_review
+          WHERE current_review.document_id = ${documentAlias}.id
+            AND current_review.action_type = 'correction_requested'))))`;
+}
 const FORM137_STATUSES = new Set(['pending', 'received', 'verified', 'correction', 'rejected']);
 const PREVIOUS_SCHOOL_REPORT_CARD_PHYSICAL_STATUSES = new Set(['pending', 'received', 'verified', 'correction', 'rejected']);
 const MIME_BY_EXTENSION = new Map([
@@ -513,7 +534,7 @@ function createDocumentService({
         .input('documentId', sql.Int, documentId)
         .input('actorId', sql.Int, actor.id)
         .query(`SELECT d.id, d.student_id, d.document_type, d.upload_source, d.status,
-            d.is_legacy_archive, s.user_id AS student_user_id
+            d.is_legacy_archive, d.created_at, s.user_id AS student_user_id
           FROM documents AS d
           INNER JOIN students AS s ON s.id = d.student_id
           WHERE d.id = @documentId FOR UPDATE`);
@@ -537,6 +558,9 @@ function createDocumentService({
         if (actor.role !== 'student' || previous.upload_source !== 'student' || previous.student_user_id !== actor.id) {
           throw new DocumentServiceError('Document not found.', 404);
         }
+        if (!['needs_review', 'failed'].includes(previous.status)) {
+          throw new DocumentServiceError('A corrected upload is available only while staff review remains open.', 409);
+        }
       }
 
       const decisionResult = await transaction.request()
@@ -558,6 +582,19 @@ function createDocumentService({
         .input('documentId', sql.Int, documentId)
         .query('SELECT id FROM documents WHERE supersedes_document_id = @documentId LIMIT 1');
       if (revisionResult.recordset?.length) throw new DocumentServiceError('A corrected upload has already been submitted for this document.', 409);
+      if (previous.document_type === 'report_card') {
+        const newerSubmissionResult = await transaction.request()
+          .input('studentId', sql.Int, previous.student_id)
+          .input('documentId', sql.Int, documentId)
+          .input('createdAt', sql.DateTime2, previous.created_at)
+          .query(`SELECT id FROM documents
+            WHERE student_id = @studentId AND document_type = 'report_card' AND is_legacy_archive = 0
+              AND (created_at > @createdAt OR (created_at = @createdAt AND id > @documentId))
+            LIMIT 1`);
+        if (newerSubmissionResult.recordset?.length) {
+          throw new DocumentServiceError('This correction request belongs to an older report-card submission.', 409);
+        }
+      }
 
       return insertSubmission({
         actor: { ...actor, transaction },
@@ -595,12 +632,24 @@ function createDocumentService({
       .input('searchPattern', sql.NVarChar(204), searchPattern)
       .input('documentType', sql.NVarChar(50), documentType === 'all' ? null : documentType)
       .input('statusFilter', sql.NVarChar(30), statusFilter === 'all' ? null : statusFilter)
-      .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.original_filename,
-          d.mime_type, d.file_size_bytes, d.status, d.supersedes_document_id, d.created_at,
+      .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive,
+          CASE WHEN EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+              OR d.document_type <> 'report_card' OR ${studentReportCardSourceAccessSql('d')}
+            THEN d.original_filename ELSE NULL END AS original_filename,
+          CASE WHEN EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+              OR d.document_type <> 'report_card' OR ${studentReportCardSourceAccessSql('d')}
+            THEN d.mime_type ELSE NULL END AS mime_type,
+          CASE WHEN EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+              OR d.document_type <> 'report_card' OR ${studentReportCardSourceAccessSql('d')}
+            THEN d.file_size_bytes ELSE NULL END AS file_size_bytes,
+          d.status, d.supersedes_document_id, d.created_at,
+          CASE WHEN ${studentReportCardSourceAccessSql('d')} THEN 1 ELSE 0 END AS student_can_view_source,
           s.student_no, s.first_name, s.middle_name, s.last_name,
           latest.action_type AS latest_review_action,
           CASE WHEN EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
-              OR (d.document_type NOT IN ('psa_birth_certificate', 'report_card') OR d.upload_source = 'student')
+              OR d.document_type NOT IN ('psa_birth_certificate', 'report_card')
+              OR (d.document_type = 'psa_birth_certificate' AND d.upload_source = 'student')
+              OR ${studentReportCardSourceAccessSql('d')}
             THEN latest.instruction ELSE NULL END AS latest_review_instruction,
           latest.created_at AS latest_review_at, latest_decision.decision_type AS latest_decision_type
         FROM documents AS d
@@ -616,7 +665,7 @@ function createDocumentService({
             OR CONCAT_WS(' ', s.first_name, NULLIF(s.middle_name, ''), s.last_name) LIKE @searchPattern ESCAPE '~')
         ) OR (
           EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role = 'student')
-          AND s.user_id = @actorId AND (
+              AND s.user_id = @actorId AND (
             (d.document_type IN ('good_moral', 'psa_birth_certificate')
               OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'))
           )
@@ -889,7 +938,7 @@ function createDocumentService({
             OR (EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role = 'student')
               AND s.user_id = @actorId
               AND (d.document_type IN ('good_moral', 'psa_birth_certificate')
-                OR (d.document_type = 'report_card' AND d.is_legacy_archive = 0 AND d.upload_source = 'student'))))`);
+                OR ${studentReportCardSourceAccessSql('d')})))`);
     const document = documentResult.recordset?.[0];
     if (!document) return null;
 
@@ -950,9 +999,16 @@ function createDocumentService({
         .input('studentId', sql.Int, document.student_id)
         .input('documentType', sql.NVarChar(50), document.document_type)
         .input('actorId', sql.Int, actor.id)
-        .query(`SELECT history_document.id, history_document.original_filename, history_document.mime_type,
+        .query(`SELECT history_document.id,
+            CASE WHEN EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+                OR @documentType <> 'report_card' OR ${studentReportCardSourceAccessSql('history_document')}
+              THEN history_document.original_filename ELSE NULL END AS original_filename,
+            CASE WHEN EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+                OR @documentType <> 'report_card' OR ${studentReportCardSourceAccessSql('history_document')}
+              THEN history_document.mime_type ELSE NULL END AS mime_type,
             history_document.is_legacy_archive,
             history_document.status, history_document.supersedes_document_id, history_document.created_at,
+            CASE WHEN ${studentReportCardSourceAccessSql('history_document')} THEN 1 ELSE 0 END AS student_can_view_source,
             latest.action_type AS latest_review_action, latest_decision.decision_type AS latest_decision_type
           FROM documents AS history_document
           LEFT JOIN v_document_latest_review_event AS latest ON latest.document_id = history_document.id
@@ -1034,9 +1090,18 @@ function createDocumentService({
       ...decision,
       verificationChecklist: displayVerificationChecklist(checklistJson)
     }));
+    const history = historyResult.recordset || [];
+    if (actor.role === 'student' && document.document_type === 'report_card') {
+      for (const version of history) {
+        if (!Number(version.student_can_view_source)) {
+          version.original_filename = null;
+          version.mime_type = null;
+        }
+      }
+    }
     return {
       ...document,
-      history: historyResult.recordset || [],
+      history,
       reviewEvents: eventsResult.recordset || [],
       decisions,
       validation,

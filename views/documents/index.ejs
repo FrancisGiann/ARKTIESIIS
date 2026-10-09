@@ -117,10 +117,11 @@
               <tr>
                 <% if (isStaff) { %><td data-label="Student"><%= document.student_no %> · <%= [document.first_name, document.middle_name, document.last_name].filter(Boolean).join(' ') %></td><% } %>
                 <td data-label="Document"><%= documentTypeLabel(document.document_type) %><% if (document.supersedes_document_id) { %><br><span class="muted-copy">Corrected submission</span><% } %></td>
-                <td data-label="File"><%= document.original_filename %></td>
+                <% const reportCardSourceRestricted = !isStaff && document.document_type === 'report_card' && !Number(document.student_can_view_source); %>
+                <td data-label="File"><%= reportCardSourceRestricted ? 'Available after staff requests a correction' : document.original_filename %></td>
                 <td data-label="Status"><%= documentStatusLabel(document.status, document.latest_decision_type, document.latest_review_action, document.document_type, document.is_legacy_archive) %></td>
                 <td data-label="Submitted"><%= document.created_at ? new Date(document.created_at).toLocaleString() : '—' %></td>
-                <td data-label="Actions"><a class="table-action" href="/documents/<%= document.id %>">View details</a></td>
+                <td data-label="Actions"><% if (reportCardSourceRestricted) { %><span class="muted-copy">Staff review in progress</span><% } else { %><a class="table-action" href="/documents/<%= document.id %>">View details</a><% } %></td>
               </tr>
             <% } %>
           </tbody>

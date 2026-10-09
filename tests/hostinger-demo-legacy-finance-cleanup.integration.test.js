@@ -39,9 +39,14 @@ async function createFixtureDatabase(adminPool) {
   try {
     await runStatements(connection, readSqlFile(path.join(repoRoot, 'database/mariadb/schema.sql')));
     for (const migration of readForwardMigrations()) {
+      if (migration.version > 'v2.015') break;
       await runStatements(connection, migration.statements);
       await connection.execute('INSERT INTO schema_migrations (version) VALUES (?)', [migration.version]);
     }
+    const [fixtureVersions] = await connection.query('SELECT version FROM schema_migrations ORDER BY version');
+    assert.deepEqual(fixtureVersions.map(({ version }) => version), [
+      'v2.001', ...Array.from({ length: 14 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`)
+    ], 'the legacy cleanup rehearsal fixture must match the helper’s exact supported v2.015 schema');
 
     const [actorResult] = await connection.execute(
       "INSERT INTO users (email, password_hash, role, is_active) VALUES (?, 'integration-fixture', 'database_admin', 1)",

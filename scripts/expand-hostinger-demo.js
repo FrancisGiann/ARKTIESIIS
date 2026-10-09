@@ -4,7 +4,7 @@ const { createHash } = require('node:crypto');
 const { isIP } = require('node:net');
 const environment = require('../src/config/environment');
 const { getPool, closePool } = require('../src/config/database');
-const { REQUIRED_OBJECTS } = require('./check-db');
+const { REQUIRED_OBJECTS } = require('./hostinger-demo-v2.011-schema');
 
 const HOSTINGER_SEED_MARKER = 'hostinger-demo-seed-v1';
 const EXPANSION_MARKER = 'hostinger-demo-expansion-v1';

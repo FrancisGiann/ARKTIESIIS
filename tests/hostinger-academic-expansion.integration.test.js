@@ -35,9 +35,14 @@ async function executeStatements(connection, statements) {
 async function buildDisposableSchema(connection) {
   await executeStatements(connection, readSqlFile(path.join(__dirname, '../database/mariadb/schema.sql')));
   for (const migration of readForwardMigrations()) {
+    if (migration.version > 'v2.011') break;
     await executeStatements(connection, migration.statements);
     await connection.execute('INSERT INTO schema_migrations (version) VALUES (?)', [migration.version]);
   }
+  const [versions] = await connection.query('SELECT version FROM schema_migrations ORDER BY version');
+  assert.deepEqual(versions.map(({ version }) => version), [
+    'v2.001', ...Array.from({ length: 10 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`)
+  ], 'the expansion rehearsal fixture must match the helper’s exact supported v2.011 schema');
 }
 
 function instrumentPool(rawPool, failures = {}) {

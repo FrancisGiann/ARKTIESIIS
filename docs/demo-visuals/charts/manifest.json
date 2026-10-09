@@ -1,0 +1,22 @@
+{
+  "format": "PNG",
+  "source": "../index.html?chart=<diagram-id>",
+  "method": "Headless Chromium screenshots of the guide's inline SVG diagrams, with browser chrome hidden.",
+  "viewport": {
+    "width": 1600,
+    "height": 900,
+    "deviceScaleFactor": 1
+  },
+  "diagrams": [
+    "enrollment",
+    "return-after-break",
+    "digital-documents",
+    "teacher-grades",
+    "payments",
+    "paper-clearance",
+    "document-requests",
+    "physical-documents",
+    "login-access",
+    "roles"
+  ]
+}

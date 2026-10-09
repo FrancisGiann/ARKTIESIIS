@@ -2,6 +2,7 @@
 <main class="page-shell dashboard-page records-page document-detail-page" id="main-content">
   <% const latestDecision = document.decisions[0] || null; %>
   <% const correctionRequested = latestDecision ? latestDecision.decision_type === 'correction_requested' : document.reviewEvents[0]?.action_type === 'correction_requested'; %>
+  <% const sourceAccessAllowed = isStaff || document.document_type !== 'report_card' || correctionRequested; %>
   <% const hasCorrectedSubmission = document.history.some((item) => String(item.supersedes_document_id) === String(document.id)); %>
   <% if (isStaff) { %><%- include('../partials/student-record-navigation', { student: { id: document.student_id, student_no: document.student_no, first_name: document.first_name, middle_name: document.middle_name, last_name: document.last_name }, activeStudentView: 'documents' }) %><% } %>
   <section class="dashboard-heading document-detail-heading">
@@ -11,7 +12,7 @@
     </div>
     <div class="admin-heading-actions">
       <% if (!isStaff) { %><a class="button button--secondary" href="/documents">My documents</a><% } %>
-      <a class="button button--secondary" href="/documents/<%= document.id %>/download">Download file</a>
+      <% if (sourceAccessAllowed) { %><a class="button button--secondary" href="/documents/<%= document.id %>/download">Download file</a><% } %>
     </div>
   </section>
 
@@ -29,7 +30,9 @@
   <div class="document-review-layout">
     <section class="admin-section document-source-pane" aria-labelledby="document-source-title">
       <div class="admin-section__heading"><div><h2 id="document-source-title">Source document</h2><% if (isStaff) { %><p>Inspect the submitted pages before recording a staff decision.</p><% } %></div></div>
-  <% if (['image/jpeg', 'image/png'].includes(document.mime_type)) { %>
+  <% if (!sourceAccessAllowed) { %>
+      <p class="muted-copy">The source file is available after staff requests a correction.</p>
+  <% } else if (['image/jpeg', 'image/png'].includes(document.mime_type)) { %>
       <a class="document-image-thumbnail" href="/documents/<%= document.id %>/preview" data-document-preview-trigger data-preview-title="<%= document.original_filename %>" data-preview-mime="<%= document.mime_type || '' %>" aria-haspopup="dialog" aria-controls="document-preview-dialog" aria-label="Open full-size preview of <%= document.original_filename %>">
         <span class="document-image-thumbnail__viewport"><img src="/documents/<%= document.id %>/preview" alt="Uploaded <%= documentTypeLabel(document.document_type) %> image: <%= document.original_filename %>"></span>
         <span class="document-image-thumbnail__label">Open full-size image</span>
@@ -39,7 +42,7 @@
   <% } else { %>
       <p class="empty-state">Use the document link above to inspect this file in the browser.</p>
   <% } %>
-      <p class="document-source-links"><a class="text-link" href="/documents/<%= document.id %>/preview" target="_blank" rel="noopener">Open source in a new tab</a><span aria-hidden="true">·</span><a class="text-link" href="/documents/<%= document.id %>/download">Download source</a></p>
+      <% if (sourceAccessAllowed) { %><p class="document-source-links"><a class="text-link" href="/documents/<%= document.id %>/preview" target="_blank" rel="noopener">Open source in a new tab</a><span aria-hidden="true">·</span><a class="text-link" href="/documents/<%= document.id %>/download">Download source</a></p><% } %>
     </section>
 
   <section class="admin-section document-detail-card document-submission-facts" aria-labelledby="submission-title">
@@ -240,10 +243,10 @@
           <thead><tr><th scope="col">Submission</th><th scope="col">File</th><th scope="col">Status</th><th scope="col">Date</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
           <tbody><% for (const item of document.history) { %><tr>
             <td data-label="Submission">#<%= item.id %><% if (item.id === document.id) { %> · Current<% } else if (item.id === document.supersedes_document_id) { %> · Previous version<% } %></td>
-            <td data-label="File"><%= item.original_filename %></td>
+            <td data-label="File"><%= !isStaff && document.document_type === 'report_card' && !Number(item.student_can_view_source) ? 'Available after staff requests a correction' : item.original_filename %></td>
             <td data-label="Status"><%= documentStatusLabel(item.status, item.latest_decision_type, item.latest_review_action, document.document_type, item.is_legacy_archive) %></td>
             <td data-label="Date"><%= item.created_at ? new Date(item.created_at).toLocaleString() : '—' %></td>
-            <td data-label="Actions"><a class="table-action" href="/documents/<%= item.id %>/preview" data-document-preview-trigger data-preview-title="<%= item.original_filename %>" data-preview-mime="<%= item.mime_type || '' %>" aria-haspopup="dialog" aria-controls="document-preview-dialog" aria-label="View <%= item.original_filename %>">View</a> · <a class="table-action" href="/documents/<%= item.id %>/download">Download</a></td>
+            <td data-label="Actions"><% if (isStaff || document.document_type !== 'report_card' || Number(item.student_can_view_source)) { %><a class="table-action" href="/documents/<%= item.id %>/preview" data-document-preview-trigger data-preview-title="<%= item.original_filename %>" data-preview-mime="<%= item.mime_type || '' %>" aria-haspopup="dialog" aria-controls="document-preview-dialog" aria-label="View <%= item.original_filename %>">View</a> · <a class="table-action" href="/documents/<%= item.id %>/download">Download</a><% } else { %><span class="muted-copy">Staff review in progress</span><% } %></td>
           </tr><% } %></tbody>
         </table>
       </div>

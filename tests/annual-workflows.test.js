@@ -12,6 +12,15 @@ const { currentManilaDate, validateStudent } = require('../src/services/studentR
 
 const uuid = '41111111-1111-4111-8111-111111111111';
 
+test('annual finance roster search maps shared printable-text validation to its domain error before database access', async () => {
+  const service = createAnnualFinanceService({ getPool: async () => { throw new Error('invalid search must stop before database access'); } });
+  for (const method of ['listRoster', 'listRosterPage']) {
+    await assert.rejects(service[method](7, { search: '\u0000' }), (error) =>
+      error instanceof AnnualFinanceError && error.status === 400
+      && error.message === 'Search must be 100 printable characters or fewer.');
+  }
+});
+
 test('registrar preview selects the shared active schedule by PUB, ESC, or NV and preserves a saved assessment', async () => {
   const annualRecords = new Map([
     [71, { id: 71, student_id: 171, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB', entry_term_number: 1 }],

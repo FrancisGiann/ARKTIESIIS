@@ -9,6 +9,7 @@ const mysql = require('mysql2/promise');
 const { PoolFacade, Transaction, sql } = require('../src/config/database');
 const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
 const { createPhysicalChecklistService } = require('../src/services/physicalChecklistService');
+const { createPreEnrollmentService } = require('../src/services/preEnrollmentService');
 
 const DATABASE_NAME = 'arktiesiis_collation_test';
 const socketPath = process.env.ANNUAL_INTAKE_COLLATION_TEST_SOCKET;
@@ -56,13 +57,18 @@ test('annual intake works across mixed school-year collations and retries idempo
     hashPassword: async () => 'integration-only-not-a-login-hash',
     createPassword: () => 'integration-only-not-a-login-password'
   });
+  const preEnrollments = createPreEnrollmentService({
+    getPool: async () => pool,
+    sql,
+    transactionFactory: (currentPool) => new Transaction(currentPool)
+  });
   const checklistService = createPhysicalChecklistService({ getPool: async () => pool, sql });
 
   try {
     const [databaseRows] = await rawPool.query('SELECT DATABASE() AS database_name');
     assert.equal(databaseRows[0]?.database_name, DATABASE_NAME, 'refusing to run outside the exact disposable test database');
-    const [migrationRows] = await rawPool.execute('SELECT version FROM schema_migrations WHERE version = ?', ['v2.011']);
-    assert.equal(migrationRows.length, 1, 'apply the baseline and MariaDB migrations through v2.011 first');
+    const [migrationRows] = await rawPool.execute('SELECT version FROM schema_migrations WHERE version = ?', ['v2.018']);
+    assert.equal(migrationRows.length, 1, 'apply the current MariaDB schema through v2.018 first');
 
     const [studentNumberColumn] = await rawPool.execute(`SELECT collation_name FROM information_schema.columns
       WHERE table_schema = DATABASE() AND table_name = 'students' AND column_name = 'student_no'`);
@@ -132,6 +138,13 @@ test('annual intake works across mixed school-year collations and retries idempo
       [`registrar-${token}@integration.invalid`, 'integration-only-not-a-login-hash', 'registrar']
     );
     const actorId = Number(registrar[0].insertId);
+    const frontDesk = await rawPool.execute(
+      'INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)',
+      [`front-desk-${token}@integration.invalid`, 'integration-only-not-a-login-hash', 'front_desk']
+    );
+    const frontDeskId = Number(frontDesk[0].insertId);
+    await rawPool.execute('INSERT INTO staff_profiles (user_id, first_name, last_name) VALUES (?, ?, ?)',
+      [frontDeskId, 'Synthetic', 'Frontdesk']);
     const termIds = [];
     for (const termName of ['Term 1', 'Term 2', 'Term 3']) {
       const [term] = await rawPool.execute(
@@ -166,8 +179,24 @@ test('annual intake works across mixed school-year collations and retries idempo
       voucherCode: 'PUB', entryTermNumber: '1', enrollmentStartDate: '2026-10-03', sectionMode: 'same',
       annualSectionId: String(sectionIds[0]), idempotencyKey: uuid()
     };
-    const newStudent = await service.createAnnualIntake(actorId, newStudentInput);
-    const newStudentReplay = await service.createAnnualIntake(actorId, newStudentInput);
+    const newStudentSource = await preEnrollments.create(frontDeskId, {
+      idempotencyKey: uuid(), schoolYear, firstName: newStudentInput.firstName,
+      middleName: newStudentInput.middleName, lastName: newStudentInput.lastName, suffix: '',
+      lrn: newStudentInput.lrn, email: newStudentInput.email, studentContactNumber: newStudentInput.phone,
+      preferredTrack: 'Academic Track', preferredCluster: 'ASSH (Arts, Social Science, and Humanities)',
+      targetGradeLevel: 'Grade 11', priorGradeLevel: 'Grade 10', priorSchool: 'Synthetic Secondary School',
+      studentSignaturePresent: '1', studentSignedDate: '2026-10-01',
+      receipt_report_card_photocopy: '1', receipt_report_card_photocopy_pieces: '1',
+      status: 'ready_for_registrar'
+    });
+    const newStudentConversion = {
+      ...newStudentInput,
+      preEnrollmentId: newStudentSource.id,
+      preEnrollmentVersion: 1,
+      idempotencyKey: newStudentSource.id
+    };
+    const newStudent = await service.createAnnualIntake(actorId, newStudentConversion);
+    const newStudentReplay = await service.createAnnualIntake(actorId, newStudentConversion);
     assert.equal(newStudentReplay.annualEnrollmentId, newStudent.annualEnrollmentId);
     assert.equal(newStudentReplay.alreadyCreated, true);
     const newStudentChecklist = await checklistService.getStudentChecklist(actorId, newStudent.studentId);
@@ -188,11 +217,31 @@ test('annual intake works across mixed school-year collations and retries idempo
       'INSERT INTO students (student_no, lrn, first_name, last_name) VALUES (?, ?, ?, ?)',
       [existingStudentNo, existingStudentLrn, 'Jordan', 'Learner']
     );
+    const existingId = Number(existingStudent.insertId);
+    await rawPool.execute(`INSERT INTO annual_enrollments
+      (student_id, school_year, grade_level, voucher_code, intake_status, created_by)
+      VALUES (?, ?, 'Grade 11', 'ESC', 'enrolled', ?)`, [existingId, `${startYear - 1}-${startYear}`, actorId]);
+    const existingStudentEmail = `existing-${token}@integration.invalid`;
+    const existingStudentSource = await preEnrollments.create(frontDeskId, {
+      idempotencyKey: uuid(), schoolYear, applicantKind: 'continuing',
+      firstName: 'Jordan', middleName: '', lastName: 'Learner', suffix: '', lrn: existingStudentLrn,
+      email: existingStudentEmail, studentContactNumber: '09171234567',
+      preferredTrack: 'Academic Track', preferredCluster: 'ASSH (Arts, Social Science, and Humanities)',
+      targetGradeLevel: 'Grade 11', priorGradeLevel: 'Grade 10', priorSchool: 'Synthetic Secondary School',
+      studentSignaturePresent: '1', studentSignedDate: '2026-10-01',
+      receipt_report_card_photocopy: '1', receipt_report_card_photocopy_pieces: '1',
+      status: 'ready_for_registrar'
+    });
+    const existingConversionSource = await preEnrollments.getForConversion(actorId, existingStudentSource.id);
+    assert.equal(existingConversionSource.existingStudent?.id, existingId,
+      'the front-desk continuing source is linked to the intended existing student');
     const existingStudentInput = {
       studentNo: existingStudentNo, schoolYear, gradeLevel: 'Grade 11', voucherCode: 'ESC',
       entryTermNumber: '1', enrollmentStartDate: '2026-10-03', sectionMode: 'per_term',
       section1Id: String(sectionIds[0]), section2Id: String(sectionIds[1]), section3Id: String(sectionIds[2]),
-      idempotencyKey: uuid()
+      email: existingStudentEmail, preEnrollmentId: existingStudentSource.id, preEnrollmentVersion: 1,
+      idempotencyKey: existingStudentSource.id,
+      studentReviewFingerprint: existingConversionSource.existingStudent.profileReviewFingerprint
     };
     const existingEnrollment = await service.createAnnualIntake(actorId, existingStudentInput);
     const existingReplay = await service.createAnnualIntake(actorId, existingStudentInput);
