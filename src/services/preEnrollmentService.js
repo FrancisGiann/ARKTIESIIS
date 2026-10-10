@@ -2,7 +2,7 @@
 
 const crypto = require('node:crypto');
 const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
-const { StudentRecordsError, validateName, normalizePhone } = require('./studentRecordsService');
+const { StudentRecordsError, validateName, validateTextWithLetter, normalizePhone } = require('./studentRecordsService');
 const { ADDRESS_DEFINITIONS, StudentAddressError, normalizeStructuredAddress } = require('../utils/studentAddress');
 const { profileReviewFingerprint } = require('../utils/studentProfileReview');
 const { runSerializableTransaction } = require('./transactionRetry');
@@ -75,7 +75,7 @@ function normalizeUuid(value, label) {
   return value.toLowerCase();
 }
 
-function normalizeDate(value, label, required = false) {
+function normalizeDate(value, label, required = false, today = manilaDate()) {
   const text = printable(value, label, 10, { required });
   if (!text) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) throw new PreEnrollmentError(`${label} must be a valid calendar date.`);
@@ -83,6 +83,7 @@ function normalizeDate(value, label, required = false) {
   if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== text) {
     throw new PreEnrollmentError(`${label} must be a valid calendar date.`);
   }
+  if (label === 'Birth date' && text >= today) throw new PreEnrollmentError('Birth date must be before today.');
   return text;
 }
 
@@ -156,8 +157,8 @@ function normalizePieceCount(value, present, label) {
   return count;
 }
 
-function manilaDate() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
+function manilaDate(now = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(now);
 }
 
 function normalizeRecord(input = {}, { actorName = '', current = null } = {}) {
@@ -201,11 +202,17 @@ function normalizeRecord(input = {}, { actorName = '', current = null } = {}) {
   result.sex = sex ? ({ male: 'Male', female: 'Female', other: 'Other' }[sex.toLowerCase()] || null) : null;
   if (sex && !result.sex) throw new PreEnrollmentError('Choose Male, Female, or Other for gender.');
   result.birthDate = normalizeDate(input.birthDate, 'Birth date');
-  for (const [name, length, label] of [
-    ['birthplace', 160, 'Birthplace'], ['facebookName', 120, 'Facebook name'],
-    ['emergencyContactPerson', 160, 'Emergency contact person'], ['emergencyContactRelationship', 80, 'Emergency contact relationship'],
-    ['motherName', 160, 'Mother name'], ['fatherName', 160, 'Father name']
-  ]) result[name] = printable(input[name], label, length);
+  result.birthplace = printable(input.birthplace, 'Birthplace', 160);
+  try {
+    result.facebookName = validateTextWithLetter(input.facebookName, 'Facebook name', 120);
+    result.emergencyContactPerson = validateName(input.emergencyContactPerson, 'Emergency contact person', { maxLength: 160 });
+    result.emergencyContactRelationship = validateTextWithLetter(input.emergencyContactRelationship, 'Emergency contact relationship', 80);
+    result.motherName = validateName(input.motherName, 'Mother name', { maxLength: 160 });
+    result.fatherName = validateName(input.fatherName, 'Father name', { maxLength: 160 });
+  } catch (error) {
+    if (error instanceof StudentRecordsError) throw new PreEnrollmentError(error.message, error.status);
+    throw error;
+  }
   normalizeProfileAddress(result, input, 'address', current);
   normalizeProfileAddress(result, normalizedInput, 'emergencyContactAddress', current);
   if (sameAddress) copyStudentAddressToEmergency(result);
@@ -735,4 +742,4 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
   return { create, update, get, getActorDisplayName, list, listAcceptedReadmissionChoices, openConversion, getForConversion, RECEIPT_REQUIREMENTS };
 }
 
-module.exports = { PreEnrollmentError, RECEIPT_REQUIREMENTS, normalizeRecord, createPreEnrollmentService };
+module.exports = { PreEnrollmentError, RECEIPT_REQUIREMENTS, normalizeDate, manilaDate, normalizeRecord, createPreEnrollmentService };

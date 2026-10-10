@@ -82,3 +82,20 @@ Input boundary review covered integer/date/time values, text lengths and schema 
 - One successful bounded Gemini response does not prove every allowed document format or provider failure mode. Production multi-process worker limits and proxy/session persistence were not exercised.
 - The UI has no committed visual regression baseline, so visual comparison remains inconclusive.
 - The temporary app is stopped and the owned MariaDB process/socket are no longer running; I verified port 3111 and the socket are closed. The pre-existing system MariaDB process was left untouched. The private `/tmp/arktiesiis-feature-fix-mariadb` datadir remains because the shell safety gate rejected recursive deletion. It contains only the synthetic audit schemas.
+
+## Follow-up confirmed fixes · 2026-10-10
+
+The focused audit follow-up now rejects supplied birth dates that fall on or after today in Asia/Manila in pre-enrollment drafts as well as master profiles; blank dates remain allowed, and the form advertises the last eligible day. Tests include an instant on the prior UTC date after Manila midnight. Mother, father, and emergency-contact names use the existing Unicode-aware person-name rule; optional Facebook display names and emergency relationships require a Unicode letter when nonblank. Optional fields remain optional, and shared family phone numbers remain valid. Structured City and Province are checked from their own raw components; numeric-only block/street, barangay, and ZIP values stay valid. Annual conversion validates saved structured components before constructing the compatible formatted address, while legacy free-text address validation is retained.
+
+Annual-payment review rejects blank, malformed, zero, negative, and over-limit amounts before preview persistence or review-draft insertion/update, using the existing positive-money parser. A positive amount remains saveable while unrelated optional draft fields are unfinished; ledger posting keeps its existing authoritative check. The shared pre-enrollment detail summary, finance review labels/no-balance message, and student payment-history allocation tables received scoped layout refinements. No fee-policy or adjustment-credit behavior changed.
+
+| Follow-up check | Result |
+|---|---:|
+| `node --test tests/pre-enrollment.test.js tests/student-records.test.js tests/annual-workflows.test.js tests/student-setup.test.js tests/finance.test.js tests/finance-browse-layout.test.js tests/student-portal.test.js` | 121 passed, 0 failed, 0 skipped |
+| After the final address-normalization merge: `node --test tests/annual-workflows.test.js tests/pre-enrollment.test.js tests/student-records.test.js` | 56 passed, 0 failed, 0 skipped |
+| `npm run check` | Passed |
+| `git diff --check` | Passed |
+| Impeccable layout detector on the three changed templates and stylesheet | No findings |
+| Synthetic browser renders | 25 cases at 1532/1024/900/390/320px; no page overflow or console errors; mobile payment history and keyboard focus verified |
+
+Browser screenshots: [finance review at 320px](</tmp/arktiesiis-audit-20261010/evidence/finance-review-none-labels-320.png>) and [student payment history at 320px](</tmp/arktiesiis-audit-20261010/evidence/student-payment-history-320.png>). Tests and browser fixtures used synthetic data; no production or configured school database was accessed, and no integration database was written during this follow-up.

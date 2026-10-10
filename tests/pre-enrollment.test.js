@@ -5,10 +5,10 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const ejs = require('ejs');
 const express = require('express');
-const { normalizeRecord, RECEIPT_REQUIREMENTS, PreEnrollmentError } = require('../src/services/preEnrollmentService');
+const { normalizeDate, manilaDate, normalizeRecord, RECEIPT_REQUIREMENTS, PreEnrollmentError, createPreEnrollmentService } = require('../src/services/preEnrollmentService');
 const { createPreEnrollmentRouter } = require('../src/routes/preEnrollments');
 const { requireRole } = require('../src/middleware/roles');
-const { applyAddressInput } = require('../src/services/studentRecordsService');
+const { applyAddressInput, latestBirthDate, validateStudent } = require('../src/services/studentRecordsService');
 const { normalizeStructuredAddress, StudentAddressError } = require('../src/utils/studentAddress');
 const { comparePreEnrollmentProfile, PROFILE_REVIEW_GROUPS } = require('../src/utils/studentProfileReview');
 const { initialize: initializeAddressCopy } = require('../public/js/pre-enrollment-address-copy');
@@ -45,6 +45,77 @@ test('pre-enrollment validates supplied paper data, ready requirements, school y
   assert.throws(() => normalizeRecord(readyInput({ status: 'enrollment_started' })), /Choose Draft or Ready/);
 });
 
+test('pre-enrollment optional birth date is blank or before the current Manila day', () => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date());
+  const priorDay = new Date(`${today}T00:00:00.000Z`);
+  priorDay.setUTCDate(priorDay.getUTCDate() - 1);
+  const priorDate = priorDay.toISOString().slice(0, 10);
+  const nextDay = new Date(`${today}T00:00:00.000Z`);
+  nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+  const nextDate = nextDay.toISOString().slice(0, 10);
+
+  assert.equal(normalizeRecord({ schoolYear: '2027-2028', status: 'draft', birthDate: '' }).birthDate, null);
+  assert.equal(normalizeRecord({ schoolYear: '2027-2028', status: 'draft', birthDate: priorDate }).birthDate, priorDate);
+  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', birthDate: today }), /Birth date must be before today/);
+  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', birthDate: nextDate }), /Birth date must be before today/);
+});
+
+test('birth-date validation and input max use the Manila day when UTC is still on the previous date', () => {
+  const justAfterManilaMidnight = new Date('2026-10-01T16:00:00.000Z');
+  const manilaToday = manilaDate(justAfterManilaMidnight);
+  assert.equal(manilaToday, '2026-10-02');
+  assert.equal(normalizeDate('2026-10-01', 'Birth date', false, manilaToday), '2026-10-01');
+  assert.throws(() => normalizeDate(manilaToday, 'Birth date', false, manilaToday), /Birth date must be before today/);
+  assert.equal(latestBirthDate(justAfterManilaMidnight), '2026-10-01');
+});
+
+test('pre-enrollment rejects a future birth date submitted directly to the server before database access', async () => {
+  const csrfToken = 'c'.repeat(64);
+  let poolCalls = 0;
+  const service = createPreEnrollmentService({ getPool: async () => { poolCalls += 1; throw new Error('unexpected database access'); } });
+  service.listAcceptedReadmissionChoices = async () => [];
+  const app = express();
+  app.set('views', path.resolve(__dirname, '../views'));
+  app.set('view engine', 'ejs');
+  app.use(express.urlencoded({ extended: false }));
+  app.use((req, _res, next) => {
+    req.authUser = { id: 2, email: 'front-desk@test.invalid', role: 'front_desk' };
+    req.session = { csrfToken };
+    next();
+  });
+  app.use('/pre-enrollments', createPreEnrollmentRouter({ preEnrollmentService: service }));
+  const server = await new Promise((resolve) => { const listening = app.listen(0, '127.0.0.1', () => resolve(listening)); });
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/pre-enrollments`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, schoolYear: '2027-2028', status: 'draft', birthDate: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date()) })
+    });
+    const html = await response.text();
+    assert.equal(response.status, 400);
+    assert.match(html, /Birth date must be before today/);
+    assert.match(html, /name="birthDate" type="date" max="\d{4}-\d{2}-\d{2}"/);
+    assert.equal(poolCalls, 0, 'invalid direct requests fail before the service opens a transaction or persists a row');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('pre-enrollment person fields reject numeric garbage and accept legitimate Unicode names', () => {
+  const valid = normalizeRecord(readyInput({
+    facebookName: 'J. Ari 204', emergencyContactPerson: 'José O’Neill', emergencyContactRelationship: 'Guardian 2',
+    motherName: 'María-José', fatherName: 'Jean-Luc D’Arcy', motherPhone: '09171234567', fatherPhone: '09171234567'
+  }));
+  assert.equal(valid.facebookName, 'J. Ari 204');
+  assert.equal(valid.emergencyContactPerson, 'José O’Neill');
+  assert.equal(valid.emergencyContactRelationship, 'Guardian 2');
+  assert.equal(valid.motherPhone, valid.fatherPhone, 'shared household numbers remain valid');
+  for (const [field, value] of [
+    ['motherName', '12345'], ['fatherName', '0000'], ['emergencyContactPerson', '9876'],
+    ['facebookName', '009988'], ['emergencyContactRelationship', '2']
+  ]) assert.throws(() => normalizeRecord(readyInput({ [field]: value })), /letter/);
+  assert.equal(normalizeRecord(readyInput({ motherName: '', fatherName: '', facebookName: '', emergencyContactPerson: '', emergencyContactRelationship: '' })).motherName, null);
+});
+
 test('receipt counts require a received original or photocopy and stay independent', () => {
   const value = normalizeRecord(readyInput({ receipt_report_card_original: '1', receipt_report_card_original_pieces: '1' }));
   assert.equal(value.receipts[0].originalReceived, true);
@@ -73,6 +144,28 @@ test('structured student and emergency addresses preserve legacy text unless exp
   }, 'address');
   assert.equal(replacement.addressZip, '0123');
   assert.equal(replacement.address, 'Block 2, Street 1, Ibabang Iyam, Lucena, Quezon, 0123');
+  assert.throws(() => applyAddressInput({}, {
+    addressMode: 'replace', addressBarangay: 'Barangay 4', addressCity: '123', addressProvince: 'Quezon'
+  }, 'address'), /City must include at least one letter/);
+  assert.throws(() => normalizeStructuredAddress({ addressProvince: '17' }, 'address'), /Province must include at least one letter/);
+  const numberedAddress = normalizeStructuredAddress({
+    addressBlockLotStreetPurok: 'Block 3, Lot 4', addressBarangay: 'Barangay 7',
+    addressCity: 'Lucena 2', addressProvince: 'Quezon', addressZip: '0123'
+  }, 'address');
+  assert.equal(numberedAddress.address_barangay, 'Barangay 7');
+  assert.equal(numberedAddress.address_zip, '0123');
+  const digitOnlyComponents = normalizeStructuredAddress({
+    addressBlockLotStreetPurok: '1234', addressBarangay: '7',
+    addressCity: 'Lucena 2', addressProvince: 'Quezon', addressZip: '4301'
+  }, 'address');
+  assert.equal(digitOnlyComponents.address_block_lot_street_purok, '1234');
+  assert.equal(digitOnlyComponents.address_barangay, '7');
+  const masterProfile = validateStudent({ studentNo: 'S-1', lrn: '012345678901', firstName: 'Ari', lastName: 'Santos' });
+  applyAddressInput(masterProfile, {
+    addressMode: 'replace', addressBlockLotStreetPurok: '1234', addressBarangay: '7', addressZip: '4301'
+  }, 'address');
+  assert.equal(masterProfile.address, '1234, 7, 4301');
+  assert.equal(masterProfile.addressCity, null);
 
   const emergencyReplacement = {};
   applyAddressInput(emergencyReplacement, {
@@ -413,7 +506,8 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.equal(detail.status, 200);
     const detailHtml = await detail.text();
     for (const [, label] of RECEIPT_REQUIREMENTS) assert.ok(detailHtml.includes(label), `detail renders receipt row ${label}`);
-    for (const label of ['Student and contact', 'Program and previous school', 'Signature and office record', 'Entered by']) {
+    for (const label of ['Student identity', 'Student contact', 'Student address', 'Parents and guardians',
+      'Emergency contact', 'Program and previous school', 'Signature and office record', 'Entered by']) {
       assert.ok(detailHtml.includes(label), `detail presents the grouped ${label} information`);
     }
     for (const label of ['Email', 'Gender', 'Birthplace', 'Facebook name', 'Student address',

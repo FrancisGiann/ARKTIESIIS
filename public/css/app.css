@@ -1467,6 +1467,13 @@ label { font-size: 0.84rem; }
   padding: 0.8rem 0;
   border-bottom: 1px solid var(--line);
 }
+.student-finance-activity-item.student-finance-payment-item { grid-template-columns: minmax(0, 1fr); gap: 0.65rem; }
+.student-finance-payment-summary { display: grid; grid-template-columns: minmax(9rem, 0.7fr) minmax(0, 1.6fr); gap: 0.8rem 1rem; min-width: 0; }
+.student-finance-payment-allocations { grid-column: 1 / -1; width: 100%; min-width: 0; }
+.student-finance-payment-allocations .student-finance-history__table { min-width: 48rem; }
+.student-finance-payment-note,
+.student-finance-payment-credit { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.student-finance-payment-credit { color: var(--ink-soft); }
 .student-finance-activity-item__entry,
 .student-finance-activity-item__details { display: grid; gap: 0.18rem; min-width: 0; }
 .student-finance-activity-item__entry strong { font-size: 0.84rem; text-transform: capitalize; }
@@ -1518,6 +1525,8 @@ label { font-size: 0.84rem; }
   .student-finance-term__details { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem 0.8rem; }
   .student-finance-charge__details { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .student-finance-history__table { width: 100%; min-width: 0; }
+  .student-finance-payment-allocations .student-finance-history__table { min-width: 0; }
+  .student-finance-payment-summary { grid-template-columns: minmax(0, 1fr); }
   .student-finance-activity-item { grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem 0.8rem; }
   .student-finance-activity-item__entry { grid-column: 1; }
   .student-finance-activity-item__details { grid-column: 1; }
@@ -2029,6 +2038,13 @@ label { font-size: 0.84rem; }
 .finance-review-summary__heading { display: grid; grid-template-columns: minmax(0, 1fr) minmax(12rem, max-content); align-items: start; gap: 0.85rem 1.25rem; }
 .finance-review-student { display: grid; gap: 0.12rem; min-width: 0; text-align: right; }
 .finance-review-student strong, .finance-review-student span { overflow-wrap: anywhere; }
+.finance-review-page .finance-review-context { padding: 0.55rem 0; margin: 0.75rem 0; border-block: 1px solid var(--line); color: var(--ink-soft); overflow-wrap: anywhere; }
+.finance-review-page .finance-review-context + .finance-review-context { padding-top: 0; margin-top: -0.75rem; border-top: 0; }
+.finance-review-page .finance-review-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem 1rem; margin: 0.85rem 0 1rem; }
+.finance-review-page .finance-review-fields > div { min-width: 0; padding: 0.45rem 0; border-bottom: 1px solid var(--line); }
+.finance-review-page .finance-review-fields dt { color: var(--muted); font-size: 0.78rem; font-weight: 650; line-height: 1.35; }
+.finance-review-page .finance-review-fields dd { margin: 0.15rem 0 0; color: var(--ink); font-size: 0.88rem; font-weight: 620; line-height: 1.4; overflow-wrap: anywhere; }
+.finance-review-page .finance-review-empty-note { margin: 1rem 0 1.2rem; padding: 0.65rem 0; border-block: 1px solid var(--line); color: var(--ink-soft); }
 .finance-review-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.65rem; padding: 0; margin: 1rem 0; }
 .finance-review-totals > div { min-width: 0; padding: 0.7rem; background: #f7f9f9; border: 1px solid var(--line); border-radius: var(--radius-control); }
 .finance-review-totals dt { color: var(--muted); font-size: 0.8rem; }
@@ -2422,6 +2438,8 @@ label { font-size: 0.84rem; }
 .pre-enrollment-detail-group:first-child { padding-top: 0; margin-top: 0; border-top: 0; }
 .pre-enrollment-detail-group h3 { margin: 0 0 0.55rem; font-size: 0.95rem; }
 .pre-enrollment-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.55rem 1.1rem; margin: 0; }
+.pre-enrollment-detail-page .pre-enrollment-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pre-enrollment-detail-page .pre-enrollment-summary__wide { grid-column: 1 / -1; }
 .pre-enrollment-summary > div { display: grid; min-width: 0; align-content: start; gap: 0.12rem; }
 .pre-enrollment-summary__wide { grid-column: span 2; }
 .pre-enrollment-summary dt { color: var(--muted); font-size: 0.76rem; font-weight: 650; line-height: 1.35; }
@@ -2478,6 +2496,8 @@ label { font-size: 0.84rem; }
 @media (max-width: 520px) {
   .pre-enrollment-panel { padding: 0.9rem; }
   .pre-enrollment-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem 0.8rem; }
+  .pre-enrollment-detail-page .pre-enrollment-summary { grid-template-columns: minmax(0, 1fr); }
+  .pre-enrollment-detail-page .pre-enrollment-summary__wide { grid-column: auto; }
   .pre-enrollment-receipt-table { min-width: 0; }
   .pre-enrollment-receipt-table th:first-child { width: 42%; }
   .pre-enrollment-receipt-table th, .pre-enrollment-receipt-table td { padding: 0.48rem 0.35rem; }
@@ -2492,6 +2512,10 @@ label { font-size: 0.84rem; }
   .pre-enrollment-summary__wide { grid-column: auto; }
   .pre-enrollment-detail-actions { width: 100%; }
   .pre-enrollment-detail-actions .button { flex: 1 1 auto; }
+}
+
+@media (max-width: 520px) {
+  .finance-review-page .finance-review-fields { grid-template-columns: minmax(0, 1fr); }
 }
 
 .pre-enrollment-list-table-wrap, .readmissions-table-wrap, .annual-profile-comparison-wrap {

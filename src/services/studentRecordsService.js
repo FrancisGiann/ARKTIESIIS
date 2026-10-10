@@ -69,16 +69,26 @@ function validateName(value, label, { required = false, maxLength = 100 } = {}) 
   return text;
 }
 
-function currentManilaDate() {
+function validateTextWithLetter(value, label, maxLength) {
+  if (value !== undefined && value !== null && value !== '' && typeof value !== 'string') {
+    throw new StudentRecordsError(`${label} must be text.`);
+  }
+  const text = printableText(value, maxLength);
+  if (text === null) throw new StudentRecordsError(`${label} must be ${maxLength} printable characters or fewer.`);
+  if (text && !/\p{L}/u.test(text)) throw new StudentRecordsError(`${label} must include at least one letter.`);
+  return text || null;
+}
+
+function currentManilaDate(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit'
-  }).formatToParts(new Date());
+  }).formatToParts(now);
   const fields = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${fields.year}-${fields.month}-${fields.day}`;
 }
 
-function latestBirthDate() {
-  const date = new Date(`${currentManilaDate()}T00:00:00.000Z`);
+function latestBirthDate(now = new Date()) {
+  const date = new Date(`${currentManilaDate(now)}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() - 1);
   return date.toISOString().slice(0, 10);
 }
@@ -193,17 +203,18 @@ function validateStudent(input = {}, { requireLrn = true, requireStudentNo = tru
   const address = normalizeAddress(input.address);
   const phone = normalizePhone(input.phone, 'Phone');
   const birthplace = printableText(input.birthplace, 160);
-  const facebookName = printableText(input.facebookName, 120);
-  const emergencyContactPerson = printableText(input.emergencyContactPerson, 160);
-  const emergencyContactRelationship = printableText(input.emergencyContactRelationship, 80);
+  const facebookName = validateTextWithLetter(input.facebookName, 'Facebook name', 120);
+  const emergencyContactPerson = validateName(input.emergencyContactPerson, 'Emergency contact person', { maxLength: 160 });
+  const emergencyContactRelationship = validateTextWithLetter(input.emergencyContactRelationship, 'Emergency contact relationship', 80);
   const emergencyContactPhone = normalizePhone(input.emergencyContactPhone, 'Emergency contact phone');
   const emergencyContactAddress = normalizeAddress(input.emergencyContactAddress);
-  const motherName = printableText(input.motherName, 160);
+  const motherName = validateName(input.motherName, 'Mother name', { maxLength: 160 });
   const motherPhone = normalizePhone(input.motherPhone, 'Mother’s phone');
-  const fatherName = printableText(input.fatherName, 160);
+  const fatherName = validateName(input.fatherName, 'Father name', { maxLength: 160 });
   const fatherPhone = normalizePhone(input.fatherPhone, 'Father’s phone');
-  if ([address, birthplace, facebookName, emergencyContactPerson, emergencyContactRelationship,
-    emergencyContactAddress, motherName, fatherName].includes(null)) {
+  // validateName() and validateTextWithLetter() return null for valid optional blanks;
+  // their malformed nonblank values already raise a field-specific error above.
+  if (birthplace === null) {
     throw new StudentRecordsError('Check that each optional profile field is within its allowed length and contains no control characters.');
   }
   return {
@@ -1075,6 +1086,7 @@ module.exports = {
   normalizeRecordId,
   normalizeSearchTerm,
   validateName,
+  validateTextWithLetter,
   normalizePhone,
   validateStudent,
   normalizeLrn,

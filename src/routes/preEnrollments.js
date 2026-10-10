@@ -4,6 +4,7 @@ const express = require('express');
 const crypto = require('node:crypto');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { PreEnrollmentError, RECEIPT_REQUIREMENTS, createPreEnrollmentService } = require('../services/preEnrollmentService');
+const { latestBirthDate } = require('../services/studentRecordsService');
 
 const DEFAULT_SCHOOL_YEAR = '2027-2028';
 
@@ -67,7 +68,7 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
         receivedDate: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date()),
         ...recordFormValues(record), ...receiptValues, ...values
       },
-      requirements: RECEIPT_REQUIREMENTS, acceptedReadmissionChoices, error
+      requirements: RECEIPT_REQUIREMENTS, acceptedReadmissionChoices, latestBirthDate: latestBirthDate(), error
     });
   }
 

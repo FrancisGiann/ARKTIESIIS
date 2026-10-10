@@ -217,7 +217,21 @@ test('student record, term, section, and enrollment inputs are bounded and valid
   assert.equal(workbookProfile.birthplace, 'Lucena City');
   assert.equal(workbookProfile.emergencyContactPerson, 'Alex Lee');
   assert.equal(workbookProfile.fatherPhone, '09000000002');
-  assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee', facebookName: 'x'.repeat(121) }), /optional profile field/);
+  const unicodeProfileNames = validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee',
+    facebookName: 'Ari Santos 204', emergencyContactPerson: 'José O’Neill', emergencyContactRelationship: 'Guardian 2',
+    motherName: 'María-José', fatherName: 'Jean-Luc D’Arcy', motherPhone: '09170000000', fatherPhone: '09170000000' });
+  assert.equal(unicodeProfileNames.facebookName, 'Ari Santos 204');
+  assert.equal(unicodeProfileNames.emergencyContactPerson, 'José O’Neill');
+  assert.equal(unicodeProfileNames.motherName, 'María-José');
+  assert.equal(unicodeProfileNames.motherPhone, unicodeProfileNames.fatherPhone, 'shared household numbers remain valid');
+  const optionalBlankProfile = validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee',
+    birthplace: '', facebookName: '   ', emergencyContactPerson: '', emergencyContactRelationship: ' ',
+    emergencyContactAddress: '', motherName: '   ', fatherName: '' });
+  for (const field of ['facebookName', 'emergencyContactPerson', 'emergencyContactRelationship',
+    'emergencyContactAddress', 'motherName', 'fatherName']) {
+    assert.equal(optionalBlankProfile[field], null, `${field} remains optional when blank`);
+  }
+  assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee', facebookName: 'x'.repeat(121) }), /Facebook name must be 120 printable characters/);
   assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee', emergencyContactPhone: '555\n1000' }), /Emergency contact phone must be 50 printable characters/);
   assert.equal(validateStudent({ lrn: '123456789012', firstName: 'Jamie', lastName: 'Lee' }, { requireStudentNo: false }).studentNo, null);
   assert.throws(() => normalizeLrn('12345678901'), /exactly 12 digits/);
@@ -247,6 +261,12 @@ test('student record, term, section, and enrollment inputs are bounded and valid
   ]) {
     assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee', [field]: value }), message);
   }
+  for (const [field, value, message] of [
+    ['motherName', '12345', /Mother name must contain letters/], ['fatherName', '9876', /Father name must contain letters/],
+    ['emergencyContactPerson', '1234', /Emergency contact person must contain letters/],
+    ['facebookName', '2048', /Facebook name must include at least one letter/],
+    ['emergencyContactRelationship', '2', /Emergency contact relationship must include at least one letter/]
+  ]) assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee', [field]: value }), message);
   assert.equal(validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee', sex: '' }).sex, null);
   assert.equal(validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee', sex: 'unspecified' },
     { allowLegacyUnspecifiedSex: true }).sex, 'unspecified');

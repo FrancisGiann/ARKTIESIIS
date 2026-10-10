@@ -39,6 +39,9 @@ function normalizeStructuredAddress(input = {}, prefix) {
     if (inputName.endsWith('Zip') && value && !/^\d{4}$/.test(value)) {
       throw new StudentAddressError('ZIP code must be blank or exactly four digits.');
     }
+    if ((inputName.endsWith('City') || inputName.endsWith('Province')) && value && !/\p{L}/u.test(value)) {
+      throw new StudentAddressError(`${label} must include at least one letter.`);
+    }
     values[column] = value || null;
   }
   const formatted = fields.map(([, column]) => values[column]).filter(Boolean).join(', ');

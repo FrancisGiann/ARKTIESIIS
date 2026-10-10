@@ -5,7 +5,7 @@ const bcrypt = require('bcrypt');
 const { createApp } = require('../src/app');
 const { ACTION_WRITERS, SAFE_ACTIONS, actionByPath, createFinanceReviewActionService, normalizeActionInput, normalizeFinanceReturnContext, financeActionContext } = require('../src/services/financeReviewActionService');
 const { AnnualFinanceError, createAnnualFinanceService } = require('../src/services/annualFinanceService');
-const { FinanceReviewDraftError } = require('../src/services/financeReviewDraftService');
+const { FinanceReviewDraftError, createFinanceReviewDraftService, validatePositivePaymentAmount } = require('../src/services/financeReviewDraftService');
 const {
   FinanceServiceError,
   createFinanceService,
@@ -397,6 +397,77 @@ test('payment return filters stay out of financial input and use only bounded in
   assert.equal(actions.afterCommitPath({ actionType: 'annual_payment',
     entityContext: { studentId: 22, financeUiReturnContext: { returnTo: 'https://example.invalid/' } }, committedResult: { paymentId: 104 } }),
   '/finance/students/22/annual/payments/104/confirmation', 'unknown return destinations cannot create external redirects');
+});
+
+test('payment review drafts require a positive amount before preview or persistence', async () => {
+  const invalidAmounts = ['', '0', '0.00', '-1.00', '1.001', '10000000000.00'];
+  for (const amount of invalidAmounts) {
+    assert.throws(() => validatePositivePaymentAmount('annual_payment', { amount }), FinanceReviewDraftError);
+  }
+  assert.doesNotThrow(() => validatePositivePaymentAmount('annual_payment', { amount: '20.05' }));
+  assert.doesNotThrow(() => validatePositivePaymentAmount('annual_adjustment', { amount: '-20.05' }),
+    'school-policy-dependent adjustment signs remain outside payment validation');
+
+  const binding = 'b'.repeat(64);
+  const draftId = '41111111-1111-4111-8111-111111111111';
+  let poolCalls = 0;
+  let createCalls = 0;
+  let updateCalls = 0;
+  const existing = { id: draftId, actionType: 'annual_payment', status: 'pending', entityContext: { studentId: 22 }, input: { amount: '20.00' } };
+  const actions = createFinanceReviewActionService({
+    getPool: async () => { poolCalls += 1; throw new Error('invalid amounts must fail before database preview'); },
+    draftService: {
+      async createDraft() { createCalls += 1; return { id: draftId }; },
+      async getDraft() { return structuredClone(existing); },
+      async updateDraftInput() { updateCalls += 1; }
+    }
+  });
+  for (const amount of invalidAmounts) {
+    await assert.rejects(actions.startDraft(7, binding, '/students/22/annual/payments', { amount, paymentDate: '2026-10-01' }),
+      (error) => error instanceof FinanceReviewDraftError && /positive payment amount/.test(error.message));
+    await assert.rejects(actions.updateDraft(7, binding, draftId, { amount }),
+      (error) => error instanceof FinanceReviewDraftError && /positive payment amount/.test(error.message));
+  }
+  assert.equal(poolCalls, 0);
+  assert.equal(createCalls, 0, 'an invalid new payment is not inserted as a review draft');
+  assert.equal(updateCalls, 0, 'an invalid edit is not saved over the existing draft');
+
+  const statements = [];
+  let rolledBack = false;
+  const draftStore = createFinanceReviewDraftService({
+    getPool: async () => ({}),
+    sql: { Int: 'Int', MAX: 'MAX', ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' }, Char: () => 'Char', VarChar: () => 'VarChar', NVarChar: () => 'NVarChar' },
+    transactionFactory: () => ({
+      async begin() {},
+      request() {
+        return { input() { return this; }, async query(statement) {
+          statements.push(statement);
+          if (statement.includes('SELECT id, action_type, revision, status')) {
+            return { recordset: [{ id: draftId, action_type: 'annual_payment', revision: 1, status: 'pending' }] };
+          }
+          if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'finance' }] };
+          if (statement.includes('COUNT(*) AS pending_count')) return { recordset: [{ pending_count: 0 }] };
+          return { recordset: [] };
+        } };
+      },
+      async commit() {},
+      async rollback() { rolledBack = true; }
+    })
+  });
+  const review = { dependencyFingerprint: 'a'.repeat(64), preview: {} };
+  await assert.rejects(draftStore.createDraft(7, binding, 'annual_payment', { studentId: 22 }, { amount: '-2.00' }, review),
+    (error) => error instanceof FinanceReviewDraftError && /positive payment amount/.test(error.message));
+  await assert.rejects(draftStore.updateDraftInput(7, draftId, binding, { amount: '0.00' }, review),
+    (error) => error instanceof FinanceReviewDraftError && /positive payment amount/.test(error.message));
+  assert.equal(rolledBack, true);
+  assert.ok(!statements.some((statement) => /INSERT INTO finance_review_drafts|UPDATE finance_review_drafts/.test(statement)),
+    'the persistence boundary never inserts or updates an invalid payment draft');
+  await draftStore.createDraft(7, binding, 'annual_payment', { studentId: 22 }, { amount: '20.05' }, review);
+  await draftStore.updateDraftInput(7, draftId, binding, { amount: '20.05' }, review);
+  assert.ok(statements.some((statement) => /INSERT INTO finance_review_drafts/.test(statement)),
+    'a valid positive payment draft can still be created');
+  assert.ok(statements.some((statement) => /UPDATE finance_review_drafts/.test(statement)),
+    'a valid positive payment draft can still be edited');
 });
 
 test('money parsing and financial transaction fields enforce DECIMAL(12,2) limits and signs', () => {
@@ -903,6 +974,18 @@ test('annual finance correction routes stay student-bound, CSRF-protected, and r
     assert.match(paymentHtml, /value="TRANSMIT-KEEP"/);
     assert.match(paymentHtml, /Keep this staff note\./);
     assert.match(paymentHtml, /value="15\.00"/);
+
+    reviewProbe.startDraft = async () => { throw new FinanceReviewDraftError('Enter a positive payment amount with up to 10 whole digits and 2 decimal places.'); };
+    const invalidPayment = await fetch(`${baseUrl}/finance/students/${studentId}/annual/payments`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, amount: '-12.50', paymentDate: '2026-10-01', referenceNo: 'KEEP-INVALID', receiptIssued: '0' })
+    });
+    const invalidPaymentHtml = await invalidPayment.text();
+    assert.equal(invalidPayment.status, 400);
+    assert.match(invalidPaymentHtml, /Enter a positive payment amount/);
+    assert.match(invalidPaymentHtml, /name="amount"[^>]*value="-12\.50"/,
+      'the recoverable payment form keeps the value for correction without saving an invalid draft');
+    assert.match(invalidPaymentHtml, /value="KEEP-INVALID"/);
 
     reviewProbe.startDraft = async () => { throw new FinanceReviewDraftError('Five saved finance reviews are already open.', 409); };
     const scheduleFields = new URLSearchParams({ _csrf: csrfToken, schoolYear: '2027-2028', gradeLevel: 'Grade 11', voucherCode: 'ESC',

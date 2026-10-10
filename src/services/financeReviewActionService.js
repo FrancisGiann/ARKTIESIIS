@@ -5,7 +5,7 @@ const { sql: defaultSql, getPool: defaultGetPool } = require('../config/database
 const { createAnnualFinanceService } = require('./annualFinanceService');
 const { createAnnualFinanceCasesService } = require('./annualFinanceCasesService');
 const { createStudentDocumentFinanceClearanceService } = require('./studentDocumentFinanceClearanceService');
-const { FinanceReviewDraftError, createFinanceReviewDraftService } = require('./financeReviewDraftService');
+const { FinanceReviewDraftError, createFinanceReviewDraftService, validatePositivePaymentAmount } = require('./financeReviewDraftService');
 const { formatFeePurpose } = require('../utils/paymentPurpose');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -902,6 +902,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
   }
 
   async function previewOutsideTransaction(action, context, input, prepareSuggestions = false) {
+    validatePositivePaymentAmount(action.type, input);
     const pool = await getPool();
     const tx = new sql.Transaction(pool);
     await tx.begin(sql.ISOLATION_LEVEL.REPEATABLE_READ);

@@ -2,7 +2,7 @@ const crypto = require('node:crypto');
 const bcrypt = require('bcrypt');
 const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
 const { validateStudent, StudentRecordsError, normalizeRecordId, applyAddressInput } = require('./studentRecordsService');
-const { ADDRESS_DEFINITIONS } = require('../utils/studentAddress');
+const { ADDRESS_DEFINITIONS, StudentAddressError, normalizeStructuredAddress } = require('../utils/studentAddress');
 const { allocateStudentNumber, StudentNumberAllocationError } = require('./studentNumberAllocator');
 const { normalizeIntakeChecklistUpdates } = require('./physicalChecklistService');
 const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
@@ -113,6 +113,65 @@ function profileFieldValue(value) {
   if (value === undefined || value === null || value === '') return null;
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   return String(value);
+}
+
+function applyPreEnrollmentAddressComponents(profile, source) {
+  const hasStructuredAddress = {};
+  for (const prefix of ['address', 'emergencyContactAddress']) {
+    const fields = ADDRESS_DEFINITIONS[prefix];
+    const input = Object.fromEntries(fields.map(([inputName, column]) => [inputName, source[column]]));
+    const hasComponents = fields.some(([, column]) => {
+      const value = source[column];
+      return value !== undefined && value !== null && !(typeof value === 'string' && !value.trim());
+    });
+    hasStructuredAddress[prefix] = hasComponents;
+    if (!hasComponents) {
+      for (const [inputName] of fields) profile[inputName] = null;
+      continue;
+    }
+    try {
+      const normalized = normalizeStructuredAddress(input, prefix);
+      profile[prefix] = normalized.formatted;
+      for (const [inputName, column] of fields) profile[inputName] = normalized[column];
+    } catch (error) {
+      if (error instanceof StudentAddressError) throw new AnnualEnrollmentError(error.message);
+      throw error;
+    }
+  }
+  return hasStructuredAddress;
+}
+
+function validatePreEnrollmentStudentProfile(source, email) {
+  const addressProfile = {
+    address: source.address,
+    emergencyContactAddress: source.emergency_contact_address
+  };
+  const hasStructuredAddress = applyPreEnrollmentAddressComponents(addressProfile, source);
+  try {
+    const profile = validateStudent({
+      studentNo: '', lrn: source.lrn, firstName: source.first_name,
+      middleName: source.middle_name, lastName: source.last_name, suffix: source.suffix,
+      birthDate: source.birth_date instanceof Date ? source.birth_date.toISOString().slice(0, 10) : source.birth_date,
+      sex: source.sex,
+      address: hasStructuredAddress.address ? '' : addressProfile.address,
+      phone: source.profile_phone, birthplace: source.birthplace, facebookName: source.facebook_name,
+      emergencyContactPerson: source.emergency_contact_person,
+      emergencyContactRelationship: source.emergency_contact_relationship,
+      emergencyContactPhone: source.emergency_contact_phone,
+      emergencyContactAddress: hasStructuredAddress.emergencyContactAddress ? '' : addressProfile.emergencyContactAddress,
+      motherName: source.mother_name, motherPhone: source.mother_phone,
+      fatherName: source.father_name, fatherPhone: source.father_phone
+    }, { requireStudentNo: false });
+    for (const prefix of ['address', 'emergencyContactAddress']) {
+      for (const [inputName] of ADDRESS_DEFINITIONS[prefix]) profile[inputName] = addressProfile[inputName];
+      if (hasStructuredAddress[prefix]) profile[prefix] = addressProfile[prefix];
+    }
+    profile.email = email;
+    return profile;
+  } catch (error) {
+    if (error instanceof StudentRecordsError) throw new AnnualEnrollmentError(error.message, error.status);
+    throw error;
+  }
 }
 
 function normalizeAnnualInput(input = {}, { preEnrollmentSource = false } = {}) {
@@ -796,35 +855,7 @@ function createAnnualEnrollmentService({
       }
       let profileInput = null;
       if (preEnrollment) {
-        try {
-          profileInput = validateStudent({
-            studentNo: '', lrn: preEnrollment.lrn, firstName: preEnrollment.first_name,
-            middleName: preEnrollment.middle_name, lastName: preEnrollment.last_name, suffix: preEnrollment.suffix,
-            birthDate: preEnrollment.birth_date instanceof Date ? preEnrollment.birth_date.toISOString().slice(0, 10) : preEnrollment.birth_date,
-            sex: preEnrollment.sex, address: preEnrollment.address, phone: preEnrollment.profile_phone,
-            birthplace: preEnrollment.birthplace, facebookName: preEnrollment.facebook_name,
-            emergencyContactPerson: preEnrollment.emergency_contact_person,
-            emergencyContactRelationship: preEnrollment.emergency_contact_relationship,
-            emergencyContactPhone: preEnrollment.emergency_contact_phone,
-            emergencyContactAddress: preEnrollment.emergency_contact_address,
-            motherName: preEnrollment.mother_name, motherPhone: preEnrollment.mother_phone,
-            fatherName: preEnrollment.father_name, fatherPhone: preEnrollment.father_phone
-          }, { requireStudentNo: false });
-          for (const [, inputName, dbColumn] of [
-            ['address', 'addressBlockLotStreetPurok', 'address_block_lot_street_purok'],
-            ['address', 'addressBarangay', 'address_barangay'], ['address', 'addressCity', 'address_city'],
-            ['address', 'addressProvince', 'address_province'], ['address', 'addressZip', 'address_zip'],
-            ['emergencyContactAddress', 'emergencyContactAddressBlockLotStreetPurok', 'emergency_contact_address_block_lot_street_purok'],
-            ['emergencyContactAddress', 'emergencyContactAddressBarangay', 'emergency_contact_address_barangay'],
-            ['emergencyContactAddress', 'emergencyContactAddressCity', 'emergency_contact_address_city'],
-            ['emergencyContactAddress', 'emergencyContactAddressProvince', 'emergency_contact_address_province'],
-            ['emergencyContactAddress', 'emergencyContactAddressZip', 'emergency_contact_address_zip']
-          ]) profileInput[inputName] = preEnrollment[dbColumn] || null;
-          profileInput.email = entry.email;
-        } catch (error) {
-          if (error instanceof StudentRecordsError) throw new AnnualEnrollmentError(error.message, error.status);
-          throw error;
-        }
+        profileInput = validatePreEnrollmentStudentProfile(preEnrollment, entry.email);
       }
 
       const termOrderResult = await transaction.request().input('schoolYear', sql.NVarChar(20), entry.schoolYear)
@@ -2016,6 +2047,7 @@ module.exports = {
   normalizeAnnualInput,
   normalizeAnnualAdministrationDetails,
   applySameSectionDefaults,
+  validatePreEnrollmentStudentProfile,
   normalizeEmail,
   normalizeUuid
 };

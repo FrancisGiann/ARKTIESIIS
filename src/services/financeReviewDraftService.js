@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
+const { FinanceServiceError, parseMoneyCents } = require('./financeService');
 const { runSerializableTransaction } = require('./transactionRetry');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -46,6 +47,19 @@ function normalizeFingerprint(value) {
   return value.toLowerCase();
 }
 
+function validatePositivePaymentAmount(actionType, input) {
+  if (actionType !== 'annual_payment') return;
+  try {
+    parseMoneyCents(input?.amount ?? '');
+  } catch (error) {
+    if (!(error instanceof FinanceServiceError)) throw error;
+    const message = error.message === 'Amount exceeds the supported financial limit.'
+      ? error.message
+      : 'Enter a positive payment amount with up to 10 whole digits and 2 decimal places.';
+    throw new FinanceReviewDraftError(message, error.status);
+  }
+}
+
 function createFinanceReviewDraftService({
   getPool = defaultGetPool,
   sql = defaultSql,
@@ -76,6 +90,7 @@ function createFinanceReviewDraftService({
 
   async function createDraft(actorInput, sessionBindingHmac, actionType, entityContext, input, review) {
     if (typeof actionType !== 'string' || !/^[a-z][a-z0-9_.-]{1,79}$/.test(actionType)) throw new FinanceReviewDraftError('This finance action cannot be reviewed.');
+    validatePositivePaymentAmount(actionType, input);
     if (typeof sessionBindingHmac !== 'string' || !FINGERPRINT.test(sessionBindingHmac)) throw new FinanceReviewDraftError('The finance review session is invalid.', 403);
     const contextJson = jsonText(entityContext || {}, 'Finance action context', 8192);
     const inputJson = jsonText(input || {}, 'Finance review details');
@@ -199,10 +214,11 @@ function createFinanceReviewDraftService({
     return transaction(async (tx) => {
       const rowResult = await tx.request().input('draftId', sql.Char(36), draftId)
         .input('actorId', sql.Int, Number(actorInput))
-        .query(`SELECT id, revision, status FROM finance_review_drafts
+        .query(`SELECT id, action_type, revision, status FROM finance_review_drafts
           WHERE id = @draftId AND owner_user_id = @actorId FOR UPDATE`);
       const row = rowResult.recordset?.[0];
       if (!row) throw new FinanceReviewDraftError('Finance review not found.', 404);
+      validatePositivePaymentAmount(row.action_type, input);
       const actor = await requireActor(tx.request(), actorInput);
       if (row.status !== 'pending') throw new FinanceReviewDraftError('A completed finance review cannot be edited.', 409);
       const revision = Number(row.revision) + 1;
@@ -341,4 +357,4 @@ function createFinanceReviewDraftService({
   return { createDraft, getDraft, listPendingDrafts, updateDraftInput, refreshReview, commitReviewedDraft, discardDraft };
 }
 
-module.exports = { FinanceReviewDraftError, createFinanceReviewDraftService, MAX_INPUT_BYTES, REVIEW_MS, MAX_PENDING };
+module.exports = { FinanceReviewDraftError, createFinanceReviewDraftService, validatePositivePaymentAmount, MAX_INPUT_BYTES, REVIEW_MS, MAX_PENDING };

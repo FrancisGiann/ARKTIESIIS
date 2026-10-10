@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 
-const { AnnualEnrollmentError, createAnnualEnrollmentService, normalizeAnnualInput, normalizeAnnualAdministrationDetails, applySameSectionDefaults } = require('../src/services/annualEnrollmentService');
+const { AnnualEnrollmentError, createAnnualEnrollmentService, normalizeAnnualInput, normalizeAnnualAdministrationDetails, applySameSectionDefaults, validatePreEnrollmentStudentProfile } = require('../src/services/annualEnrollmentService');
 const {
   AnnualFinanceError, createAnnualFinanceService, normalizeLineRows, normalizeAllocations, parsePaymentDate, applyExemptionPreview, canonicalAssessmentSnapshot,
   tuitionInstallmentBreakdown, nonTuitionTermTotals
@@ -11,6 +11,57 @@ const { PhysicalChecklistError, createPhysicalChecklistService, normalizeIntakeC
 const { currentManilaDate, validateStudent } = require('../src/services/studentRecordsService');
 
 const uuid = '41111111-1111-4111-8111-111111111111';
+
+test('pre-enrollment conversion validates structured city and province while keeping numeric street and barangay values', () => {
+  const source = {
+    lrn: '012345678901', first_name: 'Ari', last_name: 'Santos',
+    address: '1234, 7, 4301',
+    address_block_lot_street_purok: '1234', address_barangay: '7', address_city: 'Lucena 2',
+    address_province: 'Quezon', address_zip: '4301',
+    emergency_contact_address: '4321, 8, 4301',
+    emergency_contact_address_block_lot_street_purok: 'Block 2', emergency_contact_address_barangay: '8',
+    emergency_contact_address_city: 'Lucena', emergency_contact_address_province: 'Quezon', emergency_contact_address_zip: '4301'
+  };
+  const profile = validatePreEnrollmentStudentProfile(source, 'ari.santos@example.test');
+  assert.equal(profile.address, '1234, 7, Lucena 2, Quezon, 4301');
+  assert.equal(profile.addressBlockLotStreetPurok, '1234');
+  assert.equal(profile.addressBarangay, '7');
+  assert.equal(profile.emergencyContactAddressBarangay, '8');
+  assert.equal(profile.email, 'ari.santos@example.test');
+
+  const numberOnlyComponents = validatePreEnrollmentStudentProfile({
+    lrn: '012345678901', first_name: 'Ari', last_name: 'Santos',
+    address: '1234, 7, 4301', address_block_lot_street_purok: '1234',
+    address_barangay: '7', address_city: null, address_province: null, address_zip: '4301'
+  }, 'ari.santos@example.test');
+  assert.equal(numberOnlyComponents.address, '1234, 7, 4301');
+  assert.equal(numberOnlyComponents.addressCity, null);
+  assert.equal(numberOnlyComponents.addressProvince, null);
+
+  const legacy = validatePreEnrollmentStudentProfile({
+    lrn: '012345678901', first_name: 'Ari', last_name: 'Santos',
+    address: ' Saved legacy address ', emergency_contact_address: ' Saved emergency address '
+  }, 'ari.santos@example.test');
+  assert.equal(legacy.address, 'Saved legacy address');
+  assert.equal(legacy.emergencyContactAddress, 'Saved emergency address');
+  assert.equal(legacy.addressCity, null);
+  const blankLegacy = validatePreEnrollmentStudentProfile({
+    lrn: '012345678901', first_name: 'Ari', last_name: 'Santos', address: '   ', emergency_contact_address: '   '
+  }, 'ari.santos@example.test');
+  assert.equal(blankLegacy.address, null);
+  assert.equal(blankLegacy.emergencyContactAddress, null);
+  assert.throws(() => validatePreEnrollmentStudentProfile({
+    lrn: '012345678901', first_name: 'Ari', last_name: 'Santos', address_city: '123', address_province: 'Quezon'
+  }, 'ari.santos@example.test'), (error) => error instanceof AnnualEnrollmentError && /City must include at least one letter/.test(error.message));
+  assert.throws(() => validatePreEnrollmentStudentProfile({
+    lrn: '012345678901', first_name: 'Ari', last_name: 'Santos',
+    emergency_contact_address_city: 'Lucena', emergency_contact_address_province: '17'
+  }, 'ari.santos@example.test'), (error) => error instanceof AnnualEnrollmentError && /province must include at least one letter/.test(error.message));
+  assert.throws(() => validatePreEnrollmentStudentProfile({
+    lrn: '012345678901', first_name: 'Ari', last_name: 'Santos', address: '1234, 7, 4301'
+  }, 'ari.santos@example.test'), /Address must include at least one letter/,
+  'numeric legacy free-text remains outside the structured-component exception');
+});
 
 test('annual finance roster search maps shared printable-text validation to its domain error before database access', async () => {
   const service = createAnnualFinanceService({ getPool: async () => { throw new Error('invalid search must stop before database access'); } });
