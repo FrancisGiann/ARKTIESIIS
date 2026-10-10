@@ -21,7 +21,7 @@ New applicants and continuing students use the school's required paper form. A l
 - Search and maintain student profiles, review enrollment and academic history, manage finance accounts and transactions, and oversee document status.
 - Grade entries are written only when the registrar approves a teacher's corrected class workbook submission; administrators do not directly upload report cards or write grades through a manual form.
 - Archive student records while retaining linked academic and finance history; archiving disables the linked student login.
-- Upload a bounded Excel roster to create missing login accounts only for existing, unlinked student records. The preview must be entirely valid before confirmation; temporary passwords are delivered once and are never stored in plaintext.
+- Upload a bounded Excel roster to create missing login accounts only for existing, unlinked student records. The preview must be entirely valid before confirmation; temporary passwords are returned once through the private credential export and are never stored in plaintext.
 - Review activity through the audit log.
 - Document oversight and validation result monitoring.
 - Audit/activity monitoring.
@@ -36,6 +36,7 @@ New applicants and continuing students use the school's required paper form. A l
 - Student master list.
 - Deactivate linked student login accounts without archiving the student master record.
 - Guide new, returning, and transfer intake through student, enrollment, documents received, and fees/confirmation steps. Review the approved schedule and discounts, then confirm the payable assessment and entry-term enrollment; returning students reuse their linked profile and login.
+- For an eligible first-time student, the initial private confirmation displays the temporary password and can be printed for handoff; saved or reopened confirmation copies omit it.
 - Update the annual voucher type (PUB, ESC, NV), plus each term's section placement. Type changes after assessment remain visible for finance review and do not rewrite the reviewed charges.
 - Finalize the entry term when the registrar confirms the reviewed fee assessment; later terms are activated individually after the annual confirmation and a valid section. Finance payment or term account clearance is not an enrollment prerequisite. Only a verified first-time intake activates a pending new login; returning accounts and previously finalized terms do not have credentials rotated. Historical pending accounts do not gain activation eligibility from their old status; retired intake/finalization URLs remain guarded compatibility paths.
 - Record dated, reasoned cancel/drop/transfer changes without deleting academic history or canceling finance debt.
@@ -73,7 +74,7 @@ New applicants and continuing students use the school's required paper form. A l
 - Form 137 is staff-only: students cannot view its physical status, staff instructions, scans, or Gemini suggestions.
 - No access to another student's records.
 - Archived student records retain academic and finance history; the linked student login is inactive.
-- Temporary-password accounts must change the password after email two-factor verification and before accessing protected student pages. If a one-time form or credential download is lost, the user sets a password through the existing reset flow.
+- Temporary-password accounts must change the password after email two-factor verification and before accessing protected student pages. If the initial printed confirmation or one-time credential export is lost, the user sets a password through the existing reset flow.
 
 ## Academic grade scale
 Until the school confirms its grading policy, grade entry uses a provisional numeric range of 0–100 with up to two decimal places. The application accepts a staff-provided grading period label and does not prescribe period names. This provisional range is centralized in the academic records service for later adjustment.

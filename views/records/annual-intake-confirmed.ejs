@@ -112,15 +112,15 @@
   <% } %>
 
   <% if (enrollment.temporaryPassword) { %>
-    <section class="notice-panel confirmation-secret" aria-labelledby="temporary-password-title">
+    <footer class="confirmation-secret" aria-labelledby="temporary-password-title">
       <h2 id="temporary-password-title">One-time temporary password</h2>
-      <p><strong><%= enrollment.temporaryPassword %></strong></p>
-    <p>Give this to the student privately. It is shown only on this response and is omitted from the print copy. The student must complete email verification and change it at sign-in.</p>
-    </section>
+      <p class="confirmation-secret__value"><strong><%= enrollment.temporaryPassword %></strong></p>
+      <p>Give this password to the student privately. It appears only on this initial confirmation and is not emailed. The student must complete email verification and change it at sign-in. If it is lost, use the existing password reset flow.</p>
+    </footer>
   <% } %>
 
   <div class="admin-form-actions confirmation-actions" aria-label="Confirmation actions">
-    <% if (enrollment.temporaryPassword || summaryUnavailable) { %><a class="button button--primary" href="<%= confirmationUrl %>">Print / save as PDF</a><% } else { %><button class="button button--primary" type="button" data-print-page>Print / save as PDF</button><% } %>
+    <button class="button button--primary" type="button" data-print-page>Print / save as PDF</button>
     <a class="button button--secondary" href="<%= confirmationUrl %>">View / print saved confirmation</a>
     <% if (enrollment.studentId) { %><a class="button button--secondary" href="/documents/students/<%= enrollment.studentId %>#physical-checklist-title">Open paper requirements checklist</a><% } %>
     <% if (enrollment.annualEnrollmentId) { %><a class="button button--secondary" href="/registrar/intake/<%= enrollment.annualEnrollmentId %>/manage">Open annual student record</a><% } %>

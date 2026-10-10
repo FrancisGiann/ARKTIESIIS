@@ -8,8 +8,10 @@ const session = require('express-session');
 const {
   StudentSetupError,
   normalizeBulkRows,
+  createTemporaryPassword,
   createStudentSetupService
 } = require('../src/services/studentSetupService');
+const { validatePassword } = require('../src/services/accountService');
 const { createStudentBulkAccountsRouter, createStudentIntakeRouter, createAnnualStudentIntakeRouter,
   createAnnualConfirmationRouter } = require('../src/routes/studentSetup');
 const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
@@ -83,6 +85,16 @@ const unlinkedRows = rosterRows.map((row) => ({
   student_status: 'active', email_user_id: null, pending_email_id: null
 }));
 const fixturePreEnrollmentId = '0e0ec641-ff2a-4474-9030-aafcc0d593ad';
+
+test('temporary passwords use 12 URL-safe ASCII characters accepted by account validation', () => {
+  for (let index = 0; index < 20; index += 1) {
+    const password = createTemporaryPassword();
+    assert.match(password, /^[A-Za-z0-9_-]{12}$/);
+    assert.equal(Buffer.byteLength(password, 'utf8'), 12);
+    assert.equal(validatePassword(password), password);
+  }
+});
+
 function readyPreEnrollmentFixture(overrides = {}) {
   return {
     id: fixturePreEnrollmentId, version: 3, status: 'ready_for_registrar', created_by_role: 'front_desk',
@@ -247,6 +259,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     received_by: 'Front Desk Operator', received_date: '2026-10-02', receipts: []
   };
   let confirmationCall = null;
+  let confirmationCalls = 0;
   let hasConfirmed = false;
   const session = {};
   app.set('views', path.join(__dirname, '..', 'views'));
@@ -289,7 +302,10 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     async confirmAnnualEnrollment(actorId, annualId, input) {
       confirmationCall = { actorId, annualId, input };
       hasConfirmed = true;
-      return { annualEnrollmentId: 71, studentId: 41, studentNo: 'SHS-2026-0321', firstName: 'Synthetic', lastName: 'Learner', schoolYear: '2026-2027', gradeLevel: 'Grade 11', term: 'Term 1', sectionName: 'Mabini', total: '1334.50', temporaryPassword: 'synthetic-one-time-credential' };
+      confirmationCalls += 1;
+      return { annualEnrollmentId: 71, studentId: 41, studentNo: 'SHS-2026-0321', firstName: 'Synthetic', lastName: 'Learner', schoolYear: '2026-2027', gradeLevel: 'Grade 11', term: 'Term 1', sectionName: 'Mabini', total: '1334.50',
+        temporaryPassword: confirmationCalls === 1 ? 'synthetic<&"credential' : null,
+        alreadyConfirmed: confirmationCalls > 1 };
     }
   };
   const feePreview = {
@@ -499,11 +515,12 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(reviewHtml, /name="optionalLineIds" value="90"/);
     assert.doesNotMatch(reviewHtml, /name="(?:firstName|middleName|lastName|studentNo|lrn|birthDate|address|phone|email)"/);
     assert.deepEqual(feePreviewCalls.at(-1), [90]);
+    const confirmationForm = new URLSearchParams({ _csrf: csrfToken, idempotencyKey,
+      scheduleId: '9', scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64),
+      clearanceSnapshotFingerprint: 'clearance-review-fingerprint', optionalLineIds: '90' });
     const confirmResponse = await fetch(`${baseUrl}/registrar/intake/71/confirm`, {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey,
-        scheduleId: '9', scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64),
-        clearanceSnapshotFingerprint: 'clearance-review-fingerprint', optionalLineIds: '90' })
+      body: confirmationForm
     });
     const confirmedHtml = await confirmResponse.text();
     assert.equal(confirmResponse.status, 200);
@@ -514,9 +531,13 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(confirmedHtml, /Confirmation ID <strong>101/);
     assert.match(confirmedHtml, /Itemized assessment and approved coverage/);
     assert.match(confirmedHtml, /Tour/);
-    assert.match(confirmedHtml, /synthetic-one-time-credential/);
+    assert.match(confirmedHtml, /synthetic&lt;&amp;&#34;credential/);
+    assert.doesNotMatch(confirmedHtml, /synthetic<&"credential/);
+    assert.match(confirmedHtml, /<footer class="confirmation-secret"/);
+    assert.match(confirmedHtml, /initial confirmation and is not emailed/);
+    assert.match(confirmedHtml, /complete email verification and change it at sign-in/);
     assert.match(confirmedHtml, /Print \/ save as PDF/);
-    assert.doesNotMatch(confirmedHtml, /data-print-page/);
+    assert.match(confirmedHtml, /type="button" data-print-page/);
     assert.match(confirmedHtml, /\/registrar\/intake\/71\/confirmation/);
     assert.match(confirmedHtml, /Open paper requirements checklist/);
     assert.deepEqual(confirmationCall, { actorId: registrar.id, annualId: '71', input: {
@@ -524,6 +545,16 @@ test('registrar intake opens the guided annual form and links the roster to fee 
       scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64),
       clearanceSnapshotFingerprint: 'clearance-review-fingerprint', optionalLineIds: '90'
     } });
+
+    const replayResponse = await fetch(`${baseUrl}/registrar/intake/71/confirm`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: confirmationForm
+    });
+    const replayHtml = await replayResponse.text();
+    assert.equal(replayResponse.status, 200);
+    assert.match(replayResponse.headers.get('cache-control'), /no-store/);
+    assert.match(replayHtml, /data-print-page/);
+    assert.doesNotMatch(replayHtml, /synthetic&lt;&amp;&#34;credential|One-time temporary password/);
+    assert.equal(confirmationCalls, 2);
 
     const reopened = await fetch(`${baseUrl}/registrar/intake/71/confirmation`);
     const reopenedHtml = await reopened.text();
@@ -534,11 +565,12 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(reopenedHtml, /Approved coverage/);
     assert.match(reopenedHtml, /Confirmation ID <strong>101/);
     assert.match(reopenedHtml, /Current term placements/);
-    assert.doesNotMatch(reopenedHtml, /synthetic-one-time-credential|One-time temporary password/);
+    assert.doesNotMatch(reopenedHtml, /synthetic&lt;&amp;&#34;credential|One-time temporary password/);
     assert.match(reopenedHtml, /data-print-page/);
     assert.equal(confirmationCall?.annualId, '71');
     const confirmationCss = fs.readFileSync(path.join(__dirname, '..', 'public/css/app.css'), 'utf8');
-    assert.match(confirmationCss, /\.annual-confirmation-document \.confirmation-secret \{ display: none !important; \}/);
+    assert.match(confirmationCss, /\.annual-confirmation-document \.confirmation-secret \{\s*display: block !important;/);
+    assert.match(confirmationCss, /\.annual-confirmation-document \.confirmation-secret \{[\s\S]*?break-inside: avoid;/);
     assert.match(confirmationCss, /\.annual-confirmation-document \.admin-table thead \{ position: static !important; display: table-header-group !important;/,
       'the shared tuition installment table is reset from the narrow-screen clipped header rules when printed');
     assert.match(confirmationCss, /\.annual-confirmation-document \.admin-table td::before \{ display: none !important;/);
@@ -686,6 +718,45 @@ test('credential-free confirmation GET uses the saved assessment, entry-term sco
     'staff can reopen the credential-free confirmation after leaving the initial response');
 });
 
+test('later-term activation sends its one-time credential in a private printable response', async () => {
+  const app = express();
+  app.set('views', path.join(__dirname, '..', 'views'));
+  app.set('view engine', 'ejs');
+  app.use(express.urlencoded({ extended: false }));
+  app.use((req, _res, next) => {
+    req.authUser = registrar;
+    req.session = { csrfToken: 'b'.repeat(64) };
+    next();
+  });
+  app.use('/registrar/intake', createAnnualStudentIntakeRouter({
+    annualEnrollmentService: {
+      async finalizeAnnualTerm(actorId, enrollmentId) {
+        assert.equal(actorId, registrar.id);
+        assert.equal(enrollmentId, '51');
+        return { enrollmentId: 51, studentNo: 'SHS-2026-0321', firstName: 'Synthetic', middleName: '',
+          lastName: 'Learner', suffix: '', schoolYear: '2026-2027', term: 'Term 2', sectionName: 'Mabini',
+          email: 'learner@example.edu', temporaryPassword: '<legacy&secret>' };
+      }
+    }
+  }));
+
+  await withServer(app, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/registrar/intake/51/finalize`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: 'b'.repeat(64) })
+    });
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('cache-control'), /no-store/);
+    assert.match(html, /<section class="enrollment-print__credential"/);
+    assert.match(html, /&lt;legacy&amp;secret&gt;/);
+    assert.match(html, /data-print-page/);
+    assert.doesNotMatch(html, /<legacy&secret>/);
+  });
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public/css/app.css'), 'utf8');
+  assert.match(css, /\.enrollment-print__credential \{[\s\S]*?font-size: 8pt;[\s\S]*?break-inside: avoid;/);
+});
+
 test('a post-confirmation summary read failure still renders confirmed status and a retry link', async () => {
   const app = express();
   let confirmed = false;
@@ -723,7 +794,12 @@ test('a post-confirmation summary read failure still renders confirmed status an
     assert.equal(confirmed, true);
     assert.match(html, /Enrollment confirmed/);
     assert.match(html, /Enrollment was confirmed, but its saved detail summary could not be loaded/);
+    assert.match(response.headers.get('cache-control'), /no-store/);
+    assert.match(html, /synthetic-one-time-credential/);
+    assert.match(html, /type="button" data-print-page/);
+    assert.match(html, /Print \/ save as PDF/);
     assert.match(html, /\/registrar\/intake\/71\/confirmation/);
+    assert.match(html, /View \/ print saved confirmation/);
     assert.doesNotMatch(html, /annual enrollment was not confirmed|SQL detail|private@example\.test/);
     assert.equal(errors.length, 1);
     assert.doesNotMatch(JSON.stringify(errors), /SQL detail|private@example\.test/);

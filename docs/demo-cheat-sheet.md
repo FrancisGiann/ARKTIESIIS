@@ -13,7 +13,7 @@
 2. **Registrar** opens the saved form and checks the student's identity, school year, grade, voucher, entry term, section, and enrollment date.
 3. **Registrar** selects **Save and review fees**. The system creates a pending student record, assigns a student number, and leaves the login inactive. Fees are not added to the account yet.
 4. **Registrar** reviews the fees that match the approved schedule and the selected optional fees. Reviewing the amount does not post charges.
-5. **Registrar** selects **Confirm enrollment**. The system adds the reviewed fees to the student's account, enrolls the entry term, and activates the login for an eligible first-time student. It shows the temporary password once, privately; it does not email or print it. The student then signs in with email two-factor verification and changes the password.
+5. **Registrar** selects **Confirm enrollment**. The system adds the reviewed fees to the student's account, enrolls the entry term, and activates the login for an eligible first-time student. The initial private confirmation shows the 12-character temporary password and can be printed; it is not emailed. Give the credential to the student privately. Saved or reopened confirmation copies omit it. The student signs in with email two-factor verification and changes the password at sign-in.
 6. Finance payment or account clearance is not required to confirm enrollment.
 
 ## 3. Continue, activate a later term, or return after a break

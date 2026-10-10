@@ -1,4 +1,3 @@
-const crypto = require('node:crypto');
 const bcrypt = require('bcrypt');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 const {
@@ -7,6 +6,7 @@ const {
   validateStudent
 } = require('./studentRecordsService');
 const { allocateStudentNumber, StudentNumberAllocationError } = require('./studentNumberAllocator');
+const { createTemporaryPassword } = require('../utils/temporaryPassword');
 
 const BCRYPT_ROUNDS = 12;
 const MAX_BULK_ROWS = 100;
@@ -67,10 +67,6 @@ function normalizeBulkRows(inputRows) {
   if (!rows.length) throw new StudentSetupError('No student rows were found in the workbook.');
   if (rows.length > MAX_BULK_ROWS) throw new StudentSetupError(`The workbook cannot contain more than ${MAX_BULK_ROWS} student rows.`);
   return rows;
-}
-
-function createTemporaryPassword() {
-  return crypto.randomBytes(18).toString('hex');
 }
 
 function normalizeBulkResultRows(rows) {

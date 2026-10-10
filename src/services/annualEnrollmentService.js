@@ -9,6 +9,7 @@ const { createFinanceDebtRevisionService } = require('./financeDebtRevisionServi
 const { RETRYABLE_TRANSACTION_CODES, runSerializableTransaction } = require('./transactionRetry');
 const { TermClearanceError } = require('./termClearanceService');
 const { REVIEWABLE_PROFILE_FIELDS, PROFILE_REVIEW_GROUPS, profileReviewFingerprint } = require('../utils/studentProfileReview');
+const { createTemporaryPassword } = require('../utils/temporaryPassword');
 
 const BCRYPT_ROUNDS = 12;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -238,7 +239,7 @@ function createAnnualEnrollmentService({
   sql = defaultSql,
   transactionFactory = (pool) => new sql.Transaction(pool),
   hashPassword = bcrypt.hash,
-  createPassword = () => crypto.randomBytes(18).toString('hex'),
+  createPassword = createTemporaryPassword,
   physicalChecklistService = null,
   annualFinanceService = null,
   termClearanceService = null
