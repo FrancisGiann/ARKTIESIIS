@@ -47,6 +47,7 @@ Front desk transcribes the required paper form; the registrar reviews its saved 
 
 Email 2FA is required outside the explicit development-only password bypass. The bypass needs both `NODE_ENV=development` and `DEV_PASSWORD_ONLY_LOGIN=true` and is restricted to loopback. Configure a working SMTP relay for regular sign-in.
 The login-attempt limiter is skipped only while that development password-only mode is enabled; OTP and non-development login limits remain active.
+Password fields throughout the web app start masked and offer Show password / Hide password controls.
 
 ## Local demo seed
 

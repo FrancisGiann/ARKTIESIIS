@@ -125,6 +125,27 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-colo
 .field-help, .field-optional, .field__optional, .muted-copy { color: var(--muted); font-size: 0.82rem; }
 .field-help { margin: 0.15rem 0 0; }
 .password-match-error { color: var(--danger); font-size: 0.85rem; }
+.password-input-control { position: relative; min-width: 0; }
+.field .password-input-control > input { padding-right: 8.25rem; }
+.password-visibility-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.25rem;
+  min-width: 7.5rem;
+  min-height: 2.75rem;
+  padding: 0.35rem 0.5rem;
+  color: var(--accent);
+  background: var(--surface);
+  border: 0;
+  border-radius: 0.4rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+  transform: translateY(-50%);
+}
+.password-visibility-toggle:hover { color: var(--accent-hover); }
 .checkbox-field { display: flex; align-items: flex-start; gap: 0.65rem; }
 .checkbox-field input { margin-top: 0.25rem; accent-color: var(--accent); }
 .field--check { display: flex; width: fit-content; max-width: 100%; min-width: 0; min-height: 2.75rem; align-items: center; gap: 0.65rem; padding: 0.25rem 0.15rem; margin: 0; cursor: pointer; }

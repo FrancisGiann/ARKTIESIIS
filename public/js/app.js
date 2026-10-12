@@ -59,6 +59,29 @@ for (const form of document.querySelectorAll('form[data-clear-section-on-term-ch
   }
 }
 
+for (const input of document.querySelectorAll('input[type="password"][data-password-toggle]')) {
+  if (!input.id || !input.parentElement) continue;
+
+  const control = document.createElement('div');
+  control.className = 'password-input-control';
+  const toggle = document.createElement('button');
+  toggle.className = 'password-visibility-toggle';
+  toggle.type = 'button';
+  toggle.textContent = 'Show password';
+  toggle.setAttribute('aria-controls', input.id);
+  toggle.setAttribute('aria-pressed', 'false');
+
+  input.parentElement.insertBefore(control, input);
+  control.append(input, toggle);
+
+  toggle.addEventListener('click', () => {
+    const isVisible = input.type === 'password';
+    input.type = isVisible ? 'text' : 'password';
+    toggle.textContent = isVisible ? 'Hide password' : 'Show password';
+    toggle.setAttribute('aria-pressed', String(isVisible));
+  });
+}
+
 for (const form of document.querySelectorAll('[data-password-match-form]')) {
   const password = form.querySelector('[data-password-source]');
   const confirmation = form.querySelector('[data-password-confirm]');
