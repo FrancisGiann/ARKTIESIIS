@@ -107,6 +107,7 @@ function createStatementProjection(ledger) {
       assessed_amount: moneyText(assessed),
       coverage_amount: moneyText(coverage),
       required_amount: moneyText(requiredCents),
+      fee_basis_negative: requiredCents < 0n,
       applied_amount: moneyText(appliedCents),
       due_amount: moneyText(dueCents)
     };

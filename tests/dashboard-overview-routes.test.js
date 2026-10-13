@@ -5,6 +5,7 @@ const { readFileSync } = require('node:fs');
 const { once } = require('node:events');
 const bcrypt = require('bcrypt');
 const { createApp } = require('../src/app');
+const { initialize: initializeFinanceOverviewFilters } = require('../public/js/finance-overview-filters');
 
 const password = 'Correct-Horse-Battery-12';
 const passwordHash = bcrypt.hashSync(password, 4);
@@ -326,6 +327,66 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     assert.doesNotMatch(rosterHtml, /Tuition tracking|Whole term|>DP<|>Prelim</);
     assert.match(rosterHtml, /href="\/finance" aria-current="page"/);
   });
+});
+
+test('finance overview distinguishes an unselected configured year or term from missing configuration', async () => {
+  const cases = [
+    {
+      data: {
+        ...financeOverview, schoolYears: ['2027-2028'], selectedSchoolYear: '', selectedTermId: '', selectedTerm: null,
+        availableTerms: [], needsSchoolYearSelection: true, needsTermSelection: false
+      },
+      path: '/finance/overview',
+      yearOptionText: 'Choose school year',
+      termDisabled: true,
+      message: 'Choose a school year above to review Finance status.'
+    },
+    {
+      data: {
+        ...financeOverview, schoolYears: ['2027-2028'], selectedSchoolYear: '2027-2028', selectedTermId: '', selectedTerm: null,
+        availableTerms: [], needsSchoolYearSelection: false, needsTermSelection: true
+      },
+      path: '/finance/overview?schoolYear=2027-2028',
+      yearOptionText: null,
+      termDisabled: true,
+      message: 'No configured terms are available for 2027-2028.'
+    }
+  ];
+
+  for (const item of cases) {
+    await withServer(appFor('finance', [], [], undefined, undefined, item.data), async (baseUrl) => {
+      const cookie = await signIn(baseUrl, 'finance');
+      const response = await fetch(`${baseUrl}${item.path}`, { headers: { cookie } });
+      const html = await response.text();
+      assert.equal(response.status, 200);
+      const yearSelect = html.match(/<select name="schoolYear"[\s\S]*?<\/select>/)?.[0];
+      const termSelect = html.match(/<select name="termId"[\s\S]*?<\/select>/)?.[0];
+      assert.ok(yearSelect && termSelect, 'expected school year and term selections');
+      if (item.yearOptionText) assert.match(yearSelect, /<option value="" disabled selected>Choose school year<\/option>/);
+      if (item.termDisabled) assert.match(termSelect, /<select name="termId" required disabled>/);
+      assert.match(html, new RegExp(item.message));
+      if (item.yearOptionText) assert.doesNotMatch(html, /No configured school year is available yet/);
+    });
+  }
+});
+
+test('finance overview filter drops a stale term and section after a school-year change', () => {
+  const listeners = {};
+  const schoolYear = { value: '2027-2028', addEventListener(type, callback) { listeners[`year:${type}`] = callback; } };
+  const term = { value: '72', disabled: false, addEventListener(type, callback) { listeners[`term:${type}`] = callback; } };
+  const section = { value: '11' };
+  const form = { querySelector(selector) { return selector === '[name="schoolYear"]' ? schoolYear : selector === '[name="termId"]' ? term : selector === '[name="sectionId"]' ? section : null; } };
+
+  initializeFinanceOverviewFilters(form);
+  schoolYear.value = '2028-2029';
+  listeners['year:change']();
+  assert.equal(term.value, '');
+  assert.equal(term.disabled, true);
+  assert.equal(section.value, '');
+
+  section.value = '12';
+  listeners['term:change']();
+  assert.equal(section.value, '');
 });
 
 test('finance overview keeps every zero-count status filter available for an empty configured term', async () => {

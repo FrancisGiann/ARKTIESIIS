@@ -160,8 +160,8 @@
           <div class="admin-form-grid">
             <div class="field"><label for="grade-level">Grade level (optional)</label><input id="grade-level" name="gradeLevel" type="text" maxlength="50" value="<%= createValues.gradeLevel || '' %>"></div>
             <div class="field"><label for="section-term">Academic term</label><select id="section-term" name="academicTermId" required><option value="">Choose a term</option><% for (const term of terms) { %><option value="<%= term.id %>" <%= String(createValues.academicTermId || '') === String(term.id) ? 'selected' : '' %>><%= term.school_year %> · <%= term.term %></option><% } %></select></div>
-            <div class="field"><label for="section-cluster">Cluster (optional)</label><input id="section-cluster" name="cluster" maxlength="80" value="<%= createValues.cluster || '' %>"></div>
-            <div class="field"><label for="section-strand">Strand (optional)</label><input id="section-strand" name="strand" maxlength="80" value="<%= createValues.strand || '' %>"></div>
+            <div class="field"><label for="section-track">Track</label><select id="section-track" name="track" required><option value="">Choose a track</option><% for (const track of Object.keys(programCatalog || {})) { %><option value="<%= track %>" <%= createValues.track === track ? 'selected' : '' %>><%= track %></option><% } %></select></div>
+            <div class="field"><label for="section-cluster">Cluster</label><select id="section-cluster" name="cluster" required><option value="">Choose a cluster</option><% for (const [track, clusters] of Object.entries(programCatalog || {})) { for (const cluster of clusters) { %><option value="<%= cluster %>" data-track="<%= track %>" <%= createValues.cluster === cluster ? 'selected' : '' %>><%= cluster %></option><% } } %></select></div>
             <div class="field"><label for="section-adviser">Adviser (optional)</label><input id="section-adviser" name="adviser" maxlength="160" value="<%= createValues.adviser || '' %>"></div>
             <div class="field"><label for="section-modality">Modality (optional)</label><select id="section-modality" name="modality"><option value="">Not recorded</option><% for (const [value, label] of [['face-to-face', 'Face to face'], ['distance', 'Distance'], ['modular', 'Modular'], ['hybrid', 'Hybrid']]) { %><option value="<%= value %>" <%= createValues.modality === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
             <div class="field"><label for="section-modular-subtype">Modular subtype (if modular)</label><input id="section-modular-subtype" name="modularSubtype" maxlength="80" placeholder="e.g. printed modules" value="<%= createValues.modularSubtype || '' %>"></div>
@@ -177,8 +177,8 @@
             <details class="records-section-group" <%= group.term.is_current ? 'open' : '' %>>
               <summary><strong><%= group.term.school_year %> · <%= group.term.term %></strong><span><%= group.rows.length %> <%= group.rows.length === 1 ? 'section' : 'sections' %></span></summary>
               <div class="table-scroll records-small-table" tabindex="0" aria-label="Sections for <%= group.term.school_year %> · <%= group.term.term %>">
-                <table class="admin-table"><thead><tr><th scope="col">Section</th><th scope="col">Grade level</th><th scope="col">Cluster and strand</th><th scope="col">Adviser and modality</th></tr></thead>
-                  <tbody><% for (const section of group.rows) { %><tr><td data-label="Section"><%= section.name %></td><td data-label="Grade level"><%= section.grade_level || '—' %></td><td data-label="Cluster and strand"><%= [section.cluster ? `Cluster ${section.cluster}` : '', section.strand].filter(Boolean).join(' · ') || '—' %></td><td data-label="Adviser and modality"><%= [section.adviser, section.modality, section.modular_subtype].filter(Boolean).join(' · ') || '—' %></td></tr><% } %></tbody>
+                <table class="admin-table"><thead><tr><th scope="col">Section</th><th scope="col">Grade level</th><th scope="col">Track and cluster</th><th scope="col">Adviser and modality</th></tr></thead>
+                  <tbody><% for (const section of group.rows) { %><tr><td data-label="Section"><%= section.name %></td><td data-label="Grade level"><%= section.grade_level || '—' %></td><td data-label="Track and cluster"><%= [section.cluster ? `Track ${section.cluster}` : '', section.strand ? `Cluster ${section.strand}` : ''].filter(Boolean).join(' · ') || '—' %></td><td data-label="Adviser and modality"><%= [section.adviser, section.modality, section.modular_subtype].filter(Boolean).join(' · ') || '—' %></td></tr><% } %></tbody>
                 </table>
               </div>
             </details>
@@ -187,8 +187,8 @@
             <details class="records-section-group" open>
               <summary><strong>Term unavailable</strong><span><%= ungroupedSections.length %> <%= ungroupedSections.length === 1 ? 'section' : 'sections' %></span></summary>
               <div class="table-scroll records-small-table" tabindex="0" aria-label="Sections without an available academic term">
-                <table class="admin-table"><thead><tr><th scope="col">Section</th><th scope="col">Grade level</th><th scope="col">Term</th><th scope="col">Cluster and strand</th><th scope="col">Adviser and modality</th></tr></thead>
-                  <tbody><% for (const section of ungroupedSections) { %><tr><td data-label="Section"><%= section.name %></td><td data-label="Grade level"><%= section.grade_level || '—' %></td><td data-label="Term"><%= section.school_year || '—' %> · <%= section.term || '—' %></td><td data-label="Cluster and strand"><%= [section.cluster ? `Cluster ${section.cluster}` : '', section.strand].filter(Boolean).join(' · ') || '—' %></td><td data-label="Adviser and modality"><%= [section.adviser, section.modality, section.modular_subtype].filter(Boolean).join(' · ') || '—' %></td></tr><% } %></tbody>
+                <table class="admin-table"><thead><tr><th scope="col">Section</th><th scope="col">Grade level</th><th scope="col">Term</th><th scope="col">Track and cluster</th><th scope="col">Adviser and modality</th></tr></thead>
+                  <tbody><% for (const section of ungroupedSections) { %><tr><td data-label="Section"><%= section.name %></td><td data-label="Grade level"><%= section.grade_level || '—' %></td><td data-label="Term"><%= section.school_year || '—' %> · <%= section.term || '—' %></td><td data-label="Track and cluster"><%= [section.cluster ? `Track ${section.cluster}` : '', section.strand ? `Cluster ${section.strand}` : ''].filter(Boolean).join(' · ') || '—' %></td><td data-label="Adviser and modality"><%= [section.adviser, section.modality, section.modular_subtype].filter(Boolean).join(' · ') || '—' %></td></tr><% } %></tbody>
                 </table>
               </div>
             </details>
@@ -198,4 +198,5 @@
     </section>
   </div><% } %>
 </main>
+<script src="/js/paper-program-fields.js" defer></script>
 <%- include('../partials/foot') %>

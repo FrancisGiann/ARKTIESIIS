@@ -850,6 +850,7 @@ input:not([type=checkbox]):not([type=radio]), textarea, select { min-height: 2.7
 label { font-size: 0.84rem; }
 .field { gap: 0.35rem; }
 .annual-intake-form [hidden] { display: none !important; }
+.pre-enrollment-form [hidden] { display: none !important; }
 .request-status-conditional[hidden] { display: none !important; }
 .field-help, .field-optional, .field__optional, .muted-copy { font-size: 0.78rem; }
 .admin-table th, .portal-table th, .finance-table th { padding: 0.65rem 0.75rem; background: #f0f3f3; font-size: 0.74rem; }

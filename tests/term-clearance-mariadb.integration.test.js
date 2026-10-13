@@ -788,8 +788,13 @@ test('v2.017 to v2.018 migration rehearsal and paper-clearance SQL, roles, snaps
     const currentTwoReview = await clearance.getTermActivationReview(registrarId, termTwo.id);
     assert.equal(currentTwoReview.ready, true, 'Term 2 becomes activatable once current and prior Term 1 paper clearance is complete');
     const activationInput = { idempotencyKey: uuid(), clearanceSnapshotFingerprint: currentTwoReview.fingerprint };
+    const activeReturningCredentials = (await pool.execute('SELECT is_active, password_hash, auth_session_version FROM users WHERE id = ?', [studentUserId]))[0][0];
+    assert.equal(Number(activeReturningCredentials.is_active), 1);
     const activatedTermTwo = await annualEnrollment.finalizeAnnualTerm(registrarId, termTwo.id, activationInput);
     assert.equal(activatedTermTwo.termNumber, 2);
+    assert.equal(activatedTermTwo.temporaryPassword, null, 'a later-term activation never issues a new password to an active returning student');
+    assert.deepEqual((await pool.execute('SELECT is_active, password_hash, auth_session_version FROM users WHERE id = ?', [studentUserId]))[0][0],
+      activeReturningCredentials, 'a later-term activation does not reset the active account or its session version');
     assert.equal((await pool.execute('SELECT enrollment_status FROM enrollments WHERE id = ?', [termTwo.id]))[0][0].enrollment_status,
       'enrolled', 'the actual later-term service activates the reviewed current placement');
     const futureThreeAtTwo = await clearance.getTermActivationReview(registrarId, termThree.id);

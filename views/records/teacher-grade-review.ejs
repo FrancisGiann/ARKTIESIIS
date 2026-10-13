@@ -10,7 +10,7 @@
     <form class="form-stack" method="post" action="/registrar/grade-submissions/<%= submission.id %>/decision" data-submitting-message="Recording the review decision. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="grade-import-preview__select-all" data-grade-import-selection hidden>
-        <label class="field--check" for="teacher-grade-select-all"><input id="teacher-grade-select-all" data-grade-select-all type="checkbox" aria-controls="teacher-grade-preview-rows"><span>Select all</span></label>
+        <label class="field--check" for="teacher-grade-select-all"><input id="teacher-grade-select-all" data-grade-select-all type="checkbox" aria-controls="teacher-grade-preview-rows"><span>Select all eligible rows</span></label>
         <p class="field-help" data-grade-selection-count aria-live="polite"></p>
         <p class="field-help">Only rows ready to import are selected. Review name differences and existing-grade conflicts individually.</p>
       </div>

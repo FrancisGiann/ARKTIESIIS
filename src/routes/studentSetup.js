@@ -16,6 +16,7 @@ const { latestBirthDate } = require('../services/studentRecordsService');
 const { isDuplicateKeyError } = require('../config/database');
 const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
 const { comparePreEnrollmentProfile } = require('../utils/studentProfileReview');
+const { isCanonicalProgram } = require('../utils/paperProgramCatalog');
 
 const MAX_BULK_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_XLSX_ENTRIES = 80;
@@ -580,10 +581,15 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         service.loadIntakeOptions(req.authUser.id),
         checklistService?.listIntakeRequirements ? checklistService.listIntakeRequirements(req.authUser.id) : Promise.resolve([])
       ]);
+      const configuredIntakeSections = options.sections.filter((section) => isCanonicalProgram(section.cluster, section.strand));
+      const intakeSections = preEnrollmentSource
+        ? configuredIntakeSections.filter((section) => section.cluster === preEnrollmentSource.preferred_track
+          && section.strand === preEnrollmentSource.preferred_cluster)
+        : configuredIntakeSections;
       return setPrivateHeaders(res).status(status).render('records/annual-intake-form', {
         title: 'New Annual Enrollment', csrfToken: ensureCsrfToken(req),
         idempotencyKey: values.idempotencyKey || values.preEnrollmentId || preEnrollmentSource?.id || crypto.randomUUID(),
-        ...options, maxBirthDate: latestBirthDate(), values: { ...values, enrollmentStartDate: values.enrollmentStartDate || schoolLocalDate() }, error, activeStep,
+        ...options, sections: intakeSections, maxBirthDate: latestBirthDate(), values: { ...values, enrollmentStartDate: values.enrollmentStartDate || schoolLocalDate() }, error, activeStep,
         paperRequirements, preEnrollmentSource, preEnrollmentReceiptRequirements: RECEIPT_REQUIREMENTS,
         profileReviewFields: preEnrollmentSource?.existingStudent?.profile
           ? comparePreEnrollmentProfile(preEnrollmentSource, preEnrollmentSource.existingStudent.profile).filter((item) => item.differs) : [],
@@ -656,7 +662,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       if (loadError instanceof AnnualEnrollmentError || loadError instanceof AnnualFinanceError) {
         return setPrivateHeaders(res).status(loadError.status).render('records/annual-intake-fees', {
           title: 'Review enrollment fees', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
-          annualId, preview: null, error: loadError.message, values, confirmationChoices: []
+          annualId, preview: null, error: loadError.message, values, confirmationChoices: [], successNotice: null
         });
       }
       return res.status(503).render('error', { title: 'Fee review unavailable', message: 'The configured fee assessment could not be loaded.' });
@@ -775,6 +781,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         lrn: source.lrn || '', phone: source.student_contact_number || '',
         schoolYear: source.school_year, gradeLevel: source.target_grade_level || '',
         email: source.email || '', studentNo: source.existingStudent?.studentNo || '',
+        voucherCode: ['PUB', 'ESC', 'NV'].includes(source.voucher_type_text) ? source.voucher_type_text : '',
         intakeKind: source.applicant_kind, studentReviewFingerprint: source.existingStudent?.profileReviewFingerprint || '',
         addressMode: 'replace', emergencyContactAddressMode: 'replace'
       };

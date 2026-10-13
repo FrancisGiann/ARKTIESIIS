@@ -13,10 +13,10 @@
     <div class="finance-overview__top">
       <div><h2 id="finance-overview-heading">Term payment status</h2><p>Select a status below to open the matching accounts.</p></div>
       <% if (overview.schoolYears.length) { %>
-        <form class="dashboard-filter dashboard-filter--finance" method="get" action="/finance/overview">
+        <form class="dashboard-filter dashboard-filter--finance" method="get" action="/finance/overview" data-finance-overview-filters>
           <div class="finance-overview-filter-primary">
-            <label class="field"><span>School year</span><select name="schoolYear" required><% for (const year of overview.schoolYears) { %><option value="<%= year %>" <%= overview.selectedSchoolYear === year ? 'selected' : '' %>><%= year %></option><% } %></select></label>
-            <label class="field"><span>Term</span><select name="termId" required><% for (const term of overview.availableTerms) { %><option value="<%= term.academicTermId %>" <%= String(overview.selectedTermId) === String(term.academicTermId) ? 'selected' : '' %>><%= term.term %></option><% } %></select></label>
+            <label class="field"><span>School year</span><select name="schoolYear" required><option value="" disabled <%= overview.selectedSchoolYear ? '' : 'selected' %>>Choose school year</option><% for (const year of overview.schoolYears) { %><option value="<%= year %>" <%= overview.selectedSchoolYear === year ? 'selected' : '' %>><%= year %></option><% } %></select></label>
+            <label class="field"><span>Term</span><select name="termId" required <%= overview.availableTerms.length ? '' : 'disabled' %>><option value="" disabled <%= overview.selectedTermId ? '' : 'selected' %>>Choose term</option><% for (const term of overview.availableTerms) { %><option value="<%= term.academicTermId %>" <%= String(overview.selectedTermId) === String(term.academicTermId) ? 'selected' : '' %>><%= term.term %></option><% } %></select></label>
             <label class="field"><span>Payment period</span><select name="installment"><% for (const [value, label] of [['whole','Entire term'],['dp','Down payment'],['prelim','Preliminary'],['midterm','Midterm'],['finals','Finals']]) { %><option value="<%= value %>" <%= overview.selectedInstallment === value ? 'selected' : '' %>><%= label %></option><% } %></select></label>
           </div>
           <button class="button button--secondary" type="submit">Apply filters</button>
@@ -33,9 +33,9 @@
     </div>
 
     <% if (overview.needsSchoolYearSelection) { %>
-      <p class="dashboard-empty" role="status">No configured school year is available yet. Set up a school year and terms before reviewing Finance status.</p>
+      <p class="dashboard-empty" role="status"><% if (overview.schoolYears.length) { %>Choose a school year above to review Finance status.<% } else { %>No configured school year is available yet. Set up a school year and terms before reviewing Finance status.<% } %></p>
     <% } else if (overview.needsTermSelection) { %>
-      <p class="dashboard-empty" role="status">No configured terms are available for <%= overview.selectedSchoolYear %>.</p>
+      <p class="dashboard-empty" role="status"><% if (overview.availableTerms.length) { %>Choose a term above to review Finance status.<% } else { %>No configured terms are available for <%= overview.selectedSchoolYear %>.<% } %></p>
     <% } else { %>
       <% if (!overview.totalEligible) { %><p class="dashboard-empty" role="status">No active applicable enrollment records match this term and these filters. The status links below will return no records.</p><% } %>
       <% const installmentLabel = ({whole:'Entire term',dp:'Down payment',prelim:'Preliminary',midterm:'Midterm',finals:'Finals'})[overview.selectedInstallment]; %>
@@ -63,4 +63,5 @@
     </ul>
   </section>
 </main>
+<script src="/js/finance-overview-filters.js" defer></script>
 <%- include('../partials/foot') %>

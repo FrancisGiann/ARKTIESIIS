@@ -6,6 +6,7 @@ const { createAnnualFinanceService } = require('./annualFinanceService');
 const { createAnnualFinanceCasesService } = require('./annualFinanceCasesService');
 const { createStudentDocumentFinanceClearanceService } = require('./studentDocumentFinanceClearanceService');
 const { FinanceReviewDraftError, createFinanceReviewDraftService, validatePositivePaymentAmount } = require('./financeReviewDraftService');
+const { FinanceServiceError, parseMoneyCents, formatMoneyCents } = require('./financeService');
 const { formatFeePurpose } = require('../utils/paymentPurpose');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -661,6 +662,92 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     return details;
   }
 
+  async function feeAdjustmentReview(tx, action, context, input) {
+    const isReversal = action.type === 'annual_adjustment_reversal';
+    let chargeId = safeIntegerId(context.chargeId);
+    let deltaCents;
+    let selectedAdjustment = null;
+    try {
+      if (isReversal) {
+        const originalResult = await tx.request().input('adjustmentId', sql.BigInt, context.adjustmentId)
+          .query(`SELECT adjustment.id, adjustment.charge_id, CAST(adjustment.amount AS CHAR(40)) AS amount,
+              annual.student_id,
+              EXISTS(SELECT 1 FROM finance_charge_adjustments AS reversal
+                WHERE reversal.reverses_adjustment_id = adjustment.id) AS already_reversed
+            FROM finance_charge_adjustments AS adjustment
+            INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id
+            INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
+            WHERE adjustment.id = @adjustmentId`);
+        selectedAdjustment = originalResult.recordset?.[0];
+        if (!selectedAdjustment || Number(selectedAdjustment.student_id) !== Number(context.studentId)) {
+          throw new FinanceReviewDraftError('Adjustment not found for this student.', 404);
+        }
+        if (selectedAdjustment.already_reversed === true || selectedAdjustment.already_reversed === 1) {
+          throw new FinanceReviewDraftError('This adjustment has already been reversed.', 409);
+        }
+        chargeId = safeIntegerId(String(selectedAdjustment.charge_id));
+        const originalAmountCents = parseMoneyCents(String(selectedAdjustment.amount), { allowNegative: true });
+        deltaCents = -originalAmountCents;
+      } else {
+        deltaCents = parseMoneyCents(String(input.amount ?? ''), { allowNegative: true });
+      }
+    } catch (error) {
+      if (error instanceof FinanceReviewDraftError) throw error;
+      if (error instanceof FinanceServiceError) throw new FinanceReviewDraftError(error.message, error.status);
+      throw error;
+    }
+    if (!chargeId) throw new FinanceReviewDraftError('Choose a valid assessed fee.', 400);
+    const stateResult = await tx.request().input('chargeId', sql.BigInt, chargeId)
+      .query(`SELECT annual.student_id,
+          CAST(charge.amount + COALESCE((SELECT SUM(adjustment.amount)
+            FROM finance_charge_adjustments AS adjustment WHERE adjustment.charge_id = charge.id), 0) AS CHAR(40)) AS fee_basis,
+          CAST(due.amount_due AS CHAR(40)) AS amount_due
+        FROM assessed_charges AS charge
+        INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
+        INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
+        WHERE charge.id = @chargeId`);
+    const state = stateResult.recordset?.[0];
+    if (!state || Number(state.student_id) !== Number(context.studentId)) throw new FinanceReviewDraftError('This charge does not belong to the selected student.', 409);
+    const beforeBasisCents = parseMoneyCents(String(state.fee_basis), { allowNegative: true, allowZero: true });
+    const afterBasisCents = beforeBasisCents + deltaCents;
+    if (!isReversal && afterBasisCents < 0n) {
+      throw new FinanceReviewDraftError('The adjustment would reduce this fee below zero. Reverse an earlier reduction if it needs correction.', 409);
+    }
+    if (isReversal && selectedAdjustment && parseMoneyCents(String(selectedAdjustment.amount), { allowNegative: true }) > 0n && afterBasisCents < 0n) {
+      throw new FinanceReviewDraftError('Reversing this increase would reduce the fee below zero. Reverse earlier reductions first.', 409);
+    }
+    if (isReversal && selectedAdjustment && parseMoneyCents(String(selectedAdjustment.amount), { allowNegative: true }) < 0n
+      && afterBasisCents <= beforeBasisCents) {
+      throw new FinanceReviewDraftError('A corrective reversal must improve the saved fee basis.', 409);
+    }
+    const currentDueCents = parseMoneyCents(String(state.amount_due), { allowNegative: true, allowZero: true });
+    const projectedDueCents = currentDueCents + deltaCents;
+    let releasePlan = { annual: [], legacy: [], totalCents: 0n, annualCents: 0n, legacyCents: 0n };
+    if (afterBasisCents >= 0n && projectedDueCents < 0n) {
+      const cases = createAnnualFinanceCasesService({ getPool, sql, transaction: tx });
+      try { releasePlan = await cases.planOverpaymentRelease(tx, chargeId, projectedDueCents); }
+      catch (error) { throw new FinanceReviewDraftError(error.message || 'The excess payment credit could not be planned safely.', error.status || 409); }
+    }
+    return {
+      action: isReversal ? 'reversal' : 'adjustment',
+      amount: formatMoneyCents(deltaCents),
+      feeBasisBefore: formatMoneyCents(beforeBasisCents),
+      feeBasisAfter: formatMoneyCents(afterBasisCents),
+      currentDue: formatMoneyCents(currentDueCents),
+      projectedDue: formatMoneyCents(projectedDueCents),
+      warning: beforeBasisCents < 0n || afterBasisCents < 0n
+        ? (afterBasisCents < 0n
+          ? 'This fee contains an excessive reduction. Review its adjustments and reverse incorrect entries.'
+          : 'This reviewed correction clears the excessive fee reduction.')
+        : null,
+      plannedRelease: formatMoneyCents(releasePlan.totalCents),
+      annualRelease: formatMoneyCents(releasePlan.annualCents),
+      legacyRelease: formatMoneyCents(releasePlan.legacyCents),
+      annualReleaseCount: releasePlan.annual.length,
+      legacyReleaseCount: releasePlan.legacy.length
+    };
+  }
+
   async function calculateReview(tx, action, context, rawInput, locking = false, prepareSuggestions = false) {
     const input = structuredClone(rawInput);
     const request = tx.request();
@@ -687,6 +774,9 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       fields: Object.entries(input).map(([name, value]) => ({ name, value: Array.isArray(value) ? value.map(String) : String(value ?? '') }))
     };
     preview.targetDetails = await actionTargetDetails(tx, action, resolvedContext);
+    if (['annual_adjustment', 'annual_adjustment_reversal'].includes(action.type)) {
+      preview.feeAdjustment = await feeAdjustmentReview(tx, action, resolvedContext, input);
+    }
     if (Array.isArray(input.lines)) {
       preview.scheduleLines = input.lines.map((line) => ({
         term: Number(line.termNumber), fee: [line.feeCategory, line.lineName].filter(Boolean).join(' · '),

@@ -5,6 +5,7 @@ const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = requir
 const { StudentRecordsError, validateName, validateTextWithLetter, normalizePhone } = require('./studentRecordsService');
 const { ADDRESS_DEFINITIONS, StudentAddressError, normalizeStructuredAddress } = require('../utils/studentAddress');
 const { profileReviewFingerprint } = require('../utils/studentProfileReview');
+const { PROGRAM_CATALOG, isCanonicalProgram, isCanonicalTrack } = require('../utils/paperProgramCatalog');
 const { runSerializableTransaction } = require('./transactionRetry');
 
 const EDIT_ROLES = new Set(['front_desk', 'registrar']);
@@ -20,9 +21,9 @@ const RECEIPT_REQUIREMENTS = Object.freeze([
   ['certificate_of_rating', 'Certificate of Rating (ALS)'],
   ['esc_certificate', 'ESC Certificate (Private School)'],
   ['national_id', 'National ID (optional)'],
-  ['two_by_two_photos', 'Three 2×2 pictures (name tag and white background)'],
-  ['long_brown_envelopes', 'Three long brown envelopes']
+  ['two_by_two_photos', 'Three 2×2 pictures (name tag and white background)']
 ]);
+const LEGACY_ENVELOPE_CODE = 'long_brown_envelopes';
 const FIELD_SPEC = Object.freeze([
   ['school_year', 'schoolYear', 20], ['first_name', 'firstName', 100], ['middle_name', 'middleName', 100],
   ['last_name', 'lastName', 100], ['suffix', 'suffix', 20], ['lrn', 'lrn', 12],
@@ -161,7 +162,7 @@ function manilaDate(now = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(now);
 }
 
-function normalizeRecord(input = {}, { actorName = '', current = null } = {}) {
+function normalizeRecord(input = {}, { actorName = '', current = null, currentReceipts = [] } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new PreEnrollmentError('Enter valid paper form details.');
   const sameAddress = normalizeSameAddressFlag(input.emergencyContactSameAsStudent);
   const normalizedInput = sameAddress ? {
@@ -172,10 +173,20 @@ function normalizeRecord(input = {}, { actorName = '', current = null } = {}) {
   } : input;
   const result = {};
   for (const [column, name, length] of FIELD_SPEC) {
+    if (column === 'voucher_category_text') {
+      result[name] = current?.voucher_category_text ?? null;
+      continue;
+    }
     result[name] = column.endsWith('_date')
       ? normalizeDate(normalizedInput[name], name === 'studentSignedDate' ? 'Student signature date' : name === 'birthDate' ? 'Birth date' : 'Date received')
       : printable(normalizedInput[name], name.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`), length,
         { required: column === 'school_year' });
+  }
+  const voucherRaw = input.voucherTypeText;
+  if (voucherRaw === undefined && current) result.voucherTypeText = current.voucher_type_text ?? null;
+  else if (result.voucherTypeText && !['PUB', 'ESC', 'NV'].includes(result.voucherTypeText)) {
+    if (current && voucherRaw === current.voucher_type_text) result.voucherTypeText = current.voucher_type_text;
+    else throw new PreEnrollmentError('Choose PUB, ESC, NV, or leave voucher type blank.');
   }
   const currentSchoolYear = result.schoolYear.match(/^(\d{4})-(\d{4})$/);
   if (!currentSchoolYear || Number(currentSchoolYear[2]) !== Number(currentSchoolYear[1]) + 1) {
@@ -217,15 +228,8 @@ function normalizeRecord(input = {}, { actorName = '', current = null } = {}) {
   normalizeProfileAddress(result, normalizedInput, 'emergencyContactAddress', current);
   if (sameAddress) copyStudentAddressToEmergency(result);
   if (result.lrn && !/^\d{1,12}$/.test(result.lrn)) throw new PreEnrollmentError('LRN must contain digits only and be no longer than 12 digits.');
-  const trackOptions = {
-    'Academic Track': new Set([
-      'ASSH (Arts, Social Science, and Humanities)', 'BE (Business & Entrepreneurship)',
-      'BE-TECH-PRO HM (Hospitality Management)'
-    ]),
-    'Tech-Pro Track': new Set(['Hospitality and Tourism', 'ICT Support & Computer Programming'])
-  };
-  if (result.preferredTrack && !trackOptions[result.preferredTrack]) throw new PreEnrollmentError('Choose a listed preferred track.');
-  if (result.preferredCluster && (!result.preferredTrack || !trackOptions[result.preferredTrack].has(result.preferredCluster))) {
+  if (result.preferredTrack && !isCanonicalTrack(result.preferredTrack)) throw new PreEnrollmentError('Choose a listed preferred track.');
+  if (result.preferredCluster && !isCanonicalProgram(result.preferredTrack, result.preferredCluster)) {
     throw new PreEnrollmentError('Choose a cluster that belongs to the selected preferred track.');
   }
   if (result.targetGradeLevel && !['Grade 11', 'Grade 12'].includes(result.targetGradeLevel)) {
@@ -262,6 +266,32 @@ function normalizeRecord(input = {}, { actorName = '', current = null } = {}) {
       photocopyPieces: normalizePieceCount(input[`receipt_${code}_photocopy_pieces`], photocopyReceived, `${code} photocopy pieces`)
     };
   });
+  const legacyEnvelope = (currentReceipts || []).find((receipt) => receipt.requirement_code === LEGACY_ENVELOPE_CODE);
+  const envelopeMode = input.envelopeReceiptMode === undefined
+    ? current ? 'preserve' : 'replace'
+    : input.envelopeReceiptMode;
+  if (!['preserve', 'replace'].includes(envelopeMode)) throw new PreEnrollmentError('Choose whether to keep or update the envelope receipt.');
+  for (const legacyField of ['receipt_long_brown_envelopes_original_pieces', 'receipt_long_brown_envelopes_photocopy',
+    'receipt_long_brown_envelopes_photocopy_pieces']) {
+    if (input[legacyField] !== undefined && input[legacyField] !== null && input[legacyField] !== '') {
+      throw new PreEnrollmentError('Envelope history is recorded only as one received checkbox.');
+    }
+  }
+  let envelopeReceipt;
+  if (envelopeMode === 'preserve' && current) {
+    envelopeReceipt = {
+      requirementCode: LEGACY_ENVELOPE_CODE,
+      originalReceived: legacyEnvelope?.original_received === true || legacyEnvelope?.original_received === 1,
+      originalPieces: legacyEnvelope?.original_pieces == null ? null : Number(legacyEnvelope.original_pieces),
+      photocopyReceived: legacyEnvelope?.photocopy_received === true || legacyEnvelope?.photocopy_received === 1,
+      photocopyPieces: legacyEnvelope?.photocopy_pieces == null ? null : Number(legacyEnvelope.photocopy_pieces)
+    };
+  } else {
+    const received = normalizeReceiptFlag(input.receipt_long_brown_envelopes_received, 'three long brown envelopes');
+    envelopeReceipt = { requirementCode: LEGACY_ENVELOPE_CODE, originalReceived: received,
+      originalPieces: received ? 3 : null, photocopyReceived: false, photocopyPieces: null };
+  }
+  receipts.push(envelopeReceipt);
   const missing = [];
   if (!result.firstName) missing.push('first name');
   if (!result.lastName) missing.push('last name');
@@ -289,6 +319,10 @@ function normalizeRecord(input = {}, { actorName = '', current = null } = {}) {
   }
   result.missingRequired = missing;
   result.receipts = receipts;
+  result.envelopeReceiptMode = envelopeMode;
+  result.envelopeReceiptReceived = envelopeReceipt.originalReceived
+    && Number(envelopeReceipt.originalPieces) === 3
+    && !envelopeReceipt.photocopyReceived && envelopeReceipt.photocopyPieces == null;
   return result;
 }
 
@@ -659,14 +693,14 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
       if (!current) throw new PreEnrollmentError('Pre-enrollment record not found.', 404);
       if (current.status === 'enrollment_started') throw new PreEnrollmentError('This record is read-only because annual enrollment has started.', 409);
       if (Number(current.version) !== expectedVersion) throw new PreEnrollmentError('This record changed after the form was opened. Reload and review the latest version.', 409);
-      const record = normalizeRecord(input, { current });
+      const beforeReceiptsResult = await transaction.request().input('recordId', sql.Char(36), recordId)
+        .query('SELECT * FROM pre_enrollment_receipts WHERE pre_enrollment_id = @recordId ORDER BY requirement_code');
+      const beforeReceipts = beforeReceiptsResult.recordset || [];
+      const record = normalizeRecord(input, { current, currentReceipts: beforeReceipts });
       const evaluation = await lockReadmissionEvaluation(transaction, record);
       await validateApplicantHistory(transaction, record, evaluation);
       record.receivedBy ||= current.received_by || actor.displayName.slice(0, 100) || null;
       record.receivedDate ||= current.received_date || manilaDate();
-      const beforeReceiptsResult = await transaction.request().input('recordId', sql.Char(36), recordId)
-        .query('SELECT * FROM pre_enrollment_receipts WHERE pre_enrollment_id = @recordId ORDER BY requirement_code');
-      const beforeReceipts = beforeReceiptsResult.recordset || [];
       const nextVersion = expectedVersion + 1;
       const request = transaction.request().input('recordId', sql.Char(36), recordId)
         .input('expectedVersion', sql.Int, expectedVersion).input('nextVersion', sql.Int, nextVersion)
@@ -718,12 +752,18 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
     if (!/^\d{12}$/.test(String(record.lrn || ''))) throw new PreEnrollmentError('A complete 12-digit LRN is required before enrollment can start.', 409);
     if (!record.email) throw new PreEnrollmentError('A valid email must be saved to the front-desk record before enrollment can start.', 409);
     const matches = await pool.request().input('lrn', sql.Char(12), record.lrn)
-      .query(`SELECT student.*, account.email FROM students AS student
+      .query(`SELECT student.*, account.email, account.is_active AS linked_account_is_active,
+          EXISTS(SELECT 1 FROM annual_enrollments AS annual
+            WHERE annual.student_id = student.id AND annual.account_activation_pending = 1) AS account_activation_pending
+        FROM students AS student
         LEFT JOIN users AS account ON account.id = student.user_id WHERE student.lrn = @lrn`);
     if ((matches.recordset || []).length > 1) throw new PreEnrollmentError('More than one existing student record matches this LRN. Resolve the records before conversion.', 409);
     const existingStudent = matches.recordset?.[0] || null;
     return { ...record, existingStudent: existingStudent ? {
       id: Number(existingStudent.id), studentNo: existingStudent.student_no,
+      requiresInitialActivation: Boolean(existingStudent.user_id
+        && !(existingStudent.linked_account_is_active === true || existingStudent.linked_account_is_active === 1)
+        && (existingStudent.account_activation_pending === true || existingStudent.account_activation_pending === 1)),
       profileReviewFingerprint: profileReviewFingerprint(existingStudent),
       profile: existingStudent
     } : null };

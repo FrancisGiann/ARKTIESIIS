@@ -655,7 +655,7 @@ function createAnnualFinanceService({
         WHERE school_year = @schoolYear AND grade_level = @gradeLevel AND voucher_code = @voucherCode AND status = 'active'
         ORDER BY version_no DESC LIMIT 1`);
     const schedule = scheduleResult.recordset?.[0];
-    if (!schedule) throw new AnnualFinanceError('No active finance schedule matches this school year, grade, and voucher. Configure a schedule first.', 409);
+    if (!schedule) throw new AnnualFinanceError('No active approved fee schedule matches this school year, grade, and voucher. Ask Finance to configure one, then reload this page.', 409);
     const linesResult = await pool.request().input('scheduleId', sql.Int, schedule.id)
       .query(`SELECT id, term_number, fee_category, line_name, installment,
           CAST(amount AS CHAR(40)) AS amount, is_optional
@@ -1534,6 +1534,19 @@ function createAnnualFinanceService({
           INNER JOIN annual_enrollments AS annual  ON annual.id = charge.annual_enrollment_id
           WHERE charge.id = @chargeId`);
       if (!owner.recordset?.[0] || Number(owner.recordset[0].student_id) !== studentId) throw new AnnualFinanceError('This charge does not belong to the selected student.', 409);
+      const chargeResult = await transaction.request().input('chargeId', sql.BigInt, chargeId)
+        .query('SELECT id FROM assessed_charges WHERE id = @chargeId FOR UPDATE');
+      if (!chargeResult.recordset?.length) throw new AnnualFinanceError('This assessed fee is no longer available.', 409);
+      const basisResult = await transaction.request().input('chargeId', sql.BigInt, chargeId)
+        .query(`SELECT CAST(charge.amount + COALESCE((SELECT SUM(adjustment.amount)
+              FROM finance_charge_adjustments AS adjustment WHERE adjustment.charge_id = charge.id), 0) AS CHAR(40)) AS fee_basis,
+            CAST(due.amount_due AS CHAR(40)) AS amount_due
+          FROM assessed_charges AS charge
+          INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
+          WHERE charge.id = @chargeId`);
+      const beforeBasisCents = parseMoneyCents(String(basisResult.recordset?.[0]?.fee_basis ?? '0.00'), { allowNegative: true, allowZero: true });
+      const afterBasisCents = beforeBasisCents + amountCents;
+      if (afterBasisCents < 0n) throw new AnnualFinanceError('The adjustment would reduce this fee below zero. Reverse an earlier reduction if it needs correction.', 409);
       const inserted = await transaction.request()
         .input('chargeId', sql.BigInt, chargeId)
         .input('amount', sql.Decimal(12, 2), formatMoneyCents(amountCents))
@@ -1549,7 +1562,19 @@ function createAnnualFinanceService({
           .query('SELECT enrollment_id FROM assessed_charges  WHERE id = @chargeId');
         if (termResult.recordset?.[0]) await requireFreshApproval(transaction, actor, Number(termResult.recordset[0].enrollment_id), 'positive_charge_adjustment');
       }
-      await writeAudit(transaction, actor, 'charge_adjustment_recorded', adjustmentId, { studentId, chargeId, amount: formatMoneyCents(amountCents), reason });
+      let releasePlan = { totalCents: 0n, annualCents: 0n, legacyCents: 0n };
+      if (afterBasisCents >= 0n) {
+        const dueAfterCents = parseMoneyCents(String(basisResult.recordset[0].amount_due), { allowNegative: true, allowZero: true }) + amountCents;
+        if (dueAfterCents < 0n) {
+          releasePlan = await financeCases.releaseOverpayment(transaction, actor, chargeId,
+            `Adjustment #${adjustmentId} reduced the fee below its applied amount. Excess applications were released as account credit.`);
+        }
+      }
+      await writeAudit(transaction, actor, 'charge_adjustment_recorded', adjustmentId, {
+        studentId, chargeId, amount: formatMoneyCents(amountCents), reason,
+        releasedAnnualAllocations: formatMoneyCents(releasePlan.annualCents),
+        releasedLegacyReconciliations: formatMoneyCents(releasePlan.legacyCents)
+      });
       await debtRevisions.recordIncreaseIfAny(transaction, studentId, debtBefore);
       return { adjustmentId };
     });
@@ -1648,13 +1673,36 @@ function createAnnualFinanceService({
           FROM finance_charge_adjustments AS adjustment
           INNER JOIN assessed_charges AS charge  ON charge.id = adjustment.charge_id
           INNER JOIN annual_enrollments AS annual  ON annual.id = charge.annual_enrollment_id
-          WHERE adjustment.id = @adjustmentId`);
+          WHERE adjustment.id = @adjustmentId FOR UPDATE`);
       const original = originalResult.recordset?.[0];
       if (!original || Number(original.student_id) !== studentId) throw new AnnualFinanceError('Adjustment not found for this student.', 404);
       if (original.reverses_adjustment_id != null) throw new AnnualFinanceError('A reversal entry cannot be reversed again.', 409);
+      const existingReversal = await transaction.request().input('adjustmentId', sql.BigInt, adjustmentId)
+        .query('SELECT id FROM finance_charge_adjustments WHERE reverses_adjustment_id = @adjustmentId LIMIT 1 FOR UPDATE');
+      if (existingReversal.recordset?.length) throw new AnnualFinanceError('This adjustment has already been reversed.', 409);
+      const chargeLock = await transaction.request().input('chargeId', sql.BigInt, original.charge_id)
+        .query('SELECT id FROM assessed_charges WHERE id = @chargeId FOR UPDATE');
+      if (!chargeLock.recordset?.length) throw new AnnualFinanceError('This assessed fee is no longer available.', 409);
+      const basisResult = await transaction.request().input('chargeId', sql.BigInt, original.charge_id)
+        .query(`SELECT CAST(charge.amount + COALESCE((SELECT SUM(adjustment.amount)
+              FROM finance_charge_adjustments AS adjustment WHERE adjustment.charge_id = charge.id), 0) AS CHAR(40)) AS fee_basis,
+            CAST(due.amount_due AS CHAR(40)) AS amount_due
+          FROM assessed_charges AS charge
+          INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
+          WHERE charge.id = @chargeId`);
+      const beforeBasisCents = parseMoneyCents(String(basisResult.recordset?.[0]?.fee_basis ?? '0.00'), { allowNegative: true, allowZero: true });
+      const originalAmountCents = parseMoneyCents(String(original.amount), { allowNegative: true });
+      const reversalAmountCents = -originalAmountCents;
+      const afterBasisCents = beforeBasisCents + reversalAmountCents;
+      if (originalAmountCents > 0n && afterBasisCents < 0n) {
+        throw new AnnualFinanceError('Reversing this increase would reduce the fee below zero. Reverse earlier reductions first.', 409);
+      }
+      if (originalAmountCents < 0n && afterBasisCents <= beforeBasisCents) {
+        throw new AnnualFinanceError('A corrective reversal must improve the saved fee basis.', 409);
+      }
       const result = await transaction.request()
         .input('chargeId', sql.BigInt, original.charge_id)
-        .input('amount', sql.Decimal(12, 2), formatMoneyCents(-parseMoneyCents(String(original.amount))))
+        .input('amount', sql.Decimal(12, 2), formatMoneyCents(reversalAmountCents))
         .input('reason', sql.NVarChar(1000), reason)
         .input('reversesId', sql.BigInt, adjustmentId)
         .input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
@@ -1663,11 +1711,24 @@ function createAnnualFinanceService({
         .query(`INSERT INTO finance_charge_adjustments
             (charge_id, amount, reason, reverses_adjustment_id, idempotency_key, request_fingerprint, recorded_by)
           VALUES (@chargeId, @amount, @reason, @reversesId, @idempotencyKey, @requestFingerprint, @actorId)`);
-      if (parseMoneyCents(String(original.amount)) < 0n) {
+      if (originalAmountCents < 0n) {
         await requireFreshApproval(transaction, actor, Number(original.enrollment_id), 'negative_adjustment_reversed');
       }
       const reversalId = generatedId(result, 'Charge adjustment reversal');
-      await writeAudit(transaction, actor, 'charge_adjustment_reversed', reversalId, { studentId, adjustmentId, reason });
+      let releasePlan = { totalCents: 0n, annualCents: 0n, legacyCents: 0n };
+      if (afterBasisCents >= 0n) {
+        const dueAfterCents = parseMoneyCents(String(basisResult.recordset[0].amount_due), { allowNegative: true, allowZero: true }) + reversalAmountCents;
+        if (dueAfterCents < 0n) {
+          releasePlan = await financeCases.releaseOverpayment(transaction, actor, Number(original.charge_id),
+            `Reversal #${reversalId} restored the fee basis. Excess applications were released as account credit.`);
+        }
+      }
+      await writeAudit(transaction, actor, 'charge_adjustment_reversed', reversalId, {
+        studentId, adjustmentId, reason, feeBasisBefore: formatMoneyCents(beforeBasisCents),
+        feeBasisAfter: formatMoneyCents(afterBasisCents),
+        releasedAnnualAllocations: formatMoneyCents(releasePlan.annualCents),
+        releasedLegacyReconciliations: formatMoneyCents(releasePlan.legacyCents)
+      });
       await debtRevisions.recordIncreaseIfAny(transaction, studentId, debtBefore);
       return { reversalId };
     });
@@ -2202,6 +2263,9 @@ function createAnnualFinanceService({
         adjustment.charge_id, CAST(adjustment.amount AS CHAR(40)) AS amount,
         CASE WHEN @isStudent = 1 THEN 'Finance adjustment' ELSE adjustment.reason END AS reason,
         adjustment.reverses_adjustment_id, adjustment.created_at,
+        CASE WHEN adjustment.reverses_adjustment_id IS NULL AND EXISTS(
+          SELECT 1 FROM finance_charge_adjustments AS reversal WHERE reversal.reverses_adjustment_id = adjustment.id)
+          THEN CAST(1 AS UNSIGNED) ELSE CAST(0 AS UNSIGNED) END AS already_reversed,
         annual.school_year, enrollment.annual_term_number, charge.line_name, charge.installment
       FROM finance_charge_adjustments AS adjustment
       INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id

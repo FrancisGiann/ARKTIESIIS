@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
 const { allocateStudentNumber, StudentNumberAllocationError } = require('./studentNumberAllocator');
 const { ADDRESS_DEFINITIONS, StudentAddressError, normalizeStructuredAddress } = require('../utils/studentAddress');
+const { isCanonicalProgram } = require('../utils/paperProgramCatalog');
 
 const RECORDS_ROLES = new Set(['database_admin', 'registrar']);
 const STUDENT_PAGE_SIZE = 25;
@@ -261,21 +262,22 @@ function validateSection(input = {}) {
   if (gradeLevel === null) throw new StudentRecordsError('Grade level must be 50 characters or fewer.');
   const academicTermId = normalizeOptionalId(input.academicTermId, 'academic term');
   if (!academicTermId) throw new StudentRecordsError('Choose an academic term.');
+  const track = printableText(input.track, 80);
   const cluster = printableText(input.cluster, 80);
-  const strand = printableText(input.strand, 80);
   const adviser = printableText(input.adviser, 160);
   const modality = printableText(input.modality, 30);
   const modularSubtype = printableText(input.modularSubtype, 80);
-  if ([cluster, strand, adviser, modality, modularSubtype].includes(null)) {
+  if ([track, cluster, adviser, modality, modularSubtype].includes(null)) {
     throw new StudentRecordsError('Check that each section detail is within its allowed length.');
   }
+  if (!isCanonicalProgram(track, cluster)) throw new StudentRecordsError('Choose a cluster from the selected track.');
   if (modality && !['face-to-face', 'distance', 'modular', 'hybrid'].includes(modality)) {
     throw new StudentRecordsError('Choose a supported section modality.');
   }
   if (modality !== 'modular' && modularSubtype) throw new StudentRecordsError('A modular subtype can only be entered for modular sections.');
   return {
     name, gradeLevel: gradeLevel || null, academicTermId,
-    cluster: cluster || null, strand: strand || null, adviser: adviser || null,
+    cluster: track, strand: cluster, adviser: adviser || null,
     modality: modality || null, modularSubtype: modularSubtype || null
   };
 }

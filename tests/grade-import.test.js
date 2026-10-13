@@ -129,7 +129,7 @@ async function renderGradePreview(view, rows, contextMismatch = false) {
   return ejs.renderFile(file, locals);
 }
 
-test('select all selects and clears eligible rows while exposing mixed state and skipping special-review rows', () => {
+test('select all selects and clears eligible rows while showing partial selection as unchecked', () => {
   const first = selectionCheckbox();
   first.bulkSelectable = 'true';
   const second = selectionCheckbox();
@@ -158,7 +158,7 @@ test('select all selects and clears eligible rows while exposing mixed state and
   first.checked = false;
   first.change();
   assert.equal(selectAll.checked, false);
-  assert.equal(selectAll.indeterminate, true);
+  assert.equal(selectAll.indeterminate, false);
   assert.equal(countMessage.textContent, '1 of 2 rows selected.');
 
   selectAll.checked = false;
@@ -192,7 +192,7 @@ test('both grade preview templates mark validation, name, conflict, and context 
   const rows = previewRows();
   for (const view of ['teacher-grade-review', 'grade-import']) {
     const html = await renderGradePreview(view, rows);
-    assert.match(html, /<label class="field--check" for="(?:teacher-grade-select-all|grade-import-select-all)"><input id="(?:teacher-grade-select-all|grade-import-select-all)"[^>]*type="checkbox"[^>]*><span>Select all<\/span><\/label>/);
+    assert.match(html, /<label class="field--check" for="(?:teacher-grade-select-all|grade-import-select-all)"><input id="(?:teacher-grade-select-all|grade-import-select-all)"[^>]*type="checkbox"[^>]*><span>Select all eligible rows<\/span><\/label>/);
     const selectAll = html.match(/<input id="(?:teacher-grade-select-all|grade-import-select-all)"[^>]*data-grade-select-all[^>]*aria-controls="([^"]+)"/);
     assert.ok(selectAll, 'the master checkbox exposes its controlled table');
     const wrapperStart = html.indexOf('<div class="grade-import-preview__select-all"');

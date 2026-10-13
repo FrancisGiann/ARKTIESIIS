@@ -165,12 +165,15 @@ function createAnnualFinanceCasesService({
     await writeAudit(tx, actor, finalized ? 'finance_review_required' : 'term_approval_reopened', enrollmentId, { reason, enrollmentPreserved: finalized });
   }
 
-  async function releaseOverpayment(tx, actor, chargeId, reason) {
-    const dueResult = await tx.request().input('chargeId', sql.BigInt, chargeId)
-      .query('SELECT amount_due FROM v_finance_assessed_charge_due WHERE charge_id = @chargeId');
-    let excess = parseMoneyCents(String(dueResult.recordset?.[0]?.amount_due || '0.00'), { allowNegative: true, allowZero: true });
-    excess = -excess;
-    if (excess <= 0n) return;
+  async function planOverpaymentRelease(tx, chargeId, amountDueCents = null) {
+    if (amountDueCents == null) {
+      const dueResult = await tx.request().input('chargeId', sql.BigInt, chargeId)
+        .query('SELECT amount_due FROM v_finance_assessed_charge_due WHERE charge_id = @chargeId');
+      amountDueCents = parseMoneyCents(String(dueResult.recordset?.[0]?.amount_due || '0.00'), { allowNegative: true, allowZero: true });
+    }
+    let excess = -BigInt(amountDueCents);
+    const plan = { annual: [], legacy: [], totalCents: 0n, annualCents: 0n, legacyCents: 0n };
+    if (excess <= 0n) return plan;
     const allocations = await tx.request().input('chargeId', sql.BigInt, chargeId)
       .query(`SELECT allocation.allocation_id, CAST(allocation.net_amount AS CHAR(40)) AS amount
         FROM v_finance_net_payment_allocations AS allocation
@@ -181,14 +184,8 @@ function createAnnualFinanceCasesService({
       if (excess <= 0n) break;
       const available = parseMoneyCents(String(allocation.amount));
       const release = available < excess ? available : excess;
-      const key = crypto.randomUUID();
-      const fp = requestFingerprint({ kind: 'exemption-release', allocationId: Number(allocation.allocation_id), amount: formatMoneyCents(release), reason });
-      await tx.request().input('allocationId', sql.BigInt, allocation.allocation_id)
-        .input('amount', sql.Decimal(12, 2), formatMoneyCents(release)).input('reason', sql.NVarChar(1000), reason)
-        .input('key', sql.UniqueIdentifier, key).input('fingerprint', sql.NVarChar(64), fp).input('actorId', sql.Int, actor.id)
-        .query(`INSERT INTO finance_payment_allocation_releases
-          (allocation_id, amount, reason, idempotency_key, request_fingerprint, recorded_by)
-          VALUES (@allocationId, @amount, @reason, @key, @fingerprint, @actorId)`);
+      plan.annual.push({ allocationId: Number(allocation.allocation_id), amountCents: release });
+      plan.annualCents += release;
       excess -= release;
     }
     if (excess > 0n) {
@@ -213,18 +210,41 @@ function createAnnualFinanceCasesService({
         if (opening.recordset?.length) throw new FinanceCasesError('Legacy reconciliation credit cannot be released after its account was transferred.', 409);
         const available = parseMoneyCents(String(reconciliation.amount));
         const release = available < excess ? available : excess;
-        const key = crypto.randomUUID();
-        const fp = requestFingerprint({ kind: 'exemption-legacy-release', reconciliationId: Number(reconciliation.reconciliation_id), amount: formatMoneyCents(release), reason });
-        await tx.request().input('reconciliationId', sql.BigInt, reconciliation.reconciliation_id)
-          .input('amount', sql.Decimal(12, 2), formatMoneyCents(release)).input('reason', sql.NVarChar(1000), reason)
-          .input('key', sql.UniqueIdentifier, key).input('fingerprint', sql.NVarChar(64), fp).input('actorId', sql.Int, actor.id)
-          .query(`INSERT INTO finance_legacy_reconciliation_releases
-            (reconciliation_id, amount, reason, idempotency_key, request_fingerprint, recorded_by)
-            VALUES (@reconciliationId, @amount, @reason, @key, @fingerprint, @actorId)`);
+        plan.legacy.push({ reconciliationId: Number(reconciliation.reconciliation_id), amountCents: release });
+        plan.legacyCents += release;
         excess -= release;
       }
     }
-    if (excess > 0n) throw new FinanceCasesError('The exemption would create more credit than its recorded allocations can release.', 409);
+    if (excess > 0n) throw new FinanceCasesError('The fee correction would create more credit than its recorded allocations can release.', 409);
+    plan.totalCents = plan.annualCents + plan.legacyCents;
+    return plan;
+  }
+
+  async function releaseOverpayment(tx, actor, chargeId, reason) {
+    const plan = await planOverpaymentRelease(tx, chargeId);
+    for (const release of plan.annual) {
+      const key = crypto.randomUUID();
+      const amount = formatMoneyCents(release.amountCents);
+      const fp = requestFingerprint({ kind: 'assessed-charge-overpayment-release', allocationId: release.allocationId, amount, reason });
+      await tx.request().input('allocationId', sql.BigInt, release.allocationId)
+        .input('amount', sql.Decimal(12, 2), amount).input('reason', sql.NVarChar(1000), reason)
+        .input('key', sql.UniqueIdentifier, key).input('fingerprint', sql.NVarChar(64), fp).input('actorId', sql.Int, actor.id)
+        .query(`INSERT INTO finance_payment_allocation_releases
+          (allocation_id, amount, reason, idempotency_key, request_fingerprint, recorded_by)
+          VALUES (@allocationId, @amount, @reason, @key, @fingerprint, @actorId)`);
+    }
+    for (const release of plan.legacy) {
+      const key = crypto.randomUUID();
+      const amount = formatMoneyCents(release.amountCents);
+      const fp = requestFingerprint({ kind: 'assessed-charge-legacy-overpayment-release', reconciliationId: release.reconciliationId, amount, reason });
+      await tx.request().input('reconciliationId', sql.BigInt, release.reconciliationId)
+        .input('amount', sql.Decimal(12, 2), amount).input('reason', sql.NVarChar(1000), reason)
+        .input('key', sql.UniqueIdentifier, key).input('fingerprint', sql.NVarChar(64), fp).input('actorId', sql.Int, actor.id)
+        .query(`INSERT INTO finance_legacy_reconciliation_releases
+          (reconciliation_id, amount, reason, idempotency_key, request_fingerprint, recorded_by)
+          VALUES (@reconciliationId, @amount, @reason, @key, @fingerprint, @actorId)`);
+    }
+    return plan;
   }
 
   async function applyRuleToCharge(tx, actor, annual, rule, charge, reason) {
@@ -583,7 +603,8 @@ function createAnnualFinanceCasesService({
     return result.recordset || [];
   }
 
-  return { approveExemptionCase, applyApprovedExemptionsForCharge, billSpecialSubject, reviewDepartureCase, getStudentCases, listPendingDepartureCases };
+  return { approveExemptionCase, applyApprovedExemptionsForCharge, billSpecialSubject, reviewDepartureCase,
+    getStudentCases, listPendingDepartureCases, planOverpaymentRelease, releaseOverpayment };
 }
 
 module.exports = { FinanceCasesError, createAnnualFinanceCasesService, normalizeRules, normalizeAdjustmentRows };

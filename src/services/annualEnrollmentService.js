@@ -9,7 +9,8 @@ const { createFinanceDebtRevisionService } = require('./financeDebtRevisionServi
 const { RETRYABLE_TRANSACTION_CODES, runSerializableTransaction } = require('./transactionRetry');
 const { TermClearanceError } = require('./termClearanceService');
 const { REVIEWABLE_PROFILE_FIELDS, PROFILE_REVIEW_GROUPS, profileReviewFingerprint } = require('../utils/studentProfileReview');
-const { createTemporaryPassword } = require('../utils/temporaryPassword');
+const { createTemporaryPassword, createStudentActivationPassword, validStudentActivationIdentity } = require('../utils/temporaryPassword');
+const { isCanonicalProgram } = require('../utils/paperProgramCatalog');
 
 const BCRYPT_ROUNDS = 12;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -858,6 +859,12 @@ function createAnnualEnrollmentService({
       if (preEnrollment) {
         profileInput = validatePreEnrollmentStudentProfile(preEnrollment, entry.email);
       }
+      if (!entry.isReturning && !validStudentActivationIdentity(profileInput?.lastName, profileInput?.birthDate)) {
+        const recovery = preEnrollment
+          ? 'Correct the saved paper record before starting intake.'
+          : 'Enter a valid saved surname and past birth date before starting intake.';
+        throw new AnnualEnrollmentError(`A saved surname and valid past birth date are required for the first student login. ${recovery}`, 409);
+      }
 
       const termOrderResult = await transaction.request().input('schoolYear', sql.NVarChar(20), entry.schoolYear)
         .query(`SELECT configured.term_number, configured.academic_term_id, term.term
@@ -903,6 +910,12 @@ function createAnnualEnrollmentService({
         if (!section || section.school_year !== entry.schoolYear || section.grade_level !== entry.gradeLevel
           || Number(section.term_number) !== index + 1 || Number(section.academic_term_id) !== Number(termOrder[index].academic_term_id)) {
           throw new AnnualEnrollmentError(`Choose a ${entry.gradeLevel} section mapped to Term ${index + 1} of ${entry.schoolYear}.`, 409);
+        }
+        if (!isCanonicalProgram(section.cluster, section.strand)) {
+          throw new AnnualEnrollmentError('Choose a canonically configured track and cluster section.', 409);
+        }
+        if (preEnrollment && (section.cluster !== preEnrollment.preferred_track || section.strand !== preEnrollment.preferred_cluster)) {
+          throw new AnnualEnrollmentError('Every selected term section must match the saved paper track and cluster. Configure a matching section first.', 409);
         }
       }
       let resolvedSectionIds = [...entry.sectionIds];
@@ -1113,6 +1126,13 @@ function createAnnualEnrollmentService({
           return value == null ? '' : String(value);
         };
         const actualChanges = selectedColumns.filter(([key, column]) => storedValue(column) !== proposedValue(key, column));
+        if (activateOnFirstTerm) {
+          const activationLastName = actualChanges.some(([, column]) => column === 'last_name') ? profileInput.lastName : student.last_name;
+          const activationBirthDate = actualChanges.some(([, column]) => column === 'birth_date') ? profileInput.birthDate : student.birth_date;
+          if (!validStudentActivationIdentity(activationLastName, activationBirthDate)) {
+            throw new AnnualEnrollmentError('The saved surname and valid past birth date are required for the first student login. Approve a valid profile correction or update the student record before intake.', 409);
+          }
+        }
         if (actualChanges.some(([key]) => key === 'email') && !student.user_id) {
           throw new AnnualEnrollmentError('A contact email can be changed only for a student with a linked student login.', 409);
         }
@@ -1595,7 +1615,7 @@ function createAnnualEnrollmentService({
           enrollment.section_id, enrollment.term_scope_status, enrollment.annual_term_number,
           parent.id AS annual_enrollment_id, parent.account_activation_pending, parent.intake_status,
           student.id AS student_id, student.student_no, student.status AS student_status, student.user_id,
-          student.first_name, student.middle_name, student.last_name, student.suffix,
+          student.first_name, student.middle_name, student.last_name, student.suffix, student.birth_date,
           account.email, account.is_active, parent.grade_level, term.school_year, term.term, section.name AS section_name,
           confirmation.id AS registrar_confirmation_id
         FROM enrollments AS enrollment
@@ -1617,11 +1637,14 @@ function createAnnualEnrollmentService({
     if (row.enrollment_status !== 'pending_payment' || row.finalized_at) throw new AnnualEnrollmentError('This term placement is no longer pending.', 409);
     if (row.student_status !== 'active') throw new AnnualEnrollmentError('Only an active student record can be finalized.', 409);
 
-    const generatedPassword = createPassword();
     let temporaryPassword = null;
     let activated = false;
     if ((row.account_activation_pending === true || row.account_activation_pending === 1) && row.user_id
       && !(row.is_active === true || row.is_active === 1)) {
+      const generatedPassword = createStudentActivationPassword(row.last_name, row.birth_date);
+      if (!generatedPassword) {
+        throw new AnnualEnrollmentError('The student’s saved surname and valid past birth date are required for first login activation. Update the student record and retry.', 409);
+      }
       const passwordHash = await hashPassword(generatedPassword, BCRYPT_ROUNDS);
       const activation = await transaction.request()
         .input('userId', sql.Int, row.user_id)

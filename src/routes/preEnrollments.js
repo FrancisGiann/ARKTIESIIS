@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { PreEnrollmentError, RECEIPT_REQUIREMENTS, createPreEnrollmentService } = require('../services/preEnrollmentService');
 const { latestBirthDate } = require('../services/studentRecordsService');
+const { PROGRAM_CATALOG, TRACKS } = require('../utils/paperProgramCatalog');
 
 const DEFAULT_SCHOOL_YEAR = '2027-2028';
 
@@ -52,6 +53,19 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
       receiptValues[`receipt_${code}_photocopy`] = receipt?.photocopy_received ? '1' : '';
       receiptValues[`receipt_${code}_photocopy_pieces`] = receipt?.photocopy_pieces ?? '';
     }
+    const envelopeReceipt = receipts.get('long_brown_envelopes') || {};
+    const envelopeExact = Boolean(envelopeReceipt.original_received)
+      && Number(envelopeReceipt.original_pieces) === 3
+      && !envelopeReceipt.photocopy_received && envelopeReceipt.photocopy_pieces == null;
+    const envelopeState = !record ? 'No saved receipt' : envelopeExact
+      ? 'All three received'
+      : !envelopeReceipt.original_received && envelopeReceipt.original_pieces == null
+        && !envelopeReceipt.photocopy_received && envelopeReceipt.photocopy_pieces == null
+        ? 'Not recorded'
+        : `Legacy receipt: original ${envelopeReceipt.original_received ? 'received' : 'not received'}${envelopeReceipt.original_pieces == null ? ' (quantity unknown)' : ` (${envelopeReceipt.original_pieces})`}; photocopy ${envelopeReceipt.photocopy_received ? 'received' : 'not received'}${envelopeReceipt.photocopy_pieces == null ? '' : ` (${envelopeReceipt.photocopy_pieces})`}`;
+    const envelopeCheckboxDefault = values.envelopeReceiptMode === 'replace'
+      ? ''
+      : envelopeExact ? '1' : '';
     let acceptedReadmissionChoices = [];
     if (['front_desk', 'registrar'].includes(req.authUser.role) && service.listAcceptedReadmissionChoices) {
       try { acceptedReadmissionChoices = await service.listAcceptedReadmissionChoices(req.authUser.id, values.schoolYear || record?.school_year || ''); }
@@ -66,9 +80,12 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
       values: {
         schoolYear: DEFAULT_SCHOOL_YEAR, status: 'draft', applicantKind: 'new', studentSignaturePresent: '',
         receivedDate: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date()),
-        ...recordFormValues(record), ...receiptValues, ...values
+        ...recordFormValues(record), ...receiptValues,
+        receipt_long_brown_envelopes_received: envelopeCheckboxDefault,
+        envelopeReceiptMode: record ? 'preserve' : 'replace', ...values
       },
-      requirements: RECEIPT_REQUIREMENTS, acceptedReadmissionChoices, latestBirthDate: latestBirthDate(), error
+      requirements: RECEIPT_REQUIREMENTS, acceptedReadmissionChoices, latestBirthDate: latestBirthDate(),
+      programCatalog: PROGRAM_CATALOG, programTracks: TRACKS, envelopeState, error
     });
   }
 

@@ -21,6 +21,7 @@ const {
   normalizeUniqueConflict,
   latestBirthDate
 } = require('../services/studentRecordsService');
+const { PROGRAM_CATALOG } = require('../utils/paperProgramCatalog');
 
 const notices = {
   studentCreated: 'Student profile created.',
@@ -278,6 +279,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         students: workspace.students || [],
         terms: workspace.terms || [],
         sections: workspace.sections || [],
+        programCatalog: PROGRAM_CATALOG,
         searchTerm: workspace.searchTerm ?? search,
         academicTermId: workspace.academicTermId ?? null,
         totalStudents: workspace.totalStudents ?? workspace.students?.length ?? 0,

@@ -843,6 +843,24 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
         `/students/${studentId}/annual/payments`, { _csrf: 'transport-only', amount, paymentDate: '2026-10-04' });
       return reviewActions.freshReview(actorId, sessionBinding, draft.id);
     }
+    async function startChargeAdjustmentDraft(studentId, chargeId, amount, reason = 'Integration fee adjustment review.') {
+      const draft = await reviewActions.startDraft(actorId, sessionBinding,
+        `/students/${studentId}/annual/charges/${chargeId}/adjustments`, { _csrf: 'transport-only', amount, reason });
+      return reviewActions.freshReview(actorId, sessionBinding, draft.id);
+    }
+    async function startAdjustmentReversalDraft(studentId, adjustmentId, reason = 'Integration adjustment reversal review.') {
+      const draft = await reviewActions.startDraft(actorId, sessionBinding,
+        `/students/${studentId}/annual/adjustments/${adjustmentId}/reverse`, { _csrf: 'transport-only', reason });
+      return reviewActions.freshReview(actorId, sessionBinding, draft.id);
+    }
+    async function commitReviewedDraft(draft) {
+      return reviewActions.commit(actorId, sessionBinding, draft.id, draft.revision, draft.dependencyFingerprint);
+    }
+    async function feeAdjustmentRows(chargeId) {
+      const [rows] = await appPool.execute(`SELECT id, CAST(amount AS CHAR(40)) AS amount, reverses_adjustment_id
+        FROM finance_charge_adjustments WHERE charge_id = ? ORDER BY id`, [chargeId]);
+      return rows;
+    }
     async function writerCounts(studentId) {
       const [payments] = await appPool.execute('SELECT COUNT(*) AS count FROM finance_payments WHERE student_id = ?', [studentId]);
       const [allocations] = await appPool.execute(`SELECT COUNT(*) AS count FROM finance_payment_allocations AS allocation
@@ -909,6 +927,189 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       { amount: '15.00', paymentDate: '2026-10-04' });
     assert.equal(editedStaleDraft.input.amount, '15.00', 'stale allocation drafts remain editable with current balances');
     await reviewActions.discard(actorId, stalePaymentDraft.id);
+
+    const exactCapStudent = await createAssessedStudent('FIN-ADJUSTMENT-CAP', 'AdjustmentCap');
+    const exactCapCharge = exactCapStudent.chargeIds.get('DP');
+    const exactZeroDraft = await startChargeAdjustmentDraft(exactCapStudent.studentId, exactCapCharge, '-100.00');
+    assert.equal(exactZeroDraft.preview.feeAdjustment.feeBasisBefore, '100.00');
+    assert.equal(exactZeroDraft.preview.feeAdjustment.feeBasisAfter, '0.00', 'a fee basis reduced exactly to zero is valid');
+    const exactZeroCommit = await commitReviewedDraft(exactZeroDraft);
+    assert.equal(exactZeroCommit.committed, true);
+    const exactZeroReplays = await Promise.all([
+      commitReviewedDraft(exactZeroDraft),
+      commitReviewedDraft(exactZeroDraft)
+    ]);
+    assert.ok(exactZeroReplays.every((result) => result.committed && result.replayed),
+      'completed adjustment retries return their saved outcome before reapplying current-state caps');
+    assert.equal((await feeAdjustmentRows(exactCapCharge)).length, 1, 'idempotent replay does not duplicate a zero-basis adjustment');
+    await assert.rejects(startChargeAdjustmentDraft(exactCapStudent.studentId, exactCapCharge, '-0.01'), /below zero/i,
+      'a new adjustment cannot make the aggregate fee basis negative');
+
+    const staleAdjustmentStudent = await createAssessedStudent('FIN-ADJUSTMENT-STALE', 'AdjustmentStale');
+    const staleAdjustmentCharge = staleAdjustmentStudent.chargeIds.get('DP');
+    const staleAdjustmentDraft = await startChargeAdjustmentDraft(staleAdjustmentStudent.studentId, staleAdjustmentCharge, '-10.00');
+    await addAnnualPaymentAllocation(staleAdjustmentStudent, 'DP', '20.00');
+    const staleAdjustmentCommit = await commitReviewedDraft(staleAdjustmentDraft);
+    assert.equal(staleAdjustmentCommit.stale, true, 'a changed applied balance invalidates a reviewed fee correction');
+    assert.equal((await feeAdjustmentRows(staleAdjustmentCharge)).length, 0, 'a stale fee correction writes no adjustment');
+    await reviewActions.discard(actorId, staleAdjustmentDraft.id);
+
+    const concurrentAdjustmentStudent = await createAssessedStudent('FIN-ADJUSTMENT-CONCURRENT', 'AdjustmentConcurrent');
+    const concurrentAdjustmentCharge = concurrentAdjustmentStudent.chargeIds.get('DP');
+    const concurrentAdjustmentDraft = await startChargeAdjustmentDraft(concurrentAdjustmentStudent.studentId, concurrentAdjustmentCharge, '-10.00');
+    const concurrentAdjustmentResults = await Promise.all([
+      commitReviewedDraft(concurrentAdjustmentDraft),
+      commitReviewedDraft(concurrentAdjustmentDraft)
+    ]);
+    assert.ok(concurrentAdjustmentResults.every((result) => result.committed),
+      'simultaneous reviewed adjustment commits both resolve to a committed result');
+    assert.equal(new Set(concurrentAdjustmentResults.map((result) => result.result.adjustmentId)).size, 1,
+      'simultaneous submissions return one saved adjustment');
+    assert.equal((await feeAdjustmentRows(concurrentAdjustmentCharge)).length, 1,
+      'concurrent adjustment commits create exactly one adjustment');
+
+    const changedBasisStudent = await createAssessedStudent('FIN-ADJUSTMENT-RECHECK', 'AdjustmentRecheck');
+    const changedBasisCharge = changedBasisStudent.chargeIds.get('DP');
+    const changedBasisDraft = await startChargeAdjustmentDraft(changedBasisStudent.studentId, changedBasisCharge, '-50.00');
+    await appPool.execute(`INSERT INTO finance_charge_adjustments
+        (charge_id, amount, reason, idempotency_key, request_fingerprint, recorded_by)
+      VALUES (?, -60.00, 'Concurrent earlier correction', ?, ?, ?)`,
+    [changedBasisCharge, crypto.randomUUID(), 'e'.repeat(64), actorId]);
+    await assert.rejects(commitReviewedDraft(changedBasisDraft), /below zero/i,
+      'commit rechecks the authoritative fee basis and rejects a correction made invalid after preview');
+    assert.equal((await feeAdjustmentRows(changedBasisCharge)).length, 1,
+      'the invalid reviewed correction rolls back without adding its adjustment');
+    assert.equal((await reviewActions.getDraft(actorId, changedBasisDraft.id)).status, 'pending',
+      'the rejected cap correction remains recoverable for staff');
+    await reviewActions.discard(actorId, changedBasisDraft.id);
+
+    const grandfatheredStudent = await createAssessedStudent('FIN-ADJUSTMENT-RECOVERY', 'AdjustmentRecovery');
+    const grandfatheredCharge = grandfatheredStudent.chargeIds.get('DP');
+    for (const [amount, reason] of [['-125.00', 'Historical reduction A'], ['-50.00', 'Historical reduction B']]) {
+      await appPool.execute(`INSERT INTO finance_charge_adjustments
+          (charge_id, amount, reason, idempotency_key, request_fingerprint, recorded_by)
+        VALUES (?, ?, ?, ?, ?, ?)`,
+      [grandfatheredCharge, amount, reason, crypto.randomUUID(), 'f'.repeat(64), actorId]);
+    }
+    const [grandfatheredRows] = await appPool.execute(
+      'SELECT id FROM finance_charge_adjustments WHERE charge_id = ? ORDER BY id', [grandfatheredCharge]
+    );
+    const firstRecoveryDraft = await startAdjustmentReversalDraft(grandfatheredStudent.studentId, Number(grandfatheredRows[1].id));
+    assert.equal(firstRecoveryDraft.preview.feeAdjustment.feeBasisBefore, '-75.00');
+    assert.equal(firstRecoveryDraft.preview.feeAdjustment.feeBasisAfter, '-25.00',
+      'a negative historical adjustment can be reversed to improve a still-negative fee basis');
+    assert.match(firstRecoveryDraft.preview.feeAdjustment.warning, /excessive reduction/i,
+      'the review keeps a warning while multiple historical reductions remain');
+    const firstRecoveryCommit = await commitReviewedDraft(firstRecoveryDraft);
+    assert.equal(firstRecoveryCommit.committed, true);
+    const secondRecoveryDraft = await startAdjustmentReversalDraft(grandfatheredStudent.studentId, Number(grandfatheredRows[0].id));
+    assert.equal(secondRecoveryDraft.preview.feeAdjustment.feeBasisAfter, '100.00',
+      'a second reviewed reversal may finish gradual recovery of a grandfathered negative basis');
+    assert.equal(secondRecoveryDraft.preview.feeAdjustment.warning, 'This reviewed correction clears the excessive fee reduction.');
+    const secondRecoveryCommit = await commitReviewedDraft(secondRecoveryDraft);
+    assert.equal(secondRecoveryCommit.committed, true);
+    const recoveredRows = await feeAdjustmentRows(grandfatheredCharge);
+    assert.deepEqual(recoveredRows.slice(-2).map((row) => row.amount), ['50.00', '125.00'],
+      'reviewed reversal of signed negative originals records positive correcting adjustments');
+    await assert.rejects(startAdjustmentReversalDraft(grandfatheredStudent.studentId, Number(grandfatheredRows[0].id)), /already been reversed/i,
+      'a previously reversed adjustment cannot receive a second reversal');
+
+    const releaseStudent = await createAssessedStudent('FIN-ADJUSTMENT-RELEASE', 'AdjustmentRelease');
+    const releaseCharge = releaseStudent.chargeIds.get('DP');
+    const releasePayment = await addAnnualPaymentAllocation(releaseStudent, 'DP', '20.00');
+    const [releaseAccount] = await appPool.execute(
+      'INSERT INTO financial_accounts (student_id, balance) VALUES (?, 0.00)', [releaseStudent.studentId]
+    );
+    const [releaseTransaction] = await appPool.execute(`INSERT INTO financial_transactions
+        (financial_account_id, transaction_type, amount, reference_no, recorded_by, is_legacy_unattributed)
+      VALUES (?, 'payment', 80.00, 'ADJUSTMENT-RELEASE-TEST', ?, 1)`, [Number(releaseAccount.insertId), actorId]);
+    const [releaseBatch] = await appPool.execute(`INSERT INTO finance_legacy_reconciliation_batches
+        (transaction_id, idempotency_key, request_fingerprint, recorded_by) VALUES (?, ?, ?, ?)`,
+    [Number(releaseTransaction.insertId), crypto.randomUUID(), 'a'.repeat(64), actorId]);
+    await appPool.execute(`INSERT INTO finance_legacy_reconciliations
+        (transaction_id, charge_id, amount, reason, batch_id, recorded_by)
+      VALUES (?, ?, 80.00, 'Matched legacy payment for reviewed fee release.', ?, ?)`,
+    [Number(releaseTransaction.insertId), releaseCharge, Number(releaseBatch.insertId), actorId]);
+    const [legacyBalanceBeforeRelease] = await appPool.execute(`SELECT CAST(remaining_legacy_balance AS CHAR(40)) AS remaining_balance
+      FROM v_finance_legacy_account_balance WHERE financial_account_id = ?`, [Number(releaseAccount.insertId)]);
+    assert.equal(legacyBalanceBeforeRelease[0].remaining_balance, '80.00');
+    const releaseDraft = await startChargeAdjustmentDraft(releaseStudent.studentId, releaseCharge, '-50.00', 'Reviewed fee reduction with excess payment release.');
+    assert.deepEqual({
+      before: releaseDraft.preview.feeAdjustment.feeBasisBefore,
+      after: releaseDraft.preview.feeAdjustment.feeBasisAfter,
+      planned: releaseDraft.preview.feeAdjustment.plannedRelease,
+      annual: releaseDraft.preview.feeAdjustment.annualRelease,
+      legacy: releaseDraft.preview.feeAdjustment.legacyRelease
+    }, { before: '100.00', after: '50.00', planned: '50.00', annual: '20.00', legacy: '30.00' },
+    'review preview plans annual releases first and then eligible legacy releases using the same fee basis');
+    const releaseCommit = await commitReviewedDraft(releaseDraft);
+    assert.equal(releaseCommit.committed, true);
+    const [releaseTotals] = await appPool.execute(`SELECT
+        CAST(COALESCE((SELECT SUM(release_row.amount) FROM finance_payment_allocation_releases AS release_row
+          INNER JOIN finance_payment_allocations AS allocation ON allocation.id = release_row.allocation_id
+          WHERE allocation.charge_id = ?), 0) AS CHAR(40)) AS annual_release,
+        CAST(COALESCE((SELECT SUM(release_row.amount) FROM finance_legacy_reconciliation_releases AS release_row
+          INNER JOIN finance_legacy_reconciliations AS reconciliation ON reconciliation.id = release_row.reconciliation_id
+          WHERE reconciliation.charge_id = ?), 0) AS CHAR(40)) AS legacy_release`, [releaseCharge, releaseCharge]);
+    assert.deepEqual(releaseTotals[0], { annual_release: '20.00', legacy_release: '30.00' },
+      'commit appends the planned annual and eligible legacy credit releases');
+    const [annualCredit] = await appPool.execute(`SELECT CAST(available_credit AS CHAR(40)) AS available_credit
+      FROM v_finance_payment_credit WHERE payment_id = ?`, [releasePayment.paymentId]);
+    assert.equal(annualCredit[0].available_credit, '20.00', 'the annual source payment receives its released amount as available credit');
+    const [legacyBalanceAfterRelease] = await appPool.execute(`SELECT CAST(remaining_legacy_balance AS CHAR(40)) AS remaining_balance
+      FROM v_finance_legacy_account_balance WHERE financial_account_id = ?`, [Number(releaseAccount.insertId)]);
+    assert.equal(moneyCents(legacyBalanceBeforeRelease[0].remaining_balance)
+      - moneyCents(legacyBalanceAfterRelease[0].remaining_balance), 3000n,
+    'the released legacy source balance changes by the planned ₱30.00 amount');
+    const [releasedDue] = await appPool.execute(`SELECT CAST(annual_allocated AS CHAR(40)) AS annual_allocated,
+        CAST(legacy_allocated AS CHAR(40)) AS legacy_allocated, CAST(amount_due AS CHAR(40)) AS amount_due
+      FROM v_finance_assessed_charge_due WHERE charge_id = ?`, [releaseCharge]);
+    assert.deepEqual(releasedDue[0], { annual_allocated: '0.00', legacy_allocated: '50.00', amount_due: '0.00' },
+      'the release leaves a fully paid fee with its remaining eligible legacy application intact');
+
+    const transferredStudent = await createAssessedStudent('FIN-ADJUSTMENT-TRANSFER-GUARD', 'AdjustmentTransferGuard');
+    const transferredCharge = transferredStudent.chargeIds.get('DP');
+    await addAnnualPaymentAllocation(transferredStudent, 'DP', '20.00');
+    const [transferredAccount] = await appPool.execute(
+      'INSERT INTO financial_accounts (student_id, balance) VALUES (?, 80.00)', [transferredStudent.studentId]
+    );
+    await annual.transferLegacyOpeningLiability(actorId, transferredStudent.studentId, {
+      expectedAmount: '80.00', sourceLabel: 'Integration transfer guard', reason: 'Create a transferred source-account guard.',
+      idempotencyKey: crypto.randomUUID()
+    });
+    const [transferredPayment] = await appPool.execute(`INSERT INTO financial_transactions
+        (financial_account_id, transaction_type, amount, reference_no, recorded_by, is_legacy_unattributed)
+      VALUES (?, 'payment', 80.00, 'ADJUSTMENT-TRANSFER-GUARD', ?, 1)`, [Number(transferredAccount.insertId), actorId]);
+    const [transferredBatch] = await appPool.execute(`INSERT INTO finance_legacy_reconciliation_batches
+        (transaction_id, idempotency_key, request_fingerprint, recorded_by) VALUES (?, ?, ?, ?)`,
+    [Number(transferredPayment.insertId), crypto.randomUUID(), 'b'.repeat(64), actorId]);
+    await appPool.execute(`INSERT INTO finance_legacy_reconciliations
+        (transaction_id, charge_id, amount, reason, batch_id, recorded_by)
+      VALUES (?, ?, 80.00, 'Transferred account guard regression fixture.', ?, ?)`,
+    [Number(transferredPayment.insertId), transferredStudent.chargeIds.get('DP'), Number(transferredBatch.insertId), actorId]);
+    const transferredRowsBefore = await feeAdjustmentRows(transferredStudent.chargeIds.get('DP'));
+    const [transferredReleaseCountsBefore] = await appPool.execute(`SELECT
+        (SELECT COUNT(*) FROM finance_payment_allocation_releases AS release_row
+          INNER JOIN finance_payment_allocations AS allocation ON allocation.id = release_row.allocation_id
+          WHERE allocation.charge_id = ?) AS annual_releases,
+        (SELECT COUNT(*) FROM finance_legacy_reconciliation_releases AS release_row
+          INNER JOIN finance_legacy_reconciliations AS reconciliation ON reconciliation.id = release_row.reconciliation_id
+          WHERE reconciliation.charge_id = ?) AS legacy_releases`, [transferredCharge, transferredCharge]);
+    await assert.rejects(annual.recordChargeAdjustment(actorId, transferredStudent.studentId, transferredStudent.chargeIds.get('DP'), {
+      amount: '-50.00', reason: 'This release must respect the transferred account guard.', idempotencyKey: crypto.randomUUID()
+    }), /cannot be released after its account was transferred/i,
+    'the writer rejects release from a legacy reconciliation whose account was already transferred');
+    assert.deepEqual(await feeAdjustmentRows(transferredStudent.chargeIds.get('DP')), transferredRowsBefore,
+      'the adjustment and attempted release roll back together when the transfer guard rejects');
+    const [transferredReleaseCountsAfter] = await appPool.execute(`SELECT
+        (SELECT COUNT(*) FROM finance_payment_allocation_releases AS release_row
+          INNER JOIN finance_payment_allocations AS allocation ON allocation.id = release_row.allocation_id
+          WHERE allocation.charge_id = ?) AS annual_releases,
+        (SELECT COUNT(*) FROM finance_legacy_reconciliation_releases AS release_row
+          INNER JOIN finance_legacy_reconciliations AS reconciliation ON reconciliation.id = release_row.reconciliation_id
+          WHERE reconciliation.charge_id = ?) AS legacy_releases`, [transferredCharge, transferredCharge]);
+    assert.deepEqual(transferredReleaseCountsAfter[0], transferredReleaseCountsBefore[0],
+      'the mixed annual/legacy transfer-guard failure appends neither source release');
 
     const retiredDraftId = crypto.randomUUID();
     const retiredIdempotencyKey = crypto.randomUUID();

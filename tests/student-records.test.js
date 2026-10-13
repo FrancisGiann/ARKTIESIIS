@@ -274,6 +274,17 @@ test('student record, term, section, and enrollment inputs are bounded and valid
   assert.equal(latestBirthDate() < currentManilaDate(), true);
   assert.throws(() => validateTerm({ schoolYear: '2026', term: 'A'.repeat(31) }), StudentRecordsError);
   assert.throws(() => validateSection({ name: 'Grade 7', academicTermId: '3x' }), /valid academic term/);
+  assert.deepEqual(validateSection({ name: '11-A', gradeLevel: 'Grade 11', academicTermId: '3',
+    track: 'Academic Track', cluster: 'ASSH (Arts, Social Science, and Humanities)' }), {
+    name: '11-A', gradeLevel: 'Grade 11', academicTermId: 3,
+    cluster: 'Academic Track', strand: 'ASSH (Arts, Social Science, and Humanities)',
+    adviser: null, modality: null, modularSubtype: null
+  }, 'section storage keeps track in cluster and exact paper cluster in strand');
+  assert.throws(() => validateSection({ name: '11-A', academicTermId: '3',
+    track: 'Academic Track', cluster: 'ICT Support & Computer Programming' }), /cluster from the selected track/);
+  for (const inheritedTrack of ['__proto__', 'constructor', 'toString']) {
+    assert.throws(() => validateSection({ name: '11-A', academicTermId: '3', track: inheritedTrack, cluster: '' }), /cluster from the selected track/);
+  }
   assert.throws(() => validateEnrollment({ studentId: '0', academicTermId: '4' }), /valid student/);
   assert.deepEqual(validateEnrollment({ studentId: '5', academicTermId: '4', sectionId: '' }), { studentId: 5, academicTermId: 4, sectionId: null });
 });

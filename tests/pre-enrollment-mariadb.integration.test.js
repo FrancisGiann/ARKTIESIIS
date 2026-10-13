@@ -70,6 +70,7 @@ function readyPaper(idempotencyKey, overrides = {}) {
   return {
     idempotencyKey, schoolYear: '2027-2028', firstName: 'Ari', middleName: 'Mae', lastName: 'Santos', suffix: '',
     lrn: '012345678901', email: 'ari-santos@integration.invalid', studentContactNumber: '09171234567', voucherTypeText: 'ESC', voucherCategoryText: 'CATEGORY A',
+    birthDate: '2008-04-21',
     preferredTrack: 'Academic Track', preferredCluster: 'ASSH (Arts, Social Science, and Humanities)',
     targetGradeLevel: 'Grade 11', priorGradeLevel: 'Grade 10', priorSchool: 'Lucena High School',
     studentSignaturePresent: '1', studentSignedDate: '2026-10-01', receivedBy: 'spoofed receiver',
@@ -261,6 +262,7 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
       'copy and manual requests for the same resolved address share the canonical idempotency fingerprint');
     const receiptDetail = await preEnrollments.get(users.registrar, receiptSource.id);
     assert.equal(receiptDetail.receipts.length, 9);
+    assert.equal(receiptDetail.voucher_category_text, null, 'new active form submissions never create removed voucher category values');
     assert.equal(receiptDetail.receipts.find((row) => row.requirement_code === 'report_card').photocopy_pieces, 1);
     assert.equal(receiptDetail.address, 'Block 7, Lot 2, Ibabang Iyam, Lucena, Quezon, 0123');
     assert.equal(receiptDetail.emergency_contact_address, receiptDetail.address);
@@ -275,10 +277,13 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
 
     // Ready records support explicit correction and optimistic conflict handling before conversion.
     const stale = await preEnrollments.create(users.front_desk, readyPaper(uuid(), { lrn: '012345678902' }));
+    await rawPool.execute('UPDATE pre_enrollments SET voucher_category_text = ? WHERE id = ?', ['Legacy category', stale.id]);
     const staleInput = readyPaper(uuid(), { lrn: '012345678902', status: 'draft' });
     const staleLatest = await preEnrollments.get(users.front_desk, stale.id);
     const demoted = await preEnrollments.update(users.front_desk, stale.id, staleLatest.version, staleInput);
     assert.equal(demoted.status, 'draft', 'ready to draft is an explicit permitted correction');
+    assert.equal((await preEnrollments.get(users.front_desk, stale.id)).voucher_category_text, 'Legacy category',
+      'an unrelated correction preserves previously stored voucher category history');
     await assert.rejects(preEnrollments.update(users.front_desk, stale.id, 1,
       readyPaper(uuid(), { lrn: '012345678902' })), { status: 409 }, 'stale versions conflict');
     await assert.rejects(preEnrollments.openConversion(users.front_desk, stale.id), { status: 403 });
@@ -296,7 +301,7 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     for (let index = 0; index < 3; index += 1) {
       const [result] = await rawPool.execute(`INSERT INTO sections
         (name, grade_level, academic_term_id, cluster, strand, adviser, modality)
-        VALUES ('Mabini', 'Grade 11', ?, 'ASSH', 'Academic', 'Synthetic Adviser', 'face-to-face')`, [terms[index]]);
+        VALUES ('Mabini', 'Grade 11', ?, 'Academic Track', 'ASSH (Arts, Social Science, and Humanities)', 'Synthetic Adviser', 'face-to-face')`, [terms[index]]);
       sections.push(Number(result.insertId));
     }
     const [emptySectionResult] = await rawPool.execute(`INSERT INTO sections
@@ -322,11 +327,35 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     const annualService = createAnnualEnrollmentService({ getPool: async () => pool, sql,
       transactionFactory: (currentPool) => new Transaction(currentPool), hashPassword: async () => 'integration-only-hash',
       createPassword: () => 'integration-only-password', termClearanceService });
+    const missingSavedDob = await preEnrollments.create(users.front_desk, readyPaper(uuid(), {
+      lrn: '012345678918', birthDate: ''
+    }));
+    const missingDobConversion = await convertInput(missingSavedDob.id,
+      (await preEnrollments.get(users.registrar, missingSavedDob.id)).version, { intakeKind: 'transferee' });
+    const countsBeforeMissingDob = await queryOne(rawPool, `SELECT
+      (SELECT COUNT(*) FROM students) AS students, (SELECT COUNT(*) FROM annual_enrollments) AS annuals,
+      (SELECT COUNT(*) FROM enrollments) AS enrollments`);
+    await assert.rejects(annualService.createAnnualIntake(users.registrar, missingDobConversion), (error) => {
+      assert.equal(error.status, 409);
+      assert.match(error.message, /Correct the saved paper record before starting intake/);
+      return true;
+    }, 'a valid DOB typed into annual intake cannot override a missing authoritative DOB saved on paper');
+    const countsAfterMissingDob = await queryOne(rawPool, `SELECT
+      (SELECT COUNT(*) FROM students) AS students, (SELECT COUNT(*) FROM annual_enrollments) AS annuals,
+      (SELECT COUNT(*) FROM enrollments) AS enrollments`);
+    assert.deepEqual(Object.values(countsAfterMissingDob).map(Number), Object.values(countsBeforeMissingDob).map(Number),
+      'a missing saved activation DOB rejects the intake without creating a student or placement');
     await assert.rejects(annualService.createAnnualIntake(users.database_admin, sourceConversion), { status: 403 });
     await assert.rejects(annualService.createAnnualIntake(users.registrar,
       { ...sourceConversion, preEnrollmentVersion: readyVersion + 1 }), { status: 409 }, 'a stale source version is rejected');
     await assert.rejects(annualService.createAnnualIntake(users.registrar,
       { ...sourceConversion, lrn: '012345678999' }), { status: 409 }, 'a new profile LRN cannot replace the source LRN');
+    await assert.rejects(annualService.createAnnualIntake(users.registrar,
+      { ...sourceConversion, annualSectionId: String(emptySection) }), (error) => {
+      assert.equal(error.status, 409);
+      assert.match(error.message, /canonically configured track and cluster/);
+      return true;
+    }, 'source-linked intake rejects a tampered section id even when its term and grade are otherwise valid');
     const beforeConversion = await queryOne(rawPool, `SELECT
       (SELECT COUNT(*) FROM students) AS students, (SELECT COUNT(*) FROM annual_enrollments) AS annuals,
       (SELECT COUNT(*) FROM enrollments) AS enrollments`);

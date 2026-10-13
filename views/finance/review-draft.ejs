@@ -30,6 +30,22 @@
         <% for (const target of draft.preview.targetDetails) { %><div><dt><%= target.label %></dt><dd><%= target.label === 'Stopped or transferred review' ? String(target.value).replace(/\bdropped\b/gi, 'stopped') : target.value %></dd></div><% } %>
       </dl>
     <% } %>
+    <% if (draft.preview.feeAdjustment) { const correction = draft.preview.feeAdjustment; %>
+      <section class="finance-review-fields" aria-label="Projected fee correction">
+        <h2>Fee basis and credit release</h2>
+        <p>Fee basis is the assessed charge plus all recorded adjustments, including approved coverage once.</p>
+        <% if (correction.warning) { %><p class="form-alert" role="status"><%= correction.warning %></p><% } %>
+        <dl class="finance-review-fields">
+          <div><dt>Fee basis before</dt><dd>₱<%= correction.feeBasisBefore %></dd></div>
+          <div><dt>Fee basis after</dt><dd>₱<%= correction.feeBasisAfter %></dd></div>
+          <div><dt>Remaining due before</dt><dd>₱<%= correction.currentDue %></dd></div>
+          <div><dt>Projected remaining due</dt><dd>₱<%= correction.projectedDue %></dd></div>
+          <div><dt>Planned release to account credit</dt><dd>₱<%= correction.plannedRelease %></dd></div>
+          <div><dt>Annual payment applications released</dt><dd>₱<%= correction.annualRelease %></dd></div>
+          <div><dt>Eligible legacy reconciliations released</dt><dd>₱<%= correction.legacyRelease %></dd></div>
+        </dl>
+      </section>
+    <% } %>
 
   <% if (draft.preview.cashAmount) { %>
       <ol class="finance-payment-wizard__steps finance-payment-wizard__steps--review" aria-label="Payment steps"><li>1. Details</li><li>2. Apply payment</li><li aria-current="step">3. Review</li><li>4. Saved</li></ol>

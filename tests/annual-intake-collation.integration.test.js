@@ -162,7 +162,7 @@ test('annual intake works across mixed school-year collations and retries idempo
     for (const termId of termIds) {
       const [section] = await rawPool.execute(`INSERT INTO sections
         (name, grade_level, academic_term_id, cluster, strand, adviser, modality)
-        VALUES ('Mabini', 'Grade 11', ?, 'Academic', 'STEM', 'Synthetic Adviser', 'face_to_face')`, [termId]);
+        VALUES ('Mabini', 'Grade 11', ?, 'Academic Track', 'ASSH (Arts, Social Science, and Humanities)', 'Synthetic Adviser', 'face_to_face')`, [termId]);
       sectionIds.push(Number(section.insertId));
     }
 
@@ -182,7 +182,8 @@ test('annual intake works across mixed school-year collations and retries idempo
     const newStudentSource = await preEnrollments.create(frontDeskId, {
       idempotencyKey: uuid(), schoolYear, firstName: newStudentInput.firstName,
       middleName: newStudentInput.middleName, lastName: newStudentInput.lastName, suffix: '',
-      lrn: newStudentInput.lrn, email: newStudentInput.email, studentContactNumber: newStudentInput.phone,
+      lrn: newStudentInput.lrn, email: newStudentInput.email, birthDate: newStudentInput.birthDate,
+      studentContactNumber: newStudentInput.phone,
       preferredTrack: 'Academic Track', preferredCluster: 'ASSH (Arts, Social Science, and Humanities)',
       targetGradeLevel: 'Grade 11', priorGradeLevel: 'Grade 10', priorSchool: 'Synthetic Secondary School',
       studentSignaturePresent: '1', studentSignedDate: '2026-10-01',

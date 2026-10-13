@@ -179,7 +179,6 @@
         <dl class="pre-enrollment-summary">
           <% for (const [label, value, spanTwo] of [
             ['Voucher type as written', record.voucher_type_text, false],
-            ['Voucher category as written', record.voucher_category_text, false],
             ['Preferred track', record.preferred_track, false],
             ['Preferred cluster', record.preferred_cluster, true],
             ['Grade to enroll', record.target_grade_level, false],
@@ -224,6 +223,8 @@
           <tr><th scope="col">Requirement</th><th scope="col">Original</th><th scope="col">Photocopy</th></tr>
         </thead>
         <tbody>
+          <% const envelope = record.receipts.find((row) => row.requirement_code === 'long_brown_envelopes') || {}; const envelopeExact = Boolean(envelope.original_received) && Number(envelope.original_pieces) === 3 && !envelope.photocopy_received && envelope.photocopy_pieces == null; const envelopeKnownAbsent = !envelope.original_received && envelope.original_pieces == null && !envelope.photocopy_received && envelope.photocopy_pieces == null; %>
+          <tr><th scope="row">Three long brown envelopes</th><td colspan="2"><span class="pre-enrollment-receipt__status"><%= envelopeExact ? 'All three received' : envelopeKnownAbsent ? 'Not recorded' : `Legacy receipt: original ${envelope.original_received ? 'received' : 'not received'}${envelope.original_pieces == null ? ' (quantity unknown)' : ` (${envelope.original_pieces})`}; photocopy ${envelope.photocopy_received ? 'received' : 'not received'}${envelope.photocopy_pieces == null ? '' : ` (${envelope.photocopy_pieces})`}` %></span></td></tr>
           <% for (const [code, label] of requirements) {
             const receipt = record.receipts.find((row) => row.requirement_code === code) || {};
             const originalCount = Number(receipt.original_pieces);

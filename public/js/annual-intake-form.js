@@ -9,6 +9,9 @@
   const returning = document.getElementById('returning-student-field');
   const newFields = document.getElementById('new-student-fields');
   const returningInput = document.getElementById('annual-student-no');
+  const birthDateInput = document.getElementById('annual-birth-date');
+  const birthDateRequirement = document.getElementById('annual-birth-date-requirement');
+  const birthDateHelp = document.getElementById('annual-birth-date-help');
   const year = document.getElementById('annual-school-year');
   const grade = document.getElementById('annual-grade');
   const entryTerm = document.getElementById('annual-entry-term');
@@ -26,9 +29,17 @@
     newFields.hidden = isReturning;
     returningInput.required = isReturning;
     returningInput.disabled = !isReturning;
+    if (birthDateInput) {
+      birthDateInput.required = !isReturning;
+      if (birthDateRequirement) birthDateRequirement.textContent = isReturning
+        ? '(optional for an existing student)' : '(required for first account activation)';
+      if (birthDateHelp) birthDateHelp.textContent = isReturning
+        ? 'Active returning student accounts keep their existing login.'
+        : 'First account activation requires a valid past birth date.';
+    }
     newFields.querySelectorAll('input, select, textarea').forEach((input) => {
       input.disabled = isReturning;
-      input.required = !isReturning && ['annual-lrn', 'annual-email', 'annual-first-name', 'annual-last-name'].includes(input.id);
+      input.required = !isReturning && ['annual-lrn', 'annual-email', 'annual-first-name', 'annual-last-name', 'annual-birth-date'].includes(input.id);
       if (isReturning) input.setCustomValidity('');
       else profileValidation.validateControl(input);
     });

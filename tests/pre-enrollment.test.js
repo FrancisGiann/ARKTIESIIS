@@ -2,7 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 const ejs = require('ejs');
 const express = require('express');
 const { normalizeDate, manilaDate, normalizeRecord, RECEIPT_REQUIREMENTS, PreEnrollmentError, createPreEnrollmentService } = require('../src/services/preEnrollmentService');
@@ -11,7 +13,9 @@ const { requireRole } = require('../src/middleware/roles');
 const { applyAddressInput, latestBirthDate, validateStudent } = require('../src/services/studentRecordsService');
 const { normalizeStructuredAddress, StudentAddressError } = require('../src/utils/studentAddress');
 const { comparePreEnrollmentProfile, PROFILE_REVIEW_GROUPS } = require('../src/utils/studentProfileReview');
+const { PROGRAM_CATALOG } = require('../src/utils/paperProgramCatalog');
 const { initialize: initializeAddressCopy } = require('../public/js/pre-enrollment-address-copy');
+const { initialize: initializeReadmissionEvaluation } = require('../public/js/pre-enrollment-readmission');
 
 function readyInput(overrides = {}) {
   return {
@@ -32,7 +36,7 @@ test('pre-enrollment validates supplied paper data, ready requirements, school y
   assert.equal(ready.receipts.length, 9);
   assert.deepEqual(RECEIPT_REQUIREMENTS.map(([code]) => code), [
     'report_card', 'birth_certificate', 'good_moral', 'junior_high_certificate', 'certificate_of_rating',
-    'esc_certificate', 'national_id', 'two_by_two_photos', 'long_brown_envelopes'
+    'esc_certificate', 'national_id', 'two_by_two_photos'
   ]);
 
   const draft = normalizeRecord({ schoolYear: '2027-2028', status: 'draft' });
@@ -43,6 +47,94 @@ test('pre-enrollment validates supplied paper data, ready requirements, school y
   assert.throws(() => normalizeRecord(readyInput({ lrn: '1234' })), /12-digit LRN/);
   assert.throws(() => normalizeRecord(readyInput({ studentSignedDate: '' })), /signature and date/);
   assert.throws(() => normalizeRecord(readyInput({ status: 'enrollment_started' })), /Choose Draft or Ready/);
+});
+
+test('voucher type accepts only canonical new values and preserves unchanged historical values and category history', () => {
+  for (const value of ['', 'PUB', 'ESC', 'NV']) {
+    assert.equal(normalizeRecord(readyInput({ voucherTypeText: value })).voucherTypeText, value || null);
+  }
+  assert.throws(() => normalizeRecord(readyInput({ voucherTypeText: 'PUBLIC' })), /Choose PUB, ESC, NV/);
+
+  const current = { voucher_type_text: 'ESC as written on the original form', voucher_category_text: 'Legacy category' };
+  const preserved = normalizeRecord(readyInput({ voucherTypeText: current.voucher_type_text,
+    voucherCategoryText: ['malformed hidden legacy field'] }), { current });
+  assert.equal(preserved.voucherTypeText, current.voucher_type_text);
+  assert.equal(preserved.voucherCategoryText, current.voucher_category_text);
+  assert.throws(() => normalizeRecord(readyInput({ voucherTypeText: 'different arbitrary text' }), { current }), /Choose PUB, ESC, NV/);
+  assert.equal(normalizeRecord(readyInput({ voucherCategoryText: 'new category input' })).voucherCategoryText, null,
+    'removed category inputs never create or overwrite category history');
+});
+
+test('pre-enrollment and sections share an exact safe paper program catalog', () => {
+  assert.deepEqual(PROGRAM_CATALOG['Academic Track'], [
+    'ASSH (Arts, Social Science, and Humanities)',
+    'BE (Business & Entrepreneurship)',
+    'BE-TECH-PRO HM (Hospitality Management)'
+  ]);
+  for (const inheritedKey of ['__proto__', 'constructor', 'toString']) {
+    assert.throws(() => normalizeRecord(readyInput({ preferredTrack: inheritedKey, preferredCluster: '' })), /listed preferred track/);
+    assert.throws(() => normalizeRecord(readyInput({ preferredTrack: 'Academic Track', preferredCluster: inheritedKey })), /belongs to the selected preferred track/);
+  }
+});
+
+test('shared paper program controls filter every cluster by selected track on both forms', () => {
+  const controls = new Map();
+  const makePair = (prefix, initialTrack, initialCluster) => {
+    const trackListeners = {};
+    const track = { value: initialTrack, addEventListener(type, callback) { trackListeners[type] = callback; }, change() { trackListeners.change?.(); } };
+    const options = [{ value: '', dataset: {}, hidden: false, disabled: false },
+      ...Object.entries(PROGRAM_CATALOG).flatMap(([trackName, clusters]) => clusters.map((clusterName) => ({
+        value: clusterName, dataset: { track: trackName }, hidden: false, disabled: false
+      })))];
+    let selectedValue = initialCluster;
+    const cluster = { options, get value() { return selectedValue; }, set value(value) { selectedValue = value; },
+      get selectedOptions() { return options.filter((option) => option.value === selectedValue); } };
+    controls.set(`${prefix}-track`, track);
+    controls.set(`${prefix}-cluster`, cluster);
+    return { track, cluster };
+  };
+  const pre = makePair('pre', 'Academic Track', PROGRAM_CATALOG['Academic Track'][0]);
+  const section = makePair('section', 'Tech-Pro Track', PROGRAM_CATALOG['Tech-Pro Track'][1]);
+  const source = fs.readFileSync(path.resolve(__dirname, '../public/js/paper-program-fields.js'), 'utf8');
+  vm.runInNewContext(source, { document: { getElementById(id) { return controls.get(id) || null; } } });
+
+  const preAcademic = pre.cluster.options.find((option) => option.value === PROGRAM_CATALOG['Academic Track'][0]);
+  const preTech = pre.cluster.options.find((option) => option.value === PROGRAM_CATALOG['Tech-Pro Track'][0]);
+  assert.equal(preAcademic.hidden, false);
+  assert.equal(preTech.hidden, true);
+  pre.track.value = 'Tech-Pro Track';
+  pre.track.change();
+  assert.equal(pre.cluster.value, '', 'changing tracks clears an incompatible saved cluster');
+  assert.equal(preAcademic.disabled, true);
+  assert.equal(preTech.disabled, false);
+  const sectionIct = section.cluster.options.find((option) => option.value === PROGRAM_CATALOG['Tech-Pro Track'][1]);
+  assert.equal(section.cluster.value, PROGRAM_CATALOG['Tech-Pro Track'][1]);
+  assert.equal(sectionIct.disabled, false, 'section creation uses the same exact catalog filtering');
+});
+
+test('long brown envelope checkbox maps only an explicit replacement and preserves legacy receipt rows', () => {
+  const received = normalizeRecord(readyInput({ envelopeReceiptMode: 'replace', receipt_long_brown_envelopes_received: '1' }));
+  assert.deepEqual(received.receipts.at(-1), {
+    requirementCode: 'long_brown_envelopes', originalReceived: true, originalPieces: 3,
+    photocopyReceived: false, photocopyPieces: null
+  });
+  const unchecked = normalizeRecord(readyInput({ envelopeReceiptMode: 'replace' }));
+  assert.deepEqual(unchecked.receipts.at(-1), {
+    requirementCode: 'long_brown_envelopes', originalReceived: false, originalPieces: null,
+    photocopyReceived: false, photocopyPieces: null
+  });
+
+  const legacy = { requirement_code: 'long_brown_envelopes', original_received: 1,
+    original_pieces: 2, photocopy_received: 1, photocopy_pieces: 1 };
+  const preserved = normalizeRecord(readyInput({ envelopeReceiptMode: 'preserve' }), {
+    current: { voucher_category_text: 'Legacy category' }, currentReceipts: [legacy]
+  });
+  assert.deepEqual(preserved.receipts.at(-1), {
+    requirementCode: 'long_brown_envelopes', originalReceived: true, originalPieces: 2,
+    photocopyReceived: true, photocopyPieces: 1
+  });
+  assert.throws(() => normalizeRecord(readyInput({ envelopeReceiptMode: 'replace',
+    receipt_long_brown_envelopes_original_pieces: '3' })), /one received checkbox/);
 });
 
 test('pre-enrollment optional birth date is blank or before the current Manila day', () => {
@@ -58,6 +150,44 @@ test('pre-enrollment optional birth date is blank or before the current Manila d
   assert.equal(normalizeRecord({ schoolYear: '2027-2028', status: 'draft', birthDate: priorDate }).birthDate, priorDate);
   assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', birthDate: today }), /Birth date must be before today/);
   assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', birthDate: nextDate }), /Birth date must be before today/);
+});
+
+test('return evaluation is required only for readmission and its selection survives status changes', () => {
+  const listeners = {};
+  const applicantKind = { value: 'new', addEventListener(type, callback) { listeners[type] = callback; } };
+  const evaluation = { value: '', disabled: false, required: false };
+  const field = { hidden: false };
+  const form = { querySelector(selector) {
+    return selector === '#pre-applicant-kind' ? applicantKind
+      : selector === '#pre-readmission-evaluation' ? evaluation
+        : selector === '[data-readmission-evaluation-field]' ? field : null;
+  } };
+
+  initializeReadmissionEvaluation(form);
+  assert.equal(field.hidden, true);
+  assert.equal(evaluation.disabled, true);
+  assert.equal(evaluation.required, false);
+
+  applicantKind.value = 'readmission';
+  listeners.change();
+  assert.equal(field.hidden, false);
+  assert.equal(evaluation.disabled, false);
+  assert.equal(evaluation.required, true);
+  evaluation.value = 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4';
+
+  applicantKind.value = 'continuing';
+  listeners.change();
+  assert.equal(field.hidden, true);
+  assert.equal(evaluation.disabled, true);
+  assert.equal(evaluation.required, false);
+  assert.equal(evaluation.value, 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4');
+
+  applicantKind.value = 'readmission';
+  listeners.change();
+  assert.equal(field.hidden, false);
+  assert.equal(evaluation.disabled, false);
+  assert.equal(evaluation.required, true);
+  assert.equal(evaluation.value, 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4');
 });
 
 test('birth-date validation and input max use the Manila day when UTC is still on the previous date', () => {
@@ -403,7 +533,8 @@ function detailRecord(id, status = 'ready_for_registrar') {
       original_pieces: index === 0 ? 1 : index === 7 ? 3 : null,
       photocopy_received: index === 1,
       photocopy_pieces: index === 1 ? 1 : null
-    })),
+    })).concat([{ requirement_code: 'long_brown_envelopes', original_received: 1, original_pieces: 3,
+      photocopy_received: 0, photocopy_pieces: null }]),
     events: [
       { event_type: 'created', version: 1, first_name: 'Pat', last_name: 'Fixture', created_at: '2026-10-02 09:10:00.000', from_status: null, to_status: 'draft' },
       { event_type: 'submitted_ready', version: 2, first_name: 'Rae', last_name: 'Registrar', created_at: '2026-10-03 10:30:00.000', from_status: 'draft', to_status: 'ready_for_registrar' },
@@ -492,11 +623,26 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.equal(newFormResponse.status, 200);
     assert.match(newFormResponse.headers.get('cache-control'), /no-store/);
     const newFormHtml = await newFormResponse.text();
+    assert.match(newFormHtml, /Voucher type as written <span class="muted-copy">\(optional\)<\/span>/);
+    assert.match(newFormHtml, /name="voucherTypeText"/);
+    assert.doesNotMatch(newFormHtml, /voucher category|voucherCategoryText/i,
+      'removed voucher category is absent from active paper forms');
+    assert.doesNotMatch(newFormHtml, /Historical value \(preserve\)/,
+      'new forms never relabel rejected POST text as a saved historical value');
+    for (const cluster of Object.values(PROGRAM_CATALOG).flat()) assert.ok(newFormHtml.includes(cluster.replaceAll('&', '&amp;')),
+      `paper cluster option ${cluster} is present for dynamic track selection`);
+    assert.match(newFormHtml, /src="\/js\/paper-program-fields\.js" defer/);
+    assert.match(newFormHtml, /Three long brown envelopes received/);
     assert.match(newFormHtml, /<label for="pre-email">Email<\/label>/);
     assert.match(newFormHtml, /aria-describedby="pre-email-help"/);
     assert.match(newFormHtml, /id="pre-email-help">This email will be used for the student’s account\./);
     assert.match(newFormHtml, /name="emergencyContactSameAsStudent" value="1"[^>]*><span>Same address as student<\/span>/);
     assert.match(newFormHtml, /src="\/js\/pre-enrollment-address-copy\.js" defer/);
+    assert.match(newFormHtml, /data-readmission-evaluation-field/);
+    assert.match(newFormHtml, /data-pre-enrollment-form/);
+    assert.match(newFormHtml, /src="\/js\/pre-enrollment-readmission\.js" defer/);
+    assert.match(fs.readFileSync(path.resolve(__dirname, '../public/css/app.css'), 'utf8'),
+      /\.pre-enrollment-form \[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/);
     assert.match(newFormHtml, /accepted evaluation for this applicant, school year, and grade/);
     assert.doesNotMatch(newFormHtml, /profile source|saved binding is stale|explicit current selection/i);
     assert.match(newFormHtml, /Copy these contact details from the paper form/);
@@ -505,6 +651,10 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     const detail = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261`);
     assert.equal(detail.status, 200);
     const detailHtml = await detail.text();
+    assert.match(detailHtml, /Voucher type as written/);
+    assert.match(detailHtml, /ESC as written on original school form/);
+    assert.doesNotMatch(detailHtml, /voucher category|CATEGORY A/i,
+      'record detail hides category while retaining it in persisted history');
     for (const [, label] of RECEIPT_REQUIREMENTS) assert.ok(detailHtml.includes(label), `detail renders receipt row ${label}`);
     for (const label of ['Student identity', 'Student contact', 'Student address', 'Parents and guardians',
       'Emergency contact', 'Program and previous school', 'Signature and office record', 'Entered by']) {
@@ -539,6 +689,11 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     const registrarEdit = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261/edit`, { headers: { 'x-test-role': 'registrar' } });
     const registrarEditHtml = await registrarEdit.text();
     assert.equal(registrarEdit.status, 200);
+    assert.match(registrarEditHtml, /Historical value \(preserve\): ESC as written on original school form/,
+      'an existing record alone receives a selected option for its unchanged historical voucher text');
+    assert.match(registrarEditHtml, /name="receipt_long_brown_envelopes_received" value="1" data-envelope-receipt-checkbox checked/,
+      'saved exact envelope receipt is shown checked before an edit');
+    assert.doesNotMatch(registrarEditHtml, /name="voucherCategoryText"/);
     assert.doesNotMatch(registrarEditHtml, /name="emergencyContactSameAsStudent" value="1"[^>]*checked/,
       'reopened corrections start unchecked because the control is not stored');
     assert.ok(registrarEditHtml.includes('value="c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4" selected'),
@@ -550,6 +705,7 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
       method: 'POST', headers: { 'x-test-role': 'registrar', 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ _csrf: csrfToken, version: '2', schoolYear: '2027-2028', applicantKind: 'readmission',
         readmissionEvaluationBinding: 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4', emergencyContactSameAsStudent: '1',
+        envelopeReceiptMode: 'replace',
         emergencyContactPerson: 'Mae Santos', emergencyContactRelationship: 'Mother', emergencyContactPhone: '09181234567',
         emergencyContactAddressMode: 'replace', emergencyContactAddressBlockLotStreetPurok: 'Separate emergency draft',
         emergencyContactAddressZip: 'bad' })
@@ -562,6 +718,11 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
       'validation-error rerenders retain the transient checkbox');
     assert.match(correctionHtml, /value="Separate emergency draft"/);
     assert.match(correctionHtml, /value="bad"/);
+    assert.match(correctionHtml, /name="envelopeReceiptMode" value="replace"/);
+    assert.match(correctionHtml, /name="receipt_long_brown_envelopes_received" value="1" data-envelope-receipt-checkbox(?![^>]*checked)/,
+      'an explicitly unchecked replacement remains unchecked after an unrelated validation error');
+    assert.doesNotMatch(correctionHtml, /name="voucherCategoryText"/,
+      'unrelated edits do not submit a removed hidden category field');
     assert.equal(updateInputs[0].emergencyContactSameAsStudent, '1',
       'the checked value reaches the service in the ordinary URL-encoded request');
     assert.equal(updateInputs[0].emergencyContactPerson, 'Mae Santos');

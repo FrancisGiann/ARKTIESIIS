@@ -18,7 +18,7 @@
     const updateSelectionState = () => {
       const selectedCount = rows.filter((row) => row.checked).length;
       selectAll.checked = rows.length > 0 && selectedCount === rows.length;
-      selectAll.indeterminate = selectedCount > 0 && selectedCount < rows.length;
+      selectAll.indeterminate = false;
       countMessage.textContent = rows.length
         ? `${selectedCount} of ${rows.length} rows selected.`
         : 'No rows are ready for selection.';

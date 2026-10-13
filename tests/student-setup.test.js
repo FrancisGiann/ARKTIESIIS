@@ -16,6 +16,7 @@ const { createStudentBulkAccountsRouter, createStudentIntakeRouter, createAnnual
   createAnnualConfirmationRouter } = require('../src/routes/studentSetup');
 const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
 const { AnnualEnrollmentError } = require('../src/services/annualEnrollmentService');
+const { AnnualFinanceError } = require('../src/services/annualFinanceService');
 const { latestBirthDate } = require('../src/services/studentRecordsService');
 const { validateTransaction, createFinanceService } = require('../src/services/financeService');
 const { TermClearanceSummaryUnavailableError } = require('../src/services/termClearanceService');
@@ -326,6 +327,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     snapshotFingerprint: 'a'.repeat(64)
   };
   const feePreviewCalls = [];
+  let feeScheduleConfigured = false;
   const checklistFixture = {
     student: { id: 41 }, summary: { completeCount: 1, requiredCount: 2 }, history: [], additionalItems: [],
     requirements: [
@@ -343,6 +345,9 @@ test('registrar intake opens the guided annual form and links the roster to fee 
   const previewFees = async (actorId, annualId, selectedInput = []) => {
     assert.equal(actorId, registrar.id);
     assert.equal(String(annualId), '71');
+    if (!feeScheduleConfigured) {
+      throw new AnnualFinanceError('No active approved fee schedule matches this school year, grade, and voucher. Ask Finance to configure one, then reload this page.', 409);
+    }
     const selected = (Array.isArray(selectedInput) ? selectedInput : [selectedInput]).filter(Boolean).map(Number);
     feePreviewCalls.push(selected);
     if (hasConfirmed) return {
@@ -416,7 +421,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(html, /Step 5 of 5: Review details/);
     assert.match(html, /missing papers do not block enrollment/i);
     assert.match(html, /Select a paper only after staff has received and checked it/i);
-    assert.match(html, /long brown envelope; the envelope is a storage container and is not tracked/i);
+    assert.match(html, /long brown envelope; the separate paper receipt note is informational and does not create a physical-checklist event/i);
     assert.match(html, /name="paper_birth_certificate_copies"/);
     assert.doesNotMatch(html, /name="paper_birth_certificate_(?:originals|pieces)"/);
     assert.match(html, /name="paper_good_moral_originals"/);
@@ -451,6 +456,14 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(pendingHtml, /Enrollment counts/);
     assert.match(pendingHtml, /data-label="Students"><strong>1/);
 
+    const missingSchedule = await fetch(`${baseUrl}/registrar/intake/71/fees`);
+    const missingScheduleHtml = await missingSchedule.text();
+    assert.equal(missingSchedule.status, 409);
+    assert.match(missingScheduleHtml, /Ask Finance to configure one, then reload this page/);
+    assert.match(missingScheduleHtml, /Return to enrollments/);
+    assert.doesNotMatch(missingScheduleHtml, /successNotice is not defined|Internal Server Error/);
+
+    feeScheduleConfigured = true;
     const fees = await fetch(`${baseUrl}/registrar/intake/71/fees`);
     const feesHtml = await fees.text();
     assert.equal(fees.status, 200);
