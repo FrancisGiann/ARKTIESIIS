@@ -140,7 +140,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
             .filter((key) => !/Id$/.test(key) && key !== 'target_id');
           const targetOptions = name === 'adjustments' ? options.departureCharges : name === 'allocations' ? options.allocationTargets : null;
           fields.push({ name, label: reviewFieldLabel(name), kind: 'rows', rows, properties: properties.map((key) => ({
-            key, label: key === 'target' ? 'Fee or balance' : name === 'allocations' && key === 'amount' ? 'Amount to apply (PHP)' : reviewFieldLabel(key), options: key === 'target' ? targetOptions : null
+            key, label: key === 'target' ? 'Fee or balance' : name === 'allocations' && key === 'amount' ? 'Amount for this fee or balance (PHP)' : reviewFieldLabel(key), options: key === 'target' ? targetOptions : null
           })) });
         } else {
           fields.push({ name, label: reviewFieldLabel(name), kind: 'list', values: value, options: fieldOptions(name) });
