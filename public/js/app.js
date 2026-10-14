@@ -59,6 +59,32 @@ for (const form of document.querySelectorAll('form[data-clear-section-on-term-ch
   }
 }
 
+function createPasswordVisibilityIcon(isVisible) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+
+  const paths = isVisible
+    ? [
+      'M9.9 5.2A10.8 10.8 0 0 1 12 5c6.4 0 9.8 7 9.8 7a16.5 16.5 0 0 1-2.5 3.4',
+      'M6.1 6.1C3.4 8 2.2 12 2.2 12s3.4 7 9.8 7a10.4 10.4 0 0 0 4.3-.9',
+      'M14.1 14.1a3 3 0 0 1-4.2-4.2',
+      'M3 3l18 18'
+    ]
+    : [
+      'M2.2 12s3.4-7 9.8-7 9.8 7 9.8 7-3.4 7-9.8 7-9.8-7-9.8-7Z',
+      'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z'
+    ];
+
+  for (const pathData of paths) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', pathData);
+    svg.append(path);
+  }
+  return svg;
+}
+
 for (const input of document.querySelectorAll('input[type="password"][data-password-toggle]')) {
   if (!input.id || !input.parentElement) continue;
 
@@ -67,9 +93,14 @@ for (const input of document.querySelectorAll('input[type="password"][data-passw
   const toggle = document.createElement('button');
   toggle.className = 'password-visibility-toggle';
   toggle.type = 'button';
-  toggle.textContent = 'Show password';
   toggle.setAttribute('aria-controls', input.id);
-  toggle.setAttribute('aria-pressed', 'false');
+  const updateToggle = (isVisible) => {
+    const label = isVisible ? 'Hide password' : 'Show password';
+    toggle.setAttribute('aria-label', label);
+    toggle.title = label;
+    toggle.replaceChildren(createPasswordVisibilityIcon(isVisible));
+  };
+  updateToggle(false);
 
   input.parentElement.insertBefore(control, input);
   control.append(input, toggle);
@@ -77,8 +108,7 @@ for (const input of document.querySelectorAll('input[type="password"][data-passw
   toggle.addEventListener('click', () => {
     const isVisible = input.type === 'password';
     input.type = isVisible ? 'text' : 'password';
-    toggle.textContent = isVisible ? 'Hide password' : 'Show password';
-    toggle.setAttribute('aria-pressed', String(isVisible));
+    updateToggle(isVisible);
   });
 }
 
