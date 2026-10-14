@@ -307,6 +307,14 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     const [emptySectionResult] = await rawPool.execute(`INSERT INTO sections
       (name, grade_level, academic_term_id, cluster, strand) VALUES ('Empty', 'Grade 11', ?, 'ASSH', 'Academic')`, [terms[0]]);
     const emptySection = Number(emptySectionResult.insertId);
+    const [wrongGradeSectionResult] = await rawPool.execute(`INSERT INTO sections
+      (name, grade_level, academic_term_id, cluster, strand) VALUES ('Wrong grade', 'Grade 12', ?, 'Academic Track', 'ASSH (Arts, Social Science, and Humanities)')`, [terms[0]]);
+    const wrongGradeSection = Number(wrongGradeSectionResult.insertId);
+    const [wrongYearTermResult] = await rawPool.execute(
+      'INSERT INTO academic_terms (school_year, term, is_current) VALUES (?, ?, 0)', ['2099-2100', 'Term 1']);
+    const [wrongYearSectionResult] = await rawPool.execute(`INSERT INTO sections
+      (name, grade_level, academic_term_id, cluster, strand) VALUES ('Wrong year', 'Grade 11', ?, 'Academic Track', 'ASSH (Arts, Social Science, and Humanities)')`, [wrongYearTermResult.insertId]);
+    const wrongYearSection = Number(wrongYearSectionResult.insertId);
 
     const convertInput = async (sourceId, sourceVersion, overrides = {}) => {
       const input = annualInput(sourceId, sourceVersion, sections[0], overrides);
@@ -351,11 +359,23 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     await assert.rejects(annualService.createAnnualIntake(users.registrar,
       { ...sourceConversion, lrn: '012345678999' }), { status: 409 }, 'a new profile LRN cannot replace the source LRN');
     await assert.rejects(annualService.createAnnualIntake(users.registrar,
-      { ...sourceConversion, annualSectionId: String(emptySection) }), (error) => {
+      { ...sourceConversion, annualSectionId: String(wrongYearSection) }), (error) => {
       assert.equal(error.status, 409);
-      assert.match(error.message, /canonically configured track and cluster/);
+      assert.match(error.message, /no longer available or mapped to this school year/);
       return true;
-    }, 'source-linked intake rejects a tampered section id even when its term and grade are otherwise valid');
+    }, 'annual intake rejects a section outside the selected school year');
+    await assert.rejects(annualService.createAnnualIntake(users.registrar,
+      { ...sourceConversion, annualSectionId: String(wrongGradeSection) }), (error) => {
+      assert.equal(error.status, 409);
+      assert.match(error.message, /Choose a Grade 11 section mapped to Term 1/);
+      return true;
+    }, 'annual intake rejects a section for a different grade');
+    await assert.rejects(annualService.createAnnualIntake(users.registrar,
+      { ...sourceConversion, annualSectionId: String(sections[1]) }), (error) => {
+      assert.equal(error.status, 409);
+      assert.match(error.message, /Choose a Grade 11 section mapped to Term 1/);
+      return true;
+    }, 'annual intake rejects a section from a different entry term');
     const beforeConversion = await queryOne(rawPool, `SELECT
       (SELECT COUNT(*) FROM students) AS students, (SELECT COUNT(*) FROM annual_enrollments) AS annuals,
       (SELECT COUNT(*) FROM enrollments) AS enrollments`);
@@ -449,6 +469,35 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
       'paper receipt rows do not become physical verification events during conversion');
     await assert.rejects(preEnrollments.update(users.front_desk, conversionSource.id, sourceAfter.version,
       readyPaper(uuid())), { status: 409 }, 'enrollment-started records are read-only');
+
+    // A saved paper preference is advisory; intake preserves both the chosen legacy section and source values.
+    const legacySectionSource = await preEnrollments.create(users.front_desk, readyPaper(uuid(), {
+      lrn: '012345678915', email: 'legacy-section@integration.invalid',
+      preferredTrack: 'Tech-Pro Track', preferredCluster: 'ICT Support & Computer Programming'
+    }));
+    const legacySectionInput = await convertInput(legacySectionSource.id, 1);
+    legacySectionInput.annualSectionId = String(emptySection);
+    const legacySectionIntake = await annualService.createAnnualIntake(users.registrar, legacySectionInput);
+    const legacyPlacements = await rawPool.execute(`SELECT enrollment.annual_term_number, enrollment.section_id,
+        section.cluster, section.strand
+      FROM enrollments AS enrollment
+      LEFT JOIN sections AS section ON section.id = enrollment.section_id
+      WHERE enrollment.annual_enrollment_id = ? ORDER BY enrollment.annual_term_number`, [legacySectionIntake.annualEnrollmentId]);
+    assert.deepEqual(legacyPlacements[0].map((row) => ({
+      term: Number(row.annual_term_number), sectionId: row.section_id == null ? null : Number(row.section_id),
+      cluster: row.cluster, strand: row.strand
+    })), [
+      { term: 1, sectionId: emptySection, cluster: 'ASSH', strand: 'Academic' },
+      { term: 2, sectionId: null, cluster: null, strand: null },
+      { term: 3, sectionId: null, cluster: null, strand: null }
+    ], 'the selected legacy section remains attached and exact-match rules leave unmatched future terms open');
+    const legacySourceAfter = await preEnrollments.get(users.registrar, legacySectionSource.id);
+    assert.equal(legacySourceAfter.preferred_track, 'Tech-Pro Track');
+    assert.equal(legacySourceAfter.preferred_cluster, 'ICT Support & Computer Programming');
+    const legacySectionAfter = await queryOne(rawPool,
+      'SELECT cluster, strand FROM sections WHERE id = ?', [emptySection]);
+    assert.deepEqual(legacySectionAfter, { cluster: 'ASSH', strand: 'Academic' },
+      'annual placement does not rewrite existing section metadata');
 
     // The source version remains editable while a wizard is open; an old wizard receives 409 after an edit.
     const staleSource = await preEnrollments.create(users.front_desk, readyPaper(uuid(), { lrn: '012345678904' }));

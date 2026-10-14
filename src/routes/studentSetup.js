@@ -16,7 +16,6 @@ const { latestBirthDate } = require('../services/studentRecordsService');
 const { isDuplicateKeyError } = require('../config/database');
 const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
 const { comparePreEnrollmentProfile } = require('../utils/studentProfileReview');
-const { isCanonicalProgram } = require('../utils/paperProgramCatalog');
 
 const MAX_BULK_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_XLSX_ENTRIES = 80;
@@ -581,15 +580,10 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         service.loadIntakeOptions(req.authUser.id),
         checklistService?.listIntakeRequirements ? checklistService.listIntakeRequirements(req.authUser.id) : Promise.resolve([])
       ]);
-      const configuredIntakeSections = options.sections.filter((section) => isCanonicalProgram(section.cluster, section.strand));
-      const intakeSections = preEnrollmentSource
-        ? configuredIntakeSections.filter((section) => section.cluster === preEnrollmentSource.preferred_track
-          && section.strand === preEnrollmentSource.preferred_cluster)
-        : configuredIntakeSections;
       return setPrivateHeaders(res).status(status).render('records/annual-intake-form', {
         title: 'New Annual Enrollment', csrfToken: ensureCsrfToken(req),
         idempotencyKey: values.idempotencyKey || values.preEnrollmentId || preEnrollmentSource?.id || crypto.randomUUID(),
-        ...options, sections: intakeSections, maxBirthDate: latestBirthDate(), values: { ...values, enrollmentStartDate: values.enrollmentStartDate || schoolLocalDate() }, error, activeStep,
+        ...options, maxBirthDate: latestBirthDate(), values: { ...values, enrollmentStartDate: values.enrollmentStartDate || schoolLocalDate() }, error, activeStep,
         paperRequirements, preEnrollmentSource, preEnrollmentReceiptRequirements: RECEIPT_REQUIREMENTS,
         profileReviewFields: preEnrollmentSource?.existingStudent?.profile
           ? comparePreEnrollmentProfile(preEnrollmentSource, preEnrollmentSource.existingStudent.profile).filter((item) => item.differs) : [],

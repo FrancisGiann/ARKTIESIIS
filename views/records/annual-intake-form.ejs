@@ -151,7 +151,7 @@
       </div>
       <section class="intake-section-choice" aria-labelledby="term-placement-title">
         <h3 id="term-placement-title">Annual section</h3>
-        <% if (preEnrollmentSource) { %><p class="muted-copy">Sections are limited to the saved <strong><%= preEnrollmentSource.preferred_track %></strong> track and <strong><%= preEnrollmentSource.preferred_cluster %></strong> cluster. If no matching entry-term section is listed, <a href="/registrar/records?view=setup&openForm=section" target="_blank" rel="noopener">configure a matching section first</a>, then reload this intake.</p><% } %>
+        <% if (preEnrollmentSource) { %><p class="muted-copy">Choose an available section for the selected school year, grade, and term. Review the saved paper track and cluster when assigning a section.</p><% } %>
         <p>Use this section for the school year. You can change individual terms when needed.</p>
         <div class="field"><label for="annual-section-mode">Sections</label><select id="annual-section-mode" name="sectionMode"><option value="same" <%= (values.sectionMode || 'same') === 'same' ? 'selected' : '' %>>Same section for all terms</option><option value="per_term" <%= values.sectionMode === 'per_term' ? 'selected' : '' %>>Different sections by term</option></select></div>
         <div class="field" id="annual-common-section-field"><label for="annual-common-section">Section for the entry term</label>

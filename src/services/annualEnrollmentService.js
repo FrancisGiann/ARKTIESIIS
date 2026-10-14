@@ -10,7 +10,6 @@ const { RETRYABLE_TRANSACTION_CODES, runSerializableTransaction } = require('./t
 const { TermClearanceError } = require('./termClearanceService');
 const { REVIEWABLE_PROFILE_FIELDS, PROFILE_REVIEW_GROUPS, profileReviewFingerprint } = require('../utils/studentProfileReview');
 const { createTemporaryPassword, createStudentActivationPassword, validStudentActivationIdentity } = require('../utils/temporaryPassword');
-const { isCanonicalProgram } = require('../utils/paperProgramCatalog');
 
 const BCRYPT_ROUNDS = 12;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -910,12 +909,6 @@ function createAnnualEnrollmentService({
         if (!section || section.school_year !== entry.schoolYear || section.grade_level !== entry.gradeLevel
           || Number(section.term_number) !== index + 1 || Number(section.academic_term_id) !== Number(termOrder[index].academic_term_id)) {
           throw new AnnualEnrollmentError(`Choose a ${entry.gradeLevel} section mapped to Term ${index + 1} of ${entry.schoolYear}.`, 409);
-        }
-        if (!isCanonicalProgram(section.cluster, section.strand)) {
-          throw new AnnualEnrollmentError('Choose a canonically configured track and cluster section.', 409);
-        }
-        if (preEnrollment && (section.cluster !== preEnrollment.preferred_track || section.strand !== preEnrollment.preferred_cluster)) {
-          throw new AnnualEnrollmentError('Every selected term section must match the saved paper track and cluster. Configure a matching section first.', 409);
         }
       }
       let resolvedSectionIds = [...entry.sectionIds];

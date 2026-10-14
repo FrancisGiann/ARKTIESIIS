@@ -254,7 +254,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     first_name: 'Jamie', middle_name: 'Rae', last_name: 'Lee', suffix: '', lrn: '123456789012',
     email: 'learner@example.edu', birth_date: '2008-04-21', sex: 'Female', profile_phone: '09171234567',
     address: '25 Mabini Street', emergency_contact_person: 'Morgan Lee', emergency_contact_phone: '09170000000',
-    emergency_contact_address: 'Lucena, Quezon', preferred_track: 'Academic Track', preferred_cluster: 'ASSH',
+    emergency_contact_address: 'Lucena, Quezon', preferred_track: 'Tech-Pro Track', preferred_cluster: 'ICT Support & Computer Programming',
     voucher_type_text: 'ESC as written', voucher_category_text: 'Category A', prior_grade_level: 'Grade 10',
     prior_school: 'Lucena High School', student_signature_present: 1, student_signed_date: '2026-10-01',
     received_by: 'Front Desk Operator', received_date: '2026-10-02', receipts: []
@@ -274,7 +274,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
       return {
         schoolYears: [{ school_year: '2026-2027' }],
         terms: [1, 2, 3].map((number) => ({ id: number, school_year: '2026-2027', term: `Term ${number}`, annual_term_number: number, is_current: number === 1 })),
-        sections: [1, 2, 3].map((number) => ({ id: number + 7, name: 'Mabini', grade_level: 'Grade 11', academic_term_id: number, school_year: '2026-2027', term: `Term ${number}`, cluster: 'A', strand: 'STEM', adviser: 'Synthetic Adviser', modality: 'face_to_face' }))
+        sections: [1, 2, 3].map((number) => ({ id: number + 7, name: 'Mabini', grade_level: 'Grade 11', academic_term_id: number, school_year: '2026-2027', term: `Term ${number}`, term_number: number, cluster: 'ASSH', strand: 'Academic', adviser: 'Synthetic Adviser', modality: 'face_to_face' }))
       };
     },
     async listAnnualEnrollments() { return [{ annual_enrollment_id: 71, enrollment_id: 51, student_id: 41, student_no: 'SHS-2026-0321', first_name: 'Synthetic', last_name: 'Learner', email: 'learner@example.edu', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB', voucher_category: 'D', entry_term_number: 1, term: 'Term 1', section_id: 8, section_name: 'Mabini', term_scope_status: 'applicable', annual_term_number: 1, enrollment_status: 'pending_payment', signed_clearance_status: 'not signed' }]; },
@@ -441,6 +441,10 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(html, /name="section1Id"/);
     assert.match(html, /name="section2Id"/);
     assert.match(html, /name="section3Id"/);
+    assert.match(html, /Choose an available section for the selected school year, grade, and term\. Review the saved paper track and cluster when assigning a section\./);
+    assert.match(html, /<option value="8" data-year="2026-2027" data-grade="Grade 11" data-term-number="1" data-name="Mabini" data-cluster="ASSH" data-strand="Academic"/,
+      'older section labels remain available even when they differ from the paper preference');
+    assert.doesNotMatch(html, /Sections are limited to the saved/);
     assert.match(html, /Voucher type/);
     assert.doesNotMatch(html, /name="voucherCategory"/i);
     const pending = await fetch(`${baseUrl}/registrar/intake`);
