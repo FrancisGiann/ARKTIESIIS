@@ -598,7 +598,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-colo
   body { background: #fff; }
   body.enrollment-print-page { min-height: 0 !important; }
   .app-header, .app-nav, .desktop-nav, .mobile-nav, .site-footer, .skip-link,
-  .enrollment-print__actions, .finance-statement .statement-actions, .finance-statement .context-back { display: none !important; }
+  .enrollment-print__actions, .pending-eform-actions, .finance-statement .statement-actions, .finance-statement .context-back { display: none !important; }
   .page-shell { width: 100%; padding: 0; }
   .enrollment-print, .finance-statement, .finance-statement .finance-panel { background: #fff; border: 0; box-shadow: none; }
   .enrollment-print__credential {
@@ -664,9 +664,62 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-colo
   .annual-confirmation-document .fee-breakdown > summary { display: none; }
   .annual-confirmation-document .fee-breakdown > .table-scroll { margin-top: 0; }
   .annual-confirmation-document .muted-copy { color: #222; }
+  .annual-pending-eform-document { page: annual-pending-eform-sheet; width: 100% !important; max-width: none !important; padding: 0 !important; margin: 0 !important; color: #000; background: #fff; font-size: 8pt; }
+  .pending-eform-copy { padding: 0; margin: 0; color: #000; background: #fff; border: 0; border-radius: 0; break-after: page; page-break-after: always; }
+  .pending-eform-copy:last-child { break-after: auto; page-break-after: auto; }
+  .pending-eform-header { padding-bottom: 0.45rem; margin-bottom: 0.45rem; border-bottom: 1.3pt solid #000; break-after: avoid; }
+  .pending-eform-header h1 { font-size: 15pt; }
+  .pending-eform-header p, .pending-eform-copy-label span { color: #222; font-size: 7.5pt; }
+  .pending-eform-copy-label strong { font-size: 9pt; }
+  .pending-eform-status { padding: 0.35rem 0.45rem; margin-bottom: 0.45rem; color: #000; background: #f2f2f2; border: 0.6pt solid #777; font-size: 7.5pt; }
+  .pending-eform-section { margin-bottom: 0.5rem; }
+  .pending-eform-section h2 { margin-bottom: 0.25rem; font-size: 8.5pt; break-after: avoid; }
+  .pending-eform-identity { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.16rem 0.45rem; }
+  .pending-eform-identity > div { padding-bottom: 0.1rem; border-color: #bbb; }
+  .pending-eform-identity dt { color: #333; font-size: 6.5pt; }
+  .pending-eform-identity dd { font-size: 7.5pt; }
+  .pending-eform-table { font-size: 7pt; }
+  .pending-eform-table thead { display: table-header-group; }
+  .pending-eform-table tr { break-inside: avoid; page-break-inside: avoid; }
+  .pending-eform-table th, .pending-eform-table td { padding: 0.2rem 0.24rem; color: #000; border-color: #888; }
+  .pending-eform-table th { background: #eee; }
+  .pending-eform-note { color: #333; font-size: 6.5pt; }
+  .pending-eform-checks p { margin: 0.35rem 0; font-size: 7.5pt; }
+  .pending-eform-stamp { min-height: 0.4in; padding-top: 0.35rem; border-color: #888; }
 }
 
 @page annual-confirmation-sheet { size: A4; margin: 13mm; }
+@page annual-pending-eform-sheet { size: A4 portrait; margin: 10mm; }
+
+@media print {
+  .annual-pending-eform-document .pending-eform-copy { padding: 0; margin: 0; color: #000; background: #fff; border: 0; border-radius: 0; break-after: page; page-break-after: always; }
+  .annual-pending-eform-document .pending-eform-copy:last-child { break-after: auto; page-break-after: auto; }
+  .annual-pending-eform-document .pending-eform-header { padding-bottom: 0.45rem; margin-bottom: 0.45rem; border-bottom: 1.3pt solid #000; }
+  .annual-pending-eform-document .pending-eform-header h1 { font-size: 15pt; }
+  .annual-pending-eform-document .pending-eform-header p,
+  .annual-pending-eform-document .pending-eform-copy-label span { color: #222; font-size: 7.5pt; }
+  .annual-pending-eform-document .pending-eform-copy-label strong { font-size: 9pt; }
+  .annual-pending-eform-document .pending-eform-status { padding: 0.35rem 0.45rem; margin-bottom: 0.45rem; color: #000; background: #f2f2f2; border: 0.6pt solid #777; font-size: 7.5pt; }
+  .annual-pending-eform-document .pending-eform-section { margin-bottom: 0.5rem; }
+  .annual-pending-eform-document .pending-eform-section h2 { margin-bottom: 0.25rem; font-size: 8.5pt; }
+  .annual-pending-eform-document .pending-eform-identity { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.16rem 0.45rem; }
+  .annual-pending-eform-document .pending-eform-identity > div { padding-bottom: 0.1rem; border-color: #bbb; }
+  .annual-pending-eform-document .pending-eform-identity dt { color: #333; font-size: 6.5pt; }
+  .annual-pending-eform-document .pending-eform-identity dd { font-size: 7.5pt; }
+  .annual-pending-eform-document .pending-eform-table { font-size: 7pt; }
+  .annual-pending-eform-document .pending-eform-table thead { display: table-header-group; }
+  .annual-pending-eform-document .pending-eform-table tr { break-inside: avoid; page-break-inside: avoid; }
+  .annual-pending-eform-document .pending-eform-table th,
+  .annual-pending-eform-document .pending-eform-table td { padding: 0.2rem 0.24rem; color: #000; border-color: #888; }
+  .annual-pending-eform-document .pending-eform-table th { background: #eee; }
+  .annual-pending-eform-document .pending-eform-note { color: #333; font-size: 6.5pt; }
+  .annual-pending-eform-document .pending-eform-receipts-section { break-inside: avoid; page-break-inside: avoid; }
+  .annual-pending-eform-document .pending-eform-receipts .pending-eform-receipt-context th {
+    color: #000; background: #eee; font-size: 7pt; text-align: center;
+  }
+  .annual-pending-eform-document .pending-eform-checks p { margin: 0.35rem 0; font-size: 7.5pt; }
+  .annual-pending-eform-document .pending-eform-stamp { min-height: 0.4in; padding-top: 0.35rem; border-color: #888; }
+}
 
 .registrar-overview, .finance-overview {
   padding: 1.15rem;
@@ -874,6 +927,37 @@ label { font-size: 0.84rem; }
 /* Guided registrar intake and fee confirmation */
 .registrar-intake, .annual-confirmation-result { max-width: 68rem; }
 .annual-confirmation-document { page: annual-confirmation-sheet; max-width: 68rem; }
+.annual-pending-eform-document { max-width: 64rem; }
+.pending-eform-actions { display: flex; justify-content: space-between; gap: 0.8rem; margin: 0 0 1rem; }
+.pending-eform-copy { padding: clamp(1rem, 2.2vw, 1.6rem); margin: 0 0 1.2rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); }
+.pending-eform-header { display: flex; justify-content: space-between; gap: 1rem; padding-bottom: 0.75rem; margin-bottom: 0.75rem; border-bottom: 2px solid var(--accent); }
+.pending-eform-header h1 { margin: 0 0 0.2rem; font-size: 1.55rem; }
+.pending-eform-header p { margin: 0; font-size: 0.82rem; }
+.pending-eform-copy-label { display: grid; align-content: start; gap: 0.3rem; text-align: right; }
+.pending-eform-copy-label strong { font-size: 1rem; }
+.pending-eform-copy-label span { max-width: 18rem; color: #79212f; font-size: 0.8rem; font-weight: 700; }
+.pending-eform-status { padding: 0.55rem 0.7rem; margin: 0 0 0.8rem; color: #54252a; background: #fff4f3; border: 1px solid #dfb7b7; font-size: 0.82rem; font-weight: 650; }
+.pending-eform-section { margin: 0 0 0.75rem; break-inside: auto; }
+.pending-eform-section h2 { margin: 0 0 0.4rem; font-size: 0.95rem; }
+.pending-eform-identity { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.35rem 0.7rem; margin: 0; }
+.pending-eform-identity > div { min-width: 0; padding-bottom: 0.2rem; border-bottom: 1px solid var(--line); }
+.pending-eform-identity dt { color: var(--muted); font-size: 0.69rem; font-weight: 650; }
+.pending-eform-identity dd { margin: 0.08rem 0 0; overflow-wrap: anywhere; font-size: 0.82rem; }
+.pending-eform-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 0.76rem; }
+.pending-eform-table th, .pending-eform-table td { padding: 0.32rem 0.38rem; border: 1px solid var(--line); overflow-wrap: anywhere; text-align: left; vertical-align: top; }
+.pending-eform-table th { background: #f0f3f3; }
+.pending-eform-table th:first-child { width: 14%; }
+.pending-eform-table th:nth-child(2) { width: 35%; }
+.pending-eform-table th:nth-child(3) { width: 12%; }
+.pending-eform-table th:nth-child(4) { width: 20%; }
+.pending-eform-table th:nth-child(5) { width: 19%; }
+.pending-eform-note { margin: 0.3rem 0 0; color: var(--muted); font-size: 0.72rem; }
+.pending-eform-checks p { margin: 0.5rem 0; font-size: 0.78rem; }
+.pending-eform-stamp { min-height: 2rem; padding-top: 0.5rem; border-top: 1px solid var(--line); }
+.pending-eform-receipts th:first-child { width: 24%; }
+.pending-eform-receipts th:nth-child(2) { width: 16%; }
+.pending-eform-receipts th:nth-child(3) { width: 40%; }
+.pending-eform-receipts th:nth-child(4) { width: 20%; }
 .confirmation-document-header { display: flex; align-items: center; gap: 0.85rem; padding: 0.8rem 0 1rem; margin: 0 0 1rem; border-bottom: 2px solid var(--accent); }
 .confirmation-document-header > img { flex: 0 0 auto; width: 3.6rem; height: 3.6rem; object-fit: contain; }
 .confirmation-document-header > div:nth-child(2) { min-width: 0; }

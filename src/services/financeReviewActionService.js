@@ -44,7 +44,10 @@ const READ_ONLY_POSTS = Object.freeze([
 const ACTION_WRITERS = Object.freeze({
   document_clearance_decision: ({ services, actorId, context, input }) => services.documentClearance.decideClearance(actorId, context.requestId, input),
   schedule_create: ({ services, actorId, input }) => services.annual.createSchedule(actorId, input),
-  annual_assessment: ({ services, actorId, context, input, studentId }) => services.annual.confirmAnnualAssessment(actorId, context.annualId, input.optionalLineId, { ...input, studentId }),
+  annual_assessment: ({ services, actorId, context, input, studentId, commitContext }) => services.annual.confirmAnnualAssessment(
+    actorId, context.annualId, input.optionalLineId, { ...input, studentId,
+      financeAttestation: commitContext?.financeAssessmentAttestation === true,
+      zeroDpAttested: commitContext?.zeroDpApproval === true }),
   annual_payment: ({ services, actorId, studentId, input }) => services.annual.recordPayment(actorId, studentId, input),
   annual_credit_allocation: ({ services, actorId, studentId, context, input }) => services.annual.allocateExistingCredit(actorId, studentId, context.paymentId, input),
   annual_adjustment: ({ services, actorId, studentId, context, input }) => services.annual.recordChargeAdjustment(actorId, studentId, context.chargeId, input),
@@ -757,9 +760,27 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     const resolvedContext = { ...actionContext, ...(studentId ? { studentId } : {}) };
     if (action.type === 'annual_assessment' && context.annualId) {
       const annual = await tx.request().input('annualId', sql.Int, context.annualId)
-        .query('SELECT school_year, grade_level, voucher_code FROM annual_enrollments WHERE id = @annualId');
+        .query(`SELECT annual.school_year, annual.grade_level, annual.voucher_code, annual.entry_term_number, annual.intake_status,
+            assessment.schedule_id AS assessed_schedule_id, assessment.schedule_version AS assessed_schedule_version,
+            assessment.voucher_code_snapshot AS assessed_voucher_code, assessment.selection_json AS assessed_selection_json
+          FROM annual_enrollments AS annual
+          LEFT JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.id
+          WHERE annual.id = @annualId`);
       const parent = annual.recordset?.[0];
-      if (parent) Object.assign(resolvedContext, { schoolYear: parent.school_year, gradeLevel: parent.grade_level, voucherCode: parent.voucher_code });
+      if (parent) {
+        Object.assign(resolvedContext, { schoolYear: parent.school_year, gradeLevel: parent.grade_level,
+          voucherCode: parent.voucher_code, entryTermNumber: Number(parent.entry_term_number || 1),
+          assessedScheduleId: parent.assessed_schedule_id == null ? null : Number(parent.assessed_schedule_id),
+          assessedScheduleVersion: parent.assessed_schedule_version == null ? null : Number(parent.assessed_schedule_version),
+          assessedVoucherCode: parent.assessed_voucher_code || null,
+          pendingAnnualHandoff: parent.intake_status === 'pending' });
+        if (parent.assessed_schedule_id != null) {
+          try {
+            const selection = JSON.parse(parent.assessed_selection_json || '{}');
+            input.optionalLineId = Array.isArray(selection.optionalLineIds) ? selection.optionalLineIds.map(String) : [];
+          } catch { throw new FinanceReviewDraftError('The saved annual assessment selection needs Finance review.', 409); }
+        }
+      }
     }
     if (locking && studentId) await lockStudentRows(tx, studentId);
     if (locking) await lockActionTargets(tx, resolvedContext, input);
@@ -771,6 +792,9 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       schoolYear: resolvedContext.schoolYear || null,
       gradeLevel: resolvedContext.gradeLevel || null,
       voucherCode: resolvedContext.voucherCode || null,
+      assessedVoucherCode: resolvedContext.assessedVoucherCode || null,
+      assessedScheduleVersion: resolvedContext.assessedScheduleVersion || null,
+      annualHandoffRequired: action.type === 'annual_assessment' && resolvedContext.pendingAnnualHandoff === true,
       fields: Object.entries(input).map(([name, value]) => ({ name, value: Array.isArray(value) ? value.map(String) : String(value ?? '') }))
     };
     preview.targetDetails = await actionTargetDetails(tx, action, resolvedContext);
@@ -868,17 +892,20 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       const schedule = await tx.request().input('scheduleYear', sql.NVarChar(20), resolvedContext.schoolYear)
         .input('scheduleGrade', sql.NVarChar(50), resolvedContext.gradeLevel)
         .input('scheduleVoucher', sql.NVarChar(10), resolvedContext.voucherCode)
+        .input('assessedScheduleId', sql.Int, resolvedContext.assessedScheduleId || null)
         .query(`SELECT schedule.id AS schedule_id, schedule.version_no, line.id AS line_id, line.term_number,
           line.fee_category, line.line_name, line.installment, line.amount, line.is_optional
           FROM finance_schedules AS schedule INNER JOIN finance_schedule_lines AS line ON line.schedule_id = schedule.id
-          WHERE schedule.school_year = @scheduleYear AND schedule.grade_level = @scheduleGrade
-            AND schedule.voucher_code = @scheduleVoucher AND schedule.status = 'active'
+          WHERE ((@assessedScheduleId IS NOT NULL AND schedule.id = @assessedScheduleId)
+            OR (@assessedScheduleId IS NULL AND schedule.school_year = @scheduleYear AND schedule.grade_level = @scheduleGrade
+              AND schedule.voucher_code = @scheduleVoucher AND schedule.status = 'active'))
           ORDER BY schedule.version_no DESC, line.term_number, line.id LIMIT 120`);
       const rows = schedule.recordset || [];
       const optionalIds = new Set((Array.isArray(input.optionalLineId) ? input.optionalLineId : [input.optionalLineId]).map(String));
       preview.schedule = rows.length ? { version: Number(rows[0].version_no),
         lines: rows.map((line) => ({ term: Number(line.term_number), fee: `${line.fee_category} · ${line.line_name}`,
           installment: line.installment, amount: String(line.amount), selected: !line.is_optional || optionalIds.has(String(line.line_id)) })) } : null;
+      preview.entryTermNumber = Number(resolvedContext.entryTermNumber || 1);
     }
     if (action.type === 'departure_review' && context.caseId) {
       const departureCharges = await tx.request().input('caseId', sql.BigInt, context.caseId)
@@ -1069,7 +1096,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     };
   }
 
-  async function applyReviewedAction(tx, draft, actor) {
+  async function applyReviewedAction(tx, draft, actor, commitContext = {}) {
     const services = boundServices(tx);
     const input = { ...draft.input, idempotencyKey: draft.idempotencyKey };
     const context = draft.entityContext;
@@ -1077,14 +1104,15 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     const studentId = safeIntegerId(context.studentId);
     const writer = ACTION_WRITERS[draft.actionType];
     if (!writer) throw new Error('The finance action is not registered for reviewed commit.');
-    const result = await writer({ services, actorId, studentId, context, input });
+    const result = await writer({ services, actorId, studentId, context, input, commitContext });
     return result || { saved: true };
   }
 
-  async function commit(actorId, sessionBindingHmac, draftId, revision, fingerprint) {
+  async function commit(actorId, sessionBindingHmac, draftId, revision, fingerprint, commitContext = {}) {
     return drafts.commitReviewedDraft({
       actorId, sessionBindingHmac, draftId, revision,
       review: { dependencyFingerprint: fingerprint, preview: {} },
+      commitContext,
       previewInTransaction: async (tx, draft) => {
         const action = actionForDraft(draft.actionType);
         return calculateReview(tx, action, draft.entityContext, draft.input, true);

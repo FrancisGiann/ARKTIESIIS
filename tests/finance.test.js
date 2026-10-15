@@ -291,7 +291,7 @@ test('all 22 reviewed writers receive action-specific normalized raw form values
     assert.equal(call.method, item.method, `${item.type} writer method`);
     const inputWithExpectedOwner = {
       ...input,
-      ...(item.type === 'annual_assessment' ? { studentId } : {}),
+      ...(item.type === 'annual_assessment' ? { studentId, financeAttestation: false, zeroDpAttested: false } : {}),
       ...(['annual_handbook_reference', 'annual_exemption'].includes(item.type) ? { expectedStudentId: studentId } : {})
     };
     const expectedArgs = {

@@ -380,7 +380,10 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     try {
       const result = await reviewActions.commit(req.authUser.id, sessionBinding(req), req.params.draftId,
-        req.body?.revision, req.body?.dependencyFingerprint);
+        req.body?.revision, req.body?.dependencyFingerprint, {
+          financeAssessmentAttestation: req.body?.financeAssessmentAttestation === '1',
+          zeroDpApproval: req.body?.zeroDpApproval === '1'
+        });
       if (result.stale) return res.redirect(303, `/finance/review-drafts/${encodeURIComponent(req.params.draftId)}?stale=1`);
       const draft = await reviewActions.getDraft(req.authUser.id, req.params.draftId);
       return res.redirect(303, reviewActions.afterCommitPath(draft));

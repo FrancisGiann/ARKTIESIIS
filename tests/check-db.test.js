@@ -5,7 +5,7 @@ const env = require('../src/config/environment');
 const { REQUIRED_OBJECTS, REQUIRED_COLUMNS, REQUIRED_CONSTRAINTS, REQUIRED_INDEXES, REQUIRED_FOREIGN_KEYS, EXPECTED_VERSIONS, checkDatabase } = require('../scripts/check-db');
 
 function checkHarness({ databaseName = env.database.database, missingObject = null, missingColumn = null, missingConstraint = null,
-  invalidRoleConstraint = false, missingIndex = null, missingForeignKey = false, failAt = null } = {}) {
+  invalidRoleConstraint = false, missingIndex = null, wrongIndexUniqueness = null, missingForeignKey = false, failAt = null } = {}) {
   const state = { queries: [], logs: [], errors: [], closed: 0 };
   let queryCount = 0;
   const pool = { request() {
@@ -32,7 +32,10 @@ function checkHarness({ databaseName = env.database.database, missingObject = nu
           })) };
         if (statement.includes('information_schema.statistics')) return { recordset: REQUIRED_INDEXES
           .filter(({ tableName, indexName }) => `${tableName}.${indexName}` !== missingIndex)
-          .map(({ tableName, indexName, columns }) => ({ tableName, indexName, nonUnique: 0, columns: columns.join(',') })) };
+          .map(({ tableName, indexName, columns, unique }) => ({ tableName, indexName,
+            nonUnique: unique === false ? 1 : 0,
+            ...( `${tableName}.${indexName}` === wrongIndexUniqueness ? { nonUnique: unique === false ? 0 : 1 } : {}),
+            columns: columns.join(',') })) };
         if (statement.includes('information_schema.key_column_usage')) return { recordset: missingForeignKey ? [] : REQUIRED_FOREIGN_KEYS.map((foreignKey) => ({
           tableName: foreignKey.tableName, constraintName: foreignKey.constraintName,
           columnName: foreignKey.columnName, referencedTable: foreignKey.referencedTable, referencedColumn: foreignKey.referencedColumn
@@ -66,7 +69,7 @@ test('MariaDB database check verifies migration versions, required tables, views
   assert.equal(state.exitCode, undefined);
   assert.equal(state.closed, 1);
   assert.match(state.logs[0], /MariaDB connectivity/);
-  assert.match(state.logs[0], /v2\.018/);
+  assert.match(state.logs[0], /v2\.019/);
   assert.ok(state.queries.some((statement) => statement.includes('information_schema.tables')));
   assert.ok(state.queries.some((statement) => statement.includes('information_schema.columns')));
   assert.ok(state.queries.every((statement) => !/\b(?:DB_NAME|OBJECT_ID|dbo\.|sys\.tables|TRIGGER)\b/i.test(statement)));
@@ -103,6 +106,15 @@ test('MariaDB database check requires paper-confirmation recording mode and its 
   assert.match(missingAttestationConstraint.errors.join('\n'), /constraint student_term_clearances\.CK_student_term_clearance_attestation/);
 });
 
+test('MariaDB database check requires durable annual Finance voucher-review context', async () => {
+  const missingEvent = await runCheck({ missingColumn: 'annual_finance_assessment_reviews.voucher_review_event_id' });
+  assert.equal(missingEvent.exitCode, 1);
+  assert.match(missingEvent.errors.join('\n'), /column annual_finance_assessment_reviews\.voucher_review_event_id/);
+  const missingAssessmentLink = await runCheck({ missingColumn: 'annual_enrollment_events.finance_assessment_id' });
+  assert.equal(missingAssessmentLink.exitCode, 1);
+  assert.match(missingAssessmentLink.errors.join('\n'), /column annual_enrollment_events\.finance_assessment_id/);
+});
+
 test('MariaDB database check verifies role, address, idempotency, LRN, and annual-source constraints', async () => {
   const wrongRole = await runCheck({ invalidRoleConstraint: true });
   assert.equal(wrongRole.exitCode, 1);
@@ -111,6 +123,10 @@ test('MariaDB database check verifies role, address, idempotency, LRN, and annua
   const missingUnique = await runCheck({ missingIndex: 'pre_enrollments.UQ_pre_enrollment_year_lrn' });
   assert.equal(missingUnique.exitCode, 1);
   assert.match(missingUnique.errors.join('\n'), /unique index pre_enrollments\.UQ_pre_enrollment_year_lrn/);
+
+  const wrongIndexKind = await runCheck({ wrongIndexUniqueness: 'annual_enrollment_events.IX_annual_enrollment_event_finance_assessment' });
+  assert.equal(wrongIndexKind.exitCode, 1);
+  assert.match(wrongIndexKind.errors.join('\n'), /index annual_enrollment_events\.IX_annual_enrollment_event_finance_assessment/);
 
   const missingForeignKey = await runCheck({ missingForeignKey: true });
   assert.equal(missingForeignKey.exitCode, 1);

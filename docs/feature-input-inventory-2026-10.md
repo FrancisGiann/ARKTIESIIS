@@ -260,8 +260,11 @@ Read-only inventory generated from current views/**/*.ejs markup. EJS conditiona
 ## readmissions/index.ejs:4 — GET /registrar/readmissions
 - "search" (input; maxlength=100); "status" (select options=[])
 
-## records/annual-intake-fees.ejs:22 — GET (EJS-generated)
-- "idempotencyKey" (hidden); "optionalLineIds" (hidden); "optionalLineIds" (checkbox)
+## finance/annual-student.ejs — POST /finance/annual/:annualId/assessment-preview and /assessment
+- Finance-only schedule, optional-fee selection, preview snapshot, idempotency, and explicit zero-DP attestation inputs; Registrar routes do not accept assessment or fee-selection inputs.
+
+## records/annual-intake-pending-form.ejs — GET /registrar/intake/:annualId/pending-form
+- No inputs. Private, no-store printable copies are generated from the saved pending annual intake.
 
 ## records/annual-intake-form.ejs:24 — POST /registrar/intake
 - "_csrf" (hidden); "idempotencyKey" (hidden); "preEnrollmentId" (hidden); "preEnrollmentVersion" (hidden); "studentReviewFingerprint" (hidden); "studentNo" (hidden); "approvedProfileFields" (checkbox); "studentNo" (input; disabled); "studentNo" (input; maxlength=50); "lrn" (input; pattern=[0-9]{12}, maxlength=12); "email" (email; maxlength=255); "firstName" (input; maxlength=100, pattern=\p{L}[\p{L}\p{M}]*(?:[.\x2d); "middleName" (input; maxlength=100, pattern=\p{L}[\p{L}\p{M}]*(?:[.\x2d); "lastName" (input; maxlength=100, pattern=\p{L}[\p{L}\p{M}]*(?:[.\x2d); "suffix" (input; maxlength=20, pattern=\p{L}[\p{L}\p{M}]*(?:[.\x2d); "birthDate" (date); "sex" (select options=[]); "phone" (tel; maxlength=50, pattern=\+?[0-9\x28\x29\x20\x2d]{7,50}); "emergencyContactPerson" (input; maxlength=160); "emergencyContactRelationship" (input; maxlength=80); "emergencyContactPhone" (tel; maxlength=50, pattern=\+?[0-9\x28\x29\x20\x2d]{7,50}); "schoolYear" (select; required options=[]); "gradeLevel" (select; required options=[]); "voucherCode" (select; required options=[]); "intakeKind" (select options=[standard|transferee]); "entryTermNumber" (select; required options=[]); "enrollmentStartDate" (date); "sectionMode" (select options=[same|per_term]); "annualSectionId" (select; required options=[])

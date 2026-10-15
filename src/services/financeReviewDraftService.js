@@ -265,7 +265,7 @@ function createFinanceReviewDraftService({
     });
   }
 
-  async function commitReviewedDraft({ actorId: actorInput, draftId: draftInput, sessionBindingHmac, revision: revisionInput, review, previewInTransaction, applyInTransaction }) {
+  async function commitReviewedDraft({ actorId: actorInput, draftId: draftInput, sessionBindingHmac, revision: revisionInput, review, previewInTransaction, applyInTransaction, commitContext = {} }) {
     const draftId = normalizeUuid(draftInput, 'draft id');
     const revision = Number(revisionInput);
     if (!Number.isSafeInteger(revision) || revision < 1) throw new FinanceReviewDraftError('The finance review changed. Review it again.', 409);
@@ -324,7 +324,7 @@ function createFinanceReviewDraftService({
         outcome = { stale: true, revision: nextRevision };
         return;
       }
-      const result = await applyInTransaction(tx, draft, actor);
+      const result = await applyInTransaction(tx, draft, actor, commitContext);
       const resultJson = jsonText(result || { saved: true }, 'Saved finance result', 64 * 1024);
       await tx.request().input('draftId', sql.Char(36), draft.id)
         .input('ownerId', sql.Int, actor.id)

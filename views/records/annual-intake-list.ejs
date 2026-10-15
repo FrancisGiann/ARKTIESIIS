@@ -96,7 +96,7 @@
                     <div><h4><%= displayTerm %></h4><p><%= [row.section_name || 'No section assigned', row.cluster ? `Cluster ${row.cluster}` : '', row.strand, row.adviser ? `Adviser ${row.adviser}` : '', row.modality, row.modular_subtype].filter(Boolean).join(' · ') %></p></div>
                     <dl class="annual-placement__status">
                       <div><dt>Status</dt><dd><%= statusLabel %></dd></div>
-                      <div><dt>Enrollment</dt><dd><%= row.term_scope_status === 'not_applicable' ? 'Not applicable before entry' : row.registrar_confirmation_id ? 'Confirmed' : Number(row.annual_term_number) === Number(row.entry_term_number) ? 'Needs fee confirmation' : 'Waiting for entry confirmation' %></dd></div>
+                      <div><dt>Enrollment</dt><dd><%= row.term_scope_status === 'not_applicable' ? 'Not applicable before entry' : row.registrar_confirmation_id ? 'Confirmed' : Number(row.annual_term_number) === Number(row.entry_term_number) ? 'Awaiting Finance and DP readiness' : 'Waiting for entry confirmation' %></dd></div>
                       <div><dt>Term account clearance</dt><dd><%= row.signed_clearance_status === 'signed' ? 'Recorded' : 'Not recorded' %></dd></div>
                     </dl>
                   </div>
@@ -127,10 +127,10 @@
                       </div>
                       <div class="annual-placement__action annual-placement__action--activation">
                         <% if (row.enrollment_status === 'pending_payment' && row.term_scope_status === 'applicable' && row.section_id && !row.registrar_confirmation_id && Number(row.annual_term_number) === Number(row.entry_term_number)) { %>
-                          <a class="button button--primary" href="/registrar/intake/<%= row.annual_enrollment_id %>/fees">Review fees and confirm enrollment</a>
+                          <a class="button button--primary" href="/registrar/intake/<%= row.annual_enrollment_id %>/review">Review and finalize enrollment</a>
                         <% } else if (row.enrollment_status === 'pending_payment' && row.term_scope_status === 'applicable' && row.section_id && row.registrar_confirmation_id) { %>
                           <a class="button button--primary" href="/registrar/intake/<%= row.enrollment_id %>/activation-review">Review prerequisites and activate</a>
-                        <% } else if (row.enrollment_status === 'pending_payment' && row.term_scope_status === 'applicable' && !row.section_id) { %><p class="muted-copy"><%= row.registrar_confirmation_id ? 'Assign a section before activation' : Number(row.annual_term_number) === Number(row.entry_term_number) ? 'Assign an entry section before fee confirmation' : 'Assign a section after entry confirmation' %></p>
+                        <% } else if (row.enrollment_status === 'pending_payment' && row.term_scope_status === 'applicable' && !row.section_id) { %><p class="muted-copy"><%= row.registrar_confirmation_id ? 'Assign a section before activation' : Number(row.annual_term_number) === Number(row.entry_term_number) ? 'Assign an entry section before final confirmation' : 'Assign a section after entry confirmation' %></p>
                         <% } else if (row.enrollment_status === 'pending_payment' && !row.registrar_confirmation_id) { %><p class="muted-copy">Confirm the entry term first.</p><% } else { %><p class="muted-copy">No activation action is available.</p><% } %>
                       </div>
                     </div>

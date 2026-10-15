@@ -446,7 +446,29 @@ function createAnnualEnrollmentService({
         LEFT JOIN annual_special_subjects AS special ON special.student_subject_id = assignment.id
         LEFT JOIN assessed_charges AS charge ON charge.special_subject_id = special.id
         WHERE enrollment.annual_enrollment_id = @annualEnrollmentId AND enrollment.term_scope_status = 'applicable'
-        ORDER BY enrollment.annual_term_number, subject.subject_code`);
+        ORDER BY enrollment.annual_term_number, subject.subject_code, assignment.id`);
+    const scheduleResult = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+      .query(`SELECT assignment.id AS student_subject_id, schedule.day_of_week,
+          TIME_FORMAT(schedule.start_time, '%H:%i') AS schedule_start_time,
+          TIME_FORMAT(schedule.end_time, '%H:%i') AS schedule_end_time, schedule.room
+        FROM enrollments AS enrollment
+        INNER JOIN student_subjects AS assignment ON assignment.enrollment_id = enrollment.id
+        LEFT JOIN teacher_assignments AS teacher_assignment ON teacher_assignment.academic_term_id = enrollment.academic_term_id
+          AND teacher_assignment.section_id = enrollment.section_id AND teacher_assignment.subject_id = assignment.subject_id
+          AND teacher_assignment.is_active = 1
+        LEFT JOIN class_schedules AS schedule ON schedule.assignment_id = teacher_assignment.id
+        WHERE enrollment.annual_enrollment_id = @annualEnrollmentId AND enrollment.term_scope_status = 'applicable'
+        ORDER BY assignment.id, schedule.day_of_week, schedule.start_time, schedule.id`);
+    const schedulesBySubject = new Map();
+    for (const schedule of scheduleResult.recordset || []) {
+      const subjectId = Number(schedule.student_subject_id);
+      const schedules = schedulesBySubject.get(subjectId) || [];
+      if (schedule.day_of_week || schedule.schedule_start_time || schedule.schedule_end_time || schedule.room) {
+        schedules.push({ day_of_week: schedule.day_of_week, schedule_start_time: schedule.schedule_start_time,
+          schedule_end_time: schedule.schedule_end_time, room: schedule.room });
+      }
+      schedulesBySubject.set(subjectId, schedules);
+    }
     const administrationHistoryResult = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
       .query(`SELECT revision.revision_group, revision.field_name, revision.before_value, revision.after_value,
           revision.created_at, revision.actor_id, staff.first_name AS actor_first_name, staff.last_name AS actor_last_name
@@ -454,7 +476,9 @@ function createAnnualEnrollmentService({
         LEFT JOIN staff_profiles AS staff ON staff.user_id = revision.actor_id
         WHERE revision.annual_enrollment_id = @annualEnrollmentId ORDER BY revision.created_at DESC, revision.id DESC`);
     return { parent, terms: termsResult.recordset || [], tags: tagsResult.recordset || [],
-      subjects: subjectsResult.recordset || [], administrationHistory: administrationHistoryResult.recordset || [] };
+      subjects: (subjectsResult.recordset || []).map((subject) => ({ ...subject,
+        schedules: schedulesBySubject.get(Number(subject.student_subject_id)) || [] })),
+      administrationHistory: administrationHistoryResult.recordset || [] };
   }
 
   async function updateAnnualAdministrationDetails(actorInput, annualEnrollmentInput, input = {}) {
@@ -1723,29 +1747,20 @@ function createAnnualEnrollmentService({
   }
 
   async function confirmAnnualEnrollment(actorInput, annualInput, input = {}) {
-    if (!annualFinanceService || typeof annualFinanceService.confirmAnnualAssessmentInTransaction !== 'function') {
+    if (!annualFinanceService || typeof annualFinanceService.assertAnnualEntryDownPaymentReadyInTransaction !== 'function') {
       throw new AnnualEnrollmentError('Fee assessment is unavailable. Reload later or contact a system administrator.', 503);
     }
     const annualEnrollmentId = normalizeId(annualInput, 'annual enrollment');
     const idempotencyKey = normalizeUuid(input.idempotencyKey, 'enrollment confirmation');
-    const scheduleId = normalizeId(input.scheduleId, 'fee schedule');
-    const scheduleVersion = normalizeId(input.scheduleVersion, 'fee schedule version');
-    const voucherCode = input.voucherCode;
-    if (!['PUB', 'ESC', 'NV'].includes(voucherCode)) throw new AnnualEnrollmentError('Reload the fee review before confirming enrollment.');
-    const rawSelection = input.optionalLineIds == null ? [] : Array.isArray(input.optionalLineIds) ? input.optionalLineIds : [input.optionalLineIds];
-    if (rawSelection.length > 120) throw new AnnualEnrollmentError('Too many optional fees were selected.');
-    const optionalLineIds = rawSelection.map((value) => normalizeId(value, 'optional fee'));
-    if (new Set(optionalLineIds).size !== optionalLineIds.length) throw new AnnualEnrollmentError('An optional fee was selected more than once.');
-    optionalLineIds.sort((left, right) => left - right);
-    const expectedAssessmentId = input.assessmentId ? normalizeId(input.assessmentId, 'assessment') : null;
+    if (['assessmentId', 'scheduleId', 'scheduleVersion', 'voucherCode', 'snapshotFingerprint', 'optionalLineIds']
+      .some((field) => Object.hasOwn(input, field))) {
+      throw new AnnualEnrollmentError('Fee selections and assessment details are owned by Finance. Reload the Registrar review before confirming enrollment.', 409);
+    }
     const clearanceSnapshotFingerprint = input.clearanceSnapshotFingerprint == null || input.clearanceSnapshotFingerprint === ''
       ? null : typeof input.clearanceSnapshotFingerprint === 'string' && /^[0-9a-f]{64}$/i.test(input.clearanceSnapshotFingerprint)
         ? input.clearanceSnapshotFingerprint.toLowerCase() : (() => { throw new AnnualEnrollmentError('Reload the fee and paper-clearance review before confirming enrollment.', 409); })();
-    const confirmationPayload = { annualEnrollmentId, scheduleId, scheduleVersion, voucherCode, expectedAssessmentId, optionalLineIds,
-      assessmentSnapshotFingerprint: input.snapshotFingerprint || null, clearanceSnapshotFingerprint };
+    const confirmationPayload = { annualEnrollmentId, clearanceSnapshotFingerprint };
     const inputFingerprint = crypto.createHash('sha256').update(JSON.stringify(confirmationPayload)).digest('hex');
-    const legacyFingerprint = crypto.createHash('sha256').update(JSON.stringify({ annualEnrollmentId, scheduleId, scheduleVersion,
-      voucherCode, expectedAssessmentId, optionalLineIds, assessmentSnapshotFingerprint: input.snapshotFingerprint || null })).digest('hex');
     const requestFingerprint = crypto.createHash('sha256').update(JSON.stringify({ inputFingerprint, clearanceSnapshotFingerprint })).digest('hex');
     const pool = await getPool();
     const ownerResult = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
@@ -1760,13 +1775,12 @@ function createAnnualEnrollmentService({
       if (student.status === 'archived') throw new AnnualEnrollmentError('Archived students cannot receive new enrollments.', 409);
       const priorResult = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
         .query(`SELECT id, annual_enrollment_id, request_fingerprint, input_fingerprint, clearance_snapshot_fingerprint,
-            assessment_id, payable_total
+            assessment_id, finance_review_id, payable_total
           FROM annual_registrar_confirmations WHERE idempotency_key = @idempotencyKey FOR UPDATE`);
       const prior = priorResult.recordset?.[0];
       if (prior) {
-        const priorMatches = prior.input_fingerprint
-          ? prior.input_fingerprint === inputFingerprint && prior.clearance_snapshot_fingerprint === clearanceSnapshotFingerprint
-          : clearanceSnapshotFingerprint === null && prior.request_fingerprint === legacyFingerprint;
+        const priorMatches = prior.finance_review_id == null
+          || (prior.input_fingerprint === inputFingerprint && prior.clearance_snapshot_fingerprint === clearanceSnapshotFingerprint);
         if (Number(prior.annual_enrollment_id) !== annualEnrollmentId || !priorMatches) {
           throw new AnnualEnrollmentError('This confirmation token was already used for different fee or enrollment choices.', 409);
         }
@@ -1871,20 +1885,26 @@ function createAnnualEnrollmentService({
       if (parent.latest_voucher_event === 'voucher_review_flagged') {
         throw new AnnualEnrollmentError('Finance must review the voucher change before enrollment can be confirmed.', 409);
       }
-      const existingAssessmentId = parent.existing_assessment_id == null ? null : Number(parent.existing_assessment_id);
-      if (existingAssessmentId !== expectedAssessmentId) throw new AnnualEnrollmentError('The fee assessment changed after review. Reload the fee summary before confirming.', 409);
-      const assessed = await annualFinanceService.confirmAnnualAssessmentInTransaction(transaction, actor.id, annualEnrollmentId,
-        optionalLineIds, { idempotencyKey, scheduleId, scheduleVersion, voucherCode, snapshotFingerprint: input.snapshotFingerprint, studentId: ownerStudentId });
-      const assessmentId = normalizeId(String(assessed.assessmentId), 'assessment');
-      const payableTotal = typeof assessed.total === 'string' && /^(?:0|[1-9]\d{0,9})\.\d{2}$/.test(assessed.total)
-        ? assessed.total : null;
-      if (!payableTotal || typeof assessed.snapshotFingerprint !== 'string' || !/^[0-9a-f]{64}$/i.test(assessed.snapshotFingerprint)) {
-        throw new AnnualEnrollmentError('The saved assessment could not be verified. No enrollment confirmation was recorded.', 409);
+      let assessed;
+      try {
+        assessed = await annualFinanceService.assertAnnualEntryDownPaymentReadyInTransaction(transaction, annualEnrollmentId);
+      } catch (error) {
+        if (error?.name === 'AnnualFinanceError') throw new AnnualEnrollmentError(error.message, error.status || 409);
+        throw error;
       }
-      const assessmentSnapshotFingerprint = crypto.createHash('sha256').update(JSON.stringify({
-        assessmentId, scheduleId, scheduleVersion, voucherCode, payableTotal, optionalLineIds,
-        postedComposition: assessed.snapshotFingerprint
-      })).digest('hex');
+      const assessmentId = normalizeId(String(assessed.assessmentId), 'assessment');
+      const scheduleId = normalizeId(String(assessed.scheduleId), 'fee schedule');
+      const scheduleVersion = normalizeId(String(assessed.scheduleVersion), 'fee schedule version');
+      const voucherCode = assessed.voucherCode;
+      const optionalLineIds = assessed.optionalLineIds;
+      const payableTotal = typeof assessed.payableTotal === 'string' && /^(?:0|[1-9]\d{0,9})\.\d{2}$/.test(assessed.payableTotal)
+        ? assessed.payableTotal : null;
+      const assessmentSnapshotFingerprint = assessed.assessmentSnapshotFingerprint;
+      if (!payableTotal || !['PUB', 'ESC', 'NV'].includes(voucherCode)
+        || typeof assessmentSnapshotFingerprint !== 'string' || !/^[0-9a-f]{64}$/i.test(assessmentSnapshotFingerprint)
+        || Number(parent.existing_assessment_id) !== assessmentId) {
+        throw new AnnualEnrollmentError('The saved Finance assessment could not be verified. No enrollment confirmation was recorded.', 409);
+      }
       const inserted = await transaction.request()
         .input('annualEnrollmentId', sql.Int, annualEnrollmentId)
         .input('studentId', sql.Int, parent.student_id)
@@ -1892,6 +1912,8 @@ function createAnnualEnrollmentService({
         .input('gradeLevel', sql.NVarChar(50), parent.grade_level)
         .input('entryEnrollmentId', sql.Int, parent.entry_enrollment_id)
         .input('assessmentId', sql.Int, assessmentId)
+        .input('financeReviewId', sql.BigInt, assessed.financeReviewId)
+        .input('entryDpState', sql.NVarChar(24), assessed.entryDpState)
         .input('scheduleId', sql.Int, scheduleId)
         .input('scheduleVersion', sql.Int, scheduleVersion)
         .input('voucherCode', sql.NVarChar(10), voucherCode)
@@ -1904,10 +1926,12 @@ function createAnnualEnrollmentService({
         .input('inputFingerprint', sql.Char(64), inputFingerprint)
         .input('clearanceSnapshotFingerprint', sql.Char(64), clearanceSnapshotFingerprint)
         .query(`INSERT INTO annual_registrar_confirmations
-          (annual_enrollment_id, student_id, school_year, grade_level, assessment_id, schedule_id, schedule_version, voucher_code_snapshot,
+          (annual_enrollment_id, student_id, school_year, grade_level, assessment_id, finance_review_id,
+              entry_dp_state_at_confirmation, schedule_id, schedule_version, voucher_code_snapshot,
               payable_total, selection_json, assessment_snapshot_fingerprint, confirmed_by, idempotency_key, request_fingerprint,
               entry_enrollment_id, input_fingerprint, clearance_snapshot_fingerprint)
-          VALUES (@annualEnrollmentId, @studentId, @schoolYear, @gradeLevel, @assessmentId, @scheduleId, @scheduleVersion, @voucherCode,
+          VALUES (@annualEnrollmentId, @studentId, @schoolYear, @gradeLevel, @assessmentId, @financeReviewId,
+            @entryDpState, @scheduleId, @scheduleVersion, @voucherCode,
             @payableTotal, @selectionJson, @assessmentSnapshotFingerprint, @actorId, @idempotencyKey, @requestFingerprint, @entryEnrollmentId,
             @inputFingerprint, @clearanceSnapshotFingerprint)`);
       if (!Number.isSafeInteger(inserted.insertId) || inserted.insertId < 1) throw new Error('Annual confirmation insert returned no identifier.');
@@ -1982,12 +2006,15 @@ function createAnnualEnrollmentService({
       const assessmentResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
         .query('SELECT id FROM annual_assessments WHERE annual_enrollment_id = @annualEnrollmentId');
       if (assessmentResult.recordset?.length) {
+        const assessmentId = Number(assessmentResult.recordset[0].id);
         await transaction.request()
           .input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+          .input('assessmentId', sql.Int, assessmentId)
           .input('actorId', sql.Int, actor.id)
           .input('reason', sql.NVarChar(1000), reason)
-          .query(`INSERT INTO annual_enrollment_events (annual_enrollment_id, actor_id, event_type, reason)
-            VALUES (@annualEnrollmentId, @actorId, 'voucher_review_flagged', @reason)`);
+          .query(`INSERT INTO annual_enrollment_events
+              (annual_enrollment_id, finance_assessment_id, actor_id, event_type, reason)
+            VALUES (@annualEnrollmentId, @assessmentId, @actorId, 'voucher_review_flagged', @reason)`);
       }
       await writeAudit(transaction, actor, 'annual_voucher_changed', annualEnrollmentId, {
         oldVoucherCode: current.voucher_code, oldVoucherCategory: current.voucher_category,

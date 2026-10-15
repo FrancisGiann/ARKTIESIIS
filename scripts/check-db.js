@@ -23,7 +23,7 @@ const REQUIRED_OBJECTS = Object.freeze([
   'v_finance_net_payment_allocations', 'v_finance_net_legacy_reconciliations', 'v_finance_payment_credit',
   'v_finance_assessed_charge_due', 'v_finance_opening_liability_due', 'v_finance_legacy_account_balance',
   'student_document_requests', 'student_document_request_events', 'student_profile_revisions',
-  'annual_registrar_confirmations', 'annual_enrollment_admin_revisions', 'finance_fee_comment_events',
+  'annual_registrar_confirmations', 'annual_finance_assessment_reviews', 'annual_enrollment_admin_revisions', 'finance_fee_comment_events',
   'finance_handbook_number_events', 'student_document_clearance_events', 'student_document_claim_slips',
   'finance_review_drafts',
   'v_document_latest_review_event', 'v_document_latest_decision_event',
@@ -44,7 +44,11 @@ const REQUIRED_COLUMNS = Object.freeze({
   enrollments: ['finalized_at', 'annual_enrollment_id', 'term_scope_status'],
   annual_enrollments: ['esc_id', 'eform_status', 'finance_handbook_number', 'pre_enrollment_id', 'intake_kind',
     'readmission_evaluation_id', 'readmission_evaluation_version', 'continuity_source_annual_enrollment_id'],
-  annual_registrar_confirmations: ['input_fingerprint', 'clearance_snapshot_fingerprint'],
+  annual_registrar_confirmations: ['input_fingerprint', 'clearance_snapshot_fingerprint', 'finance_review_id', 'entry_dp_state_at_confirmation'],
+  annual_finance_assessment_reviews: ['annual_enrollment_id', 'assessment_id', 'schedule_id', 'schedule_version', 'voucher_code_snapshot',
+    'current_voucher_code_snapshot', 'voucher_review_event_id', 'selection_json', 'assessment_fingerprint', 'dependency_fingerprint',
+    'zero_dp_attested', 'reviewed_by', 'reviewed_by_role', 'reviewed_at', 'idempotency_key', 'request_fingerprint'],
+  annual_enrollment_events: ['annual_enrollment_id', 'finance_assessment_id'],
   previous_school_report_card_status_events: ['status'],
   finance_payment_allocations: ['legacy_opening_charge_id'],
   assessed_charges: ['gross_amount', 'waived_amount'],
@@ -80,7 +84,8 @@ const REQUIRED_CONSTRAINTS = Object.freeze([
   { tableName: 'student_term_clearance_items', constraintName: 'CK_student_term_clearance_item_exclusion', type: 'CHECK', clauseIncludes: 'applicability_reason' },
   { tableName: 'annual_continuity_source_events', constraintName: 'CK_annual_continuity_source_event_reason', type: 'CHECK', clauseIncludes: 'reason' },
   { tableName: 'pre_enrollments', constraintName: 'CK_pre_enrollment_created_by_role', type: 'CHECK', clauseIncludes: 'front_desk' },
-  { tableName: 'annual_enrollments', constraintName: 'CK_annual_enrollment_intake_kind', type: 'CHECK', clauseIncludes: 'readmission' }
+  { tableName: 'annual_enrollments', constraintName: 'CK_annual_enrollment_intake_kind', type: 'CHECK', clauseIncludes: 'readmission' },
+  { tableName: 'annual_registrar_confirmations', constraintName: 'CK_annual_registrar_confirmation_entry_dp_state', type: 'CHECK', clauseIncludes: 'zero_due' }
 ]);
 const REQUIRED_INDEXES = Object.freeze([
   { tableName: 'students', indexName: 'UX_students_user_id_linked', columns: ['user_id'] },
@@ -90,9 +95,36 @@ const REQUIRED_INDEXES = Object.freeze([
   { tableName: 'term_clearance_templates', indexName: 'UQ_term_clearance_template_version', columns: ['grade_level', 'track_label', 'version_no'] },
   { tableName: 'student_term_clearances', indexName: 'UQ_student_term_clearance_enrollment', columns: ['enrollment_id'] },
   { tableName: 'annual_term_finalizations', indexName: 'UQ_annual_term_finalization_token', columns: ['idempotency_key'] },
+  { tableName: 'annual_finance_assessment_reviews', indexName: 'UQ_annual_finance_assessment_review_key', columns: ['idempotency_key'] },
+  { tableName: 'annual_finance_assessment_reviews', indexName: 'UQ_annual_finance_assessment_review_confirmation_context',
+    columns: ['id', 'annual_enrollment_id', 'assessment_id'] },
+  { tableName: 'annual_enrollment_events', indexName: 'IX_annual_enrollment_event_finance_assessment',
+    columns: ['finance_assessment_id', 'created_at', 'id'], unique: false },
   { tableName: 'annual_continuity_source_events', indexName: 'UQ_annual_continuity_source_event_token', columns: ['idempotency_key'] }
 ]);
 const REQUIRED_FOREIGN_KEYS = Object.freeze([
+  { tableName: 'annual_finance_assessment_reviews', constraintName: 'FK_annual_finance_assessment_review_annual',
+    columnName: 'annual_enrollment_id', referencedTable: 'annual_enrollments', referencedColumn: 'id' },
+  { tableName: 'annual_finance_assessment_reviews', constraintName: 'FK_annual_finance_assessment_review_context',
+    columnName: 'assessment_id', referencedTable: 'annual_assessments', referencedColumn: 'id' },
+  { tableName: 'annual_finance_assessment_reviews', constraintName: 'FK_annual_finance_assessment_review_context',
+    columnName: 'annual_enrollment_id', referencedTable: 'annual_assessments', referencedColumn: 'annual_enrollment_id' },
+  { tableName: 'annual_finance_assessment_reviews', constraintName: 'FK_annual_finance_assessment_review_context',
+    columnName: 'schedule_id', referencedTable: 'annual_assessments', referencedColumn: 'schedule_id' },
+  { tableName: 'annual_finance_assessment_reviews', constraintName: 'FK_annual_finance_assessment_review_context',
+    columnName: 'schedule_version', referencedTable: 'annual_assessments', referencedColumn: 'schedule_version' },
+  { tableName: 'annual_finance_assessment_reviews', constraintName: 'FK_annual_finance_assessment_review_context',
+    columnName: 'voucher_code_snapshot', referencedTable: 'annual_assessments', referencedColumn: 'voucher_code_snapshot' },
+  { tableName: 'annual_finance_assessment_reviews', constraintName: 'FK_annual_finance_assessment_review_actor',
+    columnName: 'reviewed_by', referencedTable: 'users', referencedColumn: 'id' },
+  { tableName: 'annual_enrollment_events', constraintName: 'FK_annual_enrollment_event_finance_assessment',
+    columnName: 'finance_assessment_id', referencedTable: 'annual_assessments', referencedColumn: 'id' },
+  { tableName: 'annual_registrar_confirmations', constraintName: 'FK_annual_registrar_confirmation_finance_review_context',
+    columnName: 'finance_review_id', referencedTable: 'annual_finance_assessment_reviews', referencedColumn: 'id' },
+  { tableName: 'annual_registrar_confirmations', constraintName: 'FK_annual_registrar_confirmation_finance_review_context',
+    columnName: 'annual_enrollment_id', referencedTable: 'annual_finance_assessment_reviews', referencedColumn: 'annual_enrollment_id' },
+  { tableName: 'annual_registrar_confirmations', constraintName: 'FK_annual_registrar_confirmation_finance_review_context',
+    columnName: 'assessment_id', referencedTable: 'annual_finance_assessment_reviews', referencedColumn: 'assessment_id' },
   { tableName: 'annual_enrollments', constraintName: 'FK_annual_enrollment_pre_enrollment',
     columnName: 'pre_enrollment_id', referencedTable: 'pre_enrollments', referencedColumn: 'id' },
   { tableName: 'pre_enrollments', constraintName: 'FK_pre_enrollment_readmission_evaluation',
@@ -108,7 +140,7 @@ const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'term_clearance_template_items', constraintName: 'FK_term_clearance_template_item_template',
     columnName: 'template_id', referencedTable: 'term_clearance_templates', referencedColumn: 'id' }
 ]);
-const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 18 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 19 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 function bindInList(request, values, prefix) {
   return values.map((value, index) => {
@@ -202,9 +234,11 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
     }).map(({ tableName, constraintName }) => `constraint ${tableName}.${constraintName}`);
     const missingIndexes = REQUIRED_INDEXES.filter((expected) => {
       const actual = indexes.get(`${expected.tableName}.${expected.indexName}`);
-      return !actual || Number(actual.nonUnique) !== 0
+      const expectedUnique = expected.unique !== false;
+      const actualUnique = actual ? Number(actual.nonUnique) === 0 : false;
+      return !actual || actualUnique !== expectedUnique
         || String(actual.columns || '').split(',').join('\0') !== expected.columns.join('\0');
-    }).map(({ tableName, indexName }) => `unique index ${tableName}.${indexName}`);
+    }).map(({ tableName, indexName, unique }) => `${unique === false ? 'index' : 'unique index'} ${tableName}.${indexName}`);
     const missingForeignKeys = REQUIRED_FOREIGN_KEYS.filter((expected) => {
       const actual = (foreignKeyResult.recordset || []).find((row) => row.tableName === expected.tableName
         && row.constraintName === expected.constraintName && row.columnName === expected.columnName);
@@ -227,7 +261,7 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
       process.exitCode = 1;
       return;
     }
-    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.018.`);
+    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.019.`);
   } catch {
     logger.error('MariaDB database check failed. Confirm DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD, then run npm run db:setup.');
     process.exitCode = 1;

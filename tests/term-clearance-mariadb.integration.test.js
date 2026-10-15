@@ -148,7 +148,7 @@ async function inTransaction(pool, callback) {
   }
 }
 
-test('v2.017 to v2.018 migration rehearsal and paper-clearance SQL, roles, snapshots, review gates, and replay', {
+test('v2.017 to v2.019 migration rehearsal and paper-clearance SQL, roles, snapshots, review gates, and replay', {
   skip: !socketPath && 'Set TERM_CLEARANCE_MARIADB_TEST_SOCKET to a disposable local MariaDB socket.',
   timeout: 180000
 }, async () => {
@@ -248,9 +248,21 @@ test('v2.017 to v2.018 migration rehearsal and paper-clearance SQL, roles, snaps
     assert.deepEqual({ items: Number(preservedEvidence[0].items), events: Number(preservedEvidence[0].events), templates: Number(preservedEvidence[0].templates) },
       { items: 4, events: 1, templates: 1 }, 'v2.018 leaves legacy checklist, template, and event evidence intact');
 
+    const migration019 = readForwardMigrations().find(({ version }) => version === 'v2.019');
+    assert.ok(migration019, 'the forward-only v2.019 Finance handoff migration exists');
+    await applyStatements(admin, migration019.statements);
+    await admin.execute(`INSERT INTO ${databaseQuote(upgradeName)}.schema_migrations (version) VALUES (?)`, ['v2.019']);
+    const [upgradeFinanceEvidence] = await admin.execute(`SELECT
+      (SELECT COUNT(*) FROM annual_finance_assessment_reviews) AS reviews,
+      (SELECT COUNT(*) FROM annual_registrar_confirmations WHERE finance_review_id IS NOT NULL) AS retroactive_links`);
+    assert.equal(Number(upgradeFinanceEvidence[0].reviews), 0, 'v2.019 does not infer historical Finance reviewers');
+    assert.equal(Number(upgradeFinanceEvidence[0].retroactive_links), 0, 'v2.019 leaves historical confirmations without invented Finance evidence');
+
     await admin.query(`USE ${databaseQuote(freshName)}`);
     await applyStatements(admin, migration018.statements);
     await admin.execute(`INSERT INTO ${databaseQuote(freshName)}.schema_migrations (version) VALUES (?)`, ['v2.018']);
+    await applyStatements(admin, migration019.statements);
+    await admin.execute(`INSERT INTO ${databaseQuote(freshName)}.schema_migrations (version) VALUES (?)`, ['v2.019']);
     pool = mysql.createPool({ socketPath, user: os.userInfo().username, database: freshName,
       waitForConnections: true, connectionLimit: 8, queueLimit: 0, supportBigNumbers: true, bigNumberStrings: true,
       dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'], multipleStatements: false });
@@ -401,18 +413,29 @@ test('v2.017 to v2.018 migration rehearsal and paper-clearance SQL, roles, snaps
       [firstClearance.clearanceId]))[0][0].count), 1, 'finance payment does not add a paper signature or inspection event');
 
     const blockedReview = await clearance.getAnnualPrerequisiteReview(registrarId, continuingAnnualId);
-    const blockedPreview = await annualFinance.annualAssessmentPreviewForRegistrar(registrarId, continuingAnnualId);
-    const blockedConfirmation = { scheduleId: String(blockedPreview.scheduleId), scheduleVersion: String(blockedPreview.scheduleVersion),
-      voucherCode: blockedPreview.voucherCode, assessmentId: '', optionalLineIds: [], snapshotFingerprint: blockedPreview.snapshotFingerprint,
-      clearanceSnapshotFingerprint: blockedReview.fingerprint, idempotencyKey: uuid() };
+    const blockedPreview = await annualFinance.annualAssessmentPreview(financeId, continuingAnnualId);
+    const postedFinanceAssessment = await annualFinance.confirmAnnualAssessment(financeId, continuingAnnualId,
+      blockedPreview.optionalLineIds, { scheduleId: String(blockedPreview.scheduleId),
+        scheduleVersion: String(blockedPreview.scheduleVersion), voucherCode: blockedPreview.voucherCode,
+        financeAttestation: true, idempotencyKey: uuid() });
+    const entryDpCharge = (await pool.execute(`SELECT charge.id FROM assessed_charges AS charge
+      INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
+      WHERE charge.assessment_id = ? AND enrollment.annual_term_number = 1
+        AND charge.fee_category = 'tuition' AND UPPER(charge.installment) = 'DP'`, [postedFinanceAssessment.assessmentId]))[0][0];
+    await annualFinance.allocateExistingCredit(financeId, studentId, payment.paymentId, {
+      allocations: [{ chargeId: Number(entryDpCharge.id), amount: '1.00' }], idempotencyKey: uuid()
+    });
+    const blockedConfirmation = { clearanceSnapshotFingerprint: blockedReview.fingerprint, idempotencyKey: uuid() };
     await assert.rejects(annualEnrollment.confirmAnnualEnrollment(registrarId, continuingAnnualId, blockedConfirmation), { status: 409 },
       'a real annual confirmation rejects an incomplete prior-term checklist');
-    for (const table of ['annual_assessments', 'annual_registrar_confirmations', 'assessed_charges']) {
-      assert.equal(Number((await pool.execute(`SELECT COUNT(*) AS count FROM ${table} WHERE annual_enrollment_id = ?`, [continuingAnnualId]))[0][0].count), 0,
-        `failed prerequisite gate leaves ${table} untouched`);
-    }
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_assessments WHERE annual_enrollment_id = ?', [continuingAnnualId]))[0][0].count), 1,
+      'Finance has already posted the assessment before Registrar paper-clearance review');
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_registrar_confirmations WHERE annual_enrollment_id = ?', [continuingAnnualId]))[0][0].count), 0,
+      'a failed paper-clearance gate writes no Registrar confirmation');
+    assert.ok(Number((await pool.execute('SELECT COUNT(*) AS count FROM assessed_charges WHERE annual_enrollment_id = ?', [continuingAnnualId]))[0][0].count) > 0,
+      'failed Registrar confirmation preserves Finance-posted charges');
     assert.equal(Number((await pool.execute('SELECT is_active FROM users WHERE id = ?', [studentUserId]))[0][0].is_active), 1,
-      'failed prerequisite gate does not change student login state');
+      'failed prerequisite gate does not change existing student login state');
 
     const secondTemplate = await clearance.createTemplateVersion(registrarId, templateInput(uuid(), 2));
     let studentClearance = await clearance.getStudentClearance(registrarId, studentId);
@@ -601,36 +624,32 @@ test('v2.017 to v2.018 migration rehearsal and paper-clearance SQL, roles, snaps
       notAttended: 1, notApplicable: 2 }, 'summary counts distinguish completed, not attended, no clearance, and future records');
     review = await clearance.getAnnualPrerequisiteReview(registrarId, continuingAnnualId);
     assert.equal(review.ready, true, 'source-term applicability remains valid when the next annual term becomes current');
-    let confirmationPreview = await annualFinance.annualAssessmentPreviewForRegistrar(registrarId, continuingAnnualId);
+    await pool.execute(`UPDATE users SET is_active = 0 WHERE id = ?`, [studentUserId]);
+    await pool.execute(`UPDATE students SET birth_date = '2008-04-21' WHERE id = ?`, [studentId]);
+    await pool.execute(`UPDATE annual_enrollments SET account_activation_pending = 1 WHERE id = ?`, [continuingAnnualId]);
     const confirmationInputFor = (prerequisiteReview, key = uuid()) => ({
-      scheduleId: String(confirmationPreview.scheduleId), scheduleVersion: String(confirmationPreview.scheduleVersion),
-      voucherCode: confirmationPreview.voucherCode, assessmentId: '', optionalLineIds: [],
-      snapshotFingerprint: confirmationPreview.snapshotFingerprint, clearanceSnapshotFingerprint: prerequisiteReview.fingerprint,
-      idempotencyKey: key
+      clearanceSnapshotFingerprint: prerequisiteReview.fingerprint, idempotencyKey: key
     });
-    let injectedPostAssessmentFailure = false;
-    const failingAnnualFinance = Object.create(annualFinance);
-    failingAnnualFinance.confirmAnnualAssessmentInTransaction = async (...args) => {
-      await annualFinance.confirmAnnualAssessmentInTransaction(...args);
-      injectedPostAssessmentFailure = true;
-      throw new Error('integration post-assessment rollback probe');
-    };
     const rollbackEnrollment = createAnnualEnrollmentService({ getPool: async () => appPool, sql,
-      transactionFactory: (currentPool) => new Transaction(currentPool), hashPassword: async (value) => `integration:${value}`,
-      createPassword: () => 'integration-only-password', annualFinanceService: failingAnnualFinance, termClearanceService: clearance });
+      transactionFactory: (currentPool) => new Transaction(currentPool),
+      hashPassword: async () => { throw new Error('integration finalization rollback probe'); },
+      createPassword: () => 'integration-only-password', annualFinanceService: annualFinance, termClearanceService: clearance });
     await assert.rejects(rollbackEnrollment.confirmAnnualEnrollment(registrarId, continuingAnnualId, confirmationInputFor(review)),
-      /integration post-assessment rollback probe/);
-    assert.equal(injectedPostAssessmentFailure, true, 'the real fee service wrote inside the transaction before the injected failure');
-    for (const table of ['annual_assessments', 'annual_registrar_confirmations', 'assessed_charges']) {
-      assert.equal(Number((await pool.execute(`SELECT COUNT(*) AS count FROM ${table} WHERE annual_enrollment_id = ?`, [continuingAnnualId]))[0][0].count), 0,
-        `a downstream failure rolls back ${table} with the enrollment transaction`);
-    }
+      /integration finalization rollback probe/);
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_assessments WHERE annual_enrollment_id = ?', [continuingAnnualId]))[0][0].count), 1,
+      'failed Registrar finalization preserves the Finance-posted assessment');
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_finance_assessment_reviews WHERE annual_enrollment_id = ?', [continuingAnnualId]))[0][0].count), 1,
+      'failed Registrar finalization preserves Finance review evidence');
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM assessed_charges WHERE annual_enrollment_id = ?', [continuingAnnualId]))[0][0].count), 12,
+      'failed Registrar finalization preserves Finance-posted charges');
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_registrar_confirmations WHERE annual_enrollment_id = ?', [continuingAnnualId]))[0][0].count), 0,
+      'the failure rolls back the inserted Registrar confirmation');
     assert.equal((await pool.execute('SELECT intake_status FROM annual_enrollments WHERE id = ?', [continuingAnnualId]))[0][0].intake_status,
       'pending', 'rollback leaves the annual intake pending');
     assert.equal((await pool.execute('SELECT enrollment_status FROM enrollments WHERE id = ?', [continuingPlacements[0].id]))[0][0].enrollment_status,
       'pending_payment', 'rollback leaves the entry placement unconfirmed');
-    assert.equal(Number((await pool.execute('SELECT is_active FROM users WHERE id = ?', [studentUserId]))[0][0].is_active), 1,
-      'rollback does not issue or change student login access');
+    assert.equal(Number((await pool.execute('SELECT is_active FROM users WHERE id = ?', [studentUserId]))[0][0].is_active), 0,
+      'rollback leaves the first student login inactive');
     const raceInput = confirmationInputFor(review);
     const firstCurrent = (await clearance.getStudentClearance(registrarId, studentId)).terms
       .find((term) => Number(term.enrollment_id) === firstTerm.id);
@@ -665,14 +684,13 @@ test('v2.017 to v2.018 migration rehearsal and paper-clearance SQL, roles, snaps
         `when correction wins, stale confirmation is rejected with a conflict (${raceOutcome[0].reason.message}; gate=${JSON.stringify(clearanceGateDiagnostic)})`);
       assert.equal(raceOutcome[1].value.reopened, true);
       assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_assessments WHERE annual_enrollment_id = ?',
-        [continuingAnnualId]))[0][0].count), 0, 'a correction that wins the student lock leaves no assessment behind');
+        [continuingAnnualId]))[0][0].count), 1, 'a correction that wins the student lock preserves the Finance assessment');
       const reopenedSource = (await clearance.getStudentClearance(registrarId, studentId)).terms
         .find((term) => Number(term.enrollment_id) === firstTerm.id);
       await clearance.updateTermClearance(registrarId, firstClearance.clearanceId,
         completionInput(firstTerm, reopenedSource.clearanceItems,
           { version: Number(reopenedSource.version), inspectedOn: String(reopenedSource.inspected_on).slice(0, 10) }), studentId);
       review = await clearance.getAnnualPrerequisiteReview(registrarId, continuingAnnualId);
-      confirmationPreview = await annualFinance.annualAssessmentPreviewForRegistrar(registrarId, continuingAnnualId);
       savedConfirmationInput = confirmationInputFor(review);
       confirmedAnnual = await annualEnrollment.confirmAnnualEnrollment(registrarId, continuingAnnualId, savedConfirmationInput);
     }
@@ -703,11 +721,12 @@ test('v2.017 to v2.018 migration rehearsal and paper-clearance SQL, roles, snaps
       { ...savedConfirmationInput, idempotencyKey: uuid(), clearanceSnapshotFingerprint: undefined }), { status: 409 },
     'a new confirmation cannot omit the paper prerequisite fingerprint');
 
-    const legacyPayload = { annualEnrollmentId: continuingAnnualId, scheduleId: Number(savedConfirmationInput.scheduleId),
-      scheduleVersion: Number(savedConfirmationInput.scheduleVersion), voucherCode: savedConfirmationInput.voucherCode,
-      expectedAssessmentId: null, optionalLineIds: [], assessmentSnapshotFingerprint: savedConfirmationInput.snapshotFingerprint };
+    const legacyPayload = { annualEnrollmentId: continuingAnnualId, scheduleId: 1,
+      scheduleVersion: 1, voucherCode: 'PUB', expectedAssessmentId: null, optionalLineIds: [],
+      assessmentSnapshotFingerprint: 'a'.repeat(64) };
     const legacyFingerprint = crypto.createHash('sha256').update(JSON.stringify(legacyPayload)).digest('hex');
-    await pool.execute(`UPDATE annual_registrar_confirmations SET input_fingerprint = NULL,
+    await pool.execute(`UPDATE annual_registrar_confirmations SET finance_review_id = NULL,
+      entry_dp_state_at_confirmation = NULL, input_fingerprint = NULL,
       clearance_snapshot_fingerprint = NULL, request_fingerprint = ? WHERE idempotency_key = ?`,
     [legacyFingerprint, savedConfirmationInput.idempotencyKey]);
     const legacyReplay = { ...savedConfirmationInput };

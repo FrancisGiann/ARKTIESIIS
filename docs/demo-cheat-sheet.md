@@ -10,16 +10,15 @@
 ## 2. Enroll a new student
 
 1. **Front desk** enters the details from the paper form, records counts of documents received, and saves the entry. This creates only a paper pre-enrollment record, with no student number, login, enrollment, or charges.
-2. **Registrar** opens the saved form and checks the student's identity, school year, grade, voucher, entry term, section, and enrollment date.
-3. **Registrar** selects **Save and review fees**. The system creates a pending student record, assigns a student number, and leaves the login inactive. Fees are not added to the account yet.
-4. **Registrar** reviews the fees that match the approved schedule and the selected optional fees. Reviewing the amount does not post charges.
-5. **Registrar** selects **Confirm enrollment**. The system adds the reviewed fees to the student's account, enrolls the entry term, and activates the login for an eligible first-time student. The initial private confirmation shows the temporary password made from the saved surname followed by birth date as `YYYYMMDD` (without the suffix) and can be printed; it is not emailed. Give the credential to the student privately. Saved or reopened confirmation copies omit it. The student signs in with email two-factor verification and changes the password at sign-in.
-6. Finance payment or account clearance is not required to confirm enrollment.
+2. **Registrar** reviews the saved source, student profile, school documents, academic placement, and voucher; saves a pending annual intake and may print the private pending school e-form. The first-time login stays inactive.
+3. **Finance** selects the active approved schedule and optional fees, posts the assessment and charges, and records an immutable review of that assessment. The intake remains pending.
+4. **Finance** records payment and applies eligible credits to the scheduled Tuition DP for this annual intake's exact entry term. Only the full DP installment(s) must be settled; the rest of the annual balance may remain. A configured zero or net-waived DP requires explicit Finance approval and no fake payment or receipt.
+5. **Registrar** confirms only after the current Finance review, DP readiness, placement, academic, source, readmission, and required paper-clearance checks pass. Final confirmation enrolls the entry term and activates an eligible first-time login. The initial private confirmation shows the temporary password made from the saved surname followed by birth date as `YYYYMMDD` (without the suffix) and can be printed; it is not emailed. Give the credential to the student privately. Saved or reopened confirmation copies omit it. The student signs in with email two-factor verification and changes the password at sign-in.
 
 ## 3. Continue, activate a later term, or return after a break
 
 1. **Registrar** uses the existing student record and login for a continuing student. No new account or student number is needed.
-2. For continuation or a later term, **Registrar** confirms the annual record and activates each applicable term with a valid section. Required paper clearance for earlier attended terms must be complete first. A term recorded as not attended, with a reason, is excluded; it does not count as completed clearance.
+2. For a new annual continuation, **Finance** reviews and posts fees and the full scheduled entry-term DP must be settled before **Registrar** confirms. Required paper clearance for earlier attended terms must also be complete first. A term recorded as not attended, with a reason, is excluded; it does not count as completed clearance. Later terms are activated individually after annual confirmation and a valid section.
 3. For a student returning after an interruption, **Registrar** selects **Evaluate return** on an eligible saved student record. The registrar reviews prior progress, curriculum, required subjects, and availability, then records a human decision. The system does not decide equivalency or admission automatically.
 4. After the evaluation is accepted, **Front desk** saves a new paper form linked to that acceptance. **Registrar** confirms intake using the existing student profile and login. This does not create a new login or reset the password.
 

@@ -67,8 +67,8 @@ test('annual intake works across mixed school-year collations and retries idempo
   try {
     const [databaseRows] = await rawPool.query('SELECT DATABASE() AS database_name');
     assert.equal(databaseRows[0]?.database_name, DATABASE_NAME, 'refusing to run outside the exact disposable test database');
-    const [migrationRows] = await rawPool.execute('SELECT version FROM schema_migrations WHERE version = ?', ['v2.018']);
-    assert.equal(migrationRows.length, 1, 'apply the current MariaDB schema through v2.018 first');
+    const [migrationRows] = await rawPool.execute('SELECT version FROM schema_migrations WHERE version = ?', ['v2.019']);
+    assert.equal(migrationRows.length, 1, 'apply the current MariaDB schema through v2.019 first');
 
     const [studentNumberColumn] = await rawPool.execute(`SELECT collation_name FROM information_schema.columns
       WHERE table_schema = DATABASE() AND table_name = 'students' AND column_name = 'student_no'`);

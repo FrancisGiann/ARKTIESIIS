@@ -1,18 +1,18 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page annual-intake-review" id="main-content">
-  <a class="context-back" href="/registrar/intake/<%= annualId %>/fees<% if (preview) { %>?<%= new URLSearchParams([['idempotencyKey', values.idempotencyKey], ...preview.optionalLineIds.map((id) => ['optionalLineIds', String(id)])]).toString() %><% } %>">Back to fees</a>
+  <a class="context-back" href="/registrar/intake">Back to enrollments</a>
   <header class="dashboard-heading">
     <div>
       <h1>Review enrollment details</h1>
-      <p>Check the saved student, placement, paper checklist, and fee details before finalizing enrollment.</p>
+      <p>Check the saved student, placement, paper checklist, and Finance readiness before finalizing enrollment.</p>
     </div>
   </header>
   <nav class="intake-progress" aria-label="Enrollment steps">
-    <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Paper document review</span><span class="intake-step-label--short">Papers</span></li><li><span class="intake-step-label--full">Fees</span><span class="intake-step-label--short">Fees</span></li><li aria-current="step"><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li></ol>
+    <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Paper document review</span><span class="intake-step-label--short">Papers</span></li><li><span class="intake-step-label--full">Finance assessment</span><span class="intake-step-label--short">Finance</span></li><li aria-current="step"><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li></ol>
   </nav>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
-  <% if (!record || !checklist || !preview) { %>
-    <section class="admin-section"><p>The final review could not be loaded. Return to fees to try again.</p><a class="button button--secondary" href="/registrar/intake/<%= annualId %>/fees">Return to fees</a></section>
+  <% if (!record || !checklist || !financeReadiness) { %>
+    <section class="admin-section"><p>The final review could not be loaded. Return to enrollments to try again.</p><a class="button button--secondary" href="/registrar/intake">Return to enrollments</a></section>
   <% } else { %>
     <% const parent = record.parent; const birthDate = parent.birth_date ? (parent.birth_date instanceof Date ? parent.birth_date.toISOString().slice(0, 10) : String(parent.birth_date).slice(0, 10)) : 'Not recorded'; const startDate = parent.enrollment_start_date ? (parent.enrollment_start_date instanceof Date ? parent.enrollment_start_date.toISOString().slice(0, 10) : String(parent.enrollment_start_date).slice(0, 10)) : 'Not recorded'; %>
     <% const statusLabel = (value) => {
@@ -59,6 +59,9 @@
           </tr><% } %></tbody>
         </table>
       </div>
+      <% if (!record.parent.registrar_confirmation_id && parent.intake_status === 'pending') { %>
+        <p><a class="button button--secondary" href="/registrar/intake/<%= annualId %>/pending-form">Print saved pending school e-form</a></p>
+      <% } %>
       <p><a class="table-action" href="/registrar/records/students/<%= parent.student_id %>/edit">Edit profile or term placements</a></p>
     </section>
 
@@ -112,22 +115,25 @@
       <p><a class="table-action" href="/documents/students/<%= parent.student_id %>#physical-checklist-title">Update paper checklist</a></p>
     </section>
 
-    <section class="admin-section" aria-labelledby="review-fees-title">
-      <div class="admin-section__heading"><div><h2 id="review-fees-title">Fees, options, and discounts</h2><p>Schedule version <%= preview.scheduleVersion %> · Voucher <%= preview.voucherCode %><% if (preview.existingAssessment) { %> · Saved assessment<% } %></p></div><p class="fee-total-line"><span>Total payable</span><strong>₱<%= formatMoney(preview.total) %></strong></p></div>
-      <%- include('./partials/annual-tuition-breakdown', { preview, headingId: 'review-approved-tuition-title' }) %>
-      <div class="table-scroll" tabindex="0" aria-label="Exact fee assessment and approved discounts">
-        <table class="admin-table fee-assessment-table">
-          <thead><tr><th scope="col">Term</th><th scope="col">Fee</th><th scope="col">Schedule label</th><th scope="col">Amount</th><th scope="col">Approved discount</th><th scope="col">Payable</th></tr></thead>
-          <tbody><% if (preview.lines.length) { for (const line of preview.lines) { %><tr>
-            <td data-label="Term">Term <%= line.termNumber %></td><td data-label="Fee"><%= line.lineName %><small><%= line.category.replaceAll('_', ' ') %><% if (line.isOptional) { %> · Optional<% } %></small></td>
-            <td data-label="Schedule label"><%= line.installment %></td><td data-label="Amount">₱<%= formatMoney(line.grossAmount) %></td>
-            <td data-label="Approved discount"><%= line.waivedAmount === '0.00' ? '—' : `₱${formatMoney(line.waivedAmount)}` %></td><td data-label="Payable"><strong>₱<%= formatMoney(line.amount) %></strong></td>
-          </tr><% } } else { %><tr><td colspan="6">No payable fee lines apply to this entry term and selection.</td></tr><% } %></tbody>
-          <tfoot><tr><th scope="row" colspan="5">Total payable</th><td data-label="Total payable"><strong>₱<%= formatMoney(preview.total) %></strong></td></tr></tfoot>
-        </table>
-      </div>
-      <% if (preview.optionalLines?.length) { %><h3>Optional charges</h3><ul class="review-summary-list"><% for (const line of preview.optionalLines) { %><li><span>Term <%= line.termNumber %> · <%= line.lineName %> · <%= line.installment %></span><strong><%= line.selected ? `Included · ₱${formatMoney(line.amount)}` : `Not selected · ₱${formatMoney(line.amount)}` %></strong></li><% } %></ul><% } %>
-      <div class="fee-term-summary" aria-label="Payable by term"><% for (const subtotal of preview.termTotals) { %><p><span>Term <%= subtotal.termNumber %></span><strong>₱<%= formatMoney(subtotal.amount) %></strong></p><% } %></div>
+    <section class="admin-section" aria-labelledby="review-finance-title">
+      <div class="admin-section__heading"><div><h2 id="review-finance-title">Finance readiness</h2><p>Entry term: Term <%= financeReadiness.entryTermNumber %>. Fee amounts and optional selections are managed by Finance.</p></div></div>
+      <% if (record.parent.registrar_confirmation_id) { %>
+        <p class="form-success" role="status">This annual enrollment already has a Registrar confirmation on record. Later Finance activity does not undo that confirmation.</p>
+      <% } else { const readinessLabels = {
+        awaiting_finance_assessment: 'Awaiting Finance assessment', finance_review_required: 'Finance review or DP setup required',
+        awaiting_down_payment: 'Awaiting entry-term DP settlement', ready_for_registrar: 'Ready for Registrar'
+      }; %>
+        <p><strong><%= readinessLabels[financeReadiness.status] || 'Finance review required' %></strong></p>
+        <% if (financeReadiness.status === 'awaiting_finance_assessment') { %>
+          <p>Finance selects the approved fee schedule and optional fees, posts the assessment, and records its review.</p>
+        <% } else if (financeReadiness.status === 'awaiting_down_payment') { %>
+          <p>The full scheduled tuition DP for this exact entry term must be settled through eligible allocations. Unallocated or unrelated credit and the remaining annual balance do not change this check.</p>
+        <% } else if (financeReadiness.status === 'ready_for_registrar') { %>
+          <p>Finance reviewed the current assessment and the full entry-term tuition DP is settled. Complete the Registrar review below to finalize enrollment.</p>
+        <% } else { %>
+          <p>Finance must review the current assessment and confirm the scheduled entry-term DP setup. A missing DP schedule cannot be treated as zero.</p>
+        <% } %>
+      <% } %>
     </section>
 
     <section class="admin-section fee-confirmation" aria-labelledby="review-confirm-title">
@@ -135,20 +141,14 @@
         <div class="admin-section__heading"><div><h2 id="review-confirm-title">Enrollment already confirmed</h2><p>This annual enrollment has a registrar confirmation on record.</p></div></div>
         <a class="button button--secondary" href="/registrar/intake/<%= annualId %>/manage">Open student record</a>
       <% } else { %>
-        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Finalize enrollment</h2><p>Confirming saves the voucher-based assessment and activates the entry term. Finance manages approved schedules and records payments.</p></div></div>
+        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Finalize enrollment</h2><p>Confirming reuses Finance’s reviewed assessment and activates the entry term after its full tuition DP is settled.</p></div></div>
         <% if (!prerequisiteReview?.ready) { %><p class="form-alert" role="alert">Resolve each earlier-term paper form item above before confirming enrollment.</p><% } %>
         <form method="post" action="/registrar/intake/<%= annualId %>/confirm" class="fee-confirmation__form">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <input type="hidden" name="idempotencyKey" value="<%= values.idempotencyKey %>">
-          <input type="hidden" name="scheduleId" value="<%= preview.scheduleId %>">
-          <input type="hidden" name="scheduleVersion" value="<%= preview.scheduleVersion %>">
-          <input type="hidden" name="voucherCode" value="<%= preview.voucherCode %>">
-          <input type="hidden" name="assessmentId" value="<%= preview.assessmentId || '' %>">
-          <input type="hidden" name="snapshotFingerprint" value="<%= preview.snapshotFingerprint %>">
           <input type="hidden" name="clearanceSnapshotFingerprint" value="<%= prerequisiteReview?.fingerprint || '' %>">
-          <% for (const lineId of preview.optionalLineIds) { %><input type="hidden" name="optionalLineIds" value="<%= lineId %>"><% } %>
-          <button class="button button--primary" type="submit" <%= prerequisiteReview?.ready ? '' : 'disabled' %>>Confirm enrollment</button>
-          <a class="button button--secondary" href="/registrar/intake/<%= annualId %>/fees?<%= new URLSearchParams([['idempotencyKey', values.idempotencyKey], ...preview.optionalLineIds.map((id) => ['optionalLineIds', String(id)])]).toString() %>">Back to fees</a>
+          <button class="button button--primary" type="submit" <%= prerequisiteReview?.ready && financeReadiness.status === 'ready_for_registrar' ? '' : 'disabled' %>>Confirm enrollment</button>
+          <a class="button button--secondary" href="/registrar/intake/<%= annualId %>/manage">Back to student record</a>
         </form>
       <% } %>
     </section>

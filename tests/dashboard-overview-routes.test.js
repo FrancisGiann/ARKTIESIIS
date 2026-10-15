@@ -486,7 +486,7 @@ test('annual enrollment search groups filtered placements under one student reco
     assert.doesNotMatch(html, /Term 1 · Term 1/);
     assert.equal((html.match(/action="\/registrar\/intake\/71\/voucher"/g) || []).length, 1);
     assert.match(html, /action="\/registrar\/intake\/801\/status"/);
-    assert.match(html, /href="\/registrar\/intake\/71\/fees"/);
+    assert.match(html, /href="\/registrar\/intake\/71\/review"/);
     assert.match(html, /name="_csrf" value="[^"]+"/);
     assert.doesNotMatch(html, /₱|amount due|payment history|finance ledger/i);
     const filteredTerms = await fetch(`${baseUrl}/registrar/intake?search=Ari&schoolYear=2026-2027&termId=92`, { headers: { cookie } });

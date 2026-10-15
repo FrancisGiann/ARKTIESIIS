@@ -279,6 +279,47 @@ function requestFingerprint(value) {
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
+async function loadVoucherReviewState(request, sqlTypes, {
+  annualEnrollmentId, assessmentId, scheduleId, scheduleVersion, assessedVoucherCode, currentVoucherCode, assessedAt
+}, { lock = false } = {}) {
+  if (!assessedAt) return null;
+  const latestResult = await request.input('voucherAnnualEnrollmentId', sqlTypes.Int, annualEnrollmentId)
+    .input('voucherAssessmentId', sqlTypes.Int, assessmentId)
+    .input('voucherAssessedAt', sqlTypes.DateTime2, assessedAt)
+    .input('voucherAssessedCode', sqlTypes.NVarChar(10), assessedVoucherCode)
+    .input('voucherCurrentCode', sqlTypes.NVarChar(10), currentVoucherCode)
+    .query(`SELECT id, finance_assessment_id, event_type, reason, request_fingerprint
+      FROM annual_enrollment_events
+      WHERE annual_enrollment_id = @voucherAnnualEnrollmentId
+        AND event_type IN ('voucher_review_flagged', 'voucher_review_resolved')
+        AND (created_at > @voucherAssessedAt OR finance_assessment_id = @voucherAssessmentId
+          OR @voucherAssessedCode <> @voucherCurrentCode)
+      ORDER BY created_at DESC, id DESC LIMIT 1${lock ? ' FOR UPDATE' : ''}`);
+  const event = latestResult.recordset?.[0];
+  if (!event) return null;
+  const assessmentBound = Number(event.finance_assessment_id) === Number(assessmentId);
+  const state = { eventId: Number(event.id), eventType: event.event_type, assessmentBound,
+    assessedVoucherCode: assessedVoucherCode || null, currentVoucherCode: currentVoucherCode || null,
+    resolution: null };
+  if (event.event_type !== 'voucher_review_resolved') return { ...state, status: 'unresolved' };
+  // Historical resolutions were not linked to an assessment and cannot serve as handoff evidence.
+  if (!assessmentBound) return { ...state, status: 'unverified' };
+  const resolutionPrefixes = [
+    ['Assessment remains valid: ', 'assessment_stands'],
+    ['Required adjustments were recorded: ', 'adjustments_recorded']
+  ];
+  const matchedPrefix = resolutionPrefixes.find(([prefix]) => String(event.reason || '').startsWith(prefix));
+  if (!matchedPrefix) return { ...state, status: 'unverified' };
+  const [prefix, resolution] = matchedPrefix;
+  const reason = String(event.reason).slice(prefix.length);
+  const newFingerprint = requestFingerprint({ annualEnrollmentId, assessmentId, scheduleId, scheduleVersion,
+    assessedVoucherCode, currentVoucherCode, resolution, reason });
+  if (event.request_fingerprint !== newFingerprint) {
+    return { ...state, status: 'unverified' };
+  }
+  return { ...state, status: 'resolved', resolution };
+}
+
 function canonicalAssessmentSnapshot(lines) {
   const normalized = lines.map((line) => ({
     scheduleLineId: line.scheduleLineId == null ? null : Number(line.scheduleLineId),
@@ -345,6 +386,24 @@ function nonTuitionTermTotals(lines, entryTermNumber) {
   return assessmentTermTotals(lines.filter((line) => String(line.category || '').toLowerCase() !== 'tuition'), entryTermNumber);
 }
 
+function classifyEntryDownPaymentBalances(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return { status: 'ledger_unavailable' };
+  try {
+    const entries = rows.map((row) => {
+      const due = parseMoneyCents(String(row.amount_due), { allowNegative: true, allowZero: true });
+      const annualAllocated = parseMoneyCents(String(row.annual_allocated || '0.00'), { allowZero: true });
+      const legacyAllocated = parseMoneyCents(String(row.legacy_allocated || '0.00'), { allowZero: true });
+      return { due, basis: due + annualAllocated + legacyAllocated };
+    });
+    if (entries.some((entry) => entry.basis < 0n)) return { status: 'invalid' };
+    const totalBasis = entries.reduce((sum, entry) => sum + entry.basis, 0n);
+    if (totalBasis === 0n) return { status: 'zero_due' };
+    return { status: entries.some((entry) => entry.basis > 0n && entry.due > 0n) ? 'unpaid' : 'settled' };
+  } catch {
+    return { status: 'invalid' };
+  }
+}
+
 function canonicalAllocations(allocations) {
   return allocations.map((allocation) => ({
     chargeId: allocation.chargeId,
@@ -378,6 +437,294 @@ function createAnnualFinanceService({
       installment: line.installment, grossAmount: String(line.gross_amount), waivedAmount: String(line.waived_amount || '0.00')
     }));
     return canonicalAssessmentSnapshot(lines);
+  }
+
+  async function annualFinanceEvidenceSnapshot(transaction, annualEnrollmentId, { lock = false } = {}) {
+    const lockClause = lock ? ' FOR UPDATE' : '';
+    const parentResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+      .query(`SELECT annual.id, annual.student_id, annual.school_year, annual.grade_level,
+          annual.voucher_code, annual.entry_term_number, annual.intake_status,
+          assessment.id AS assessment_id, assessment.schedule_id, assessment.schedule_version,
+          assessment.voucher_code_snapshot, assessment.selection_json, assessment.assessed_at
+        FROM annual_enrollments AS annual
+        LEFT JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.id
+        WHERE annual.id = @annualEnrollmentId${lockClause}`);
+    const parent = parentResult.recordset?.[0];
+    if (!parent || parent.assessment_id == null) {
+      return { parent: parent || null, assessment: null, assessmentFingerprint: null,
+        dependencyFingerprint: null, dp: { status: 'missing_assessment' }, latestReview: null };
+    }
+    let selection;
+    try {
+      selection = JSON.parse(parent.selection_json || '{}');
+    } catch {
+      throw new AnnualFinanceError('The saved assessment selection needs Finance review.', 409);
+    }
+    const optionalLineIds = [...normalizeSelections(selection.optionalLineIds || [])].sort((left, right) => left - right);
+    const scheduleResult = await transaction.request().input('scheduleId', sql.Int, parent.schedule_id)
+      .query(`SELECT id, school_year, grade_level, voucher_code, version_no
+        FROM finance_schedules WHERE id = @scheduleId${lockClause}`);
+    const schedule = scheduleResult.recordset?.[0];
+    if (!schedule || Number(schedule.version_no) !== Number(parent.schedule_version)
+      || schedule.voucher_code !== parent.voucher_code_snapshot
+      || schedule.school_year !== parent.school_year || schedule.grade_level !== parent.grade_level) {
+      return { parent, assessment: { id: Number(parent.assessment_id) }, assessmentFingerprint: null,
+        dependencyFingerprint: null, dp: { status: 'invalid_schedule' }, latestReview: null };
+    }
+    const voucherReview = await loadVoucherReviewState(transaction.request(), sql, {
+      annualEnrollmentId, assessmentId: Number(parent.assessment_id), scheduleId: Number(parent.schedule_id),
+      scheduleVersion: Number(parent.schedule_version), assessedVoucherCode: parent.voucher_code_snapshot,
+      currentVoucherCode: parent.voucher_code, assessedAt: parent.assessed_at
+    }, { lock });
+    const scheduleLinesResult = await transaction.request().input('scheduleId', sql.Int, parent.schedule_id)
+      .query(`SELECT id, term_number, fee_category, line_name, installment,
+          CAST(amount AS CHAR(40)) AS amount, is_optional
+        FROM finance_schedule_lines WHERE schedule_id = @scheduleId ORDER BY term_number, id${lock ? ' FOR UPDATE' : ''}`);
+    const scheduleLines = (scheduleLinesResult.recordset || []).map((line) => ({
+      id: Number(line.id), termNumber: Number(line.term_number), category: String(line.fee_category),
+      lineName: String(line.line_name), installment: String(line.installment), amount: String(line.amount),
+      isOptional: flag(line.is_optional)
+    }));
+    const chargeResult = await transaction.request().input('assessmentId', sql.Int, parent.assessment_id)
+      .query(`SELECT charge.id, charge.annual_enrollment_id, charge.enrollment_id, charge.schedule_line_id,
+          charge.fee_category, charge.line_name, charge.installment, charge.is_manual,
+          CAST(charge.amount AS CHAR(40)) AS amount, CAST(charge.waived_amount AS CHAR(40)) AS waived_amount,
+          enrollment.annual_term_number AS term_number
+        FROM assessed_charges AS charge
+        INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
+        WHERE charge.assessment_id = @assessmentId ORDER BY charge.id${lock ? ' FOR UPDATE' : ''}`);
+    const charges = chargeResult.recordset || [];
+    const chargeIds = charges.map((charge) => Number(charge.id));
+    let adjustments = [];
+    if (chargeIds.length) {
+      const request = transaction.request();
+      const names = chargeIds.map((chargeId, index) => {
+        const name = `charge${index}`;
+        request.input(name, sql.BigInt, chargeId);
+        return `@${name}`;
+      });
+      const adjustmentResult = await request.query(`SELECT adjustment.id, adjustment.charge_id,
+          adjustment.reverses_adjustment_id, CAST(adjustment.amount AS CHAR(40)) AS amount
+        FROM finance_charge_adjustments AS adjustment
+        WHERE adjustment.charge_id IN (${names.join(', ')}) ORDER BY adjustment.id${lock ? ' FOR UPDATE' : ''}`);
+      adjustments = (adjustmentResult.recordset || []).map((row) => ({
+        id: Number(row.id), chargeId: Number(row.charge_id),
+        reversesAdjustmentId: row.reverses_adjustment_id == null ? null : Number(row.reverses_adjustment_id),
+        amount: String(row.amount)
+      }));
+    }
+    const assessedComposition = canonicalAssessmentSnapshot(charges.map((charge) => ({
+      scheduleLineId: charge.schedule_line_id == null ? null : Number(charge.schedule_line_id),
+      termNumber: Number(charge.term_number), category: charge.fee_category, lineName: charge.line_name,
+      installment: charge.installment, grossAmount: String(charge.amount), waivedAmount: String(charge.waived_amount || '0.00')
+    })));
+    const assessmentFingerprint = assessedComposition.fingerprint;
+    const assessmentSnapshotFingerprint = requestFingerprint({ assessmentId: Number(parent.assessment_id),
+      scheduleId: Number(parent.schedule_id), scheduleVersion: Number(parent.schedule_version),
+      voucherCode: parent.voucher_code_snapshot, payableTotal: assessedComposition.total,
+      optionalLineIds, postedComposition: assessmentFingerprint });
+    const dependencyFingerprint = requestFingerprint({
+      annualEnrollmentId: Number(parent.id), studentId: Number(parent.student_id), schoolYear: parent.school_year,
+      gradeLevel: parent.grade_level, voucherCode: parent.voucher_code, entryTermNumber: Number(parent.entry_term_number || 1),
+      assessmentId: Number(parent.assessment_id), scheduleId: Number(parent.schedule_id),
+      scheduleVersion: Number(parent.schedule_version), assessedVoucher: parent.voucher_code_snapshot,
+      currentVoucher: parent.voucher_code, voucherReview, optionalLineIds, scheduleLines,
+      charges: charges.map((charge) => ({
+        id: Number(charge.id), termNumber: Number(charge.term_number), scheduleLineId: charge.schedule_line_id == null ? null : Number(charge.schedule_line_id),
+        category: charge.fee_category, lineName: charge.line_name, installment: charge.installment,
+        isManual: flag(charge.is_manual), amount: String(charge.amount), waivedAmount: String(charge.waived_amount || '0.00')
+      })),
+      adjustments
+    });
+    const selectedOptional = new Set(optionalLineIds);
+    const expectedDpLines = scheduleLines.filter((line) => line.termNumber === Number(parent.entry_term_number || 1)
+      && line.category.trim().toLowerCase() === 'tuition' && line.installment.trim().toUpperCase() === 'DP'
+      && (!line.isOptional || selectedOptional.has(line.id)));
+    const assessedDpByScheduleLine = new Map();
+    for (const charge of charges) {
+      if (Number(charge.term_number) !== Number(parent.entry_term_number || 1)
+        || String(charge.fee_category || '').trim().toLowerCase() !== 'tuition'
+        || String(charge.installment || '').trim().toUpperCase() !== 'DP') continue;
+      if (charge.schedule_line_id != null) {
+        const scheduleLineId = Number(charge.schedule_line_id);
+        assessedDpByScheduleLine.set(scheduleLineId, (assessedDpByScheduleLine.get(scheduleLineId) || 0) + 1);
+      }
+    }
+    let dp = { status: 'missing_dp_setup' };
+    if (expectedDpLines.length && expectedDpLines.every((line) => assessedDpByScheduleLine.get(line.id) === 1)) {
+      const dpChargeIds = charges.filter((charge) => Number(charge.term_number) === Number(parent.entry_term_number || 1)
+        && String(charge.fee_category || '').trim().toLowerCase() === 'tuition'
+        && String(charge.installment || '').trim().toUpperCase() === 'DP').map((charge) => Number(charge.id));
+      const dueResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .input('entryTermNumber', sql.TinyInt, Number(parent.entry_term_number || 1))
+        .query(`SELECT due.charge_id, CAST(due.amount_due AS CHAR(40)) AS amount_due,
+            CAST(due.annual_allocated AS CHAR(40)) AS annual_allocated,
+            CAST(due.legacy_allocated AS CHAR(40)) AS legacy_allocated
+          FROM v_finance_assessed_charge_due AS due
+          INNER JOIN enrollments AS enrollment ON enrollment.id = due.enrollment_id
+          WHERE due.annual_enrollment_id = @annualEnrollmentId
+            AND enrollment.annual_term_number = @entryTermNumber`);
+      const dpIds = new Set(dpChargeIds);
+      const dpBalances = (dueResult.recordset || []).filter((row) => dpIds.has(Number(row.charge_id)));
+      if (dpBalances.length === dpChargeIds.length) {
+        dp = classifyEntryDownPaymentBalances(dpBalances);
+      } else {
+        dp = { status: 'ledger_unavailable' };
+      }
+    } else if (expectedDpLines.length && charges.some((charge) => Number(charge.term_number) === Number(parent.entry_term_number || 1)
+      && String(charge.fee_category || '').trim().toLowerCase() === 'tuition'
+      && String(charge.installment || '').trim().toUpperCase() === 'DP')) {
+      dp = { status: 'incomplete_assessment' };
+    }
+    const latestResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+      .input('assessmentId', sql.Int, parent.assessment_id)
+      .query(`SELECT id, assessment_fingerprint, dependency_fingerprint, zero_dp_attested,
+          reviewed_by, reviewed_by_role, reviewed_at, current_voucher_code_snapshot,
+          voucher_review_event_id
+        FROM annual_finance_assessment_reviews
+        WHERE annual_enrollment_id = @annualEnrollmentId AND assessment_id = @assessmentId
+        ORDER BY id DESC LIMIT 1${lock ? ' FOR UPDATE' : ''}`);
+    return { parent, assessment: { id: Number(parent.assessment_id), scheduleId: Number(parent.schedule_id),
+      scheduleVersion: Number(parent.schedule_version), voucherCode: parent.voucher_code_snapshot,
+      optionalLineIds, total: assessedComposition.total, snapshotFingerprint: assessmentSnapshotFingerprint },
+      assessmentFingerprint, dependencyFingerprint, dp, voucherReview, latestReview: latestResult.recordset?.[0] || null };
+  }
+
+  async function recordAnnualFinanceReview(transaction, actor, annualEnrollmentId, confirmation) {
+    const intakeResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+      .query(`SELECT intake_status FROM annual_enrollments WHERE id = @annualEnrollmentId FOR UPDATE`);
+    if (intakeResult.recordset?.[0]?.intake_status !== 'pending') return { skipped: true };
+    const review = await annualFinanceEvidenceSnapshot(transaction, annualEnrollmentId, { lock: true });
+    if (!review.assessment || !review.assessmentFingerprint || !review.dependencyFingerprint) {
+      throw new AnnualFinanceError('The saved fee assessment could not be verified for Finance review.', 409);
+    }
+    if ((review.voucherReview && review.voucherReview.status !== 'resolved')
+      || (review.parent.voucher_code !== review.assessment.voucherCode && !review.voucherReview)) {
+      throw new AnnualFinanceError('Finance must resolve the current voucher change for this posted assessment before re-review.', 409);
+    }
+    if (review.dp.status === 'missing_dp_setup' || review.dp.status === 'incomplete_assessment'
+      || review.dp.status === 'ledger_unavailable' || review.dp.status === 'invalid') {
+      throw new AnnualFinanceError('The entry-term tuition down-payment setup or ledger needs Finance review before enrollment can proceed.', 409);
+    }
+    const zeroDpAttested = flag(confirmation.zeroDpAttested);
+    if (review.dp.status === 'zero_due' && !zeroDpAttested) {
+      throw new AnnualFinanceError('Explicitly approve this legitimately zero/net-waived entry-term down payment in the Finance review before saving.', 409);
+    }
+    if (review.dp.status !== 'zero_due' && zeroDpAttested) {
+      throw new AnnualFinanceError('The zero down-payment approval does not match the current positive entry-term tuition obligation.', 409);
+    }
+    const idempotencyKey = uuid(confirmation.idempotencyKey, 'Finance assessment review');
+    const fingerprint = requestFingerprint({ annualEnrollmentId, assessmentId: review.assessment.id,
+      assessmentFingerprint: review.assessmentFingerprint, dependencyFingerprint: review.dependencyFingerprint,
+      zeroDpAttested });
+    const priorResult = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
+      .query(`SELECT annual_enrollment_id, assessment_id, assessment_fingerprint,
+          dependency_fingerprint, zero_dp_attested, request_fingerprint
+        FROM annual_finance_assessment_reviews WHERE idempotency_key = @idempotencyKey FOR UPDATE`);
+    const prior = priorResult.recordset?.[0];
+    if (prior) {
+      if (Number(prior.annual_enrollment_id) !== annualEnrollmentId
+        || Number(prior.assessment_id) !== review.assessment.id
+        || prior.assessment_fingerprint !== review.assessmentFingerprint
+        || prior.dependency_fingerprint !== review.dependencyFingerprint
+        || flag(prior.zero_dp_attested) !== zeroDpAttested || prior.request_fingerprint !== fingerprint) {
+        throw new AnnualFinanceError('This Finance review token was already used for different assessment details.', 409);
+      }
+      return { ...review, alreadyReviewed: true };
+    }
+    const inserted = await transaction.request()
+      .input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+      .input('assessmentId', sql.Int, review.assessment.id)
+      .input('scheduleId', sql.Int, review.assessment.scheduleId)
+      .input('scheduleVersion', sql.Int, review.assessment.scheduleVersion)
+      .input('voucherCode', sql.NVarChar(10), review.assessment.voucherCode)
+      .input('currentVoucherCode', sql.NVarChar(10), review.parent.voucher_code)
+      .input('voucherReviewEventId', sql.BigInt, review.voucherReview?.eventId || null)
+      .input('selectionJson', sql.NVarChar(sql.MAX), JSON.stringify({ optionalLineIds: review.assessment.optionalLineIds }))
+      .input('assessmentFingerprint', sql.Char(64), review.assessmentFingerprint)
+      .input('dependencyFingerprint', sql.Char(64), review.dependencyFingerprint)
+      .input('zeroDpAttested', sql.Bit, zeroDpAttested)
+      .input('actorId', sql.Int, actor.id)
+      .input('actorRole', sql.NVarChar(20), actor.role)
+      .input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
+      .input('requestFingerprint', sql.Char(64), fingerprint)
+      .query(`INSERT INTO annual_finance_assessment_reviews
+          (annual_enrollment_id, assessment_id, schedule_id, schedule_version, voucher_code_snapshot,
+            current_voucher_code_snapshot, voucher_review_event_id,
+            selection_json, assessment_fingerprint, dependency_fingerprint, zero_dp_attested,
+            reviewed_by, reviewed_by_role, idempotency_key, request_fingerprint)
+        VALUES (@annualEnrollmentId, @assessmentId, @scheduleId, @scheduleVersion, @voucherCode,
+          @currentVoucherCode, @voucherReviewEventId,
+          @selectionJson, @assessmentFingerprint, @dependencyFingerprint, @zeroDpAttested,
+          @actorId, @actorRole, @idempotencyKey, @requestFingerprint)`);
+    await writeAudit(transaction, actor, 'annual_assessment_reviewed', review.assessment.id, {
+      annualEnrollmentId, scheduleId: review.assessment.scheduleId,
+      scheduleVersion: review.assessment.scheduleVersion, voucherCode: review.assessment.voucherCode,
+      zeroDpAttested
+    });
+    return { reviewId: generatedId(inserted, 'Finance assessment review'), ...review };
+  }
+
+  async function getAnnualEntryFinanceReadinessForRegistrar(actorInput, annualEnrollmentInput) {
+    const annualEnrollmentId = id(annualEnrollmentInput, 'annual enrollment');
+    const pool = await getPool();
+    await requireRegistrarActor(pool.request(), actorInput);
+    return withRosterReadSnapshot(pool, async (snapshot) => {
+      const state = await annualFinanceEvidenceSnapshot(snapshot, annualEnrollmentId);
+      if (!state.parent) throw new AnnualFinanceError('Annual enrollment not found.', 404);
+      const voucherEvidenceMatches = state.latestReview
+        && String(state.latestReview.current_voucher_code_snapshot || '') === String(state.parent.voucher_code || '')
+        && (state.latestReview.voucher_review_event_id == null ? state.voucherReview == null
+          : Number(state.latestReview.voucher_review_event_id) === Number(state.voucherReview?.eventId));
+      const matchingReview = state.latestReview && voucherEvidenceMatches
+        && state.latestReview.assessment_fingerprint === state.assessmentFingerprint
+        && state.latestReview.dependency_fingerprint === state.dependencyFingerprint;
+      const status = !state.assessment ? 'awaiting_finance_assessment'
+        : !matchingReview ? 'finance_review_required'
+          : state.dp.status === 'unpaid' ? 'awaiting_down_payment'
+            : state.dp.status === 'settled' || (state.dp.status === 'zero_due' && flag(state.latestReview.zero_dp_attested))
+              ? 'ready_for_registrar' : 'finance_review_required';
+      return { annualEnrollmentId, entryTermNumber: Number(state.parent.entry_term_number || 1), status,
+        hasAssessment: Boolean(state.assessment), reviewed: Boolean(matchingReview),
+        downPaymentSettled: state.dp.status === 'settled' || state.dp.status === 'zero_due',
+        zeroDownPaymentApproved: Boolean(matchingReview && flag(state.latestReview.zero_dp_attested)) };
+    });
+  }
+
+  async function assertAnnualEntryDownPaymentReadyInTransaction(transaction, annualEnrollmentInput) {
+    const annualEnrollmentId = id(annualEnrollmentInput, 'annual enrollment');
+    const state = await annualFinanceEvidenceSnapshot(transaction, annualEnrollmentId, { lock: true });
+    if (!state.assessment || !state.assessmentFingerprint || !state.dependencyFingerprint) {
+      throw new AnnualFinanceError('Finance must post and review the annual assessment before enrollment can be confirmed.', 409);
+    }
+    const review = state.latestReview;
+    const voucherEvidenceMatches = review
+      && String(review.current_voucher_code_snapshot || '') === String(state.parent.voucher_code || '')
+      && (review.voucher_review_event_id == null ? state.voucherReview == null
+        : Number(review.voucher_review_event_id) === Number(state.voucherReview?.eventId));
+    if ((state.voucherReview && state.voucherReview.status !== 'resolved')
+      || (state.parent.voucher_code !== state.assessment.voucherCode && !state.voucherReview)) {
+      throw new AnnualFinanceError('Finance must resolve the current voucher change for this posted assessment before enrollment can be confirmed.', 409);
+    }
+    if (!review || !voucherEvidenceMatches || review.assessment_fingerprint !== state.assessmentFingerprint
+      || review.dependency_fingerprint !== state.dependencyFingerprint) {
+      throw new AnnualFinanceError('The fee assessment changed after Finance review. Finance must review the current assessment before enrollment can be confirmed.', 409);
+    }
+    if (state.dp.status === 'missing_dp_setup' || state.dp.status === 'incomplete_assessment'
+      || state.dp.status === 'ledger_unavailable' || state.dp.status === 'invalid') {
+      throw new AnnualFinanceError('The entry-term tuition down-payment setup or ledger needs Finance review before enrollment can proceed.', 409);
+    }
+    if (state.dp.status === 'unpaid') {
+      throw new AnnualFinanceError('The full scheduled entry-term tuition down payment must be settled before enrollment can be confirmed.', 409);
+    }
+    if (state.dp.status === 'zero_due' && !flag(review.zero_dp_attested)) {
+      throw new AnnualFinanceError('Finance must explicitly approve the zero/net-waived entry-term tuition down payment before enrollment can be confirmed.', 409);
+    }
+    return { assessmentId: state.assessment.id, scheduleId: state.assessment.scheduleId,
+      scheduleVersion: state.assessment.scheduleVersion, voucherCode: state.assessment.voucherCode,
+      optionalLineIds: state.assessment.optionalLineIds, payableTotal: state.assessment.total,
+      assessmentSnapshotFingerprint: state.assessment.snapshotFingerprint,
+      financeReviewId: Number(review.id), entryDpState: state.dp.status };
   }
 
   async function runTransaction(callback) {
@@ -588,14 +935,14 @@ function createAnnualFinanceService({
     });
   }
 
-  async function annualAssessmentPreview(actorInput, annualEnrollmentInput, optionalLineInputs = [], actorRole = 'finance') {
+  async function annualAssessmentPreview(actorInput, annualEnrollmentInput, optionalLineInputs = []) {
     const annualEnrollmentId = id(annualEnrollmentInput, 'annual enrollment');
     const selectedOptionalLines = normalizeSelections(optionalLineInputs);
     const pool = await getPool();
-    if (actorRole === 'registrar') await requireRegistrarActor(pool.request(), actorInput);
-    else await requireFinanceActor(pool.request(), actorInput);
+    await requireFinanceActor(pool.request(), actorInput);
     const parentResult = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
       .query(`SELECT annual.id, annual.student_id, annual.school_year, annual.grade_level, annual.voucher_code, annual.entry_term_number,
+          annual.intake_status,
           student.student_no, student.first_name, student.middle_name, student.last_name, student.suffix
         FROM annual_enrollments AS annual
         INNER JOIN students AS student ON student.id = annual.student_id
@@ -604,13 +951,22 @@ function createAnnualFinanceService({
     if (!parent) throw new AnnualFinanceError('Annual enrollment not found.', 404);
     const existingAssessment = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
       .query(`SELECT assessment.id, assessment.schedule_id, assessment.schedule_version,
-          assessment.voucher_code_snapshot, assessment.selection_json
+          assessment.voucher_code_snapshot, assessment.selection_json, assessment.assessed_at
         FROM annual_assessments AS assessment
         WHERE assessment.annual_enrollment_id = @annualEnrollmentId FOR UPDATE`);
     const posted = existingAssessment.recordset?.[0] || null;
     if (posted) {
-      if (parent.voucher_code !== posted.voucher_code_snapshot) {
+      const voucherReview = await loadVoucherReviewState(pool.request(), sql, {
+        annualEnrollmentId, assessmentId: Number(posted.id), scheduleId: Number(posted.schedule_id),
+        scheduleVersion: Number(posted.schedule_version), assessedVoucherCode: posted.voucher_code_snapshot,
+        currentVoucherCode: parent.voucher_code, assessedAt: posted.assessed_at
+      });
+      if (parent.voucher_code !== posted.voucher_code_snapshot
+        && (parent.intake_status !== 'pending' || voucherReview?.status !== 'resolved')) {
         throw new AnnualFinanceError('The voucher changed after this assessment. Finance must review the existing assessment before enrollment can be confirmed.', 409);
+      }
+      if (parent.intake_status === 'pending' && voucherReview && voucherReview.status !== 'resolved') {
+        throw new AnnualFinanceError('Resolve the current Finance voucher review before re-attesting this posted assessment.', 409);
       }
       let selection = {};
       try { selection = JSON.parse(posted.selection_json || '{}'); } catch { throw new AnnualFinanceError('The saved assessment selection needs staff review.', 409); }
@@ -638,6 +994,7 @@ function createAnnualFinanceService({
       const tuitionBreakdown = tuitionInstallmentBreakdown(lines, parent.entry_term_number);
       return { parent, scheduleId: Number(posted.schedule_id), scheduleVersion: Number(posted.schedule_version),
         voucherCode: posted.voucher_code_snapshot, assessmentId: Number(posted.id), existingAssessment: true,
+        voucherReview,
         optionalLineIds: [...selected], lines, total: formatMoneyCents(totalCents), totalCents,
         optionalLines: [], termTotals: assessmentTermTotals(lines, parent.entry_term_number),
         tuitionTermTotals: tuitionTermTotals(lines, parent.entry_term_number),
@@ -719,10 +1076,6 @@ function createAnnualFinanceService({
       tuitionBreakdown,
       tuitionBreakdownComplete: tuitionBreakdown.filter((term) => !term.installments[0].notApplicable).every((term) => term.complete),
       snapshotFingerprint: snapshot.fingerprint };
-  }
-
-  async function annualAssessmentPreviewForRegistrar(actorInput, annualEnrollmentInput, optionalLineInputs = []) {
-    return annualAssessmentPreview(actorInput, annualEnrollmentInput, optionalLineInputs, 'registrar');
   }
 
   async function annualConfirmationAssessmentSnapshotForStaff(actorInput, annualEnrollmentInput) {
@@ -843,6 +1196,9 @@ function createAnnualFinanceService({
     const expectedScheduleVersion = id(confirmation.scheduleVersion, 'previewed schedule version');
     const expectedVoucherCode = confirmation.voucherCode;
     const expectedSnapshotFingerprint = confirmation.snapshotFingerprint;
+    if (actorRole !== 'finance') {
+      throw new AnnualFinanceError('Registrar cannot post or review an annual assessment. Finance owns this action.', 403);
+    }
     if (!['PUB', 'ESC', 'NV'].includes(expectedVoucherCode)) throw new AnnualFinanceError('The assessment preview context is invalid. Preview the annual assessment again.');
     if (actorRole === 'registrar' && (typeof expectedSnapshotFingerprint !== 'string' || !/^[0-9a-f]{64}$/i.test(expectedSnapshotFingerprint))) {
       throw new AnnualFinanceError('The fee summary changed or expired. Review it again before confirming enrollment.', 409);
@@ -867,10 +1223,15 @@ function createAnnualFinanceService({
         : await requireFinanceActor(transaction.request(), actorInput);
       if (!sharedTransaction) await verifyStudent(transaction, ownerStudentId);
       const lockedOwnerResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
-        .query(`SELECT annual.student_id FROM annual_enrollments AS annual
+        .query(`SELECT annual.student_id, annual.intake_status FROM annual_enrollments AS annual
           WHERE annual.id = @annualEnrollmentId AND annual.intake_status <> 'legacy' FOR UPDATE`);
-      const lockedOwnerId = Number(lockedOwnerResult.recordset?.[0]?.student_id);
+      const lockedOwner = lockedOwnerResult.recordset?.[0];
+      const lockedOwnerId = Number(lockedOwner?.student_id);
       if (!Number.isSafeInteger(lockedOwnerId) || lockedOwnerId < 1) throw new AnnualFinanceError('Annual enrollment not found.', 404);
+      const pendingHandoff = lockedOwner.intake_status === 'pending';
+      if (pendingHandoff && confirmation.financeAttestation !== true) {
+        throw new AnnualFinanceError('A Finance reviewer must explicitly attest the pending annual assessment before it is saved.', 403);
+      }
       if (lockedOwnerId !== ownerStudentId) throw new AnnualFinanceError('The student account does not match this annual enrollment.', 409);
       ownerStudentId = lockedOwnerId;
       const beforeDebt = (await debtRevisions.readSnapshot(transaction, ownerStudentId)).canonicalBalanceCents;
@@ -886,6 +1247,7 @@ function createAnnualFinanceService({
         if (actorRole === 'registrar' && snapshot.fingerprint !== expectedSnapshotFingerprint) {
           throw new AnnualFinanceError('The posted fee lines differ from the summary you reviewed. Reload the fee summary before confirming.', 409);
         }
+        await recordAnnualFinanceReview(transaction, actor, annualEnrollmentId, confirmation);
         return { assessmentId: Number(prior.id), lineCount: snapshot.lines.length, total: snapshot.total,
           snapshotFingerprint: snapshot.fingerprint, alreadyPosted: true };
       }
@@ -899,22 +1261,31 @@ function createAnnualFinanceService({
       if (!parent) throw new AnnualFinanceError('Annual enrollment not found.', 404);
       if (parent.student_status === 'archived') throw new AnnualFinanceError('Archived students cannot receive new assessments.', 409);
       const existing = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
-        .query(`SELECT id, schedule_id, schedule_version, voucher_code_snapshot, selection_json
+        .query(`SELECT id, schedule_id, schedule_version, voucher_code_snapshot, selection_json, assessed_at
           FROM annual_assessments  WHERE annual_enrollment_id = @annualEnrollmentId`);
       if (existing.recordset?.[0]) {
         const saved = existing.recordset[0];
+        const voucherReview = await loadVoucherReviewState(transaction.request(), sql, {
+          annualEnrollmentId, assessmentId: Number(saved.id), scheduleId: Number(saved.schedule_id),
+          scheduleVersion: Number(saved.schedule_version), assessedVoucherCode: saved.voucher_code_snapshot,
+          currentVoucherCode: parent.voucher_code, assessedAt: saved.assessed_at
+        }, { lock: true });
         let savedSelection = {};
         try { savedSelection = JSON.parse(saved.selection_json || '{}'); } catch { throw new AnnualFinanceError('The saved assessment selection needs staff review.', 409); }
         const savedIds = normalizeSelections(savedSelection.optionalLineIds || []);
         const sameSelection = savedIds.size === selectedOptionalLines.size && [...savedIds].every((lineId) => selectedOptionalLines.has(lineId));
+        const voucherResolvedForPending = parent.intake_status === 'pending' && voucherReview?.status === 'resolved';
         if (Number(saved.schedule_id) !== expectedScheduleId || Number(saved.schedule_version) !== expectedScheduleVersion
-          || saved.voucher_code_snapshot !== expectedVoucherCode || parent.voucher_code !== saved.voucher_code_snapshot || !sameSelection) {
+          || saved.voucher_code_snapshot !== expectedVoucherCode
+          || (parent.voucher_code !== saved.voucher_code_snapshot && !voucherResolvedForPending)
+          || (voucherReview && voucherReview.status !== 'resolved') || !sameSelection) {
           throw new AnnualFinanceError('The saved assessment or voucher differs from this review. Finance must resolve the change before enrollment can be confirmed.', 409);
         }
         const snapshot = await loadAssessmentSnapshot(transaction, Number(saved.id));
         if (actorRole === 'registrar' && snapshot.fingerprint !== expectedSnapshotFingerprint) {
           throw new AnnualFinanceError('The posted fee lines differ from the summary you reviewed. Reload the fee summary before confirming.', 409);
         }
+        await recordAnnualFinanceReview(transaction, actor, annualEnrollmentId, confirmation);
         return { assessmentId: saved.id, scheduleVersion: saved.schedule_version,
           lineCount: snapshot.lines.length, total: snapshot.total, snapshotFingerprint: snapshot.fingerprint, alreadyPosted: true };
       }
@@ -993,6 +1364,7 @@ function createAnnualFinanceService({
       if (actorRole === 'registrar' && snapshot.fingerprint !== expectedSnapshotFingerprint) {
         throw new AnnualFinanceError('The posted fee lines changed while this summary was being saved. Review the fee summary again.', 409);
       }
+      await recordAnnualFinanceReview(transaction, actor, annualEnrollmentId, confirmation);
       return { assessmentId, scheduleVersion: schedule.version_no, lineCount: includedLines.length,
         total: snapshot.total, snapshotFingerprint: snapshot.fingerprint };
     };
@@ -1757,7 +2129,7 @@ function createAnnualFinanceService({
         return { paymentId, reversed: true, alreadyReversed: true };
       }
       const paymentResult = await transaction.request().input('paymentId', sql.BigInt, paymentId)
-        .query(`SELECT id, student_id, is_reversed FROM finance_payments  WHERE id = @paymentId`);
+        .query(`SELECT id, student_id, is_reversed FROM finance_payments  WHERE id = @paymentId FOR UPDATE`);
       const payment = paymentResult.recordset?.[0];
       if (!payment || Number(payment.student_id) !== studentId) throw new AnnualFinanceError('Payment not found for this student.', 404);
       if (flag(payment.is_reversed)) throw new AnnualFinanceError('This payment has already been reversed.', 409);
@@ -1771,8 +2143,10 @@ function createAnnualFinanceService({
         .input('reason', sql.NVarChar(1000), reason).input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
         .input('requestFingerprint', sql.NVarChar(64), fingerprint)
         .query(`INSERT INTO finance_payment_reversals (payment_id, reason, idempotency_key, request_fingerprint, recorded_by)
-          VALUES (@paymentId, @reason, @idempotencyKey, @requestFingerprint, @actorId);
-          UPDATE finance_payments SET is_reversed = 1 WHERE id = @paymentId AND is_reversed = 0;`);
+          VALUES (@paymentId, @reason, @idempotencyKey, @requestFingerprint, @actorId)`);
+      const reversed = await transaction.request().input('paymentId', sql.BigInt, paymentId)
+        .query('UPDATE finance_payments SET is_reversed = 1 WHERE id = @paymentId AND is_reversed = 0');
+      if (reversed.rowsAffected?.[0] !== 1) throw new AnnualFinanceError('This payment changed before it could be reversed.', 409);
       for (const row of affectedTerms.recordset || []) {
         await requireFreshApproval(transaction, actor, Number(row.enrollment_id), 'qualifying_payment_reversed');
       }
@@ -1947,23 +2321,12 @@ function createAnnualFinanceService({
     const reason = cleanText(input.reason, 'Voucher review reason', 900, true);
     const idempotencyKey = uuid(input.idempotencyKey, 'voucher review resolution');
     const recordedReason = `${resolution === 'assessment_stands' ? 'Assessment remains valid' : 'Required adjustments were recorded'}: ${reason}`;
-    const fingerprint = requestFingerprint({ annualEnrollmentId, resolution, reason });
     return runTransaction(async (transaction) => {
       const actor = await requireFinanceActor(transaction.request(), actorInput);
-      const prior = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
-        .query(`SELECT annual_enrollment_id, event_type, request_fingerprint FROM annual_enrollment_events
-          WHERE idempotency_key = @idempotencyKey FOR UPDATE`);
-      if (prior.recordset?.[0]) {
-        const old = prior.recordset[0];
-        if (Number(old.annual_enrollment_id) !== annualEnrollmentId || old.event_type !== 'voucher_review_resolved' || old.request_fingerprint !== fingerprint) {
-          throw new AnnualFinanceError('This submission token was already used for different voucher review details.', 409);
-        }
-        const owner = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
-          .query('SELECT student_id FROM annual_enrollments WHERE id = @annualEnrollmentId');
-        return { annualEnrollmentId, studentId: Number(owner.recordset?.[0]?.student_id), resolved: true, alreadyResolved: true };
-      }
       const parentResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
-        .query(`SELECT annual.id, annual.student_id, annual.voucher_code, student.status AS student_status, assessment.id AS assessment_id,
+        .query(`SELECT annual.id, annual.student_id, annual.voucher_code, annual.intake_status,
+            student.status AS student_status,
+            assessment.id AS assessment_id, assessment.schedule_id, assessment.schedule_version,
             assessment.voucher_code_snapshot, assessment.assessed_at
           FROM annual_enrollments AS annual
           INNER JOIN students AS student  ON student.id = annual.student_id
@@ -1973,23 +2336,47 @@ function createAnnualFinanceService({
       if (!parent) throw new AnnualFinanceError('Annual enrollment not found.', 404);
       if (parent.student_status === 'archived') throw new AnnualFinanceError('Archived student finance history is read-only.', 409);
       if (!parent.assessment_id) throw new AnnualFinanceError('Post the annual assessment before resolving a voucher review.', 409);
-      const latest = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
-        .input('assessedAt', sql.DateTime2, parent.assessed_at)
-        .query(`SELECT event_type FROM annual_enrollment_events
-          WHERE annual_enrollment_id = @annualEnrollmentId AND event_type IN ('voucher_review_flagged', 'voucher_review_resolved')
-            AND created_at > @assessedAt ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE`);
-      if (latest.recordset?.[0]?.event_type !== 'voucher_review_flagged') throw new AnnualFinanceError('There is no unresolved voucher change for this assessment.', 409);
+      const fingerprint = requestFingerprint({ annualEnrollmentId, assessmentId: Number(parent.assessment_id),
+        scheduleId: Number(parent.schedule_id), scheduleVersion: Number(parent.schedule_version),
+        assessedVoucherCode: parent.voucher_code_snapshot, currentVoucherCode: parent.voucher_code,
+        resolution, reason });
+      const prior = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
+        .query(`SELECT annual_enrollment_id, event_type, request_fingerprint FROM annual_enrollment_events
+          WHERE idempotency_key = @idempotencyKey FOR UPDATE`);
+      if (prior.recordset?.[0]) {
+        const old = prior.recordset[0];
+        if (Number(old.annual_enrollment_id) !== annualEnrollmentId || old.event_type !== 'voucher_review_resolved' || old.request_fingerprint !== fingerprint) {
+          throw new AnnualFinanceError('This submission token was already used for different voucher review details.', 409);
+        }
+        return { annualEnrollmentId, studentId: Number(parent.student_id), resolved: true, alreadyResolved: true };
+      }
+      const voucherReview = await loadVoucherReviewState(transaction.request(), sql, {
+        annualEnrollmentId, assessmentId: Number(parent.assessment_id), scheduleId: Number(parent.schedule_id),
+        scheduleVersion: Number(parent.schedule_version), assessedVoucherCode: parent.voucher_code_snapshot,
+        currentVoucherCode: parent.voucher_code, assessedAt: parent.assessed_at
+      }, { lock: true });
+      const flaggedReview = voucherReview?.eventType === 'voucher_review_flagged';
+      const legacyResolutionNeedsFreshReview = parent.intake_status === 'pending'
+        && parent.voucher_code !== parent.voucher_code_snapshot
+        && voucherReview?.eventType === 'voucher_review_resolved'
+        && voucherReview.status === 'unverified' && voucherReview.assessmentBound === false;
+      if (!flaggedReview && !legacyResolutionNeedsFreshReview) {
+        throw new AnnualFinanceError('There is no unresolved voucher change for this assessment.', 409);
+      }
       const event = await transaction.request()
         .input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .input('assessmentId', sql.Int, Number(parent.assessment_id))
         .input('actorId', sql.Int, actor.id)
         .input('reason', sql.NVarChar(1000), recordedReason)
         .input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
         .input('fingerprint', sql.NVarChar(64), fingerprint)
         .query(`INSERT INTO annual_enrollment_events
-            (annual_enrollment_id, actor_id, event_type, reason, idempotency_key, request_fingerprint)
-          VALUES (@annualEnrollmentId, @actorId, 'voucher_review_resolved', @reason, @idempotencyKey, @fingerprint)`);
+            (annual_enrollment_id, finance_assessment_id, actor_id, event_type, reason, idempotency_key, request_fingerprint)
+          VALUES (@annualEnrollmentId, @assessmentId, @actorId, 'voucher_review_resolved', @reason, @idempotencyKey, @fingerprint)`);
       await writeAudit(transaction, actor, 'voucher_review_resolved', event.insertId || event.recordset?.[0]?.id, {
-        annualEnrollmentId, currentVoucher: parent.voucher_code, assessedVoucher: parent.voucher_code_snapshot, resolution, reason
+        annualEnrollmentId, assessmentId: Number(parent.assessment_id), scheduleId: Number(parent.schedule_id),
+        scheduleVersion: Number(parent.schedule_version), currentVoucher: parent.voucher_code,
+        assessedVoucher: parent.voucher_code_snapshot, resolution, reason
       });
       return { annualEnrollmentId, studentId: Number(parent.student_id), resolved: true };
     });
@@ -2119,7 +2506,7 @@ function createAnnualFinanceService({
           WHERE annual.student_id = @studentId AND clearance.event_type = 'signed'
         ) AS entries ORDER BY event_date, event_type, sort_key`);
     const termsResult = await transaction.request().input('studentId', sql.Int, studentId).input('isStudent', sql.Bit, access === 'student').query(`WITH latest_voucher_event AS (
-          SELECT annual_enrollment_id, event_type, reason, created_at,
+          SELECT annual_enrollment_id, finance_assessment_id, event_type, reason, created_at,
             ROW_NUMBER() OVER (PARTITION BY annual_enrollment_id ORDER BY created_at DESC, id DESC) AS event_rank
           FROM annual_enrollment_events
           WHERE event_type IN ('voucher_review_flagged', 'voucher_review_resolved')
@@ -2137,7 +2524,12 @@ function createAnnualFinanceService({
           CAST(COALESCE(due_by_enrollment.total, 0) AS CHAR(40)) AS outstanding,
           confirmation.id AS registrar_confirmation_id,
           assessment.voucher_code_snapshot AS assessed_voucher_code, assessment.schedule_version AS assessed_schedule_version,
-          CASE WHEN voucher_event.event_type = 'voucher_review_flagged' THEN CAST(1 AS UNSIGNED) ELSE CAST(0 AS UNSIGNED) END AS voucher_review_required,
+          CASE WHEN voucher_event.event_type = 'voucher_review_flagged'
+            OR (@isStudent = 0 AND annual.intake_status = 'pending' AND assessment.voucher_code_snapshot IS NOT NULL
+              AND annual.voucher_code <> assessment.voucher_code_snapshot
+              AND voucher_event.event_type = 'voucher_review_resolved'
+              AND (voucher_event.finance_assessment_id IS NULL OR voucher_event.finance_assessment_id <> assessment.id))
+            THEN CAST(1 AS UNSIGNED) ELSE CAST(0 AS UNSIGNED) END AS voucher_review_required,
           CASE WHEN @isStudent = 1 THEN NULL ELSE voucher_event.reason END AS voucher_review_reason,
           clearance.event_type AS signed_clearance_status
         FROM enrollments AS enrollment
@@ -2977,8 +3369,9 @@ function createAnnualFinanceService({
   }
 
   return {
-    listSchedules, createSchedule, annualAssessmentPreview, annualAssessmentPreviewForRegistrar,
-    annualConfirmationAssessmentSnapshotForStaff,
+    listSchedules, createSchedule, annualAssessmentPreview,
+    annualConfirmationAssessmentSnapshotForStaff, getAnnualEntryFinanceReadinessForRegistrar,
+    assertAnnualEntryDownPaymentReadyInTransaction,
     confirmAnnualAssessment, confirmAnnualAssessmentInTransaction, addSupplementaryCharge,
     recordPayment, updatePaymentMetadata, previewLegacyOpeningLiability, transferLegacyOpeningLiability,
     allocateExistingCredit, releasePaymentAllocation, releaseLegacyReconciliation,
@@ -3004,5 +3397,6 @@ module.exports = {
   applyExemptionPreview,
   assessmentTermTotals,
   tuitionTermTotals,
-  nonTuitionTermTotals
+  nonTuitionTermTotals,
+  classifyEntryDownPaymentBalances
 };

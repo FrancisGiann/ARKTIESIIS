@@ -530,9 +530,40 @@ function registerAnnualConfirmationGet(router, { annualEnrollmentService, annual
   });
 }
 
+function registerAnnualPendingFormGet(router, { annualEnrollmentService, logger }) {
+  router.get('/:annualId/pending-form', async (req, res) => {
+    try {
+      if (!['registrar', 'database_admin'].includes(req.authUser?.role)) {
+        throw new AnnualEnrollmentError('Registrar or database administrator access is required.', 403);
+      }
+      if (typeof annualEnrollmentService?.getAnnualManagementRecord !== 'function') {
+        throw new AnnualEnrollmentError('The pending enrollment form is unavailable.', 503);
+      }
+      const record = await annualEnrollmentService.getAnnualManagementRecord(req.authUser.id, req.params.annualId);
+      if (record.parent.intake_status !== 'pending') {
+        throw new AnnualEnrollmentError('This pending intake form is available only before enrollment is confirmed.', 409);
+      }
+      return setPrivateHeaders(res).render('records/annual-intake-pending-form', {
+        title: 'Pending enrollment e-form', currentUser: req.authUser, record
+      });
+    } catch (error) {
+      if (error instanceof AnnualEnrollmentError) return setPrivateHeaders(res).status(error.status).render('error', {
+        title: 'Pending enrollment form unavailable', message: error.message
+      });
+      const incidentId = crypto.randomUUID();
+      try { logger.error('Pending annual form load failed', { incidentId, operation: 'registrar.annual_pending_form.load', ...safeErrorDiagnostics(error) }); }
+      catch { /* Keep the private printable route response safe. */ }
+      return setPrivateHeaders(res).status(503).render('error', {
+        title: 'Pending enrollment form unavailable', message: `The saved intake form could not be loaded. Support reference: ${incidentId}.`
+      });
+    }
+  });
+}
+
 function createAnnualConfirmationRouter({ annualEnrollmentService, annualFinanceService, logger = console } = {}) {
   const router = express.Router();
   registerAnnualConfirmationGet(router, { annualEnrollmentService, annualFinanceService, logger });
+  registerAnnualPendingFormGet(router, { annualEnrollmentService, logger });
   return router;
 }
 
@@ -639,42 +670,18 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
     }
   }
 
-  async function renderFeeReview(req, res, annualId, { status = 200, error = null, values = {} } = {}) {
-    try {
-      if (!feeService?.annualAssessmentPreviewForRegistrar) throw new AnnualFinanceError('Fee assessment is unavailable.', 503);
-      const requestedLines = values.optionalLineIds ?? req.query?.optionalLineIds ?? [];
-      const preview = await feeService.annualAssessmentPreviewForRegistrar(req.authUser.id, annualId, requestedLines);
-      const submittedKey = values.idempotencyKey || req.query?.idempotencyKey;
-      const key = typeof submittedKey === 'string' && INTAKE_IDEMPOTENCY_KEY.test(submittedKey) ? submittedKey : crypto.randomUUID();
-      return setPrivateHeaders(res).status(status).render('records/annual-intake-fees', {
-        title: 'Review enrollment fees', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
-        annualId, preview, error, values: { ...values, idempotencyKey: key },
-        confirmationChoices: preview.optionalLineIds || [],
-        successNotice: req.query?.notice === 'confirmed' ? 'Enrollment confirmed. Finance manages approved schedules and records payments.' : null
-      });
-    } catch (loadError) {
-      if (loadError instanceof AnnualEnrollmentError || loadError instanceof AnnualFinanceError) {
-        return setPrivateHeaders(res).status(loadError.status).render('records/annual-intake-fees', {
-          title: 'Review enrollment fees', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
-          annualId, preview: null, error: loadError.message, values, confirmationChoices: [], successNotice: null
-        });
-      }
-      return res.status(503).render('error', { title: 'Fee review unavailable', message: 'The configured fee assessment could not be loaded.' });
-    }
-  }
-
   async function renderFinalReview(req, res, annualId, { status = 200, error = null, values = {} } = {}) {
     try {
-      if (!feeService?.annualAssessmentPreviewForRegistrar || !checklistService?.getStudentChecklist) {
+      if (!feeService?.getAnnualEntryFinanceReadinessForRegistrar || !checklistService?.getStudentChecklist) {
         throw new AnnualEnrollmentError('The final review is unavailable until student and checklist records can be loaded.', 503);
       }
       if (!clearanceService?.getAnnualPrerequisiteReview) {
         throw new AnnualEnrollmentError('The paper-clearance prerequisite review is unavailable. Enrollment confirmation is blocked.', 503);
       }
       const record = await service.getAnnualManagementRecord(req.authUser.id, annualId);
-      const [checklist, preview, prerequisiteReview] = await Promise.all([
+      const [checklist, financeReadiness, prerequisiteReview] = await Promise.all([
         checklistService.getStudentChecklist(req.authUser.id, record.parent.student_id),
-        feeService.annualAssessmentPreviewForRegistrar(req.authUser.id, annualId, values.optionalLineIds ?? req.query?.optionalLineIds ?? []),
+        feeService.getAnnualEntryFinanceReadinessForRegistrar(req.authUser.id, annualId),
         record.parent.registrar_confirmation_id
           ? Promise.resolve({ ready: true, kind: 'already_confirmed', terms: [], blockers: [], fingerprint: null })
           : clearanceService.getAnnualPrerequisiteReview(req.authUser.id, annualId)
@@ -686,7 +693,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         ? submittedKey : crypto.randomUUID();
       return setPrivateHeaders(res).status(status).render('records/annual-intake-review', {
         title: 'Review enrollment details', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
-        annualId, record, checklist, preview, prerequisiteReview, sourceOptions, error,
+        annualId, record, checklist, financeReadiness, prerequisiteReview, sourceOptions, error,
         values: { idempotencyKey, sourceBindingIdempotencyKey: crypto.randomUUID() },
         confirmationComplete: Boolean(record.parent.registrar_confirmation_id)
       });
@@ -694,7 +701,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       if (loadError instanceof TermClearanceSummaryUnavailableError) {
         return setPrivateHeaders(res).status(503).render('records/annual-intake-review', {
           title: 'Review enrollment details', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
-          annualId, record: null, checklist: null, preview: null, error: CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE,
+          annualId, record: null, checklist: null, financeReadiness: null, error: CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE,
           prerequisiteReview: null, sourceOptions: null,
           values: { idempotencyKey: crypto.randomUUID(), sourceBindingIdempotencyKey: crypto.randomUUID() },
           confirmationComplete: false
@@ -703,7 +710,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       if (loadError instanceof AnnualEnrollmentError || loadError instanceof AnnualFinanceError || loadError instanceof PhysicalChecklistError || loadError instanceof TermClearanceError) {
         return setPrivateHeaders(res).status(loadError.status).render('records/annual-intake-review', {
           title: 'Review enrollment details', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
-          annualId, record: null, checklist: null, preview: null, error: loadError.message,
+          annualId, record: null, checklist: null, financeReadiness: null, error: loadError.message,
           prerequisiteReview: null, sourceOptions: null,
           values: { idempotencyKey: crypto.randomUUID(), sourceBindingIdempotencyKey: crypto.randomUUID() },
           confirmationComplete: false
@@ -765,7 +772,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
     try {
       const opened = await preEnrollmentService.openConversion(req.authUser.id, preEnrollmentId);
       if (opened.alreadyStarted) {
-        if (opened.annualEnrollmentId) return res.redirect(303, `/registrar/intake/${encodeURIComponent(opened.annualEnrollmentId)}/fees`);
+        if (opened.annualEnrollmentId) return res.redirect(303, `/registrar/intake/${encodeURIComponent(opened.annualEnrollmentId)}/review`);
         throw new AnnualEnrollmentError('Annual enrollment was marked started but its linked record could not be found. Contact the database administrator.', 409);
       }
       const source = opened.record;
@@ -811,7 +818,8 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       return res.status(503).render('error', { title: 'Annual enrollment details', message: 'The annual administration details could not be saved.' });
     }
   });
-  router.get('/:annualId/fees', (req, res) => renderFeeReview(req, res, req.params.annualId));
+  router.get('/:annualId/fees', (req, res) => res.redirect(303,
+    `/registrar/intake/${encodeURIComponent(req.params.annualId)}/review`));
   router.get('/:annualId/review', (req, res) => renderFinalReview(req, res, req.params.annualId));
   router.get('/:enrollmentId/activation-review', (req, res) => renderActivationReview(req, res, req.params.enrollmentId));
   router.post('/:annualId/continuity-source', async (req, res) => {
@@ -922,7 +930,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       const result = await service.createAnnualIntake(req.authUser.id, req.body);
       const annualEnrollmentId = Number(result?.annualEnrollmentId);
       if (Number.isSafeInteger(annualEnrollmentId) && annualEnrollmentId > 0) {
-        return res.redirect(303, `/registrar/intake/${encodeURIComponent(annualEnrollmentId)}/fees`);
+        return res.redirect(303, `/registrar/intake/${encodeURIComponent(annualEnrollmentId)}/review`);
       }
       return res.redirect(303, '/registrar/intake?notice=annualCreated');
     } catch (error) {

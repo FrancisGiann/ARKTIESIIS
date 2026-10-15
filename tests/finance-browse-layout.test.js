@@ -668,6 +668,26 @@ test('finance annual roster separates page data, classification, and balances in
   assert.match(chargesBreakdown, /name="idempotencyKey" value="test-adjustment-token"/);
   assert.match(chargesBreakdown, /name="idempotencyKey" value="test-comment-token"/);
 
+  const pendingReviewLocals = structuredClone(chargesLocals);
+  Object.assign(pendingReviewLocals.ledger.terms[0], {
+    annual_enrollment_id: 21, intake_status: 'pending', assessment_id: 221, schedule_version: 4,
+    paymentClassification: { finance_status: 'needs_review', whole_status: 'needs_review', assessment_id: 221 }
+  });
+  const pendingReviewHtml = await renderFinanceView('annual-student', pendingReviewLocals);
+  assert.match(pendingReviewHtml, /Finance review for pending intake · 2026-2027/);
+  assert.match(pendingReviewHtml, /Review current assessment for enrollment/);
+  assert.match(pendingReviewHtml, /action="\/finance\/annual\/21\/assessment-preview"/);
+  assert.match(pendingReviewHtml, /this review does not post charges or change payment history/i);
+  const existingAssessmentPreviewHtml = await renderFinanceView('annual-student', {
+    ...pendingReviewLocals,
+    preview: { parent: { id: 21, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC' },
+      scheduleVersion: 4, existingAssessment: true, scheduleId: 4, lines: [], total: '40.00' }
+  });
+  assert.match(existingAssessmentPreviewHtml, /Current assessment review/);
+  assert.match(existingAssessmentPreviewHtml, /already posted; Finance review will keep its charges and payment history unchanged/);
+  assert.match(existingAssessmentPreviewHtml, /Confirm Finance review · keep existing charges/);
+  assert.doesNotMatch(existingAssessmentPreviewHtml, /Confirm and post annual assessment/);
+
   for (const action of ['adjustments', 'comments']) {
     const recoveryLocals = structuredClone(chargesLocals);
     recoveryLocals.failedAction = { path: `/students/22/annual/charges/83/${action}`, input: {} };
@@ -776,10 +796,10 @@ test('finance annual roster separates page data, classification, and balances in
   assert.match(paymentDetails, /Optional transmittal reference and private note/);
   assert.match(paymentAllocations, /Suggest oldest balances/);
   assert.match(paymentAllocations, /name="allocationMode" value="credit">Leave full amount as unused credit/);
-  assert.match(paymentAllocations, /Applying it here does not record another payment/);
-  assert.match(paymentAllocations, /Amount to apply \(PHP\)/);
-  assert.match(paymentAllocations, /Choose the purpose for each part of this payment[\s\S]*?school year, grade, term, fee, and tuition installment/);
-  assert.match(paymentAllocations, /<details class="finance-allocation-extra-details"[^>]*data-allocation-extra-details[\s\S]*?<summary>Additional payment purposes<\/summary>/);
+  assert.match(paymentAllocations, /Any amount not assigned stays as unused payment credit for later use/);
+  assert.match(paymentAllocations, /Amount for this fee or balance \(PHP\)/);
+  assert.match(paymentAllocations, /Choose a fee or confirmed previous balance[\s\S]*?fees, terms, or school years/);
+  assert.match(paymentAllocations, /<details class="finance-allocation-extra-details"[^>]*data-allocation-extra-details[\s\S]*?<summary>More fees or balances<\/summary>/);
   assert.match(paymentAllocations, /name="allocationTarget"/);
   assert.doesNotMatch(paymentDetails + paymentAllocations, /\shidden(?:\s|>)/, 'both steps stay available without JavaScript');
   assert.match(accountHtml, /src="\/js\/finance-payment-wizard\.js"/);
@@ -1018,140 +1038,42 @@ test('schedule validation reopens the form with submitted fee lines and idempote
   assert.equal(calls[0].input.lines[12].isOptional, true);
 });
 
-test('registrar fee preview shows meaningful approved installment labels and payable tuition lines', async () => {
-  const html = await ejs.renderFile(path.join(__dirname, '../views/records/annual-intake-fees.ejs'), {
-    title: 'Fee preview test', formatMoney, annualId: 41, csrfToken: 'test-csrf',
-    values: { idempotencyKey: '41111111-1111-4111-8111-111111111111' }, successNotice: null, error: null,
-    preview: {
-      parent: { first_name: 'Synthetic', last_name: 'Learner', student_no: 'S-1', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB' },
-      scheduleVersion: 2, existingAssessment: false, optionalLines: [], optionalLineIds: [],
-      termTotals: [{ termNumber: 1, amount: '25.00' }, { termNumber: 2, amount: '0.00' }],
-      tuitionTermTotals: [{ termNumber: 1, amount: '25.00' }, { termNumber: 2, amount: '0.00' }],
-      nonTuitionTermTotals: [{ termNumber: 1, amount: '0.00' }, { termNumber: 2, amount: '0.00' }],
-      tuitionBreakdownComplete: true,
-      tuitionBreakdown: [1, 2].map((termNumber) => ({
-        termNumber, complete: true, installments: ['DP', 'Prelim', 'Midterm', 'Finals'].map((label) => ({
-          label, configured: true, amount: termNumber === 1 && label === 'Prelim' ? '25.00' : '0.00'
-        }))
-      })),
-      lines: [
-        { termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'DP', amount: '0.00', grossAmount: '0.00', waivedAmount: '0.00', isOptional: false },
-        { termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Prelim', amount: '25.00', grossAmount: '25.00', waivedAmount: '0.00', isOptional: false }
-      ],
-      total: '25.00', scheduleId: 3, assessmentId: null, voucherCode: 'PUB', snapshotFingerprint: 'a'.repeat(64)
+test('pending school e-form prints labeled copies with saved subjects and no credentials or fabricated confirmation', async () => {
+  const html = await ejs.renderFile(path.join(__dirname, '../views/records/annual-intake-pending-form.ejs'), {
+    title: 'Pending e-form',
+    record: {
+      parent: { annual_enrollment_id: 41, intake_kind: 'transferee', entry_term_number: 2,
+        first_name: 'Ari <Learner>', middle_name: null, last_name: 'Santos', suffix: null,
+        student_no: 'S-41', lrn: '012345678901', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC' },
+      terms: [{ annual_term_number: 2, term: 'Second Semester', section_name: '11 Mahogany', cluster: 'Tech-Pro',
+        strand: 'ICT Support', adviser: 'A. Teacher', modality: 'distance' }],
+      subjects: [{ annual_term_number: 2, subject_code: 'ENG-1', subject_name: 'English', schedules: [
+        { day_of_week: 'Monday', schedule_start_time: '08:00', schedule_end_time: '09:00', room: 'Room 1' },
+        { day_of_week: 'Wednesday', schedule_start_time: '10:00', schedule_end_time: '11:00', room: 'Room 2' }
+      ] }]
     }
   });
-  assert.match(html, /Approved tuition by installment/);
-  assert.match(html, /Payable by term/);
-  assert.match(html, /Downpayment/);
-  assert.match(html, /DP/);
-  assert.match(html, /₱0\.00/);
-  assert.match(html, />Prelim</);
-  assert.match(html, /₱25\.00/);
-  assert.doesNotMatch(html, /Not configured|Not applicable/);
-  assert.match(html, /<details class="fee-breakdown">/);
-  assert.doesNotMatch(html, /<details class="fee-breakdown" open>/);
-  assert.equal((html.match(/data-fee-submit/g) || []).length, 1);
-});
-
-test('registrar installment matrix starts at the entry term and reconciles tuition, other fees, and term payable', async () => {
-  const termTwoInstallmentAmounts = { DP: '0.00', Prelim: '433.34', Midterm: '433.33', Finals: '433.33' };
-  const tuitionBreakdown = [1, 2, 3].map((termNumber) => termNumber === 1
-    ? { termNumber, complete: true, installments: ['DP', 'Prelim', 'Midterm', 'Finals'].map((label) => ({
-      label, configured: false, notApplicable: true, amount: null
-    })) }
-    : { termNumber, complete: true, installments: ['DP', 'Prelim', 'Midterm', 'Finals'].map((label) => ({
-      label, configured: true, amount: termNumber === 2 ? termTwoInstallmentAmounts[label] : '350.00'
-    })) });
-  const termTwoLines = ['DP', 'Prelim', 'Midterm', 'Finals'].map((installment) => ({
-    termNumber: 2, lineName: 'Tuition', category: 'tuition', installment, amount: termTwoInstallmentAmounts[installment],
-    grossAmount: termTwoInstallmentAmounts[installment], waivedAmount: '0.00', isOptional: false
-  }));
-  const termThreeLines = ['DP', 'Prelim', 'Midterm', 'Finals'].map((installment) => ({
-    termNumber: 3, lineName: 'Tuition', category: 'tuition', installment, amount: '350.00',
-    grossAmount: '350.00', waivedAmount: '0.00', isOptional: false
-  }));
-  const html = await ejs.renderFile(path.join(__dirname, '../views/records/annual-intake-fees.ejs'), {
-    title: 'Midyear fee preview test', formatMoney, annualId: 43, csrfToken: 'test-csrf',
-    values: { idempotencyKey: '41111111-1111-4111-8111-111111111113' }, successNotice: null, error: null,
-    preview: {
-      parent: { first_name: 'Synthetic', last_name: 'Learner', student_no: 'S-3', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'PUB', entry_term_number: 2 },
-      scheduleVersion: 2, existingAssessment: false, optionalLines: [], optionalLineIds: [],
-      termTotals: [{ termNumber: 2, amount: '1775.00' }, { termNumber: 3, amount: '1900.00' }],
-      tuitionTermTotals: [{ termNumber: 2, amount: '1300.00' }, { termNumber: 3, amount: '1400.00' }],
-      nonTuitionTermTotals: [{ termNumber: 2, amount: '475.00' }, { termNumber: 3, amount: '500.00' }],
-      tuitionBreakdownComplete: true, tuitionBreakdown,
-      lines: [
-        ...termTwoLines,
-        { termNumber: 2, lineName: 'Miscellaneous', category: 'miscellaneous', installment: 'Term 2', amount: '475.00', grossAmount: '475.00', waivedAmount: '0.00', isOptional: false },
-        ...termThreeLines,
-        { termNumber: 3, lineName: 'Miscellaneous', category: 'miscellaneous', installment: 'Term 3', amount: '500.00', grossAmount: '500.00', waivedAmount: '0.00', isOptional: false }
-      ],
-      total: '3675.00', scheduleId: 5, assessmentId: null, voucherCode: 'PUB', snapshotFingerprint: 'c'.repeat(64)
-    }
-  });
-  const summary = html.match(/<div class="fee-approved-tuition"[\s\S]*?<\/div>\s*<div class="fee-review-actions"/)?.[0];
-  assert.ok(summary);
-  assert.match(summary, /Approved tuition by installment/);
-  assert.match(summary, /<th scope="row">Term 2<\/th>[\s\S]*?₱0\.00[\s\S]*?₱1,300\.00[\s\S]*?₱475\.00[\s\S]*?₱1,775\.00/);
-  assert.match(summary, /<th scope="row">Term 3<\/th>[\s\S]*?₱350\.00[\s\S]*?₱1,400\.00[\s\S]*?₱500\.00[\s\S]*?₱1,900\.00/);
-  assert.doesNotMatch(summary, /Term 1/);
-  assert.match(html, /Downpayment/);
-  assert.match(html, /Schedule label/);
-  assert.match(html, /Term 2<\/td>\s*<td data-label="Fee">Miscellaneous/);
-  assert.match(html, /Term 3<\/td>\s*<td data-label="Fee">Miscellaneous/);
-  assert.equal((html.match(/data-fee-submit/g) || []).length, 1);
-});
-
-test('legacy tuition schedules show approved term totals and hide unhelpful installment labels', async () => {
-  const html = await ejs.renderFile(path.join(__dirname, '../views/records/annual-intake-fees.ejs'), {
-    title: 'Legacy fee preview test', formatMoney, annualId: 42, csrfToken: 'test-csrf',
-    values: { idempotencyKey: '41111111-1111-4111-8111-111111111112' }, successNotice: null, error: null,
-    preview: {
-      parent: { first_name: 'Synthetic', last_name: 'Learner', student_no: 'S-2', school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC' },
-      scheduleVersion: 1, existingAssessment: false, optionalLines: [], optionalLineIds: [],
-      termTotals: [{ termNumber: 1, amount: '25.00' }, { termNumber: 2, amount: '0.00' }],
-      tuitionTermTotals: [{ termNumber: 1, amount: '25.00' }, { termNumber: 2, amount: '0.00' }],
-      nonTuitionTermTotals: [{ termNumber: 1, amount: '0.00' }, { termNumber: 2, amount: '0.00' }],
-      tuitionBreakdownComplete: false,
-      tuitionBreakdown: [1, 2].map((termNumber) => ({
-        termNumber, complete: false, installments: ['DP', 'Prelim', 'Midterm', 'Finals'].map((label) => ({
-          label, configured: false, amount: null
-        }))
-      })),
-      lines: [
-        { termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Other', amount: '0.00', grossAmount: '0.00', waivedAmount: '0.00', isOptional: false },
-        { termNumber: 1, lineName: 'Tuition', category: 'tuition', installment: 'Other', amount: '25.00', grossAmount: '25.00', waivedAmount: '0.00', isOptional: false }
-      ],
-      total: '25.00', scheduleId: 4, assessmentId: null, voucherCode: 'ESC', snapshotFingerprint: 'b'.repeat(64)
-    }
-  });
-  const tuitionSummary = html.match(/<div class="fee-approved-tuition"[\s\S]*?<\/div>\s*<div class="fee-review-actions"/)?.[0];
-  assert.ok(tuitionSummary);
-  assert.match(tuitionSummary, /Approved tuition by term/);
-  assert.match(tuitionSummary, /Term 1/);
-  assert.match(tuitionSummary, /₱25\.00/);
-  assert.match(tuitionSummary, /Term 2/);
-  assert.match(tuitionSummary, /₱0\.00/);
-  assert.match(tuitionSummary, /The approved schedule does not provide one Downpayment/);
-  assert.match(tuitionSummary, /no installment split is estimated/i);
-  assert.doesNotMatch(tuitionSummary, /<th[^>]*>Other<\/th>/);
-  assert.match(html, /<details class="fee-breakdown">[\s\S]*?Other/);
-  assert.doesNotMatch(html, /Not configured|Not applicable/);
-  assert.equal((html.match(/data-fee-submit/g) || []).length, 1);
-
-  const savedAssessmentSummary = await ejs.renderFile(path.join(__dirname, '../views/records/partials/annual-tuition-breakdown.ejs'), {
-    formatMoney, headingId: 'saved-assessment-tuition-title',
-    preview: {
-      existingAssessment: true, tuitionBreakdownComplete: false,
-      lines: [{ category: 'tuition', termNumber: 1, lineName: 'Tuition', installment: 'Other' }],
-      tuitionBreakdown: [{ termNumber: 1, installments: [{ notApplicable: false }] }],
-      tuitionTermTotals: [{ termNumber: 1, amount: '25.00' }],
-      nonTuitionTermTotals: [{ termNumber: 1, amount: '0.00' }],
-      termTotals: [{ termNumber: 1, amount: '25.00' }]
-    }
-  });
-  assert.match(savedAssessmentSummary, /This saved assessment preserves its original fee details/);
-  assert.match(savedAssessmentSummary, /original term total/);
-  assert.doesNotMatch(savedAssessmentSummary, /confirmed enrollment/i);
+  assert.equal((html.match(/Registrar Copy/g) || []).length, 3, 'copy title, section label, and receipt continuation context are explicit');
+  assert.equal((html.match(/Finance Copy/g) || []).length, 3);
+  assert.equal((html.match(/Student Copy/g) || []).length, 3);
+  assert.equal((html.match(/Student number: S-41/g) || []).length, 3, 'receipt table identifies its student on each copy and continuation');
+  assert.equal((html.match(/For Finance \/ enrollment not yet confirmed/g) || []).length, 3);
+  assert.match(html, /Ari &lt;Learner&gt;/);
+  assert.match(html, /012345678901/);
+  assert.match(html, /S-41/);
+  assert.match(html, /Second Semester/);
+  assert.match(html, /11 Mahogany/);
+  assert.match(html, /Tech-Pro/);
+  assert.match(html, /ICT Support/);
+  assert.match(html, /A\. Teacher/);
+  assert.match(html, /distance/);
+  assert.equal((html.match(/ENG-1/g) || []).length, 6, 'two saved schedule slots appear on each of the three copies');
+  assert.match(html, /School uniform/);
+  assert.match(html, /PE uniform/);
+  assert.match(html, /School ID/);
+  assert.match(html, /Modules/);
+  assert.match(html, /payment does not confirm item issuance/i);
+  assert.match(html, /Enrolled stamp \/ final Registrar action/);
+  assert.doesNotMatch(html, /temporary password|credentials|password hash/i);
+  assert.doesNotMatch(html, /data-fee-submit|assessmentId|optionalLineId/);
 });

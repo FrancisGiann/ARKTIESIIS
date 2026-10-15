@@ -68,10 +68,18 @@
 
     <% if (draft.preview.schedule?.lines?.length) { %>
       <div class="table-scroll finance-review-table" tabindex="0" aria-label="Fee lines in the active schedule">
-        <table class="admin-table"><caption>Current approved schedule · Version <%= draft.preview.schedule.version %></caption><thead><tr><th>Term</th><th>Fee</th><th>Installment</th><th>Amount</th><th>Included</th></tr></thead>
+        <table class="admin-table"><caption>Approved fee schedule · Version <%= draft.preview.schedule.version %></caption><thead><tr><th>Term</th><th>Fee</th><th>Installment</th><th>Amount</th><th>Included</th></tr></thead>
           <tbody><% for (const line of draft.preview.schedule.lines) { %><tr><td data-label="Term">Term <%= line.term %></td><td data-label="Fee"><%= line.fee %></td><td data-label="Installment"><%= line.installment %></td><td data-label="Amount">₱<%= line.amount %></td><td data-label="Included"><%= line.selected ? 'Yes' : 'No' %></td></tr><% } %></tbody>
         </table>
       </div>
+    <% } %>
+    <% if (draft.actionType === 'annual_assessment' && draft.preview.annualHandoffRequired) { %>
+      <section class="finance-review-fields" aria-label="Annual enrollment payment handoff">
+        <h2>Enrollment handoff</h2>
+        <p>Entry term: <strong>Term <%= draft.preview.entryTermNumber || 1 %></strong>. The Registrar can confirm enrollment after this assessment has been reviewed and the full scheduled tuition DP for this term is settled.</p>
+        <p>Only eligible allocations to the entry-term DP count. Unallocated or unrelated account credit does not satisfy it. The full annual balance is not required here.</p>
+        <p>If the entry-term tuition DP is truly zero after approved waivers, explicitly approve that zero case below. Missing DP setup or an incomplete ledger will be blocked.</p>
+      </section>
     <% } %>
 
     <% if (draft.preview.scheduleLines?.length) { %>
@@ -198,6 +206,10 @@
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <input type="hidden" name="revision" value="<%= draft.revision %>">
       <input type="hidden" name="dependencyFingerprint" value="<%= draft.dependencyFingerprint %>">
+      <% if (draft.actionType === 'annual_assessment' && draft.preview.annualHandoffRequired) { %>
+        <label class="field"><span><input type="checkbox" name="financeAssessmentAttestation" value="1" required> I reviewed the approved fee schedule, selected options, and exact annual assessment shown above.</span></label>
+        <label class="field"><span><input type="checkbox" name="zeroDpApproval" value="1"> If this entry-term DP is zero after approved waivers, I explicitly approve the zero-DP case.</span></label>
+      <% } %>
       <button class="button button--primary" type="submit" <%= previewUnavailable ? 'disabled' : '' %>>Review complete · Save update</button>
     </form>
     <form method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/discard">

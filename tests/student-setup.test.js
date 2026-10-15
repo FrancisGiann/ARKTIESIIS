@@ -327,7 +327,6 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     snapshotFingerprint: 'a'.repeat(64)
   };
   const feePreviewCalls = [];
-  let feeScheduleConfigured = false;
   const checklistFixture = {
     student: { id: 41 }, summary: { completeCount: 1, requiredCount: 2 }, history: [], additionalItems: [],
     requirements: [
@@ -345,9 +344,6 @@ test('registrar intake opens the guided annual form and links the roster to fee 
   const previewFees = async (actorId, annualId, selectedInput = []) => {
     assert.equal(actorId, registrar.id);
     assert.equal(String(annualId), '71');
-    if (!feeScheduleConfigured) {
-      throw new AnnualFinanceError('No active approved fee schedule matches this school year, grade, and voucher. Ask Finance to configure one, then reload this page.', 409);
-    }
     const selected = (Array.isArray(selectedInput) ? selectedInput : [selectedInput]).filter(Boolean).map(Number);
     feePreviewCalls.push(selected);
     if (hasConfirmed) return {
@@ -396,11 +392,19 @@ test('registrar intake opens the guided annual form and links the roster to fee 
       }
     },
     annualFinanceService: {
-      annualAssessmentPreviewForRegistrar: previewFees,
+      async getAnnualEntryFinanceReadinessForRegistrar(actorId, annualId) {
+        assert.equal(actorId, registrar.id);
+        assert.equal(String(annualId), '71');
+        return { entryTermNumber: 1, status: 'ready_for_registrar' };
+      },
       async annualConfirmationAssessmentSnapshotForStaff(actorId, annualId) {
         assert.equal(actorId, registrar.id);
         assert.equal(String(annualId), '71');
-        return previewFees(actorId, annualId);
+        return { ...feePreview, scheduleId: 9, scheduleVersion: 2, assessmentId: 201, existingAssessment: true,
+          optionalLineIds: [90], total: '1334.50', totalCents: 133450,
+          termTotals: [{ termNumber: 1, amount: '1334.50' }, { termNumber: 2, amount: '0.00' }, { termNumber: 3, amount: '0.00' }],
+          lines: [...feePreview.lines, { termNumber: 1, lineName: 'Tour', category: 'activity', installment: 'Once',
+            grossAmount: '100.00', waivedAmount: '0.00', amount: '100.00', isOptional: true }] };
       }
     },
     termClearanceService: {
@@ -417,7 +421,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(html, /Student details/);
     assert.match(html, /Enrollment details/);
     assert.match(html, /Paper document review/);
-    assert.match(html, /Step 4 of 5: Fees/);
+    assert.match(html, /Step 4 of 5: Finance handoff/);
     assert.match(html, /Step 5 of 5: Review details/);
     assert.match(html, /missing papers do not block enrollment/i);
     assert.match(html, /Select a paper only after staff has received and checked it/i);
@@ -455,55 +459,22 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(pendingHtml, /Update voucher/);
     assert.doesNotMatch(pendingHtml, /Category D|name="voucherCategory"/);
     assert.match(pendingHtml, /Enrollment confirmation/);
-    assert.match(pendingHtml, /Review fees and confirm enrollment/);
+    assert.match(pendingHtml, /Review and finalize enrollment/);
     assert.match(pendingHtml, /Paper requirements checklist/);
     assert.match(pendingHtml, /Enrollment counts/);
     assert.match(pendingHtml, /data-label="Students"><strong>1/);
 
-    const missingSchedule = await fetch(`${baseUrl}/registrar/intake/71/fees`);
-    const missingScheduleHtml = await missingSchedule.text();
-    assert.equal(missingSchedule.status, 409);
-    assert.match(missingScheduleHtml, /Ask Finance to configure one, then reload this page/);
-    assert.match(missingScheduleHtml, /Return to enrollments/);
-    assert.doesNotMatch(missingScheduleHtml, /successNotice is not defined|Internal Server Error/);
-
-    feeScheduleConfigured = true;
-    const fees = await fetch(`${baseUrl}/registrar/intake/71/fees`);
-    const feesHtml = await fees.text();
-    assert.equal(fees.status, 200);
-    assert.match(fees.headers.get('cache-control'), /no-store/);
-    assert.match(feesHtml, /<title>Review enrollment fees \| ARKTIESIIS<\/title>/);
-    assert.match(feesHtml, /Student payable/);
-    assert.match(feesHtml, /View itemized fee breakdown/);
-    assert.match(feesHtml, /Update fee total/);
-    assert.match(feesHtml, /name="idempotencyKey" value="[0-9a-f-]{36}"/);
-    assert.match(feesHtml, /data-fee-review/);
-    assert.match(feesHtml, /<form[^>]*class="fee-optional-choice"[^>]*data-fee-review[^>]*>[\s\S]*name="optionalLineIds"[\s\S]*formaction="\/registrar\/intake\/71\/review"/);
-    assert.match(feesHtml, /Review details/);
-    assert.doesNotMatch(feesHtml, /name="snapshotFingerprint"|name="scheduleVersion"/);
-    assert.doesNotMatch(feesHtml, /name="paymentAmount"|name="receiptNumber"|financeReviewReason/);
-    const idempotencyKey = feesHtml.match(/name="idempotencyKey" value="([0-9a-f-]{36})"/)?.[1];
-    assert.ok(idempotencyKey);
-    const updatedFees = await fetch(`${baseUrl}/registrar/intake/71/fees?${new URLSearchParams({
-      idempotencyKey, optionalLineIds: '90'
-    })}`);
-    const updatedFeesHtml = await updatedFees.text();
-    assert.equal(updatedFees.status, 200);
-    assert.match(updatedFeesHtml, /value="90" checked/);
-    assert.match(updatedFeesHtml, /name="idempotencyKey" value="[^"]+"/);
-    assert.match(updatedFeesHtml, /Student payable/);
-    assert.match(updatedFeesHtml, /formaction="\/registrar\/intake\/71\/review"/);
-
-    const finalReview = await fetch(`${baseUrl}/registrar/intake/71/review?${new URLSearchParams({
-      idempotencyKey, optionalLineIds: '90'
-    })}`);
+    const legacyFees = await fetch(`${baseUrl}/registrar/intake/71/fees`, { redirect: 'manual' });
+    assert.equal(legacyFees.status, 303);
+    assert.equal(legacyFees.headers.get('location'), '/registrar/intake/71/review');
+    const finalReview = await fetch(`${baseUrl}/registrar/intake/71/review`);
     const reviewHtml = await finalReview.text();
     assert.equal(finalReview.status, 200);
     const csrfToken = reviewHtml.match(/name="_csrf" value="([^"]+)"/)?.[1];
     assert.ok(csrfToken);
     assert.match(reviewHtml, /data-active-step="5"|aria-current="step"/);
     assert.match(reviewHtml, /Review enrollment details/);
-    assert.match(reviewHtml, /voucher-based assessment/);
+    assert.match(reviewHtml, /Finance readiness/);
     assert.match(reviewHtml, /123456789012/);
     assert.match(reviewHtml, /2008-04-21/);
     assert.match(reviewHtml, /<dt>Intake type<\/dt><dd>New student<\/dd>/);
@@ -521,20 +492,15 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(reviewHtml, /data-label="Status">Pending/);
     assert.match(reviewHtml, /data-label="Status">Not applicable/);
     assert.doesNotMatch(reviewHtml, /pending_payment|not_applicable/);
-    assert.match(reviewHtml, /Included · ₱100\.00/);
-    assert.match(reviewHtml, /₱1,334\.50/);
-    assert.match(reviewHtml, /Approved tuition by term/);
-    assert.match(reviewHtml, /Other payable fees/);
-    assert.match(reviewHtml, /Term payable/);
-    assert.match(reviewHtml, /The approved schedule does not provide one Downpayment/);
-    assert.match(reviewHtml, /name="snapshotFingerprint" value="a{64}"/);
-    assert.match(reviewHtml, /name="scheduleVersion" value="2"/);
-    assert.match(reviewHtml, /name="optionalLineIds" value="90"/);
+    assert.match(reviewHtml, /Ready for Registrar/);
+    assert.match(reviewHtml, /full entry-term tuition DP is settled/);
+    assert.doesNotMatch(reviewHtml, /₱|optionalLineIds|scheduleVersion|snapshotFingerprint|data-fee-submit/);
     assert.doesNotMatch(reviewHtml, /name="(?:firstName|middleName|lastName|studentNo|lrn|birthDate|address|phone|email)"/);
-    assert.deepEqual(feePreviewCalls.at(-1), [90]);
+    assert.equal(feePreviewCalls.length, 0);
+    const idempotencyKey = reviewHtml.match(/name="idempotencyKey" value="([0-9a-f-]{36})"/)?.[1];
+    assert.ok(idempotencyKey);
     const confirmationForm = new URLSearchParams({ _csrf: csrfToken, idempotencyKey,
-      scheduleId: '9', scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64),
-      clearanceSnapshotFingerprint: 'clearance-review-fingerprint', optionalLineIds: '90' });
+      clearanceSnapshotFingerprint: 'clearance-review-fingerprint' });
     const confirmResponse = await fetch(`${baseUrl}/registrar/intake/71/confirm`, {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: confirmationForm
@@ -543,7 +509,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.equal(confirmResponse.status, 200);
     assert.match(confirmResponse.headers.get('cache-control'), /no-store/);
     assert.match(confirmedHtml, /Enrollment confirmed/);
-    assert.match(confirmedHtml, /Finance records payments separately/);
+    assert.match(confirmedHtml, /Amounts reflect the reviewed assessment after selected optional charges and approved coverage/);
     assert.match(confirmedHtml, /₱1,334\.50/);
     assert.match(confirmedHtml, /Confirmation ID <strong>101/);
     assert.match(confirmedHtml, /Itemized assessment and approved coverage/);
@@ -558,9 +524,8 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(confirmedHtml, /\/registrar\/intake\/71\/confirmation/);
     assert.match(confirmedHtml, /Open paper requirements checklist/);
     assert.deepEqual(confirmationCall, { actorId: registrar.id, annualId: '71', input: {
-      _csrf: csrfToken, idempotencyKey, scheduleId: '9',
-      scheduleVersion: '2', voucherCode: 'PUB', assessmentId: '', snapshotFingerprint: 'a'.repeat(64),
-      clearanceSnapshotFingerprint: 'clearance-review-fingerprint', optionalLineIds: '90'
+      _csrf: csrfToken, idempotencyKey,
+      clearanceSnapshotFingerprint: 'clearance-review-fingerprint'
     } });
 
     const replayResponse = await fetch(`${baseUrl}/registrar/intake/71/confirm`, {
@@ -655,8 +620,22 @@ test('credential-free confirmation GET uses the saved assessment, entry-term sco
       async getAnnualManagementRecord(actorId, annualId) {
         reads.record += 1;
         assert.ok([registrar.id, admin.id].includes(actorId));
-        assert.ok(['71', '72', '999'].includes(String(annualId)));
+        assert.ok(['71', '72', '73', '999'].includes(String(annualId)));
         if (String(annualId) === '999') return null;
+        if (String(annualId) === '73') return {
+          ...record,
+          parent: { ...parent, annual_enrollment_id: 73, intake_status: 'pending', registrar_confirmation_id: null,
+            adviser: 'Saved Adviser', modality: 'hybrid' },
+          terms: record.terms.map((term) => Number(term.annual_term_number) === 2
+            ? { ...term, cluster: 'Academic', strand: 'STEM', adviser: 'Saved Adviser', modality: 'hybrid' } : term),
+          subjects: [
+            { annual_term_number: 2, subject_code: 'ENG11', subject_name: 'Long saved subject title for print layout', schedules: [
+              { day_of_week: 'Monday', schedule_start_time: '08:00', schedule_end_time: '09:00', room: 'Room 2' },
+              { day_of_week: 'Wednesday', schedule_start_time: '10:00', schedule_end_time: '11:00', room: 'Room 2' }
+            ] },
+            { annual_term_number: 2, subject_code: 'MATH11', subject_name: 'Schedule not configured', schedules: [] }
+          ]
+        };
         return { ...record, parent: { ...parent, registrar_confirmation_id: String(annualId) === '72' ? null : parent.registrar_confirmation_id } };
       },
       async confirmAnnualEnrollment() { reads.confirmationWrites += 1; throw new Error('GET must not confirm'); }
@@ -729,6 +708,26 @@ test('credential-free confirmation GET uses the saved assessment, entry-term sco
     assert.equal(unconfirmed.status, 409);
     assert.match(await unconfirmed.text(), /has not been confirmed/);
     assert.equal(reads.registrarSnapshot, 4, 'an unconfirmed intake does not load any fee schedule or assessment');
+
+    const pendingFormResponse = await fetch(`${baseUrl}/registrar/intake/73/pending-form`);
+    const pendingFormHtml = await pendingFormResponse.text();
+    assert.equal(pendingFormResponse.status, 200);
+    assert.match(pendingFormResponse.headers.get('cache-control'), /no-store/);
+    assert.match(pendingFormHtml, /Registrar Copy[\s\S]*Finance Copy[\s\S]*Student Copy/);
+    assert.match(pendingFormHtml, /For Finance \/ enrollment not yet confirmed/);
+    assert.match(pendingFormHtml, /Long saved subject title for print layout/);
+    assert.equal((pendingFormHtml.match(/Long saved subject title for print layout/g) || []).length, 6,
+      'each saved schedule slot appears in every labeled copy');
+    assert.match(pendingFormHtml, /Schedule not configured/);
+    assert.match(pendingFormHtml, /Saved Adviser/);
+    assert.match(pendingFormHtml, /hybrid/);
+    assert.doesNotMatch(pendingFormHtml, /temporary password|credential|receipt number|<strong>Enrolled<\/strong>/i);
+    assert.match(pendingFormHtml, /signature: __________________________________________/i);
+
+    const finalRecordPendingForm = await fetch(`${baseUrl}/registrar/intake/71/pending-form`);
+    assert.equal(finalRecordPendingForm.status, 409, 'finalized records cannot use the pending paper form');
+    const financePendingForm = await fetch(`${baseUrl}/registrar/intake/73/pending-form`, { headers: { 'x-test-role': 'finance' } });
+    assert.equal(financePendingForm.status, 403, 'Finance does not access the Registrar pending copy route');
   });
   const managementTemplate = fs.readFileSync(path.join(__dirname, '..', 'views/records/annual-management.ejs'), 'utf8');
   assert.match(managementTemplate, /if \(record\.parent\.registrar_confirmation_id\)[\s\S]*?\/confirmation/,
@@ -797,7 +796,7 @@ test('a post-confirmation summary read failure still renders confirmed status an
       },
       async getAnnualManagementRecord() { throw new Error('SQL detail and private@example.test'); }
     },
-    annualFinanceService: { async annualAssessmentPreviewForRegistrar() { throw new Error('must not be reached'); } },
+    annualFinanceService: { async getAnnualEntryFinanceReadinessForRegistrar() { throw new Error('must not be reached'); } },
     logger: { error(...args) { errors.push(args); } }
   }));
 
@@ -846,7 +845,7 @@ test('final review unexpected load failures return a support reference and only 
     },
     physicalChecklistService: { async getStudentChecklist() { throw failure; } },
     termClearanceService: { async getAnnualPrerequisiteReview() { return { ready: true, kind: 'new_student', terms: [], blockers: [], fingerprint: 'clearance-review-fingerprint' }; } },
-    annualFinanceService: { async annualAssessmentPreviewForRegistrar() { return { lines: [], total: '0.00' }; } },
+    annualFinanceService: { async getAnnualEntryFinanceReadinessForRegistrar() { return { entryTermNumber: 1, status: 'ready_for_registrar' }; } },
     logger: { error(...args) { errors.push(args); } }
   }));
 

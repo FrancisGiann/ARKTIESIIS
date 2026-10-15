@@ -527,23 +527,26 @@
       const diagrams = [
         {
           id: "enrollment", title: "New student enrollment", nav: "Enrollment", kind: "flow",
-          summary: "Paper pre-enrollment moves through registrar review before the entry term is enrolled.",
+          summary: "Registrar review and a Finance payment handoff precede final enrollment confirmation.",
           related: ["return-after-break", "login-access", "payments", "paper-clearance"],
           nodes: [
             { id: "applicant-form", actor: "applicant", title: "Complete paper form", action: "Applicant submits the paper intake form.", result: "Paper source begins.", say: "Start with the applicant's paper source; no student account exists yet.", screen: "Applicant's printed paper pre-enrollment form." },
             { id: "save-paper", actor: "front_desk", title: "Save paper intake", action: "Front desk enters fields and document counts.", result: "Paper only; no student number, login, or charges.", say: "Receipt counts record what arrived; saving paper creates no student, student number, login, enrollment, fee assessment, or charge.", screen: "Pre-enrollment records (/pre-enrollments) → Save. A complete entry can be marked Ready for registrar." },
-            { id: "save-review", actor: "registrar", title: "Save and review fees", action: "Registrar starts review from saved intake.", result: "Student number assigned; login inactive.", say: "For a new applicant, this creates the pending student intake and inactive linked login, without assessed charges.", screen: "Student → Enrollment → Paper document review → Fees → Save and review fees." },
-            { id: "review-fees", actor: "registrar", title: "Review matching fees", action: "Registrar checks placement and fee schedule.", result: "Fee snapshot; no charges yet.", say: "The matching approved schedule and optional fees are previewed before any assessment is posted.", screen: "Review fees / Review details. Check student, grade, voucher, entry term, section, date, paper evidence, and the fee snapshot." },
-            { id: "confirm-enrollment", actor: "registrar", title: "Confirm enrollment", action: "Registrar confirms the reviewed assessment.", result: "Entry term enrolled; eligible new login active.", say: "The registrar confirms the reviewed enrollment. Confirmation posts assessed fees and activates the eligible new login; Finance payment and account clearance are separate.", screen: "Confirm enrollment." }
+            { id: "save-review", actor: "registrar", title: "Save pending intake", action: "Registrar reviews identity, placement, documents, and voucher.", result: "Pending intake; no charges; first login inactive.", say: "The registrar chooses a voucher from school documents and saves the pending annual intake. A first-time login stays inactive and no fees are posted.", screen: "Student → Enrollment → Paper document review → Save pending intake; print the pending school e-form." },
+            { id: "finance-assessment", actor: "finance", title: "Assess and post fees", action: "Finance selects the approved schedule and options, then posts charges.", result: "Durable Finance review; intake remains pending.", say: "Finance reviews the exact saved annual record, selects approved schedule and optional fees, posts charges, and records a durable review tied to the assessment.", screen: "Finance → Student accounts → Annual assessment review." },
+            { id: "settle-entry-dp", actor: "finance", title: "Settle entry-term tuition DP", action: "Record and allocate payment to the entry-term DP.", result: "Entry-term DP settled; other balances may remain.", say: "The scheduled tuition DP installment or installments for this annual entry term must be settled. Unallocated credit and unrelated terms do not count; a legitimate zero DP requires explicit Finance approval.", screen: "Finance → Student accounts → Review payment and allocations." },
+            { id: "confirm-enrollment", actor: "registrar", title: "Finalize enrollment", action: "Registrar confirms current Finance, DP, paper, and academic readiness.", result: "Entry term enrolled; first login activates now.", say: "The registrar finalizes only after Finance review and full scheduled entry-term DP settlement, or explicit approval of a legitimate zero DP. Final confirmation activates an eligible first login.", screen: "Registrar → Review enrollment → Confirm enrollment." }
           ],
           edges: [
             { from: "applicant-form", to: "save-paper" }, { from: "save-paper", to: "save-review" },
-            { from: "save-review", to: "review-fees" }, { from: "review-fees", to: "confirm-enrollment" }
+            { from: "save-review", to: "finance-assessment" }, { from: "finance-assessment", to: "settle-entry-dp" },
+            { from: "settle-entry-dp", to: "confirm-enrollment" }
           ],
           notes: [
             { title: "Setup comes first", body: "Configure the fee schedule, school year, term, and valid section before registrar intake." },
-            { title: "Credential is private", body: "Confirmation posts assessed fees, enrolls the term, and activates the new login. The temporary password appears once on the private initial confirmation, which can be printed for handoff; it is not emailed, and saved or reopened copies omit it. Email 2FA and password change follow." },
-            { title: "Existing learners", body: "Continuing students reuse their profile and login. Applicable prior paper clearance can gate later activation; an interrupted return uses its own accepted evaluation flow." }
+            { title: "Annual balance", body: "Only the scheduled entry-term tuition DP must be settled before confirmation; the full annual balance is not required." },
+            { title: "Credential is private", body: "Final confirmation activates login. The password appears once privately, never by email. Email 2FA and password change follow." },
+            { title: "Existing learners", body: "Continuing learners reuse their profile and login. Prior paper clearance can gate activation. Interrupted returns require an accepted Registrar evaluation." }
           ]
         },
         {
@@ -556,7 +559,7 @@
             { id: "review-return", actor: "registrar", title: "Review prior progress", action: "Registrar reviews progress, subjects, and availability.", result: "Human review informs decision.", say: "The registrar reviews prior progress and the current curriculum and subject availability before deciding.", screen: "Review the saved return evaluation and its supporting academic history." },
             { id: "accept-return", actor: "registrar", title: "Accept evaluation", action: "Registrar records an accepted evaluation.", result: "Fresh paper source can be linked.", say: "Only an accepted human evaluation allows the new paper intake to link to this return.", screen: "Accept the return evaluation." },
             { id: "fresh-intake", actor: "front_desk", title: "Link fresh paper intake", action: "Front desk links paper intake to acceptance.", result: "Fresh intake; existing profile.", say: "Front desk records a fresh paper source and links it to the accepted evaluation.", screen: "Pre-enrollment records → new paper record → link the accepted return evaluation." },
-            { id: "reuse-login", actor: "registrar", title: "Reuse profile and login", action: "Registrar confirms intake with existing profile.", result: "No new login or password reset.", say: "The registrar reuses the existing profile and login, then follows the enrollment review steps.", screen: "Student → Enrollment → Paper document review → Fees. Continue with the enrollment flow." }
+            { id: "reuse-login", actor: "registrar", title: "Reuse profile and login", action: "Registrar completes intake with existing profile.", result: "No new login or password reset.", say: "The registrar reuses the existing profile and login. Finance still assesses the pending annual intake and the full entry-term tuition DP must be settled before confirmation.", screen: "Registrar → Review enrollment. Finance → Student accounts → Annual assessment and payment." }
           ],
           edges: [
             { from: "return-eligible", to: "evaluate-return" }, { from: "evaluate-return", to: "review-return" },
@@ -627,7 +630,7 @@
           summary: "Finance records money received and its allocation; students see only their own safe account view.",
           related: ["enrollment", "document-requests", "roles"],
           nodes: [
-            { id: "assessed-fees", actor: "registrar", title: "Post assessed fees", action: "Enrollment posts the reviewed fee assessment.", result: "Applicable fee charges enter the ledger.", say: "The payment flow starts with fees assessed during registrar confirmation.", screen: "Student account → Overview → assessed annual and term fees." },
+            { id: "assessed-fees", actor: "finance", title: "Post assessed fees", action: "Finance reviews and posts the annual fee assessment.", result: "Applicable fee charges enter the ledger; intake remains pending.", say: "Finance assesses a pending annual intake before payment collection and Registrar confirmation.", screen: "Finance → Student accounts → Annual assessment review." },
             { id: "record-payment", actor: "finance", title: "Enter payment details", action: "Finance enters amount, date, and receipt reference.", result: "Details await review and save.", say: "Entering payment details does not commit a ledger payment. Finance saves it after allocation review.", screen: "Finance overview → Student accounts → Open student account → Record a payment → Details." },
             { id: "allocate-payment", actor: "finance", title: "Allocate payment", action: "Finance applies payment to chosen fees or terms.", result: "Unused amount remains credit.", say: "Finance allocates the payment; any unused amount remains payment credit.", screen: "Apply payment → choose the intended fees, year, or term." },
             { id: "review-payment", actor: "finance", title: "Review and save", action: "Finance reviews allocation and saves.", result: "Ledger and balance update.", say: "The review confirms which charges the payment covers and what remains due.", screen: "Review → Saved." },

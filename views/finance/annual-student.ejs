@@ -56,16 +56,16 @@
 
   <% if (preview && !archivedStudent) { %>
     <section class="finance-panel" aria-labelledby="assessment-preview-title" data-finance-view="charges">
-      <div class="admin-section__heading"><div><h2 id="assessment-preview-title">Assessment preview · <%= preview.parent.school_year %> · <%= preview.parent.grade_level %> · <%= preview.parent.voucher_code %></h2><p>Schedule version <%= preview.scheduleVersion %>. Review all selected student-payable charges before confirming.</p></div></div>
+      <div class="admin-section__heading"><div><h2 id="assessment-preview-title"><%= preview.existingAssessment ? 'Current assessment review' : 'Assessment preview' %> · <%= preview.parent.school_year %> · <%= preview.parent.grade_level %> · <%= preview.parent.voucher_code %></h2><p>Schedule version <%= preview.scheduleVersion %>. <%= preview.existingAssessment ? 'This assessment is already posted; Finance review will keep its charges and payment history unchanged.' : 'Review all selected student-payable charges before confirming.' %></p></div></div>
       <div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Term</th><th>Fee</th><th>Installment</th><th>Category</th><th>Amount</th><th>Optional</th></tr></thead><tbody>
         <% for (const line of preview.lines) { %><tr><td>Term <%= line.termNumber %></td><td><%= line.lineName %></td><td><%= line.installment %></td><td><%= line.category %></td><td>₱<%= formatMoney(line.amount) %></td><td><%= line.isOptional ? 'Selected' : 'Included' %></td></tr><% } %>
       </tbody></table></div>
       <p><strong>Annual total: ₱<%= formatMoney(preview.total) %></strong></p>
-      <form method="post" action="/finance/annual/<%= preview.parent.id %>/assessment" data-submitting-message="Posting the confirmed annual assessment. Please wait.">
+      <form method="post" action="/finance/annual/<%= preview.parent.id %>/assessment" data-submitting-message="<%= preview.existingAssessment ? 'Saving the Finance review without changing posted charges.' : 'Posting the confirmed annual assessment. Please wait.' %>">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= tokens.assessment %>">
-        <input type="hidden" name="scheduleId" value="<%= preview.scheduleId %>"><input type="hidden" name="scheduleVersion" value="<%= preview.scheduleVersion %>"><input type="hidden" name="voucherCode" value="<%= preview.parent.voucher_code %>">
+        <input type="hidden" name="scheduleId" value="<%= preview.scheduleId %>"><input type="hidden" name="scheduleVersion" value="<%= preview.scheduleVersion %>"><input type="hidden" name="voucherCode" value="<%= preview.voucherCode || preview.parent.voucher_code %>">
         <% for (const line of preview.lines.filter((item) => item.isOptional)) { %><input type="hidden" name="optionalLineId" value="<%= line.scheduleLineId %>"><% } %>
-        <button class="button button--primary" type="submit">Confirm and post annual assessment</button>
+        <button class="button button--primary" type="submit"><%= preview.existingAssessment ? 'Confirm Finance review · keep existing charges' : 'Confirm and post annual assessment' %></button>
       </form>
     </section>
   <% } %>
@@ -146,6 +146,16 @@
           <% } %>
         </section>
       <% } else { %>
+        <% if (annualRecord.intake_status === 'pending' && !archivedStudent) { %>
+          <section class="finance-panel" aria-labelledby="assessment-review-<%= annualRecord.annual_enrollment_id %>" data-finance-view="charges">
+            <div class="admin-section__heading"><div><h2 id="assessment-review-<%= annualRecord.annual_enrollment_id %>">Finance review for pending intake · <%= annualRecord.school_year %></h2><p><%= annualRecord.grade_level %> · Voucher type <%= annualRecord.voucher_code %></p></div></div>
+            <p>The assessment is already posted. Review its saved fee composition and current Finance dependencies; this review does not post charges or change payment history. Re-review after assessment-affecting corrections.</p>
+            <form class="form-stack" method="post" action="/finance/annual/<%= annualRecord.annual_enrollment_id %>/assessment-preview">
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+              <button class="button button--secondary" type="submit">Review current assessment for enrollment</button>
+            </form>
+          </section>
+        <% } %>
         <section class="finance-panel" aria-labelledby="placements-<%= annualRecord.annual_enrollment_id %>" data-finance-view="overview clearance charges">
           <div class="admin-section__heading"><div><h2 id="placements-<%= annualRecord.annual_enrollment_id %>">Term placements · <%= annualRecord.school_year %></h2><p><%= annualRecord.grade_level %> · <%= annualRecord.voucher_code %> · Assessment schedule version <%= annualRecord.schedule_version %></p></div></div>
           <div class="physical-requirements-list">

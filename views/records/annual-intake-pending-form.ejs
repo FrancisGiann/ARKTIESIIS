@@ -1,0 +1,99 @@
+<%- include('../partials/head', { title }) %>
+<%
+  const parent = record.parent || {};
+  const entryTermNumber = Number(parent.entry_term_number || 1);
+  const entryTerm = (record.terms || []).find((term) => Number(term.annual_term_number) === entryTermNumber) || {};
+  const entrySubjects = (record.subjects || []).filter((subject) => Number(subject.annual_term_number) === entryTermNumber);
+  const subjectRows = [];
+  for (const subject of entrySubjects) {
+    const schedules = subject.schedules?.length ? subject.schedules : [{}];
+    for (const schedule of schedules) {
+      subjectRows.push({
+        code: subject.subject_code || '', name: subject.subject_name || '',
+        day: schedule.day_of_week || '',
+        time: schedule.schedule_start_time && schedule.schedule_end_time
+          ? `${schedule.schedule_start_time}–${schedule.schedule_end_time}` : '',
+        room: schedule.room || ''
+      });
+    }
+  }
+  const intakeKindLabel = ({ new: 'New student', standard: 'New student', continuing: 'Continuing student',
+    returning: 'Returning student', transferee: 'Transferee', readmission: 'Readmitted student' })[parent.intake_kind] || '';
+  const studentName = [parent.first_name, parent.middle_name, parent.last_name, parent.suffix].filter(Boolean).join(' ');
+  const copies = ['Registrar Copy', 'Finance Copy', 'Student Copy'];
+%>
+<main class="page-shell dashboard-page admin-page records-page annual-pending-eform-document" id="main-content">
+  <div class="pending-eform-actions">
+    <a class="button button--secondary" href="/registrar/intake/<%= parent.annual_enrollment_id %>/review">Back to Registrar review</a>
+    <button class="button button--primary" type="button" data-print-page>Print / save as PDF</button>
+  </div>
+  <% for (const copy of copies) { %>
+    <section class="pending-eform-copy" aria-label="<%= copy %>">
+      <header class="pending-eform-header">
+        <div><h1>Annual enrollment e-form</h1><p>Ark Technological Institute Education System Inc. · Lucena Branch</p></div>
+        <div class="pending-eform-copy-label"><strong><%= copy %></strong><span>For Finance / enrollment not yet confirmed</span></div>
+      </header>
+
+      <p class="pending-eform-status">PENDING ENROLLMENT · Finance assessment and entry-term tuition DP settlement are required before Registrar confirmation.</p>
+
+      <section class="pending-eform-section" aria-labelledby="<%= copy.replaceAll(' ', '-').toLowerCase() %>-student">
+        <h2 id="<%= copy.replaceAll(' ', '-').toLowerCase() %>-student">Student and intake details</h2>
+        <dl class="pending-eform-identity">
+          <div><dt>Student name</dt><dd><%= studentName %></dd></div>
+          <div><dt>Student number</dt><dd><%= parent.student_no || '' %></dd></div>
+          <div><dt>LRN</dt><dd><%= parent.lrn || '' %></dd></div>
+          <div><dt>School year</dt><dd><%= parent.school_year || '' %></dd></div>
+          <div><dt>Entry term</dt><dd><%= entryTerm.term || `Term ${entryTermNumber}` %></dd></div>
+          <div><dt>Grade level</dt><dd><%= parent.grade_level || '' %></dd></div>
+          <div><dt>Voucher</dt><dd><%= parent.voucher_code || '' %></dd></div>
+          <div><dt>Intake type</dt><dd><%= intakeKindLabel %></dd></div>
+          <div><dt>Entry section</dt><dd><%= entryTerm.section_name || '' %></dd></div>
+          <div><dt>Section cluster</dt><dd><%= entryTerm.cluster || '' %></dd></div>
+          <div><dt>Strand</dt><dd><%= entryTerm.strand || '' %></dd></div>
+          <div><dt>Adviser</dt><dd><%= entryTerm.adviser || '' %></dd></div>
+          <div><dt>Modality</dt><dd><%= entryTerm.modality || '' %></dd></div>
+        </dl>
+      </section>
+
+      <section class="pending-eform-section" aria-labelledby="<%= copy.replaceAll(' ', '-').toLowerCase() %>-subjects">
+        <h2 id="<%= copy.replaceAll(' ', '-').toLowerCase() %>-subjects">Saved subjects and available schedules</h2>
+        <table class="pending-eform-table">
+          <thead><tr><th>Subject code</th><th>Subject</th><th>Day</th><th>Time</th><th>Room</th></tr></thead>
+          <tbody>
+            <% if (subjectRows.length) { for (const subject of subjectRows) { %>
+              <tr><td><%= subject.code %></td><td><%= subject.name %></td><td><%= subject.day %></td><td><%= subject.time %></td><td><%= subject.room %></td></tr>
+            <% } } else { %><tr><td colspan="5">No entry-term subjects are saved yet.</td></tr><% } %>
+          </tbody>
+        </table>
+        <p class="pending-eform-note">Blank schedule fields mean no matching active assignment or schedule is configured.</p>
+      </section>
+
+      <section class="pending-eform-section pending-eform-checks" aria-label="Staff review and approval">
+        <h2>Registrar verification and approval</h2>
+        <p>Student profile and placement verified: ______________________________________________</p>
+        <p>School documents reviewed: __________________________________________________________</p>
+        <p>Registrar signature: __________________________________________ &nbsp; Date: ______________</p>
+        <p>Finance assessment / payment review: __________________________ &nbsp; Date: ______________</p>
+        <p>Finance signature: ____________________________________________ &nbsp; Date: ______________</p>
+        <p class="pending-eform-stamp">Enrolled stamp / final Registrar action: _________________________________________________</p>
+      </section>
+
+      <section class="pending-eform-section pending-eform-receipts-section" aria-label="Physical items received">
+        <h2>School items received</h2>
+        <p class="pending-eform-note">Staff complete this section only after physical handover. Payment does not confirm item issuance.</p>
+        <table class="pending-eform-table pending-eform-receipts">
+          <thead>
+            <tr class="pending-eform-receipt-context"><th colspan="4"><%= copy %> · Student number: <%= parent.student_no || '' %></th></tr>
+            <tr><th>Item</th><th>Received</th><th>Received by / student signature</th><th>Date</th></tr>
+          </thead>
+          <tbody>
+            <% for (const item of ['School uniform', 'PE uniform', 'School ID', 'Modules']) { %>
+              <tr><th><%= item %></th><td></td><td></td><td></td></tr>
+            <% } %>
+          </tbody>
+        </table>
+      </section>
+    </section>
+  <% } %>
+</main>
+<%- include('../partials/foot') %>

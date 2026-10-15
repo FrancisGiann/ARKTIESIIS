@@ -12,14 +12,14 @@
   <a class="context-back" href="/registrar/intake">Back to annual enrollment</a>
   <header class="dashboard-heading">
     <div><h1><%= preEnrollmentSource ? 'Review saved paper enrollment' : 'Enroll a student' %></h1>
-      <p><%= preEnrollmentSource ? 'Review the saved profile and applicant history, then choose annual placement and finance details before confirmation.' : 'Review the student information and placement, record papers received, then review fees and details before confirming.' %></p></div>
+      <p><%= preEnrollmentSource ? 'Review the saved profile and applicant history, choose annual placement and voucher from the school documents, then save the pending intake for Finance review.' : 'Review the student information, placement, and voucher from the school documents, record papers received, then save the pending intake for Finance review.' %></p></div>
   </header>
   <% if (error) { %><p class="form-alert" role="alert" tabindex="-1" data-wizard-error><%= error %></p><% } %>
   <ol class="intake-steps" aria-label="Enrollment steps">
     <li data-step-indicator="1" aria-label="Step 1 of 5: Student"><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li>
     <li data-step-indicator="2" aria-label="Step 2 of 5: Enrollment"><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li>
     <li data-step-indicator="3" aria-label="Step 3 of 5: Paper document review"><span class="intake-step-label--full">Paper document review</span><span class="intake-step-label--short">Papers</span></li>
-    <li data-step-indicator="4" aria-label="Step 4 of 5: Fees"><span class="intake-step-label--full">Fees</span><span class="intake-step-label--short">Fees</span></li>
+    <li data-step-indicator="4" aria-label="Step 4 of 5: Finance handoff"><span class="intake-step-label--full">Finance handoff</span><span class="intake-step-label--short">Finance</span></li>
     <li data-step-indicator="5" aria-label="Step 5 of 5: Review details"><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li>
   </ol>
   <form class="form-stack admin-form annual-intake-form" method="post" action="/registrar/intake"
@@ -196,7 +196,7 @@
           </article>
         <% } %>
       </div>
-      <div class="intake-actions"><button class="button button--secondary" type="button" data-step-back>Back</button><button class="button button--primary" type="submit">Save and review fees</button></div>
+      <div class="intake-actions"><button class="button button--secondary" type="button" data-step-back>Back</button><button class="button button--primary" type="submit">Save pending intake</button></div>
     </section>
   </form>
   <% if (!schoolYears.length || !sections.length) { %><p class="notice-panel">Term order and section setup are needed before the intake can be saved. Ask the registrar administrator to finish school-year setup.</p><% } %>
