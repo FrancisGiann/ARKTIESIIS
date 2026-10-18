@@ -109,8 +109,17 @@ function parseStructuredFields(responseBody, documentType) {
   } catch {
     throw new GeminiFieldExtractionError('malformed_response');
   }
-  const text = envelope?.candidates?.[0]?.content?.parts
-    ?.map((part) => typeof part?.text === 'string' ? part.text : '')
+  const candidate = envelope?.candidates?.[0];
+  if (envelope?.promptFeedback?.blockReason
+    || (typeof candidate?.finishReason === 'string' && /SAFETY|BLOCKLIST|PROHIBITED|SPII|RECITATION|MODEL_ARMOR/i.test(candidate.finishReason))) {
+    throw new GeminiFieldExtractionError('blocked_response');
+  }
+  if (candidate?.finishReason != null && candidate.finishReason !== 'STOP') {
+    throw new GeminiFieldExtractionError('incomplete_response');
+  }
+  const text = candidate?.content?.parts
+    ?.filter((part) => part?.thought !== true)
+    .map((part) => typeof part?.text === 'string' ? part.text : '')
     .join('');
   if (typeof text !== 'string' || !text.trim()) throw new GeminiFieldExtractionError('blocked_or_empty_response');
 
