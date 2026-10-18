@@ -57,6 +57,8 @@ async function sendEmail(smtp, { to, subject, text }) {
     host: smtp.host,
     port: smtp.port,
     secure: smtp.secure,
+    requireTLS: !smtp.secure,
+    tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,
     socketTimeout: 15_000

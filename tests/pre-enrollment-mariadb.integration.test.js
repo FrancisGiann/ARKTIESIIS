@@ -202,6 +202,15 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     assert.equal(fresh017.length, 1, 'fresh setup applies migration v2.017 after v2.016');
     await admin.query(`USE ${quoteDatabase(upgradeName)}`);
 
+    // Services below use the current schema, after the historical recovery checks.
+    for (const databaseName of [upgradeName, freshName]) {
+      await admin.query(`USE ${quoteDatabase(databaseName)}`);
+      for (const migration of readForwardMigrations().filter(({ version }) => version > 'v2.017')) {
+        await applyStatements(admin, migration.statements);
+        await admin.query('INSERT INTO schema_migrations (version) VALUES (?)', [migration.version]);
+      }
+    }
+
     rawPool = mysql.createPool({ socketPath, user: os.userInfo().username, database: upgradeName,
       waitForConnections: true, connectionLimit: 8, supportBigNumbers: true, bigNumberStrings: true,
       dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'], multipleStatements: false });
@@ -964,9 +973,9 @@ test('pre-enrollment migration recovery, role-gated receipts, annual conversion,
     const staleConfirmationService = createAnnualEnrollmentService({ getPool: async () => pool, sql,
       transactionFactory: (currentPool) => new Transaction(currentPool),
       termClearanceService,
-      annualFinanceService: { async confirmAnnualAssessmentInTransaction() { staleEvaluationFeeCalls += 1; throw new Error('fee finalization must remain behind the evaluation gate'); } } });
+      annualFinanceService: { async assertAnnualEntryDownPaymentReadyInTransaction() { staleEvaluationFeeCalls += 1; throw new Error('Finance readiness must remain behind the evaluation gate'); } } });
     await assert.rejects(staleConfirmationService.confirmAnnualEnrollment(users.registrar, balikConversion.annualEnrollmentId, {
-      idempotencyKey: uuid(), scheduleId: '1', scheduleVersion: '1', voucherCode: 'PUB', clearanceSnapshotFingerprint: 'b'.repeat(64)
+      idempotencyKey: uuid(), clearanceSnapshotFingerprint: 'b'.repeat(64)
     }), (error) => error.status === 409 && /evaluation changed or is no longer accepted/i.test(error.message),
     'first confirmation revalidates the evaluation revision and accepted decision');
     assert.equal(staleEvaluationFeeCalls, 0, 'a stale evaluation is rejected before fees, activation, or confirmation writes');
