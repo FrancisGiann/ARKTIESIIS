@@ -942,7 +942,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     if (!annualId) return res.status(404).render('error', { title: 'Not Found', message: 'Annual enrollment not found.' });
     try {
       const preview = await annual.annualAssessmentPreview(req.authUser.id, annualId, req.body?.optionalLineId);
-      return renderAnnualStudent(req, res, Number(preview.parent.student_id), { preview });
+      return renderAnnualStudent(req, res, Number(preview.parent.student_id), { preview, accountViewOverride: 'charges' });
     } catch (error) {
       if (error instanceof AnnualFinanceError) return res.status(error.status).render('error', { title: 'Assessment preview', message: error.message });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The assessment preview could not be loaded.' });
