@@ -3,7 +3,7 @@
   const parent = record?.parent || {};
   const studentName = [parent.first_name || enrollment.firstName, parent.middle_name || enrollment.middleName,
     parent.last_name || enrollment.lastName, parent.suffix || enrollment.suffix].filter(Boolean).join(' ');
-  const enrollmentKind = ({ new: 'New student', standard: 'Standard intake', returning: 'Returning student', transferee: 'Transferee' })[parent.intake_kind || enrollment.intakeKind] || 'Not recorded';
+  const enrollmentKind = ({ new: 'New student', continuing: 'Continuing student', readmission: 'Readmission', standard: 'Standard intake', returning: 'Returning student', transferee: 'Transferee' })[parent.intake_kind || enrollment.intakeKind] || 'Not recorded';
   const confirmationDate = (value, dateOnly = false) => {
     if (!value) return null;
     let date;
