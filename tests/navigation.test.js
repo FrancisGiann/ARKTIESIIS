@@ -287,7 +287,7 @@ test('authenticated navigation only exposes destinations available to each role'
       }
       const mobileLabels = [...mobileNavigation.matchAll(/class="mobile-nav__link[^\"]*"[^>]*>([\s\S]*?)<\/a>/g)]
         .map((match) => match[1].replace(/<[^>]+>/g, '').trim());
-      assert.deepEqual(mobileLabels, scenario.labels, `${scenario.role} mobile destinations match its server-filtered desktop menu`);
+      assert.deepEqual(mobileLabels, [...scenario.labels, 'Account settings'], `${scenario.role} mobile destinations match its server-filtered desktop menu`);
       const navigationLinks = [...navigation.matchAll(/<a class="app-nav__link[^\"]*"[^>]*>[\s\S]*?<\/a>/g)];
       assert.equal(navigationLinks.length, scenario.labels.length);
       if (scenario.hrefs) {
@@ -302,7 +302,7 @@ test('authenticated navigation only exposes destinations available to each role'
       assert.match(html, /<details class="mobile-nav">\s*<summary>/, 'mobile navigation uses a keyboard-operable native disclosure');
       assert.match(html, /<a class="account-shortcut[^\"]*" href="\/account"/);
       assert.match(html, /<form method="post" action="\/logout">/);
-      assert.equal((html.match(/action="\/logout"/g) || []).length, 1, 'sign-out appears only in the shared header');
+      assert.equal((html.match(/action="\/logout"/g) || []).length, 2, 'shared header supplies mutually exclusive mobile and desktop sign-out controls');
       assert.ok(csrfFromHtml(html).length >= 32);
       if (scenario.role === 'database_admin') {
         assert.match(html, /Student accounts/);
@@ -398,7 +398,7 @@ test('student overview stays concise while all destinations remain in sidebar an
     assert.ok(mobileNavigation);
     const mobileLabels = [...mobileNavigation.matchAll(/class="mobile-nav__link[^\"]*"[^>]*>([\s\S]*?)<\/a>/g)]
       .map((match) => match[1].replace(/<[^>]+>/g, '').trim());
-    assert.deepEqual(mobileLabels, destinations);
+    assert.deepEqual(mobileLabels, [...destinations, 'Account settings']);
     for (const href of ['/student/schedule', '/student/grades', '/student/finance', '/student/records', '/documents']) {
       assert.ok(html.includes(`href="${href}"`), `${href} remains discoverable from the role navigation`);
     }

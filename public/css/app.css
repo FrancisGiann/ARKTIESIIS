@@ -3146,3 +3146,56 @@ details > summary { min-height: 2.75rem; }
   .student-home .schedule-agenda__room span,
   .student-page .schedule-agenda__room span { overflow-wrap: anywhere; }
 }
+
+/* Compact mobile task lists; full record details remain on their destination pages. */
+.finance-roster-mobile-year { display: none; }
+@media (max-width: 760px) {
+  .pre-enrollment-record-list__item { grid-template-columns: minmax(0, 1fr) auto; gap: 0.3rem 0.65rem; padding-block: 0.8rem; }
+  .pre-enrollment-record-list__identity { grid-column: 1; grid-row: 1; font-size: 0.875rem; }
+  .pre-enrollment-record-list__status { grid-column: 1; grid-row: 2; }
+  .pre-enrollment-record-list__lrn, .pre-enrollment-record-list__year, .pre-enrollment-record-list__updated,
+  .pre-enrollment-record-list__status > .muted-copy { display: none; }
+  .pre-enrollment-record-list__status .status-chip { white-space: normal; width: fit-content; }
+  .pre-enrollment-record-list__item .records-student-open { grid-column: 2; grid-row: 1 / span 2; width: auto; min-height: 44px; align-self: center; padding-inline: 0.65rem; font-size: 0.8rem; }
+
+  .finance-roster-record-head { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.45rem; padding: 0.8rem; }
+  .finance-roster-record-head > * { min-width: 0; }
+  .finance-roster-record-head > .finance-roster-identity,
+  .finance-roster-record-head > .finance-roster-balance { flex: none; }
+  .finance-roster-identity strong { font-size: 0.9rem; overflow-wrap: anywhere; }
+  .finance-roster-identity > span, .finance-roster-context, .finance-roster-record-details { display: none; }
+  .finance-roster-mobile-year { display: inline; }
+  .finance-roster-balance { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.6rem; }
+  .finance-roster-balance > span { font-size: 0.78rem; }
+  .finance-roster-record-head > .finance-roster-open-account { min-height: 44px; margin: 0; }
+
+  .subject-catalog__disclosure > .subject-catalog__summary, .subject-catalog__summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'name edit' 'code units'; gap: 0.25rem 0.75rem; padding-block: 0.7rem; }
+  .subject-catalog__name { grid-area: name; font-size: 0.9rem; overflow-wrap: anywhere; }
+  .subject-catalog__code { grid-area: code; font-size: 0.78rem; overflow-wrap: anywhere; }
+  .subject-catalog__units { grid-area: units; font-size: 0.78rem; text-align: right; }
+  .subject-catalog__edit { grid-area: edit; text-align: right; }
+
+  .records-page .records-student-list:not(.pre-enrollment-record-list) > .records-student-list__item { border-bottom: 1px solid #b9c1c1; padding-block: 0.85rem; gap: 0.45rem; font-size: 0.82rem; }
+  .records-page .records-student-main strong { font-size: 0.9rem; overflow-wrap: anywhere; }
+  .records-page .records-student-enrollment { padding: 0.5rem; margin: 0; }
+  .records-page .records-student-details > summary { min-height: 44px; display: flex; align-items: center; }
+
+  .admin-account-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.25rem 0.5rem; padding: 0.7rem 0; border-bottom: 1px solid #b9c1c1; }
+  .admin-account-table td:nth-child(n) { width: auto; min-width: 0; border: 0; padding: 0; font-size: 0.82rem; }
+  .admin-account-table td[data-label="Name"] { grid-column: 1; grid-row: 1; display: block; font-weight: 700; }
+  .admin-account-table td[data-label="Name"]::before, .admin-account-table td[data-label="Status"]::before, .admin-account-table td[data-label="Actions"]::before { display: none; }
+  .admin-account-table td[data-label="Status"] { grid-column: 2; grid-row: 1; display: block; }
+  .admin-account-table td[data-label="Student number"], .admin-account-table td[data-label="Department"], .admin-account-table td[data-label="Email"] { grid-column: 1 / -1; grid-template-columns: 6.5rem minmax(0, 1fr); gap: 0.4rem; }
+  .admin-account-table td[data-label="Role"] { grid-column: 1; grid-template-columns: auto minmax(0, 1fr); align-self: center; }
+  .admin-account-table td[data-label="Actions"] { grid-column: 2; display: block; }
+  .admin-account-table td[data-label="Actions"] a { display: inline-flex; align-items: center; min-height: 44px; padding-inline: 0.5rem; }
+}
+@media (max-width: 900px) {
+  .app-header .app-header__user { display: none; }
+  .mobile-nav__identity { display: grid; gap: 0.2rem; padding: 0.65rem; margin-bottom: 0.75rem; background: var(--accent-soft); border-radius: var(--radius-control); font-size: 0.8rem; }
+  .mobile-nav__identity strong { color: var(--accent); }
+  .mobile-nav__identity span { overflow-wrap: anywhere; color: var(--ink); }
+  .mobile-nav__account { display: grid; gap: 0.2rem; border-top: 1px solid var(--line); margin-top: 0.7rem; padding-top: 0.5rem; }
+  .mobile-nav__account form { margin: 0; }
+  .mobile-nav__account .sign-out-button { min-height: 44px; padding: 0.5rem 0.55rem; }
+}

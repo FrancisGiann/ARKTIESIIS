@@ -24,6 +24,7 @@
       <details class="mobile-nav">
         <summary><span>Menu</span><span class="mobile-nav__current"><%= currentNavItem?.label || 'Workspace' %></span></summary>
         <div class="mobile-nav__panel">
+          <div class="mobile-nav__identity"><strong><%= roleLabels[currentUser.role] || 'School account' %></strong><span><%= currentUser.email %></span></div>
           <% for (const group of navigationGroups || []) { %>
             <section class="nav-group">
               <h2><%= group.label %></h2>
@@ -34,6 +35,10 @@
               </nav>
             </section>
           <% } %>
+          <div class="mobile-nav__account">
+            <a class="mobile-nav__link<%= currentNavItem?.id === 'account' ? ' is-current' : '' %>" href="/account"<% if (currentNavItem?.id === 'account') { %> aria-current="page"<% } %>>Account settings</a>
+            <form method="post" action="/logout"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><button class="sign-out-button" type="submit">Sign out</button></form>
+          </div>
         </div>
       </details>
       <div class="app-header__user">
