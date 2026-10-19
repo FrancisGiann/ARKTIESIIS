@@ -539,7 +539,7 @@ test('finance annual roster separates page data, classification, and balances in
   assert.match(html, /Confirmed previous balance<\/dt><dd>₱0\.00/);
   assert.match(html, /account for a school year/);
   assert.match(html, /Student name, number, or LRN/);
-  assert.match(html, /Use the full LRN for a more precise match\. Check the student identifiers before opening an account\./);
+  assert.match(html, /Use the full LRN for a more precise match\. Verify the student identifiers inside the account before recording a payment\./);
   assert.match(html, /name="search" maxlength="100" value="001234567890"/);
   assert.match(html, /search=001234567890/);
   assert.match(html, /backSearch=001234567890/);

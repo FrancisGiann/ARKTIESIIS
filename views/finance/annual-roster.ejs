@@ -14,7 +14,7 @@
         <div class="field"><label for="annual-roster-term">Term</label><select id="annual-roster-term" name="termId"><option value="">All terms</option><% for (const term of terms) { %><option value="<%= term.id %>" <%= String(filters.termId || '') === String(term.id) ? 'selected' : '' %>><%= term.label %></option><% } %></select></div>
         <button class="button button--primary" type="submit">Apply filters</button>
       </div>
-      <small id="annual-roster-search-help" class="muted-copy finance-roster-search-help">Use the full LRN for a more precise match. Check the student identifiers before opening an account.</small>
+      <small id="annual-roster-search-help" class="muted-copy finance-roster-search-help">Use the full LRN for a more precise match. Verify the student identifiers inside the account before recording a payment.</small>
       <% const hasExtraRosterFilters = Boolean(filters.gradeLevel || filters.sectionId || filters.cluster || filters.strand || filters.voucherCode || filters.status || filters.financeStatus || (filters.installment && filters.installment !== 'whole')); %>
       <div class="finance-roster-filter-actions">
         <details class="finance-roster-more-filters" <%= hasExtraRosterFilters ? 'open' : '' %>>

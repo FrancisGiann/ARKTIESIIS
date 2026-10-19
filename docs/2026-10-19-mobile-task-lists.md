@@ -12,3 +12,5 @@ Based on ten visually inspected user screenshots. Presentation changes only; exi
 Validation uses actual EJS fragments rendered with synthetic long names, subject codes and email addresses. At 360, 375, 390, 412, 768 and 1280px, no whole-page or main-control overflow was measured. Mobile menu containment and 44px account controls were checked at five widths. Native subject Enter and menu Escape/focus were exercised. Comparable 390px synthetic rows: pre-enrollment 334→98px; finance card 496→154px. These are fixture measurements, not claims about every live record.
 
 Relevant navigation, account, student record, pre-enrollment, finance browse, academic record and annual workflow regressions were run. No real student decision, financial transaction, account/security change, or database migration was performed. Physical mobile devices and OS-native select popup appearance remain outside this browser check.
+
+Final regression follow-up: roster search guidance now directs users to verify student identifiers inside the account before recording a payment, matching the requested compact mobile list. Finance permissions, account balances and calculations are unchanged.
