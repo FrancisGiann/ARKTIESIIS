@@ -32,3 +32,17 @@ test('mobile account menu identifies the signed-in account and retains CSRF-prot
   assert.match(panel,/href="\/account"/);
   assert.match(panel,/action="\/logout"[^]*?value="synthetic-csrf"/);
 });
+
+test('live-style term installments and fee categories do not repeat in compact option labels', () => {
+  const source=readFileSync(path.join(root,'views/finance/annual-student.ejs'),'utf8');
+  const block=source.slice(source.indexOf('<% const allocationTargets = ['), source.indexOf('  <% const currentTermPlacement'));
+  const ledger={openingLiabilities:[],charges:[
+    {charge_id:1,school_year:'2026-2027',grade_level:'Grade 12',annual_term_number:2,line_name:'Tuition',fee_category:'tuition',installment:'Term 2',remaining_amount:'3600.00'},
+    {charge_id:2,school_year:'2026-2027',grade_level:'Grade 12',annual_term_number:2,line_name:'Demo miscellaneous fee',fee_category:'miscellaneous',installment:'Term 2',remaining_amount:'675.00'},
+    {charge_id:3,school_year:'2026-2027',grade_level:'Grade 12',annual_term_number:2,line_name:'Laboratory',fee_category:'special',installment:'prelim',remaining_amount:'50.00'}]};
+  const targets=JSON.parse(ejs.render(block+'<%- JSON.stringify(allocationTargets) %>',{ledger}).trim());
+  assert.equal(targets[0].label,'Term 2: Tuition');
+  assert.equal(targets[1].label,'Term 2: Demo miscellaneous fee');
+  assert.equal(targets[2].label,'Term 2: Laboratory · special · prelim');
+  assert.deepEqual(targets.map(t=>[t.value,t.balance,t.order]),[['charge:1','3600.00',0],['charge:2','675.00',1],['charge:3','50.00',2]]);
+});
