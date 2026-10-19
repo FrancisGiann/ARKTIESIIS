@@ -1,3 +1,14 @@
+// Keep native disclosure navigation keyboard-accessible without changing
+// ordinary details controls elsewhere in forms and records.
+for (const menu of document.querySelectorAll('details.mobile-nav')) {
+  menu.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !menu.open) return;
+    event.preventDefault();
+    menu.open = false;
+    menu.querySelector('summary')?.focus();
+  });
+}
+
 for (const table of document.querySelectorAll('.student-clearance-page .clearance-items-table')) {
   for (const checkbox of table.querySelectorAll('[data-clearance-signature-toggle]')) {
     const row = checkbox.closest('tr');
