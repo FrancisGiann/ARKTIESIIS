@@ -12,12 +12,14 @@ const bcrypt = require('bcrypt');
 const express = require('express');
 const { createApp } = require('../src/app');
 const { configuredMaxBytes, createDocumentsRouter, documentStatusLabel } = require('../src/routes/documents');
+const syntheticSessionSecret = 'synthetic-documents-test-session-secret-v1';
 const { PhysicalChecklistError } = require('../src/services/physicalChecklistService');
 const {
   DocumentServiceError,
   createDocumentService,
   validateUpload,
-  verificationChecklistItems
+  verificationChecklistItems,
+  safeGeminiAdvisoryFindings
 } = require('../src/services/documentService');
 
 function fakeSql() {
@@ -728,6 +730,8 @@ test('Gemini findings are fetched only for registrar and database administrator 
   assert.equal(student.result.validation, null);
   assert.deepEqual(student.result.decisions[0].verificationChecklist, []);
   assert.equal(student.queries.some(({ statement }) => statement.includes('FROM document_validations')), false);
+  assert.equal(student.queries.some(({ statement }) => statement.includes('SELECT birth_date AS birthDate')), false,
+    'students never read the linked DOB for staff-only advisory rendering');
   const studentDecisionQuery = student.queries.find(({ statement }) => statement.includes('FROM document_decision_events AS e'));
   assert.match(studentDecisionQuery.statement, /CAST\(NULL AS CHAR\(500\)\) AS verification_checklist_json/);
 
@@ -787,6 +791,67 @@ test('Gemini findings are fetched only for registrar and database administrator 
 
   const revokedRegistrar = await readAsRole('registrar', { deactivateAfterDocumentRead: true });
   assert.equal(revokedRegistrar.result.validation, null, 'active-role recheck prevents OCR text disclosure after access is revoked');
+});
+
+test('advisory display recomputes only from complete bounded fields and intact current-reference snapshots', () => {
+  const currentBirthDate = { birthDate: '2008-02-29' };
+  const noDobField = safeGeminiAdvisoryFindings('psa_birth_certificate', {
+    gemini: {
+      status: 'extracted',
+      fields: { studentName: 'Jamie Garcia' },
+      advisories: { birthDate: { comparisonStatus: 'match', profileFingerprint: 'a'.repeat(64) } }
+    }
+  }, currentBirthDate);
+  assert.deepEqual(noDobField.map(({ status, reason }) => [status, reason]), [
+    ['not_recorded', undefined], ['unknown', 'not_recorded']
+  ], 'a stored match claim cannot replace a missing raw date field');
+
+  const ambiguousWithStoredMatch = safeGeminiAdvisoryFindings('psa_birth_certificate', {
+    gemini: {
+      status: 'extracted', fields: { dateOfBirthText: '04/05/2008' },
+      advisories: { birthDate: { comparisonStatus: 'match', profileFingerprint: 'a'.repeat(64) } }
+    }
+  }, currentBirthDate);
+  assert.equal(ambiguousWithStoredMatch[1].status, 'unknown');
+  assert.equal(ambiguousWithStoredMatch[1].reason, 'date_ambiguous_or_invalid');
+
+  const changedProfile = safeGeminiAdvisoryFindings('psa_birth_certificate', {
+    gemini: {
+      status: 'extracted', fields: { dateOfBirthText: 'February 29, 2008' },
+      advisories: { birthDate: { comparisonStatus: 'match', profileFingerprint: require('../src/services/documentValidationService').profileValueFingerprint('2008-02-29', syntheticSessionSecret) } }
+    }
+  }, { birthDate: '2008-03-01' }, syntheticSessionSecret);
+  assert.equal(changedProfile[1].status, 'unknown');
+  assert.equal(changedProfile[1].reason, 'source_changed_since_precheck');
+  assert.equal(changedProfile[1].referenceValue, '2008-03-01', 'the visible current reference is explicitly current');
+
+  const providerFailure = safeGeminiAdvisoryFindings('psa_birth_certificate', {
+    gemini: { status: 'unavailable', fields: null }
+  });
+  assert.deepEqual(providerFailure.map(({ status, reason }) => [status, reason]), [
+    ['unavailable', undefined], ['unavailable', 'provider_unavailable']
+  ]);
+
+  const noSchoolSource = safeGeminiAdvisoryFindings('good_moral', {
+    gemini: {
+      status: 'extracted', fields: { issuingSchoolName: 'North Academy' },
+      advisories: { issuingSchool: { status: 'match', recordedSchool: '', source: null } }
+    }
+  }, { lastSchoolSource: null });
+  assert.deepEqual([noSchoolSource[0].status, noSchoolSource[0].reason], ['unknown', 'recorded_last_school_not_available']);
+
+  const uncertainIssuer = safeGeminiAdvisoryFindings('good_moral', {
+    gemini: {
+      status: 'extracted', fields: { issuingSchoolName: 'North Academy or South College' },
+      advisories: { issuingSchool: { status: 'match', recordedSchool: '', source: null } }
+    }
+  }, { lastSchoolSource: null });
+  assert.deepEqual([uncertainIssuer[0].status, uncertainIssuer[0].reason], ['unknown', 'issuer_school_uncertain']);
+
+  const legacyGoodMoral = safeGeminiAdvisoryFindings('good_moral', {
+    gemini: { status: 'extracted', fields: { issuingSchoolName: 'North Academy' } }
+  });
+  assert.deepEqual([legacyGoodMoral[0].status, legacyGoodMoral[0].reason], ['unknown', 'not_recorded']);
 });
 
 test('student decision history exposes own Good Moral rejection reasons and keeps unrelated decision reasons hidden', async () => {
@@ -1770,7 +1835,9 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     assert.doesNotMatch(studentHtml, /Staff-only paper note/);
     assert.doesNotMatch(studentHtml, /Form 137|form137_status|Gemini suggestions/i, 'Form 137 workflow details remain staff-only');
     assert.match(studentHtml, /id="document-file"[^>]*aria-describedby="upload-format-help"/);
-    assert.match(studentHtml, /id="upload-format-help">Accepted formats are PDF, JPEG, and PNG; maximum size is 10 MB\. Good Moral and PSA files receive limited field suggestions/);
+    assert.match(studentHtml, /id="upload-format-help">The app checks file size and configured PDF, JPEG, or PNG format on the server; maximum size is 10 MB\. Google Gemini receives Good Moral and PSA file bytes/);
+    assert.match(studentHtml, /PSA birth dates and Good Moral school names are compared locally with saved records; profile data is not sent to Gemini/);
+    assert.match(studentHtml, /For a report-card scan, Gemini suggests only the visible student name; it does not read grades or other academic results/);
     assert.match(studentHtml, /If staff rejects the latest submission, you can start a new original submission; earlier submissions stay in your history/);
     assert.doesNotMatch(studentHtml, /No file is uploaded or processed/);
     assert.match(studentHtml, /option value="psa_birth_certificate"/);
@@ -2074,6 +2141,8 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     }
     assert.match(staffPageHtml, /<script src="\/js\/student-documents\.js" defer><\/script>/);
     assert.doesNotMatch(staffPageHtml, /data-section-panel="(?:digital|paper|form137)" hidden/);
+    assert.match(staffPageHtml, /Google Gemini receives Good Moral and PSA file bytes and suggests the visible student name/);
+    assert.match(staffPageHtml, /PSA birth dates and Good Moral school names are compared locally with saved records; profile data is not sent to Gemini/);
     const paperError = await fetch(`${baseUrl}/documents/students/44/physical-checklist`, {
       method: 'POST', headers: { cookie: registrarCookie, 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ _csrf: csrfFromHtml(staffPageHtml), idempotencyKey: 'paper-checklist-token', requirementCode: 'birth_certificate', status: 'correction', isApplicable: '1', originalsReceived: '2', copiesReceived: '0', piecesReceived: '0', note: '' }),
@@ -2456,7 +2525,7 @@ test('document detail pairs source with findings, keeps notices and secondary ac
   assert.match(styles, /\.document-detail-page\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.05fr\)\s+minmax\(0,\s*0\.95fr\)/s);
   assert.match(styles, /@media \(max-width: 880px\)\s*\{[^}]*\.document-detail-page\s*\{\s*display:\s*block;/s);
   assert.match(styles, /\.document-precheck-scope\s*\{[^}]*max-width:\s*74ch;/s);
-  assert.match(template, /does not establish authenticity or acceptance/);
+  assert.match(template, /do not establish authenticity or acceptance/);
 });
 
 test('student document sections preserve legacy anchors and focus targets after progressive enhancement reveals them', async () => {

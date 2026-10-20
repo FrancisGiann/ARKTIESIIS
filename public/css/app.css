@@ -356,6 +356,12 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-colo
 .document-image-viewer__viewport.is-pannable { touch-action: none; }
 .document-preview-dialog { overflow-y: auto; }
 .document-precheck-scope { max-width: 74ch; }
+.document-advisory-findings { border-left: 0.25rem solid var(--accent); }
+.document-advisory-findings > li { padding: 0.7rem 0; border-bottom: 1px solid var(--line); }
+.document-advisory-findings > li:last-child { padding-bottom: 0; border-bottom: 0; }
+.document-advisory-findings > li > strong, .document-advisory-findings > li > span { display: block; }
+.document-advisory-findings > li > span { margin-top: 0.25rem; font-weight: 700; }
+.document-advisory-findings > li > p { margin: 0.35rem 0 0; overflow-wrap: anywhere; }
 .document-image-thumbnail img, .document-image-viewer__image { display: block; max-width: 100%; height: auto; border-radius: var(--radius-control); }
 .document-image-thumbnail-card, .document-preview-dialog { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-panel); }
 .document-history-scroll { overflow-x: auto; }

@@ -16,7 +16,7 @@ async function start({
   departureRecoverySchedulerFactory = startDepartureRecoveryScheduler,
   logger = console
 } = {}) {
-  const processingService = processingServiceFactory({ getPool: databasePool });
+  const processingService = processingServiceFactory({ getPool: databasePool, sessionSecret: environment.sessionSecret });
   const departureLifecycle = departureLifecycleFactory({ getPool: databasePool });
   let departureRecovery = null;
 

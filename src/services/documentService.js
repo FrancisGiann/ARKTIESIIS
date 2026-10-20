@@ -3,7 +3,16 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { constants: fsConstants } = require('node:fs');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
-const { MAX_GEMINI_PRECHECK_ATTEMPTS, canRetryGeminiPrecheck } = require('./documentValidationService');
+const { formatFinanceDateTime } = require('../utils/financeDateTime');
+const {
+  MAX_GEMINI_PRECHECK_ATTEMPTS,
+  canRetryGeminiPrecheck,
+  evaluateIssuingSchoolAdvisory,
+  parseVisibleBirthDate,
+  profileDateOnly,
+  profileValueFingerprint,
+  schoolComparisonForCurrentSource
+} = require('./documentValidationService');
 
 const ID_PATTERN = /^\d{1,10}$/;
 const STAFF_ROLES = new Set(['registrar', 'database_admin']);
@@ -203,6 +212,106 @@ function safeGeminiFieldChecks(documentType, summary) {
   return checks;
 }
 
+function safeGeminiAdvisoryFindings(documentType, summary, currentProfile = {}, sessionSecret) {
+  if (!['good_moral', 'psa_birth_certificate'].includes(documentType)) return [];
+  const gemini = summary?.gemini;
+  const fields = gemini?.fields;
+  const extracted = gemini?.status === 'extracted' && fields && typeof fields === 'object' && !Array.isArray(fields);
+  const textValue = (value, maximum = 240) => typeof value === 'string'
+    ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maximum)
+    : '';
+
+  if (documentType === 'psa_birth_certificate') {
+    const hasDateField = extracted && Object.prototype.hasOwnProperty.call(fields, 'dateOfBirthText');
+    const storedAdvisory = gemini?.advisories?.birthDate;
+    const rawDate = hasDateField ? textValue(fields.dateOfBirthText) : '';
+    const parsedDate = hasDateField ? parseVisibleBirthDate(rawDate) : null;
+    const currentFingerprint = profileValueFingerprint(currentProfile.birthDate, sessionSecret);
+    const providerUnavailable = gemini?.status === 'unavailable';
+    const extractionStatus = providerUnavailable ? 'unavailable'
+      : !extracted || !hasDateField ? 'not_recorded'
+        : parsedDate.status;
+    let comparison = { status: 'unknown', reason: 'not_recorded' };
+    if (providerUnavailable) comparison = { status: 'unavailable', reason: 'provider_unavailable' };
+    else if (hasDateField && parsedDate.status === 'not_identified') comparison = { status: 'unknown', reason: 'date_not_identified' };
+    else if (hasDateField && parsedDate.status === 'uncertain') comparison = { status: 'unknown', reason: 'date_ambiguous_or_invalid' };
+    else if (parsedDate?.status === 'identified' && currentProfile.lookupFailed) comparison = { status: 'unknown', reason: 'current_reference_unavailable' };
+    else if (parsedDate?.status === 'identified' && !/^[a-f0-9]{64}$/i.test(storedAdvisory?.profileFingerprint || '')) comparison = { status: 'unknown', reason: 'not_recorded' };
+    else if (parsedDate?.status === 'identified' && !currentFingerprint) comparison = { status: 'unknown', reason: 'not_recorded' };
+    else if (parsedDate?.status === 'identified' && storedAdvisory.profileFingerprint !== currentFingerprint) {
+      comparison = { status: 'unknown', reason: 'source_changed_since_precheck' };
+    } else if (parsedDate?.status === 'identified') {
+      const currentBirthDate = profileDateOnly(currentProfile.birthDate);
+      comparison = currentBirthDate
+        ? { status: parsedDate.normalizedDate === currentBirthDate ? 'match' : 'mismatch', reason: null }
+        : { status: 'unknown', reason: 'profile_date_not_recorded' };
+    }
+    return [
+      {
+        key: 'visible_birth_date',
+        label: 'PSA date of birth (visible text, as written)',
+        status: extractionStatus,
+        value: hasDateField ? textValue(fields.dateOfBirthText) : '',
+        advisory: true
+      },
+      {
+        key: 'birth_date_comparison',
+        label: 'Birth date comparison · advisory only',
+        status: comparison.status,
+        reason: comparison.reason,
+        referenceValue: currentProfile.lookupFailed ? '' : profileDateOnly(currentProfile.birthDate) || '',
+        advisory: true
+      }
+    ];
+  }
+
+  const storedAdvisory = gemini?.advisories?.issuingSchool;
+  const hasStoredAdvisory = storedAdvisory && typeof storedAdvisory === 'object' && !Array.isArray(storedAdvisory);
+  const storedSource = storedAdvisory?.source;
+  const recordedSchool = extracted ? textValue(storedAdvisory?.recordedSchool, 200) : '';
+  const validSnapshot = typeof storedSource?.recordId === 'string' && storedSource.recordId.length > 0
+    && typeof storedSource?.schoolYear === 'string' && /^\d{4}-\d{4}$/.test(storedSource.schoolYear)
+    && /^[a-f0-9]{64}$/i.test(storedSource?.fingerprint || '')
+    && typeof storedSource?.createdAt === 'string' && storedSource.createdAt.length > 0;
+  const recomputedSnapshot = extracted && validSnapshot
+    ? evaluateIssuingSchoolAdvisory({ issuingSchoolName: textValue(fields.issuingSchoolName) }, {
+      lastSchoolSource: {
+        recordId: storedSource.recordId,
+        schoolYear: storedSource.schoolYear,
+        createdAt: storedSource.createdAt,
+        updatedAt: storedSource.updatedAt,
+        value: recordedSchool
+      }
+    })
+    : null;
+  const snapshotIntact = recomputedSnapshot?.source?.fingerprint === storedSource?.fingerprint;
+  const missingSourceComparison = extracted && hasStoredAdvisory && storedSource == null
+    ? evaluateIssuingSchoolAdvisory({ issuingSchoolName: textValue(fields.issuingSchoolName) }, { lastSchoolSource: null })
+    : null;
+  const comparison = gemini?.status === 'unavailable'
+    ? { status: 'unavailable', reason: 'provider_unavailable' }
+    : !extracted || !hasStoredAdvisory
+      ? { status: 'unknown', reason: 'not_recorded' }
+      : !validSnapshot && storedSource == null
+        ? { status: 'unknown', reason: missingSourceComparison?.reason || 'recorded_last_school_not_available' }
+        : !validSnapshot || !snapshotIntact
+          ? { status: 'unknown', reason: 'not_recorded' }
+      : currentProfile.lookupFailed
+        ? { status: 'unknown', reason: 'current_reference_unavailable' }
+        : schoolComparisonForCurrentSource(recomputedSnapshot, currentProfile.lastSchoolSource);
+  const schoolYear = validSnapshot ? storedSource.schoolYear.slice(0, 20) : '';
+  const recordedAt = validSnapshot ? formatFinanceDateTime(storedSource.createdAt) : '';
+  return [{
+    key: 'issuing_school_comparison',
+    label: 'Issuing school vs recorded last school · advisory only',
+    status: comparison.status,
+    reason: comparison.reason,
+    value: recordedSchool,
+    provenance: schoolYear ? `Registrar intake · school year ${schoolYear}${recordedAt && recordedAt !== 'Date unavailable' ? ` · recorded ${recordedAt} Manila time` : ''}` : '',
+    advisory: true
+  }];
+}
+
 function automatedCheckOutcome(documentType, resultStatus, summary, formatCheckPassed) {
   if (!ADVISORY_KEYS_BY_TYPE.has(documentType)) return null;
   if (summary?.precheckVersion !== 2) return 'unavailable';
@@ -283,6 +392,7 @@ function createDocumentService({
   getPool = defaultGetPool,
   sql = defaultSql,
   transactionFactory = (pool) => new sql.Transaction(pool),
+  sessionSecret,
   storageDirectory,
   maxUploadBytes = 10 * 1024 * 1024,
   fileSystem = fs,
@@ -345,6 +455,34 @@ function createDocumentService({
     const actor = result.recordset?.[0];
     if (!actor || !['student', ...STAFF_ROLES].includes(actor.role)) throw new DocumentServiceError('Your document access is no longer active. Sign in again.', 403);
     return actor;
+  }
+
+  async function loadCurrentAdvisoryProfile(pool, document, actorId) {
+    if (document.document_type === 'psa_birth_certificate') {
+      const result = await pool.request()
+        .input('studentId', sql.Int, document.student_id)
+        .input('actorId', sql.Int, actorId)
+        .query(`SELECT birth_date AS birthDate FROM students
+          WHERE id = @studentId AND EXISTS (SELECT 1 FROM users
+            WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))`);
+      const profile = result.recordset?.[0];
+      return profile ? { birthDate: profile.birthDate ?? null } : { lookupFailed: true };
+    }
+    if (document.document_type === 'good_moral') {
+      const result = await pool.request()
+        .input('studentId', sql.Int, document.student_id)
+        .input('actorId', sql.Int, actorId)
+        .query(`SELECT source.id AS recordId, annual.school_year AS schoolYear,
+            source.prior_school AS value, source.created_at AS createdAt, source.updated_at AS updatedAt
+          FROM annual_enrollments AS annual
+          INNER JOIN pre_enrollments AS source ON source.id = annual.pre_enrollment_id
+          WHERE annual.student_id = @studentId AND annual.intake_status <> 'cancelled'
+            AND EXISTS (SELECT 1 FROM users
+              WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
+          ORDER BY annual.school_year DESC, annual.created_at DESC, annual.id DESC LIMIT 1`);
+      return { lastSchoolSource: result.recordset?.[0] || null };
+    }
+    return {};
   }
 
   async function writeAudit(transaction, { actor, action, documentId, studentId, documentType }) {
@@ -1045,6 +1183,19 @@ function createDocumentService({
       } catch {
         // Ignore malformed stored summaries and use a fixed safe fallback.
       }
+      const hasCurrentAdvisorySnapshot = document.document_type === 'psa_birth_certificate'
+        ? Boolean(storedSummary?.gemini?.advisories?.birthDate)
+        : document.document_type === 'good_moral'
+          ? Boolean(storedSummary?.gemini?.advisories?.issuingSchool)
+          : false;
+      let currentAdvisoryProfile = {};
+      if (STAFF_ROLES.has(actor.role) && hasCurrentAdvisorySnapshot) {
+        try {
+          currentAdvisoryProfile = await loadCurrentAdvisoryProfile(pool, document, actor.id);
+        } catch {
+          currentAdvisoryProfile = { lookupFailed: true };
+        }
+      }
       const formatCheckPassed = supportedDocumentFormat(document);
       const checkOutcome = automatedCheckOutcome(
         document.document_type,
@@ -1066,6 +1217,7 @@ function createDocumentService({
         created_at: validationRow.created_at,
         advisoryChecks: advisory,
         fieldChecks: safeGeminiFieldChecks(document.document_type, storedSummary),
+        advisoryFindings: safeGeminiAdvisoryFindings(document.document_type, storedSummary, currentAdvisoryProfile, sessionSecret),
         formatCheckPassed,
         automatedCheckOutcome: checkOutcome,
         requiresOverrideReason: checkOutcome !== 'pass',
@@ -1533,5 +1685,6 @@ module.exports = {
   normalizeDocumentType,
   validateUpload,
   hasSupportedSignature,
-  verificationChecklistItems
+  verificationChecklistItems,
+  safeGeminiAdvisoryFindings
 };

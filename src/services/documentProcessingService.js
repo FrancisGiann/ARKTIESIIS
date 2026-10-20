@@ -49,6 +49,7 @@ function createDocumentProcessingService({
   transactionFactory = (pool) => new sql.Transaction(pool),
   geminiFieldExtractor,
   geminiConfig = defaultEnvironment.gemini,
+  sessionSecret = defaultEnvironment.sessionSecret,
   storageDirectory = defaultEnvironment.upload.storageDirectory,
   maxFileBytes = Math.floor(defaultEnvironment.upload.maxMb * 1024 * 1024),
   timeoutMs = defaultEnvironment.gemini.timeoutMs,
@@ -135,10 +136,22 @@ function createDocumentProcessingService({
   async function loadStudentName(transaction, document) {
     const result = await transaction.request()
       .input('documentId', sql.Int, document.id)
-      .query(`SELECT d.original_filename, s.first_name, s.middle_name, s.last_name
+      .query(`SELECT d.student_id, d.original_filename, s.first_name, s.middle_name, s.last_name,
+          CASE WHEN d.document_type = 'psa_birth_certificate' THEN s.birth_date ELSE NULL END AS birth_date
         FROM documents AS d INNER JOIN students AS s ON s.id = d.student_id
         WHERE d.id = @documentId`);
     const linkedStudent = result.recordset?.[0] || {};
+    if (document.document_type === 'good_moral') {
+      const sourceResult = await transaction.request()
+        .input('studentId', sql.Int, linkedStudent.student_id)
+        .query(`SELECT source.id AS recordId, annual.school_year AS schoolYear,
+            source.prior_school AS value, source.created_at AS createdAt, source.updated_at AS updatedAt
+          FROM annual_enrollments AS annual
+          INNER JOIN pre_enrollments AS source ON source.id = annual.pre_enrollment_id
+          WHERE annual.student_id = @studentId AND annual.intake_status <> 'cancelled'
+          ORDER BY annual.school_year DESC, annual.created_at DESC, annual.id DESC LIMIT 1`);
+      linkedStudent.lastSchoolSource = sourceResult.recordset?.[0] || null;
+    }
     return { ...document, original_filename: linkedStudent.original_filename, student: linkedStudent };
   }
 
@@ -237,7 +250,7 @@ function createDocumentProcessingService({
         studentNameMatchesLinkedRecord: null
       };
     }
-    return evaluateExtractedFields(document.document_type, extraction.fields, document.student, fileFormatPassed);
+    return evaluateExtractedFields(document.document_type, extraction.fields, document.student, fileFormatPassed, sessionSecret);
   }
 
   async function saveOutcome(documentId, outcome) {

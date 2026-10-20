@@ -87,12 +87,14 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
   const service = documentService || createDocumentService({
     getPool,
     sql,
+    sessionSecret: environment?.sessionSecret,
     storageDirectory: environment?.upload?.storageDirectory,
     maxUploadBytes: configuredMaxBytes(environment)
   });
   const processingService = documentProcessingService || createDocumentProcessingService({
     getPool,
     sql,
+    sessionSecret: environment?.sessionSecret,
     storageDirectory: environment?.upload?.storageDirectory,
     maxFileBytes: configuredMaxBytes(environment),
     geminiConfig: environment?.gemini,

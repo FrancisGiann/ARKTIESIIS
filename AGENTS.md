@@ -28,7 +28,7 @@ Enforce authorization on the server. Hiding UI buttons is never enough.
 ## AI scope - very important
 The automated document precheck is limited to:
 - visible field extraction for Good Moral, PSA, active student-uploaded previous-school report-card scans, and transient Form 137 scans
-- comparison of the extracted student name with the linked student record
+- comparison of the extracted student name with the linked student record; a local, advisory-only PSA birth-date comparison; and a local, advisory-only Good Moral issuing-school comparison with the recorded last-school source
 - Good Moral certificate-context clues
 - configured PDF/JPEG/PNG file-format checks
 
@@ -42,6 +42,8 @@ It MUST NOT claim to:
 Human review is always responsible for acceptance; the precheck never sets a digital document to `valid`.
 
 Good Moral/PSA and active student-uploaded report-card bytes are sent to Google Gemini for the explicitly approved bounded precheck. Report-card extraction is limited to the visible student name; it must not extract grades, marks, subjects, attendance, or other academic results. Staff scan bytes for Form 137 are also sent to Gemini transiently; the app does not save these scans as files or database rows. Do not log raw bytes, extracted personal fields, API keys, or provider errors. Enforce file, request/response, timeout, and bounded worker limits. The Gemini adapter uses inline bytes and structured responses; do not add an SDK package.
+
+For PSA, Gemini may extract only the visible student name and date of birth as written. The saved birth date is never sent to Gemini; date parsing and comparison happen locally and remain advisory. Ambiguous, partial, invalid, missing, changed-profile, historical-not-recorded, and provider-unavailable states remain distinct from a match. For Good Moral, compare the extracted issuing-school name only with the latest non-cancelled prior-school value linked through a registrar intake; preserve its intake provenance and treat missing or changed sources as unknown. School-name differences are text-review clues only and must not claim authenticity or change acceptance. Neither advisory can set a document to `valid`.
 
 New student-origin previous-school report-card scans use the bounded worker for visible-name comparison and PDF/JPEG/PNG format checks, then require staff source inspection and a staff checklist decision. Provider failure leaves the submission reviewable; eligible transient failures may be retried within the existing limit. The precheck never writes grades. Rows marked as the pre-lifecycle archive remain read-only for staff and are excluded from processing and retry. Paper copies have a separate staff-recorded event history; neither channel is a grade source.
 

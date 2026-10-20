@@ -7,6 +7,7 @@ const { constants: fsConstants } = require('node:fs');
 const { createDocumentProcessingService } = require('../src/services/documentProcessingService');
 
 const STORED_PDF = '5dd677e1-87fb-4214-a7c1-27aca233ae1f.pdf';
+const sessionSecret = 'synthetic-document-processing-test-secret-v1';
 const VALID_GOOD_MORAL_FIELDS = {
   studentName: 'Jamie Garcia',
   issuingSchoolName: 'North Academy',
@@ -22,7 +23,7 @@ function fakeSql() {
   };
 }
 
-function makeHarness({ documentType = 'good_moral', status = 'pending', isLegacyArchive = false, storedFilename = STORED_PDF, mimeType = 'application/pdf', originalFilename = 'moral.pdf' } = {}) {
+function makeHarness({ documentType = 'good_moral', status = 'pending', isLegacyArchive = false, storedFilename = STORED_PDF, mimeType = 'application/pdf', originalFilename = 'moral.pdf', birthDate = '2008-02-29', lastSchoolSource = { recordId: 'synthetic-intake-44', schoolYear: '2026-2027', value: 'North Academy', createdAt: '2026-06-01 09:00:00.000', updatedAt: '2026-06-02 09:00:00.000' } } = {}) {
   const state = {
     document: { id: 84, student_id: 44, status, processing_started_at: null, stored_filename: storedFilename, mime_type: mimeType, document_type: documentType, is_legacy_archive: isLegacyArchive ? 1 : 0, original_filename: originalFilename },
     validations: [], queries: [], commits: 0
@@ -45,10 +46,12 @@ function makeHarness({ documentType = 'good_moral', status = 'pending', isLegacy
             if (statement.includes('SELECT id, stored_filename, mime_type, document_type, is_legacy_archive')) {
               return { recordset: [{ ...transaction.document }] };
             }
-            if (statement.includes('SELECT d.original_filename, s.first_name')) return { recordset: [{
+            if (statement.includes('SELECT d.student_id, d.original_filename, s.first_name')) return { recordset: [{
+              student_id: 44,
               original_filename: transaction.document.original_filename,
-              first_name: 'Jamie', middle_name: null, last_name: 'Garcia'
+              first_name: 'Jamie', middle_name: null, last_name: 'Garcia', birth_date: birthDate
             }] };
+            if (statement.includes('FROM annual_enrollments AS annual')) return { recordset: lastSchoolSource ? [lastSchoolSource] : [] };
             if (statement.includes('SET status = @documentStatus')) {
               if (transaction.document.status !== 'processing') return { recordset: [] };
               transaction.document.status = values.documentStatus;
@@ -80,6 +83,7 @@ function createService(harness, storageDirectory, extractDocument, overrides = {
     getPool: async () => ({}),
     sql: fakeSql(),
     transactionFactory: harness.transactionFactory,
+    sessionSecret,
     storageDirectory,
     maxFileBytes: 16 * 1024 * 1024,
     timeoutMs: 1000,
@@ -142,6 +146,61 @@ test('Good Moral name and school alone never produce a precheck pass', async () 
     assert.equal(result.code, 'precheck_attention');
     assert.equal(result.status, 'needs_review');
     assert.equal(JSON.parse(harness.state.validations[0].validationJson).gemini.requiredFieldsPresent, false);
+  } finally {
+    await fs.rm(storageDirectory, { recursive: true, force: true });
+  }
+});
+
+test('PSA DOB is compared locally as an advisory and profile values never enter the Gemini request', async () => {
+  const storageDirectory = await temporaryStorage();
+  try {
+    for (const item of [
+      { visible: '29 February 2008', birthDate: '2008-02-29', comparison: 'match' },
+      { visible: 'March 1, 2008', birthDate: '2008-02-29', comparison: 'mismatch' },
+      { visible: '04/05/2008', birthDate: '2008-04-05', comparison: 'unknown' }
+    ]) {
+      const harness = makeHarness({ documentType: 'psa_birth_certificate', originalFilename: 'birth.pdf', birthDate: item.birthDate });
+      await fs.writeFile(path.join(storageDirectory, STORED_PDF), Buffer.from('%PDF-1.7\nsynthetic PSA'));
+      let request;
+      const service = createService(harness, storageDirectory, async (input) => {
+        request = input;
+        assert.deepEqual(Object.keys(input).sort(), ['buffer', 'documentType', 'mimeType', 'signal']);
+        return { status: 'extracted', code: 'extracted', fields: { studentName: 'Jamie Garcia', dateOfBirthText: item.visible } };
+      });
+      const result = await service.processPendingDocument(84);
+      const saved = harness.state.validations[0];
+      const summary = JSON.parse(saved.validationJson);
+      assert.equal(result.code, 'precheck_pass', 'the DOB advisory never changes the existing name/file-format outcome');
+      assert.equal(result.status, 'needs_review');
+      assert.equal(harness.state.document.status, 'needs_review');
+      assert.equal(summary.gemini.advisories.birthDate.comparisonStatus, item.comparison);
+      assert.equal(summary.gemini.fields.dateOfBirthText, item.visible);
+      assert.equal(request.buffer.length > 0, true);
+      assert.equal(saved.validationJson.includes(item.birthDate), false, 'the linked DOB itself is never stored in the advisory');
+    }
+  } finally {
+    await fs.rm(storageDirectory, { recursive: true, force: true });
+  }
+});
+
+test('Good Moral school mismatch stays an advisory and records selected intake provenance', async () => {
+  const storageDirectory = await temporaryStorage();
+  const harness = makeHarness({ lastSchoolSource: {
+    recordId: 'synthetic-intake-44', schoolYear: '2026-2027', value: 'North Academy',
+    createdAt: '2026-06-01 09:00:00.000', updatedAt: '2026-06-02 09:00:00.000'
+  } });
+  await fs.writeFile(path.join(storageDirectory, STORED_PDF), Buffer.from('%PDF-1.7\nsynthetic certificate'));
+  try {
+    const service = createService(harness, storageDirectory, async () => ({
+      status: 'extracted', code: 'extracted', fields: { ...VALID_GOOD_MORAL_FIELDS, issuingSchoolName: 'South Academy' }
+    }));
+    const result = await service.processPendingDocument(84);
+    const summary = JSON.parse(harness.state.validations[0].validationJson);
+    assert.equal(result.code, 'precheck_pass');
+    assert.equal(result.status, 'needs_review');
+    assert.equal(summary.gemini.advisories.issuingSchool.status, 'mismatch');
+    assert.equal(summary.gemini.advisories.issuingSchool.source.schoolYear, '2026-2027');
+    assert.ok(harness.state.queries.some((query) => /ORDER BY annual\.school_year DESC, annual\.created_at DESC, annual\.id DESC/.test(query)));
   } finally {
     await fs.rm(storageDirectory, { recursive: true, force: true });
   }

@@ -111,6 +111,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   const registrarGradeOverview = gradeOverviewService || createRegistrarGradeOverviewService({ getPool, sql });
   const registrarDashboard = registrarDashboardService || createRegistrarDashboardService({ getPool, sql });
   const documentsService = documentService || createDocumentService({ getPool, sql,
+    sessionSecret: environment.sessionSecret,
     storageDirectory: environment.upload?.storageDirectory });
   const studentSetup = studentSetupService || createStudentSetupService({ getPool, sql });
   const schedulesService = classScheduleService || createClassScheduleService({ getPool, sql });

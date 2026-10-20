@@ -77,13 +77,16 @@ test('Form 137 requests bounded student and possible school suggestions only', a
   assert.match(prompt, /Do not classify authenticity/);
 });
 
-test('PSA schema requests only the linked student name and does not require school fields', async () => {
+test('PSA schema requests only visible student name and birth-date text, without profile comparison data', async () => {
   let schema;
+  let prompt;
   const service = createGeminiFieldExtractionService({
     apiKey: 'test-key',
     fetchImpl: async (_url, options) => {
-      schema = JSON.parse(options.body).generationConfig.responseSchema;
-      return responseFor({ student_name: 'Jamie Garcia' });
+      const body = JSON.parse(options.body);
+      schema = body.generationConfig.responseSchema;
+      prompt = body.contents[0].parts[1].text;
+      return responseFor({ student_name: 'Jamie Garcia', date_of_birth: '04/05/2008' });
     }
   });
   const result = await service.extractDocument({
@@ -91,9 +94,15 @@ test('PSA schema requests only the linked student name and does not require scho
     mimeType: 'image/jpeg',
     documentType: 'psa_birth_certificate'
   });
-  assert.deepEqual(result, { status: 'extracted', code: 'extracted', fields: { studentName: 'Jamie Garcia' } });
-  assert.deepEqual(schema.required, ['student_name']);
-  assert.deepEqual(Object.keys(schema.properties), ['student_name']);
+  assert.deepEqual(result, {
+    status: 'extracted', code: 'extracted', fields: { studentName: 'Jamie Garcia', dateOfBirthText: '04/05/2008' }
+  });
+  assert.deepEqual(schema.required, ['student_name', 'date_of_birth']);
+  assert.deepEqual(Object.keys(schema.properties), ['student_name', 'date_of_birth']);
+  assert.match(prompt, /preserving its exact written order and separators/);
+  assert.match(prompt, /Do not extract birthplace, sex, parent information/);
+  assert.match(prompt, /saved student profile is not provided/);
+  assert.doesNotMatch(prompt, /saved profile date|profile DOB|student record birth date/i);
 });
 
 test('report-card schema asks only for the visible student name and explicitly excludes grade extraction', async () => {
