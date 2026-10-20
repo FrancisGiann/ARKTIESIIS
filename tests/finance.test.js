@@ -135,15 +135,16 @@ test('all registered finance writes have one route parser and one reviewed write
     ['legacy_opening_transfer', '/students/22/annual/legacy-opening/transfer', 'annual', 'transferLegacyOpeningLiability'],
     ['term_finance_approval', '/annual/terms/14/approval', 'annual', 'approveTerm'],
     ['voucher_review_resolution', '/annual/12/voucher-review-resolution', 'annual', 'resolveVoucherReview'],
-    ['term_clearance', '/annual/terms/14/clearance', 'annual', 'signTermClearance']
+    ['term_clearance', '/annual/terms/14/clearance', 'annual', 'signTermClearance'],
+    ['retake_item_decision', '/retake-referrals/items/151/decision', 'retake', 'financeDecisionInTransaction']
   ];
-  assert.equal(SAFE_ACTIONS.length, 22);
+  assert.equal(SAFE_ACTIONS.length, 23);
   assert.deepEqual(Object.keys(ACTION_WRITERS).sort(), cases.map(([type]) => type).sort(), 'every supported action has a writer callback');
   for (const pathname of ['/students/22/account', '/students/22/transactions', '/students/22/enrollment-clearance']) {
     assert.equal(actionByPath(pathname), null, `${pathname} is retired from the reviewed action registry`);
   }
   const writerCalls = [];
-  const services = Object.fromEntries(['annual', 'cases', 'documentClearance'].map((serviceName) => [serviceName,
+  const services = Object.fromEntries(['annual', 'cases', 'documentClearance', 'retake'].map((serviceName) => [serviceName,
     new Proxy({}, { get(_target, method) { return async (...args) => { writerCalls.push([serviceName, method, args]); return { saved: true }; }; } })
   ]));
   for (const [type, pathname, expectedService, expectedMethod] of cases) {
@@ -1195,7 +1196,7 @@ test('a pending review stays editable and discardable when current-target valida
     const response = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
     const html = await response.text();
     assert.equal(response.status, 409);
-    assert.match(html, /The pending draft is retained/);
+    assert.match(html, /Your pending draft and values are retained/);
     assert.match(html, /Edit saved details/);
     assert.match(html, /Discard unfinished review/);
     assert.match(html, /name="item_allocations_0_amount" value="20\.00"/);

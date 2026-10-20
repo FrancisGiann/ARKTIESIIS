@@ -11,11 +11,11 @@ const { splitSqlStatements, readSqlFile, readForwardMigrations, validateAppliedV
   assert.match(statements[1], /\`semi;colon\`/);
 });
 
-test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.020 migrations', () => {
+test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.021 migrations', () => {
   const baseline = readSqlFile(path.resolve('database/mariadb/schema.sql'));
   assert.ok(baseline.some((statement) => /v2\.001/.test(statement)));
   const migrations = readForwardMigrations();
-  assert.deepEqual(migrations.map(({ version }) => version), Array.from({ length: 19 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
+  assert.deepEqual(migrations.map(({ version }) => version), Array.from({ length: 20 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
   assert.ok(migrations.every(({ statements }) => statements.length > 0));
   const wholePaper = migrations.find(({ version }) => version === 'v2.018');
   assert.equal(wholePaper.statements[0].match(/\bALTER\s+TABLE\s+student_term_clearances\b/gi)?.length, 1);
@@ -32,6 +32,13 @@ test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.020 migra
   assert.match(departureCutoff.statements[1], /CREATE TABLE finance_departure_charge_reviews/i);
   assert.doesNotMatch(departureCutoff.statements.join('\n'), /UPDATE\s+finance_departure_cases/i,
     'historical reviewed cases are not given inferred cutoff decisions');
+  const retake = migrations.find(({ version }) => version === 'v2.021');
+  assert.match(retake.statements.join('\n'), /CREATE TABLE registrar_retake_referrals/i);
+  assert.match(retake.statements.join('\n'), /CREATE TABLE finance_retake_item_decisions/i);
+  assert.match(retake.statements.join('\n'), /UQ_finance_retake_item_decision_charge_item/i,
+    'stable retake identities can have at most one posted charge across referral corrections');
+  assert.match(retake.statements.join('\n'), /current_item_key_id BIGINT AS/i,
+    'no-charge decisions can be reopened by a later finalized correction without deleting the prior decision');
 });
 
 test('setup rejects Hostinger-incompatible schema DDL', () => {
@@ -66,6 +73,12 @@ test('setup refuses unknown or discontinuous migration history', () => {
   assert.doesNotThrow(() => validateAppliedVersions(new Set(
     Array.from({ length: 20 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
   )));
+  assert.doesNotThrow(() => validateAppliedVersions(new Set(
+    Array.from({ length: 21 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
+  )));
+  assert.throws(() => validateAppliedVersions(new Set([
+    ...Array.from({ length: 20 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`), 'v2.022'
+  ])), /Unknown migration version/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.017', 'v2.018'])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.019'])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.013'])), /history is inconsistent/);

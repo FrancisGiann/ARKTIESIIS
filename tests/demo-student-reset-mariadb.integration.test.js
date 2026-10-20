@@ -26,15 +26,15 @@ async function createFixture(admin, suffix) {
   await admin.query(`CREATE DATABASE ${quoteDatabase(databaseName)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
   await admin.query(`USE ${quoteDatabase(databaseName)}`);
   await applyStatements(admin, readSqlFile(path.join(projectRoot, 'database/mariadb/schema.sql')));
-  const expectedVersions = ['v2.001', ...Array.from({ length: 16 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`)];
+  const expectedVersions = ['v2.001', ...Array.from({ length: 20 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`)];
   for (const migration of readForwardMigrations()) {
-    if (migration.version > 'v2.017') break;
+    if (migration.version > 'v2.021') break;
     await applyStatements(admin, migration.statements);
     await admin.execute('INSERT INTO schema_migrations (version) VALUES (?)', [migration.version]);
   }
   const [fixtureVersions] = await admin.query('SELECT version FROM schema_migrations ORDER BY version');
   assert.deepEqual(fixtureVersions.map(({ version }) => version), expectedVersions,
-    'the reset rehearsal fixture must match the helper’s exact supported v2.017 schema');
+    'the reset rehearsal fixture must match the helper’s exact supported v2.021 schema');
   return databaseName;
 }
 
@@ -82,6 +82,18 @@ async function seedResetGraph(connection, storageRoot, { files = 0 } = {}) {
      selection_json, idempotency_key, request_fingerprint)
     VALUES (?, ?, 1, 'PUB', ?, '{}', ?, ?)`,
   [Number(annualResult.insertId), Number(scheduleResult.insertId), adminId, uuid(), fingerprint()]);
+  const [assessmentEvent] = await connection.execute(`INSERT INTO annual_enrollment_events
+    (annual_enrollment_id, enrollment_id, actor_id, event_type, reason, idempotency_key,
+      request_fingerprint, finance_assessment_id)
+    VALUES (?, ?, ?, 'voucher_review_flagged', 'Synthetic reset rehearsal', ?, ?, ?)`,
+  [Number(annualResult.insertId), Number(enrollmentResult.insertId), adminId, uuid(), fingerprint(), Number(assessmentResult.insertId)]);
+  await connection.execute(`INSERT INTO annual_finance_assessment_reviews
+    (annual_enrollment_id, assessment_id, schedule_id, schedule_version, voucher_code_snapshot,
+      current_voucher_code_snapshot, voucher_review_event_id, selection_json, assessment_fingerprint,
+      dependency_fingerprint, zero_dp_attested, reviewed_by, reviewed_by_role, idempotency_key, request_fingerprint)
+    VALUES (?, ?, ?, 1, 'PUB', 'PUB', ?, '{}', ?, ?, 0, ?, 'database_admin', ?, ?)`,
+  [Number(annualResult.insertId), Number(assessmentResult.insertId), Number(scheduleResult.insertId),
+    Number(assessmentEvent.insertId), fingerprint(), fingerprint(), adminId, uuid(), fingerprint()]);
   const [chargeResult] = await connection.execute(`INSERT INTO assessed_charges
     (assessment_id, annual_enrollment_id, enrollment_id, fee_category, line_name, installment, amount, gross_amount)
     VALUES (?, ?, ?, 'tuition', 'Fictional fee', 'annual', 100.00, 100.00)`,
@@ -95,6 +107,28 @@ async function seedResetGraph(connection, storageRoot, { files = 0 } = {}) {
   [Number(chargeResult.insertId), Number(adjustmentA.insertId), uuid(), fingerprint(), adminId]);
   await connection.execute('UPDATE finance_charge_adjustments SET reverses_adjustment_id = ? WHERE id = ?',
     [Number(adjustmentB.insertId), Number(adjustmentA.insertId)]);
+
+  const [departureCase] = await connection.execute(`INSERT INTO finance_departure_cases
+    (annual_enrollment_id, effective_enrollment_id, effective_date, departure_type, reason,
+      finance_status, recorded_by, idempotency_key, request_fingerprint)
+    VALUES (?, ?, '2026-10-01', 'transferred', 'Synthetic reset rehearsal', 'pending', ?, ?, ?)`,
+  [Number(annualResult.insertId), Number(enrollmentResult.insertId), adminId, uuid(), fingerprint()]);
+  const departureCaseId = Number(departureCase.insertId);
+  await connection.execute(`INSERT INTO finance_departure_case_terms
+    (departure_case_id, enrollment_id, academic_activity_review_required) VALUES (?, ?, 0)`,
+  [departureCaseId, Number(enrollmentResult.insertId)]);
+  const [cutoffReview] = await connection.execute(`INSERT INTO finance_departure_cutoff_reviews
+    (departure_case_id, effective_enrollment_id, effective_term_number, last_payable_installment,
+      review_reason, reviewed_by, reviewed_by_role, idempotency_key, request_fingerprint)
+    VALUES (?, ?, 1, 'none', 'Synthetic reset rehearsal Finance evidence.', ?, 'database_admin', ?, ?)`,
+  [departureCaseId, Number(enrollmentResult.insertId), adminId, uuid(), fingerprint()]);
+  await connection.execute(`INSERT INTO finance_departure_charge_reviews
+    (cutoff_review_id, departure_case_id, charge_id, enrollment_id, term_number, fee_category_snapshot,
+      line_name_snapshot, installment_snapshot, review_category, decision, payable_before_amount,
+      proposed_reduction_amount, reviewed_reduction_amount, payable_after_amount, review_reason)
+    VALUES (?, ?, ?, ?, 1, 'tuition', 'Fictional fee', 'annual', 'manual_tuition', 'retain',
+      100.00, 0.00, 0.00, 100.00, 'Synthetic reset rehearsal Finance evidence.')`,
+  [Number(cutoffReview.insertId), departureCaseId, Number(chargeResult.insertId), Number(enrollmentResult.insertId)]);
 
   const [paymentA] = await connection.execute(`INSERT INTO finance_payments
     (student_id, amount, payment_date, idempotency_key, request_fingerprint, recorded_by)
@@ -158,8 +192,12 @@ test('MariaDB demo reset binds target, rejects stale plans, clears FK cycles, an
       (SELECT COUNT(*) FROM student_document_claim_slips) AS slips,
       (SELECT COUNT(*) FROM student_document_clearance_events) AS clearances,
       (SELECT COUNT(*) FROM finance_payments WHERE reverses_payment_id IS NOT NULL) AS paymentLinks,
-      (SELECT COUNT(*) FROM finance_charge_adjustments WHERE reverses_adjustment_id IS NOT NULL) AS adjustmentLinks`);
-    assert.deepEqual(Object.values(beforeCycle[0]).map(Number), [1, 1, 1, 2, 2]);
+      (SELECT COUNT(*) FROM finance_charge_adjustments WHERE reverses_adjustment_id IS NOT NULL) AS adjustmentLinks,
+      (SELECT COUNT(*) FROM finance_departure_cutoff_reviews) AS departureCutoffs,
+      (SELECT COUNT(*) FROM finance_departure_charge_reviews) AS departureChargeReviews,
+      (SELECT COUNT(*) FROM annual_finance_assessment_reviews) AS assessmentReviews,
+      (SELECT COUNT(*) FROM annual_enrollment_events) AS annualEvents`);
+    assert.deepEqual(Object.values(beforeCycle[0]).map(Number), [1, 1, 1, 2, 2, 1, 1, 1, 1]);
 
     const vars = {
       RESET_DEMO_ALLOWED_DATABASE: databaseName,
@@ -226,8 +264,12 @@ test('MariaDB demo reset binds target, rejects stale plans, clears FK cycles, an
       (SELECT COUNT(*) FROM student_document_claim_slips) AS slips,
       (SELECT COUNT(*) FROM student_document_clearance_events) AS clearances,
       (SELECT COUNT(*) FROM finance_payments) AS payments,
-      (SELECT COUNT(*) FROM finance_charge_adjustments) AS adjustments`);
-    assert.deepEqual(Object.values(after[0]).map(Number), [0, 0, 1, 0, 0, 0, 0, 0, 0]);
+      (SELECT COUNT(*) FROM finance_charge_adjustments) AS adjustments,
+      (SELECT COUNT(*) FROM finance_departure_cutoff_reviews) AS departureCutoffs,
+      (SELECT COUNT(*) FROM finance_departure_charge_reviews) AS departureChargeReviews,
+      (SELECT COUNT(*) FROM annual_finance_assessment_reviews) AS assessmentReviews,
+      (SELECT COUNT(*) FROM annual_enrollment_events) AS annualEvents`);
+    assert.deepEqual(Object.values(after[0]).map(Number), [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     const [resetAudit] = await fixtureConnection.execute(`SELECT COUNT(*) AS count FROM audit_logs
       WHERE action = 'maintenance.demo_student_data_reset' AND entity_id = ?`, [databaseName]);
     assert.equal(Number(resetAudit[0].count), 1);

@@ -1,0 +1,29 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page retake-page" id="main-content">
+  <a class="context-back" href="/finance/retake-referrals">Back to retake review</a>
+  <header class="dashboard-heading"><div><p class="eyebrow">Finance · Review one item</p><h1><%= item.subject_name %></h1><p><%= item.student_name %> · <%= item.student_no || 'Student number unavailable' %> · <%= item.school_year %> · <%= item.grade_level %> · Term <%= item.target_term_number %></p><p><a class="text-link" href="/finance/students/<%= item.student_id %>/annual?view=charges">Open student account fees</a></p></div></header>
+  <section class="finance-panel" aria-labelledby="retake-review-context-title">
+    <div class="finance-panel__heading"><div><h2 id="retake-review-context-title">Registrar referral</h2><p><%= item.evaluation_reference %> · revision <%= item.revision_no %></p></div></div>
+    <dl class="finance-review-fields"><div><dt>Item</dt><dd><%= item.subject_name %><%= item.subject_id ? ` · ${item.linked_subject_code ? `${item.linked_subject_code} · ${item.linked_subject_name}` : 'Existing subject linked'}` : '' %></dd></div><div><dt>Finance-safe explanation</dt><dd><%= item.finance_explanation %></dd></div><div><dt>Target placement</dt><dd>Term <%= item.target_term_number %><%= item.enrollment_status ? ` · ${item.enrollment_status}` : ' · unavailable' %></dd></div><div><dt>Annual assessment</dt><dd><%= item.assessment_id ? 'Posted' : 'Not posted' %></dd></div></dl>
+  </section>
+  <% if (item.finance_decision) { %>
+    <% if (item.finance_decision === 'no_charge') { %>
+      <p class="notice-panel" role="status">This no-charge decision is saved in referral history. To request another review, ask the Registrar to start and finalize a correction; the new revision will return to Finance.</p>
+    <% } else { %>
+      <p class="notice-panel" role="status">This charge is already linked to the student account. Use the reviewed adjustment or reversal controls on the account to correct posted money.</p>
+    <% } %>
+  <% } else if (!item.assessment_id) { %>
+    <p class="notice-panel" role="status">Finance decisions are unavailable until the target annual assessment is posted. Open the student account to review assessment status; no decision or charge has been saved.</p>
+  <% } else { %><section class="finance-panel" aria-labelledby="retake-decision-title"><div class="finance-panel__heading"><div><h2 id="retake-decision-title">Finance decision</h2><p>A charge uses the approved amount as its gross fee. Existing approved exemptions apply once through the current supplementary-charge process. Voucher values do not reduce the retake charge a second time.</p></div></div>
+    <form class="form-grid" method="post" action="/finance/retake-referrals/items/<%= item.item_key_id %>/decision">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= idempotencyKey %>">
+      <label class="field field--wide"><span>Decision</span><select name="decision" required><option value="charge">Add a supplementary retake charge</option><option value="no_charge">Record no charge</option></select></label>
+      <label class="field"><span>Approved amount (PHP) · charge decision</span><input name="amount" inputmode="decimal" maxlength="14" aria-describedby="retake-finance-amount-help"><small id="retake-finance-amount-help">Enter the full approved amount. Any matching approved exemption is previewed separately.</small></label>
+      <label class="field"><span>Charge description · charge decision</span><input name="chargeDescription" maxlength="120" aria-describedby="retake-finance-description-help"><small id="retake-finance-description-help">This becomes the linked supplementary charge line.</small></label>
+      <label class="field field--wide"><span>Finance decision reason</span><textarea name="reason" rows="3" maxlength="1000" required aria-describedby="retake-finance-reason-help"></textarea><small id="retake-finance-reason-help">Required for both a charge and a no-charge decision.</small></label>
+      <div class="notice-panel field--wide"><p>The decision will appear in the saved review draft. Verify the student, target term, amount, and exemption preview before saving.</p></div>
+      <div class="form-actions"><button class="button button--primary" type="submit">Review Finance decision</button></div>
+    </form>
+  </section><% } %>
+</main>
+<%- include('../partials/foot') %>

@@ -1566,6 +1566,42 @@ label { font-size: 0.84rem; }
   white-space: nowrap;
 }
 .student-finance-summary__lead .student-finance-summary__amount { font-size: 2rem; }
+
+/* Registrar and Finance retake referral handoff. */
+.retake-page { min-width: 0; padding-bottom: 2rem; }
+.retake-page .finance-panel { min-width: 0; overflow-wrap: anywhere; }
+.retake-context { display: grid; gap: 0.9rem; }
+.retake-reference-edit { padding-top: 0.7rem; border-top: 1px solid var(--line); }
+.retake-reference-edit > summary,
+.retake-item__edit > summary,
+.retake-add-item > summary { min-height: 2.75rem; padding: 0.45rem 0; color: var(--accent); cursor: pointer; font-weight: 700; }
+.retake-reference-edit > summary:focus-visible,
+.retake-item__edit > summary:focus-visible,
+.retake-add-item > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.form-field-error { display: block; margin-top: 0.3rem; color: var(--danger); font-size: 0.8rem; line-height: 1.4; }
+.retake-items { display: grid; gap: 0.8rem; }
+.retake-item { min-width: 0; padding: 0.95rem; border: 1px solid var(--line); border-radius: var(--radius-control); }
+.retake-item__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.8rem; min-width: 0; }
+.retake-item__heading h3 { overflow-wrap: anywhere; }
+.retake-item p { overflow-wrap: anywhere; white-space: pre-line; }
+.retake-finalize { justify-content: flex-end; margin-top: 0.8rem; }
+.retake-history > summary { min-height: 2.75rem; padding: 0.55rem 0; color: var(--accent); cursor: pointer; font-weight: 700; }
+.retake-history li { overflow-wrap: anywhere; }
+.retake-queue { display: grid; gap: 0.8rem; }
+.retake-queue-card { display: grid; gap: 0.5rem; min-width: 0; padding: 0.95rem; border: 1px solid var(--line); border-radius: var(--radius-control); }
+.retake-queue-card h2 { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
+.retake-queue-card p { margin: 0; overflow-wrap: anywhere; white-space: pre-line; }
+.retake-queue-card__meta { color: var(--muted); font-size: 0.82rem; }
+.retake-page textarea { white-space: pre-wrap; }
+.retake-page .finance-review-fields dd { white-space: pre-line; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .retake-item__heading { display: grid; }
+  .retake-context .finance-review-fields,
+  .retake-page .finance-review-fields { grid-template-columns: minmax(0, 1fr); }
+  .retake-finalize { justify-content: stretch; }
+  .retake-finalize form,
+  .retake-finalize .button { width: 100%; }
+}
 .student-finance-balance-breakdown,
 .student-finance-term-context__list {
   display: grid;

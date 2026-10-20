@@ -16,11 +16,13 @@ const {
 } = require('../services/studentDocumentFinanceClearanceService');
 const { FinanceReviewDraftError } = require('../services/financeReviewDraftService');
 const { actionByPath, createFinanceReviewActionService, normalizeActionInput, normalizeFinanceReturnContext } = require('../services/financeReviewActionService');
+const { RetakeReferralError, createRetakeReferralService } = require('../services/retakeReferralService');
 const { createStatementProjection } = require('../utils/financeStatementProjection');
 const { paymentStatusPresentation } = require('../utils/financeStatusPresentation');
 const { LAST_PAYABLE_OPTIONS } = require('../services/departureFinanceReview');
 const { formatFinanceDateTime, manilaWeekStartDate } = require('../utils/financeDateTime');
 const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
+const { createFinanceRetakeReferralRouter } = require('./retakeReferrals');
 
 const FINANCE_ROSTER_QUERY_PHASE_SET = new Set(FINANCE_ROSTER_QUERY_PHASES);
 const FINANCE_REPORT_QUERY_PHASE_SET = new Set(FINANCE_REPORT_QUERY_PHASES);
@@ -84,7 +86,7 @@ function recoveryFields(input = {}) {
     .filter((field) => field.value !== '');
 }
 
-function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, documentClearanceService, financeReviewActionService, sessionSecret = '', logger = console } = {}) {
+function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, documentClearanceService, financeReviewActionService, retakeReferralService, sessionSecret = '', logger = console } = {}) {
   const router = express.Router();
   const annual = annualFinanceService || createAnnualFinanceService({ getPool, sql });
   const cases = financeCasesService || createAnnualFinanceCasesService({ getPool, sql });
@@ -93,6 +95,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
   const masterlist = financeMasterlistService || createFinanceMasterlistService({ getPool, sql });
   const documentClearance = documentClearanceService || createStudentDocumentFinanceClearanceService({ getPool, sql });
   const reviewActions = financeReviewActionService || createFinanceReviewActionService({ getPool, sql });
+  const retakeReferrals = retakeReferralService || createRetakeReferralService({ getPool, sql, annualFinanceService: annual });
 
   function sessionBinding(req) {
     if (typeof sessionSecret !== 'string' || sessionSecret.length < 32 || typeof req.sessionID !== 'string' || !req.sessionID) {
@@ -116,7 +119,8 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       status: 'Decision', clearanceStatus: 'Clearance status', ledgerReviewConfirmed: 'Ledger reviewed',
       paymentArrangement: 'Payment arrangement', financeNote: 'Private Finance note', effectiveDate: 'Effective date',
       cutoffInstallment: 'Last payable tuition installment', chargeReviews: 'Fees and Finance decisions',
-      departureType: 'Departure type', adjustmentAmount: 'Adjustment amount', reversesAdjustmentId: 'Adjustment being reversed'
+      departureType: 'Departure type', adjustmentAmount: 'Adjustment amount', reversesAdjustmentId: 'Adjustment being reversed',
+      evaluationReference: 'Registrar evaluation reference', decision: 'Finance decision', chargeDescription: 'Charge description'
     };
     if (labels[value]) return labels[value];
     return String(value).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replaceAll('_', ' ')
@@ -131,6 +135,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       if (['enrollmentId', 'clearEnrollmentId'].includes(name)) return options.enrollments;
       if (name === 'paymentTransactionId') return options.payments;
       if (name === 'optionalLineId') return options.optionalScheduleLines;
+      if (name === 'decision' && draft.actionType === 'retake_item_decision') return options.retakeDecisions;
       if (name === 'cutoffInstallment') return LAST_PAYABLE_OPTIONS.map((value) => ({
         value, label: value === 'none' ? 'None payable' : value.toUpperCase()
       }));
@@ -272,7 +277,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
   }
 
   function isRecoverableFinanceValidation(error) {
-    return [FinanceReviewDraftError, AnnualFinanceError, FinanceCasesError, StudentDocumentFinanceClearanceError]
+    return [FinanceReviewDraftError, AnnualFinanceError, FinanceCasesError, StudentDocumentFinanceClearanceError, RetakeReferralError]
       .some((ErrorType) => error instanceof ErrorType) && [400, 409, 422].includes(Number(error.status));
   }
 
@@ -377,7 +382,6 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       if (draft.status === 'committed') return res.redirect(303, reviewActions.afterCommitPath(draft));
       return renderReview(req, res, draft, { status: req.query.stale === '1' || draft.requiresReview ? 409 : 200 });
     } catch (error) {
-      if (error instanceof FinanceReviewDraftError) return res.status(error.status).render('error', { title: 'Finance review', message: error.message });
       if (isRecoverableFinanceValidation(error)) {
         try {
           const draft = await reviewActions.getDraft(req.authUser.id, req.params.draftId);
@@ -386,6 +390,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
           });
         } catch { /* Keep ownership and database failures sanitized below. */ }
       }
+      if (error instanceof FinanceReviewDraftError) return res.status(error.status).render('error', { title: 'Finance review', message: error.message });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The finance review could not be loaded.' });
     }
   });
@@ -482,6 +487,8 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       });
     }
   });
+
+  router.use('/retake-referrals', createFinanceRetakeReferralRouter({ retakeReferralService: retakeReferrals }));
 
   function repeated(value) {
     if (value == null) return [];

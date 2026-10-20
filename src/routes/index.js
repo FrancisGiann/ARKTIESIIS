@@ -52,6 +52,8 @@ const { createPreEnrollmentService } = require('../services/preEnrollmentService
 const { createPreEnrollmentRouter } = require('./preEnrollments');
 const { createReadmissionRouter } = require('./readmissions');
 const { createReadmissionService } = require('../services/readmissionService');
+const { createRetakeReferralService } = require('../services/retakeReferralService');
+const { createRegistrarRetakeReferralRouter } = require('./retakeReferrals');
 const { createAccountRouter, createEmailConfirmationRouter } = require('./account');
 
 const credentialError = 'Invalid email or password.';
@@ -81,7 +83,7 @@ async function verifyPassword(user, password, comparePassword = bcrypt.compare) 
   return Boolean(active && passwordMatches);
 }
 
-function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment = defaultEnvironment, twoFactorService = twoFactor, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, financeReviewActionService, registrarDashboardService, annualEnrollmentService, preEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService, termClearanceService } = {}) {
+function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment = defaultEnvironment, twoFactorService = twoFactor, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, financeReviewActionService, registrarDashboardService, annualEnrollmentService, preEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService, termClearanceService, retakeReferralService } = {}) {
   const router = express.Router();
   const authRouter = express.Router();
   const requireAuth = createRequireAuth({ getPool, sql, environment });
@@ -103,6 +105,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   });
   const preEnrollmentsService = preEnrollmentService || createPreEnrollmentService({ getPool, sql });
   const readmissionsService = readmissionService || createReadmissionService({ getPool, sql });
+  const retakeReferralsService = retakeReferralService || createRetakeReferralService({ getPool, sql });
   const studentDocumentRequests = documentRequestService || createStudentDocumentRequestService({ getPool, sql });
   const studentDocumentClearance = documentClearanceService || createStudentDocumentFinanceClearanceService({ getPool, sql });
   const registrarGradeOverview = gradeOverviewService || createRegistrarGradeOverviewService({ getPool, sql });
@@ -215,12 +218,15 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     createPreEnrollmentRouter({ getPool, sql, preEnrollmentService: preEnrollmentsService }));
   router.use('/registrar/readmissions', requireAuth, requireRole('registrar', 'database_admin'),
     createReadmissionRouter({ getPool, sql, readmissionService: readmissionsService }));
+  router.use('/registrar/retake-referrals', requireAuth, requireRole('registrar'),
+    createRegistrarRetakeReferralRouter({ retakeReferralService: retakeReferralsService }));
   router.get('/front-desk', requireAuth, requireRole('front_desk'), (req, res) => res.redirect(303, '/pre-enrollments'));
   router.use('/registrar/intake/legacy', requireAuth, requireRole('registrar'), createStudentIntakeRouter({ getPool, sql, studentSetupService: studentSetup }));
   router.use('/finance', requireAuth, requireRole('finance', 'database_admin'), createFinanceRouter({ getPool, sql,
     annualFinanceService: annualFinancesService, financeCasesService: annualFinanceCases,
     financeReportsService: annualFinanceReports, financeDashboardService: financeDashboard, financeMasterlistService: financeMasterlist, financeReviewActionService,
-    documentClearanceService: studentDocumentClearance, sessionSecret: environment.sessionSecret }));
+    documentClearanceService: studentDocumentClearance, sessionSecret: environment.sessionSecret,
+    retakeReferralService: retakeReferralsService }));
   router.use('/admin', requireAuth, requireRole('database_admin'), createAdminRouter({ getPool, sql, adminService }));
   router.use('/registrar/records', requireAuth, requireRole('registrar', 'database_admin'), createStudentRecordsRouter({ getPool, sql, studentRecordsService: recordsService, academicRecordsService: academicsService, documentRequestService: studentDocumentRequests, documentClearanceService: studentDocumentClearance, gradeOverviewService: registrarGradeOverview, readmissionService: readmissionsService, termClearanceService: termClearancesService }));
   router.use('/registrar/records', requireAuth, requireRole('registrar', 'database_admin'), createAcademicRecordsRouter({ getPool, sql, academicRecordsService: academicsService, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));

@@ -32,7 +32,9 @@ const REQUIRED_OBJECTS = Object.freeze([
   'readmission_evaluations', 'readmission_evaluation_events', 'annual_continuity_source_events',
   'term_clearance_templates', 'term_clearance_template_items', 'student_term_clearances',
   'student_term_clearance_items', 'student_term_clearance_events', 'annual_term_finalizations',
-  'finance_departure_cutoff_reviews', 'finance_departure_charge_reviews'
+  'finance_departure_cutoff_reviews', 'finance_departure_charge_reviews',
+  'registrar_retake_referrals', 'registrar_retake_item_keys', 'registrar_retake_referral_items',
+  'finance_retake_item_decisions', 'registrar_retake_referral_events'
 ]);
 
 const REQUIRED_COLUMNS = Object.freeze({
@@ -73,7 +75,15 @@ const REQUIRED_COLUMNS = Object.freeze({
     'last_payable_installment', 'review_reason', 'reviewed_by', 'reviewed_by_role', 'idempotency_key', 'request_fingerprint'],
   finance_departure_charge_reviews: ['cutoff_review_id', 'departure_case_id', 'charge_id', 'enrollment_id', 'term_number',
     'fee_category_snapshot', 'line_name_snapshot', 'installment_snapshot', 'review_category', 'decision',
-    'payable_before_amount', 'proposed_reduction_amount', 'reviewed_reduction_amount', 'payable_after_amount', 'review_reason']
+    'payable_before_amount', 'proposed_reduction_amount', 'reviewed_reduction_amount', 'payable_after_amount', 'review_reason'],
+  registrar_retake_referrals: ['annual_enrollment_id', 'revision_no', 'intake_kind_snapshot', 'evaluation_reference',
+    'readmission_evaluation_id', 'readmission_evaluation_version', 'status', 'is_current', 'idempotency_key', 'created_by', 'finalized_by'],
+  registrar_retake_item_keys: ['annual_enrollment_id', 'idempotency_key'],
+  registrar_retake_referral_items: ['referral_id', 'annual_enrollment_id', 'item_key_id', 'subject_name', 'subject_id',
+    'target_term_number', 'finance_explanation'],
+  finance_retake_item_decisions: ['item_key_id', 'referral_item_id', 'decision', 'approved_amount', 'charge_description',
+    'decision_reason', 'charge_id', 'reviewed_by', 'reviewed_by_role', 'idempotency_key', 'request_fingerprint', 'superseded_at'],
+  registrar_retake_referral_events: ['referral_id', 'actor_id', 'event_type', 'details_json']
 });
 const REQUIRED_CONSTRAINTS = Object.freeze([
   { tableName: 'previous_school_report_card_status_events', constraintName: 'CK_previous_school_report_card_status_status', type: 'CHECK' },
@@ -93,7 +103,14 @@ const REQUIRED_CONSTRAINTS = Object.freeze([
   { tableName: 'annual_enrollments', constraintName: 'CK_annual_enrollment_intake_kind', type: 'CHECK', clauseIncludes: 'readmission' },
   { tableName: 'annual_registrar_confirmations', constraintName: 'CK_annual_registrar_confirmation_entry_dp_state', type: 'CHECK', clauseIncludes: 'zero_due' },
   { tableName: 'finance_departure_cutoff_reviews', constraintName: 'CK_finance_departure_cutoff_installment', type: 'CHECK', clauseIncludes: 'last_payable_installment' },
-  { tableName: 'finance_departure_charge_reviews', constraintName: 'CK_finance_departure_charge_review_result', type: 'CHECK', clauseIncludes: 'reviewed_reduction_amount' }
+  { tableName: 'finance_departure_charge_reviews', constraintName: 'CK_finance_departure_charge_review_result', type: 'CHECK', clauseIncludes: 'reviewed_reduction_amount' },
+  { tableName: 'registrar_retake_referrals', constraintName: 'CK_registrar_retake_referral_kind', type: 'CHECK', clauseIncludes: 'transferee' },
+  { tableName: 'registrar_retake_referrals', constraintName: 'CK_registrar_retake_referral_finalization', type: 'CHECK', clauseIncludes: 'finalized_at' },
+  { tableName: 'registrar_retake_referral_items', constraintName: 'CK_registrar_retake_item_term', type: 'CHECK', clauseIncludes: 'between 1 and 3' },
+  { tableName: 'finance_retake_item_decisions', constraintName: 'CK_finance_retake_item_decision_type', type: 'CHECK', clauseIncludes: 'no_charge' },
+  { tableName: 'finance_retake_item_decisions', constraintName: 'CK_finance_retake_item_decision_shape', type: 'CHECK', clauseIncludes: 'approved_amount' },
+  { tableName: 'finance_retake_item_decisions', constraintName: 'CK_finance_retake_item_decision_supersession', type: 'CHECK', clauseIncludes: 'superseded_at' },
+  { tableName: 'registrar_retake_referral_events', constraintName: 'CK_registrar_retake_referral_event_type', type: 'CHECK', clauseIncludes: 'reference_updated' }
 ]);
 const REQUIRED_INDEXES = Object.freeze([
   { tableName: 'students', indexName: 'UX_students_user_id_linked', columns: ['user_id'] },
@@ -113,7 +130,15 @@ const REQUIRED_INDEXES = Object.freeze([
   { tableName: 'finance_departure_cutoff_reviews', indexName: 'UQ_finance_departure_cutoff_key', columns: ['idempotency_key'] },
   { tableName: 'finance_departure_cutoff_reviews', indexName: 'UQ_finance_departure_cutoff_context', columns: ['id', 'departure_case_id'] },
   { tableName: 'finance_departure_charge_reviews', indexName: 'UQ_finance_departure_charge_review', columns: ['cutoff_review_id', 'charge_id'] },
-  { tableName: 'finance_departure_charge_reviews', indexName: 'IX_finance_departure_charge_review_case', columns: ['departure_case_id', 'term_number', 'charge_id'], unique: false }
+  { tableName: 'finance_departure_charge_reviews', indexName: 'IX_finance_departure_charge_review_case', columns: ['departure_case_id', 'term_number', 'charge_id'], unique: false },
+  { tableName: 'registrar_retake_referrals', indexName: 'UQ_registrar_retake_referral_revision', columns: ['annual_enrollment_id', 'revision_no'] },
+  { tableName: 'registrar_retake_referrals', indexName: 'UQ_registrar_retake_referral_key', columns: ['idempotency_key'] },
+  { tableName: 'registrar_retake_referrals', indexName: 'UX_registrar_retake_referral_current', columns: ['current_annual_enrollment_id'] },
+  { tableName: 'registrar_retake_item_keys', indexName: 'UQ_registrar_retake_item_key', columns: ['idempotency_key'] },
+  { tableName: 'registrar_retake_referral_items', indexName: 'UQ_registrar_retake_item_revision', columns: ['referral_id', 'item_key_id'] },
+  { tableName: 'finance_retake_item_decisions', indexName: 'UQ_finance_retake_item_decision_current', columns: ['current_item_key_id'] },
+  { tableName: 'finance_retake_item_decisions', indexName: 'UQ_finance_retake_item_decision_charge_item', columns: ['charge_item_key_id'] },
+  { tableName: 'finance_retake_item_decisions', indexName: 'UQ_finance_retake_item_decision_key', columns: ['idempotency_key'] }
 ]);
 const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'annual_finance_assessment_reviews', constraintName: 'FK_annual_finance_assessment_review_annual',
@@ -165,9 +190,27 @@ const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'finance_departure_charge_reviews', constraintName: 'FK_finance_departure_charge_review_context',
     columnName: 'cutoff_review_id', referencedTable: 'finance_departure_cutoff_reviews', referencedColumn: 'id' },
   { tableName: 'finance_departure_charge_reviews', constraintName: 'FK_finance_departure_charge_review_context',
-    columnName: 'departure_case_id', referencedTable: 'finance_departure_cutoff_reviews', referencedColumn: 'departure_case_id' }
+    columnName: 'departure_case_id', referencedTable: 'finance_departure_cutoff_reviews', referencedColumn: 'departure_case_id' },
+  { tableName: 'registrar_retake_referrals', constraintName: 'FK_registrar_retake_referral_annual',
+    columnName: 'annual_enrollment_id', referencedTable: 'annual_enrollments', referencedColumn: 'id' },
+  { tableName: 'registrar_retake_referrals', constraintName: 'FK_registrar_retake_referral_readmission',
+    columnName: 'readmission_evaluation_id', referencedTable: 'readmission_evaluations', referencedColumn: 'id' },
+  { tableName: 'registrar_retake_item_keys', constraintName: 'FK_registrar_retake_item_key_annual',
+    columnName: 'annual_enrollment_id', referencedTable: 'annual_enrollments', referencedColumn: 'id' },
+  { tableName: 'registrar_retake_referral_items', constraintName: 'FK_registrar_retake_item_referral',
+    columnName: 'referral_id', referencedTable: 'registrar_retake_referrals', referencedColumn: 'id' },
+  { tableName: 'registrar_retake_referral_items', constraintName: 'FK_registrar_retake_item_key',
+    columnName: 'item_key_id', referencedTable: 'registrar_retake_item_keys', referencedColumn: 'id' },
+  { tableName: 'finance_retake_item_decisions', constraintName: 'FK_finance_retake_item_decision_key',
+    columnName: 'item_key_id', referencedTable: 'registrar_retake_item_keys', referencedColumn: 'id' },
+  { tableName: 'finance_retake_item_decisions', constraintName: 'FK_finance_retake_item_decision_revision',
+    columnName: 'referral_item_id', referencedTable: 'registrar_retake_referral_items', referencedColumn: 'id' },
+  { tableName: 'finance_retake_item_decisions', constraintName: 'FK_finance_retake_item_decision_charge',
+    columnName: 'charge_id', referencedTable: 'assessed_charges', referencedColumn: 'id' },
+  { tableName: 'registrar_retake_referral_events', constraintName: 'FK_registrar_retake_referral_event_referral',
+    columnName: 'referral_id', referencedTable: 'registrar_retake_referrals', referencedColumn: 'id' }
 ]);
-const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 20 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 21 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 function bindInList(request, values, prefix) {
   return values.map((value, index) => {
@@ -288,7 +331,7 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
       process.exitCode = 1;
       return;
     }
-    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.020.`);
+    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.021.`);
   } catch {
     logger.error('MariaDB database check failed. Confirm DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD, then run npm run db:setup.');
     process.exitCode = 1;

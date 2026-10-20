@@ -48,7 +48,7 @@ test('Finance departure cutoff migration and reviewed writes preserve payable ba
     } finally { setupConnection.release(); }
 
     const [versions] = await appPool.execute('SELECT version FROM schema_migrations ORDER BY version');
-    assert.equal(versions.at(-1)?.version, 'v2.020', 'the disposable database applies the complete forward sequence through migration 020');
+    assert.equal(versions.at(-1)?.version, 'v2.021', 'the disposable database applies the complete forward sequence through migration 021');
     const [migrationTables] = await appPool.execute(`SELECT table_name FROM information_schema.tables
       WHERE table_schema = ? AND table_name IN ('finance_departure_cutoff_reviews', 'finance_departure_charge_reviews') ORDER BY table_name`, [databaseName]);
     assert.deepEqual(migrationTables.map((row) => row.table_name), ['finance_departure_charge_reviews', 'finance_departure_cutoff_reviews']);

@@ -1051,14 +1051,14 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
   assert.match(departureHtml, /<h1>Students who stopped or transferred<\/h1>/);
   assert.match(departureHtml, /Finance reviews fees and balances for the affected terms/);
   const departureSummary = departureHtml.match(/<details class="finance-departure-case"\s*>\s*<summary>([\s\S]*?)<\/summary>/)?.[1] || '';
-  assert.match(departureSummary, /1 affected terms · 0 charges to review/);
+  assert.match(departureSummary, /1 affected terms · 0 fees to review/);
   assert.doesNotMatch(departureSummary, /Registrar record reason/);
   assert.match(departureHtml, /No annual charges are linked to this placement/);
   assert.match(departureHtml, /Academic activity exists; verify grade and schedule history separately/);
   assert.match(departureHtml, /name="reason"[^>]*required/);
   assert.match(departureHtml, /name="_csrf" value="csrf-token"/);
   assert.match(departureHtml, /name="idempotencyKey" value="41111111-1111-4111-8111-111111111111"/);
-  assert.match(departureHtml, /Save Finance review and corrections/);
+  assert.match(departureHtml, /Review cutoff and open Finance draft/);
   assert.doesNotMatch(departureHtml, /<fieldset/);
 
   const recoveredDepartureHtml = await renderFinanceView('departures', {
@@ -1076,13 +1076,10 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
       ] }]
     }]
   });
-  assert.match(recoveredDepartureHtml, /<details class="finance-departure-term" open>\s*<summary><strong>Term 2<\/strong><span>2 fees · ₱35\.50 due/);
-  assert.match(recoveredDepartureHtml, /<details class="finance-departure-charge-adjustment" open>[\s\S]*?value="-1\.25"[\s\S]*?value="Correct the saved fee\."/);
-  assert.match(recoveredDepartureHtml, /name="departureChargeId" value="301"[\s\S]*?name="departureAdjustmentAmount"[\s\S]*?name="departureAdjustmentReason"/);
-  assert.equal((recoveredDepartureHtml.match(/name="departureChargeId"/g) || []).length, 2);
-  assert.equal((recoveredDepartureHtml.match(/name="departureAdjustmentAmount"/g) || []).length, 2);
-  assert.equal((recoveredDepartureHtml.match(/name="departureAdjustmentReason"/g) || []).length, 2,
-    'closing a per-fee disclosure leaves every aligned charge/amount/reason form control present');
+  assert.match(recoveredDepartureHtml, /<details class="finance-departure-term"\s*>\s*<summary><strong>Term 2<\/strong><span>2 fees · ₱35\.50 due/);
+  assert.doesNotMatch(recoveredDepartureHtml, /name="departureChargeId"|name="departureAdjustmentAmount"|name="departureAdjustmentReason"/,
+    'the departure queue opens a reviewed Finance draft instead of exposing direct charge-adjustment controls');
+  assert.match(recoveredDepartureHtml, /Review cutoff and open Finance draft/);
 });
 
 test('schedule validation reopens the form with submitted fee lines and idempotency key', async () => {

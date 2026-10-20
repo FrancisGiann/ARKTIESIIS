@@ -1,0 +1,105 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page retake-page" id="main-content">
+  <a class="context-back" href="/registrar/retake-referrals">Back to retake referrals</a>
+  <header class="dashboard-heading">
+    <div><p class="eyebrow">Registrar · Revision <%= referral.revision_no %></p><h1><%= referral.student_name %></h1>
+      <p><%= referral.student_no || 'Student number unavailable' %> · <%= referral.school_year %> · <%= referral.grade_level %> · <%= referral.intake_kind %></p></div>
+  </header>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+
+  <section class="finance-panel retake-context" aria-labelledby="retake-context-title">
+    <div class="finance-panel__heading"><div><h2 id="retake-context-title">Referral context</h2><p>Assessment posting can happen later. Finance cannot add a charge until the applicable annual assessment and target enrollment are ready.</p></div><span class="status-pill"><%= referral.status === 'finalized' ? (referral.is_current ? 'Finalized · current' : 'Finalized · history') : (referral.is_current ? 'Draft' : 'Historical draft') %></span></div>
+    <dl class="finance-review-fields">
+      <div><dt>Evaluation reference</dt><dd><%= referral.evaluation_reference %></dd></div>
+      <div><dt>Target annual enrollment</dt><dd><%= referral.school_year %> · <%= referral.grade_level %> · entry Term <%= referral.entry_term_number %></dd></div>
+      <% if (referral.readmission_evaluation_id) { const bindingChanged = String(referral.annual_evaluation_id || '') !== String(referral.readmission_evaluation_id) || Number(referral.annual_evaluation_version) !== Number(referral.readmission_evaluation_version) || Number(referral.current_evaluation_version) !== Number(referral.readmission_evaluation_version) || referral.evaluation_status !== 'accepted'; %><div><dt>Linked return evaluation</dt><dd>Saved accepted revision <%= referral.readmission_evaluation_version %><% if (bindingChanged) { %> · <strong>the current accepted evaluation binding changed; start a correction to capture it</strong><% } %></dd></div><% } %>
+      <div><dt>Status</dt><dd><%= referral.status === 'finalized' ? `Finalized ${formatFinanceDateTime(referral.finalized_at)}` : 'Not visible to Finance' %></dd></div>
+    </dl>
+    <% if (referral.status === 'draft' && referral.is_current) { %>
+      <details class="retake-reference-edit"><summary>Correct evaluation reference</summary>
+        <form class="form-grid" method="post" action="/registrar/retake-referrals/<%= referral.id %>/reference">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <label class="field field--wide"><span>Registrar evaluation reference</span><input name="evaluationReference" value="<%= referenceValue == null ? referral.evaluation_reference : referenceValue %>" maxlength="160" required></label>
+          <div class="form-actions"><button class="button button--secondary" type="submit">Save reference correction</button></div>
+        </form>
+        <p class="muted-copy">Only this referral draft changes. The audit history keeps the previous and corrected reference.</p>
+      </details>
+    <% } %>
+  </section>
+
+  <section class="finance-panel" aria-labelledby="retake-items-title">
+    <div class="finance-panel__heading"><div><h2 id="retake-items-title">Retake items</h2><p>Decisions stay attached to their reviewed revision. A finalized Registrar correction can return a no-charge item for fresh Finance review; posted charges remain linked to their reviewed adjustment or reversal.</p></div></div>
+    <% if (referral.items.length) { %>
+      <div class="retake-items">
+        <% for (const item of referral.items) { %>
+          <% const stablePostedCharge = Boolean(item.stable_charge_id); const itemIsLocked = Boolean(item.finance_decision || stablePostedCharge); %>
+          <article class="retake-item" aria-labelledby="retake-item-<%= item.id %>">
+            <div class="retake-item__heading"><div><p class="eyebrow">Term <%= item.target_term_number %> · <%= item.subject_id ? (item.linked_subject_code ? `${item.linked_subject_code} · ${item.linked_subject_name}` : 'Existing subject linked') : 'No existing subject reference' %></p><h3 id="retake-item-<%= item.id %>"><%= item.subject_name %></h3></div>
+              <span class="status-pill"><%= item.finance_decision ? (item.finance_decision === 'no_charge' ? 'Finance · no charge' : 'Finance · charge linked') : (stablePostedCharge ? 'Finance · charge linked' : (referral.status === 'finalized' && referral.is_current ? 'Awaiting Finance' : 'Not reviewed')) %></span></div>
+            <p><strong>Finance-safe explanation:</strong> <%= item.finance_explanation %></p>
+            <% if (itemIsLocked) { %>
+              <dl class="finance-review-fields">
+                <% if (item.decision_reason) { %><div><dt>Finance reason</dt><dd><%= item.decision_reason %></dd></div><% } else if (stablePostedCharge) { %><div><dt>Finance status</dt><dd>A charge is already linked to this item’s referral history.</dd></div><% } %>
+                <% if (item.finance_decision === 'charge' || stablePostedCharge) { %><div><dt>Linked charge</dt><dd><%= item.charge_description || item.linked_charge_description %> · ₱<%= item.gross_amount || item.linked_charge_gross_amount || item.approved_amount || item.linked_charge_approved_amount %> gross · ₱<%= item.waived_amount || item.linked_charge_waived_amount || '0.00' %> approved exemption · ₱<%= item.amount_due || item.linked_charge_amount_due || '0.00' %> current due</dd></div><% } %>
+              </dl>
+              <p class="muted-copy"><% if (item.finance_decision === 'no_charge') { %>This no-charge decision stays in history. The Registrar can finalize a correction to request a fresh Finance review.<% } else { %>This linked charge stays in history. Correct posted money through the existing Finance adjustment or reversal review.<% } %></p>
+            <% } else if (referral.status === 'draft' && referral.is_current) { %>
+              <details class="retake-item__edit"><summary>Edit this draft item</summary>
+                <% const editValue = editValues[String(item.id)] || item; %>
+                <% const editSubjectId = String(editValue.subject_id ?? editValue.subjectId ?? ''); const editSubjectTerm = String(editValue.target_term_number || editValue.targetTerm || ''); const editSubjectAvailable = subjects.some((subject) => String(subject.id) === editSubjectId && String(subject.term_number) === editSubjectTerm); %>
+                <form class="form-grid" method="post" action="/registrar/retake-referrals/<%= referral.id %>/items/<%= item.id %>/update" data-retake-item-form>
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+                  <label class="field"><span>Subject/module name</span><input name="subjectName" value="<%= editValue.subject_name || editValue.subjectName || '' %>" maxlength="120" required></label>
+                  <label class="field"><span>Target term</span><select name="targetTerm" required><% const selectedEditTerm = String(editValue.target_term_number || editValue.targetTerm || ''); if (selectedEditTerm && !termOptions.map(String).includes(selectedEditTerm)) { %><option value="<%= selectedEditTerm %>" selected disabled>Invalid term · choose a valid term</option><% } %><% if (!termOptions.length && !selectedEditTerm) { %><option value="" selected disabled>No current applicable target terms</option><% } %><% for (const term of termOptions) { %><option value="<%= term %>" <%= Number(selectedEditTerm) === term ? 'selected' : '' %>>Term <%= term %></option><% } %></select><% if (selectedEditTerm && !termOptions.map(String).includes(selectedEditTerm)) { %><small class="form-field-error" role="status">That target term is unavailable. Choose one of the current applicable terms.</small><% } %></label>
+                  <label class="field"><span>Existing subject (optional)</span><select name="subjectId" data-retake-subject-select aria-describedby="retake-edit-subject-help-<%= item.id %>">
+                    <option value="" <%= !editSubjectId || !editSubjectAvailable ? 'selected' : '' %>><%= editSubjectId && !editSubjectAvailable ? 'Selected subject is unavailable for this term · choose again' : 'No existing subject link' %></option>
+                    <% for (const subject of subjects) { %><option value="<%= subject.id %>" data-term="<%= subject.term_number %>" <%= String(subject.term_number) === editSubjectTerm ? '' : 'hidden disabled' %> <%= editSubjectAvailable && String(subject.id) === editSubjectId ? 'selected' : '' %>>Term <%= subject.term_number %> · <%= subject.subject_code %> — <%= subject.subject_name %></option><% } %>
+                  </select><small id="retake-edit-subject-help-<%= item.id %>">Choose a subject from the selected term’s current placement, or leave this blank for a module without an existing subject record.</small><% if (editSubjectId && !editSubjectAvailable) { %><small class="form-field-error" role="status">That subject is not available for the selected term. Choose another subject or leave this blank.</small><% } %></label>
+                  <label class="field field--wide"><span>Finance-safe explanation</span><textarea name="financeExplanation" rows="3" maxlength="500" required><%= editValue.finance_explanation || editValue.financeExplanation || '' %></textarea></label>
+                  <div class="form-actions"><button class="button button--secondary" type="submit">Save item correction</button></div>
+                </form>
+                <form method="post" action="/registrar/retake-referrals/<%= referral.id %>/items/<%= item.id %>/remove" onsubmit="return confirm('Remove this item from the draft referral? The previous finalized version remains in history.');">
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>"><button class="text-link" type="submit">Remove from this draft</button>
+                </form>
+              </details>
+            <% } %>
+          </article>
+        <% } %>
+      </div>
+    <% } else { %><p class="dashboard-empty" role="status">No items are recorded in this referral version yet.</p><% } %>
+
+    <% if (referral.status === 'draft' && referral.is_current) { %>
+      <details class="retake-add-item" open>
+        <summary>Add a retake item</summary>
+        <% const selectedSubjectId = String(values.subjectId || ''); const selectedSubjectTerm = String(values.targetTerm || referral.entry_term_number || ''); const selectedSubjectAvailable = subjects.some((subject) => String(subject.id) === selectedSubjectId && String(subject.term_number) === selectedSubjectTerm); %>
+        <form class="form-grid" method="post" action="/registrar/retake-referrals/<%= referral.id %>/items" data-retake-item-form>
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <input type="hidden" name="itemKeyToken" value="<%= itemKeyToken %>">
+          <label class="field"><span>Subject/module name</span><input name="subjectName" value="<%= values.subjectName || '' %>" maxlength="120" required></label>
+          <label class="field"><span>Target term</span><select name="targetTerm" required><% const selectedTargetTerm = String(values.targetTerm || referral.entry_term_number || ''); if (selectedTargetTerm && !termOptions.map(String).includes(selectedTargetTerm)) { %><option value="<%= selectedTargetTerm %>" selected disabled>Invalid term · choose a valid term</option><% } %><% if (!termOptions.length && !selectedTargetTerm) { %><option value="" selected disabled>No current applicable target terms</option><% } %><% for (const term of termOptions) { %><option value="<%= term %>" <%= selectedTargetTerm === String(term) ? 'selected' : '' %>>Term <%= term %></option><% } %></select><% if (selectedTargetTerm && !termOptions.map(String).includes(selectedTargetTerm)) { %><small class="form-field-error" role="status">That target term is unavailable. Choose one of the current applicable terms.</small><% } %><% if (!termOptions.length) { %><small class="form-field-error" role="status">This annual enrollment has no current applicable target placement. Items cannot be added yet.</small><% } %></label>
+          <label class="field"><span>Existing subject (optional)</span><select name="subjectId" data-retake-subject-select aria-describedby="retake-subject-help">
+            <option value="" <%= !selectedSubjectId || !selectedSubjectAvailable ? 'selected' : '' %>><%= selectedSubjectId && !selectedSubjectAvailable ? 'Selected subject is unavailable for this term · choose again' : 'No existing subject link' %></option>
+            <% for (const subject of subjects) { %><option value="<%= subject.id %>" data-term="<%= subject.term_number %>" <%= String(subject.term_number) === selectedSubjectTerm ? '' : 'hidden disabled' %> <%= selectedSubjectAvailable && String(subject.id) === selectedSubjectId ? 'selected' : '' %>>Term <%= subject.term_number %> · <%= subject.subject_code %> — <%= subject.subject_name %></option><% } %>
+          </select><small id="retake-subject-help">Choose a subject from the selected term’s current placement, or leave this blank for a module without an existing subject record.</small><% if (selectedSubjectId && !selectedSubjectAvailable) { %><small class="form-field-error" role="status">That subject is not available for the selected term. Choose another subject or leave this blank.</small><% } %></label>
+          <label class="field field--wide"><span>Finance-safe explanation</span><textarea name="financeExplanation" rows="3" maxlength="500" required aria-describedby="retake-explanation-help"><%= values.financeExplanation || '' %></textarea><small id="retake-explanation-help">Describe why Finance is reviewing this retake item. Do not include confidential academic notes.</small></label>
+          <div class="form-actions"><button class="button button--secondary" type="submit" <%= termOptions.length ? '' : 'disabled' %>>Add item</button></div>
+        </form>
+      </details>
+      <div class="form-actions retake-finalize">
+        <form method="post" action="/registrar/retake-referrals/<%= referral.id %>/finalize">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <button class="button button--primary" type="submit" <%= referral.items.length ? '' : 'disabled' %>>Finalize referral for Finance</button>
+        </form>
+      </div>
+    <% } else if (referral.status === 'finalized' && referral.is_current) { %>
+      <div class="notice-panel"><p>A correction captures the annual enrollment’s current accepted return evaluation and preserves earlier referral history. Posted charges remain unchanged and require a reviewed Finance adjustment or reversal. A prior no-charge decision can be superseded for fresh Finance review after this correction is finalized.</p>
+        <form method="post" action="/registrar/retake-referrals/<%= referral.id %>/corrections"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= correctionToken %>"><button class="button button--secondary" type="submit">Start correction and capture current evaluation</button></form></div>
+    <% } %>
+  </section>
+
+  <details class="finance-panel retake-history"><summary>Referral revision history (<%= history.length %>)</summary>
+    <ol><% for (const version of history) { %><li><strong>Revision <%= version.revision_no %></strong> · <%= version.status %><%= Number(version.is_current) === 1 ? ' · current' : '' %> · <%= formatFinanceDateTime(version.created_at) %> · <%= version.items.length %> item(s)<% if (Number(version.id) !== Number(referral.id)) { %> · <a href="/registrar/retake-referrals/<%= version.id %>">Open history</a><% } %></li><% } %></ol>
+  </details>
+</main>
+<script src="/js/retake-subject-select.js" defer></script>
+<%- include('../partials/foot') %>

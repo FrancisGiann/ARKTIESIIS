@@ -248,6 +248,7 @@ test('finance navigation keeps student accounts selected for annual accounts, st
     ['/finance/accounts.csv', 'finance-roster', '/finance'],
     ['/finance/schedules', 'finance-schedules', '/finance/schedules'],
     ['/finance/reports', 'finance-reports', '/finance/reports'],
+    ['/finance/retake-referrals', 'finance-retake-referrals', '/finance/retake-referrals'],
     ['/finance/departures', 'finance-departures', '/finance/departures'],
     ['/finance/students/22', 'finance-roster', '/finance'],
     ['/finance/students/22/annual', 'finance-roster', '/finance'],
@@ -269,11 +270,11 @@ test('finance navigation keeps student accounts selected for annual accounts, st
 
 test('authenticated navigation only exposes destinations available to each role', async () => {
   const cases = [
-    { role: 'database_admin', path: '/admin', labels: ['Overview', 'User accounts', 'Student records', 'Paper clearance', 'Pre-enrollment records', 'Activity log', 'Documents', 'Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Stopped or transferred', 'Unfinished reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/registrar/records/clearance', '/pre-enrollments', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: [] },
-    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Paper clearance', 'Enrollments', 'Pre-enrollment records', 'Document review', 'Grade review', 'Class schedules', 'Subjects', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
+    { role: 'database_admin', path: '/admin', labels: ['Overview', 'User accounts', 'Student records', 'Paper clearance', 'Pre-enrollment records', 'Activity log', 'Documents', 'Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Stopped or transferred', 'Retake review', 'Unfinished reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/registrar/records/clearance', '/pre-enrollments', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/retake-referrals', '/finance/review-drafts'], forbidden: [] },
+    { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Paper clearance', 'Enrollments', 'Pre-enrollment records', 'Retake referrals', 'Document review', 'Grade review', 'Class schedules', 'Subjects', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
     { role: 'front_desk', path: '/pre-enrollments', labels: ['Pre-enrollment records'], hrefs: ['/pre-enrollments'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/documents', '/admin'] },
     { role: 'teacher', path: '/teacher', labels: ['My classes', 'Submit grades'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/admin'] },
-    { role: 'finance', path: '/finance', labels: ['Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Stopped or transferred', 'Unfinished reviews'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/review-drafts'], forbidden: ['/registrar/records', '/documents', '/admin'] },
+    { role: 'finance', path: '/finance', labels: ['Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Stopped or transferred', 'Retake review', 'Unfinished reviews'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/retake-referrals', '/finance/review-drafts'], forbidden: ['/registrar/records', '/documents', '/admin'] },
     { role: 'student', path: '/student', labels: ['Home', 'Class schedule', 'Grades', 'Fees &amp; payments', 'My records', 'Documents'], forbidden: ['/registrar/records', '/finance', '/admin'] }
   ];
 

@@ -137,6 +137,15 @@ function cleanText(value, label, maxLength, required = false) {
   return text || null;
 }
 
+function cleanTextArea(value, label, maxLength, required = false) {
+  if (typeof value !== 'string') throw new AnnualFinanceError(`${label} must be ${maxLength} characters or fewer.`);
+  const text = value.replace(/\r\n?/g, '\n').trim();
+  if ((required && !text) || text.length > maxLength || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text)) {
+    throw new AnnualFinanceError(`${label} is required and must be ${maxLength} characters or fewer.`);
+  }
+  return text || null;
+}
+
 function id(value, label) {
   const raw = typeof value === 'number' ? String(value) : value;
   if (typeof raw !== 'string' || !ID_PATTERN.test(raw)) throw new AnnualFinanceError(`Choose a valid ${label}.`);
@@ -1960,7 +1969,7 @@ function createAnnualFinanceService({
     const lineName = cleanText(input.lineName, 'Supplementary charge name', 120, true);
     const installment = cleanText(input.installment || 'As incurred', 'Installment', 40, true);
     const amountCents = parseMoneyCents(String(input.amount || ''), { allowZero: false });
-    const reason = cleanText(input.reason, 'Supplementary charge reason', 1000, true);
+    const reason = cleanTextArea(input.reason, 'Supplementary charge reason', 1000, true);
     const idempotencyKey = uuid(input.idempotencyKey, 'supplementary charge');
     const fingerprint = requestFingerprint({ studentId, enrollmentId, category, lineName, installment, amount: formatMoneyCents(amountCents), reason });
     return runTransaction(async (transaction) => {

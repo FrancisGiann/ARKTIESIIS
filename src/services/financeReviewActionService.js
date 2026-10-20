@@ -5,6 +5,7 @@ const { sql: defaultSql, getPool: defaultGetPool } = require('../config/database
 const { createAnnualFinanceService } = require('./annualFinanceService');
 const { createAnnualFinanceCasesService } = require('./annualFinanceCasesService');
 const { createStudentDocumentFinanceClearanceService } = require('./studentDocumentFinanceClearanceService');
+const { createRetakeReferralService } = require('./retakeReferralService');
 const { FinanceReviewDraftError, createFinanceReviewDraftService, validatePositivePaymentAmount } = require('./financeReviewDraftService');
 const { FinanceServiceError, parseMoneyCents, formatMoneyCents } = require('./financeService');
 const { formatFeePurpose } = require('../utils/paymentPurpose');
@@ -37,7 +38,8 @@ const SAFE_ACTIONS = Object.freeze([
   { type: 'legacy_opening_transfer', label: 'Confirm previous balance', pattern: /^\/students\/(\d{1,10})\/annual\/legacy-opening\/transfer$/, ids: ['studentId'] },
   { type: 'term_finance_approval', label: 'Approve term finance status', pattern: /^\/annual\/terms\/(\d{1,10})\/approval$/, ids: ['enrollmentId'] },
   { type: 'voucher_review_resolution', label: 'Resolve voucher review', pattern: /^\/annual\/(\d{1,10})\/voucher-review-resolution$/, ids: ['annualId'] },
-  { type: 'term_clearance', label: 'Record signed term clearance', pattern: /^\/annual\/terms\/(\d{1,10})\/clearance$/, ids: ['enrollmentId'] }
+  { type: 'term_clearance', label: 'Record signed term clearance', pattern: /^\/annual\/terms\/(\d{1,10})\/clearance$/, ids: ['enrollmentId'] },
+  { type: 'retake_item_decision', label: 'Review a retake referral item', pattern: /^\/retake-referrals\/items\/(\d{1,18})\/decision$/, ids: ['itemKeyId'] }
 ]);
 
 const READ_ONLY_POSTS = Object.freeze([
@@ -70,7 +72,8 @@ const ACTION_WRITERS = Object.freeze({
   legacy_opening_transfer: ({ services, actorId, studentId, input }) => services.annual.transferLegacyOpeningLiability(actorId, studentId, input),
   term_finance_approval: ({ services, actorId, context, input }) => services.annual.approveTerm(actorId, context.enrollmentId, input),
   voucher_review_resolution: ({ services, actorId, context, input }) => services.annual.resolveVoucherReview(actorId, context.annualId, input),
-  term_clearance: ({ services, actorId, context, input }) => services.annual.signTermClearance(actorId, context.enrollmentId, input)
+  term_clearance: ({ services, actorId, context, input }) => services.annual.signTermClearance(actorId, context.enrollmentId, input),
+  retake_item_decision: ({ services, actorId, context, input }) => services.retake.financeDecisionInTransaction(actorId, context.itemKeyId, input)
 });
 
 function safeIntegerId(value) {
@@ -81,7 +84,7 @@ function safeIntegerId(value) {
 
 function safeText(value, maxLength = 2048) {
   if (typeof value !== 'string') return value;
-  return value.slice(0, maxLength).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+  return value.slice(0, maxLength).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').replace(/\r\n?/g, '\n');
 }
 
 const FINANCE_RETURN_FILTERS = Object.freeze([
@@ -246,7 +249,7 @@ function actionByPath(pathname) {
     if (!match) continue;
     const context = {};
     for (const [index, name] of action.ids.entries()) context[name] = match[index + 1];
-    for (const key of ['studentId', 'annualId', 'enrollmentId', 'chargeId', 'paymentId', 'transactionId', 'caseId', 'allocationId', 'reconciliationId', 'specialSubjectId']) {
+    for (const key of ['studentId', 'annualId', 'enrollmentId', 'chargeId', 'paymentId', 'transactionId', 'caseId', 'allocationId', 'reconciliationId', 'specialSubjectId', 'itemKeyId']) {
       if (context[key] && !safeIntegerId(context[key]) && key !== 'requestId') return null;
     }
     if (context.requestId && !UUID.test(context.requestId)) return null;
@@ -263,6 +266,7 @@ function jsonHash(value) {
 
 function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defaultSql, draftService = null } = {}) {
   const drafts = draftService || createFinanceReviewDraftService({ getPool, sql });
+  const retakePreviewService = createRetakeReferralService({ getPool, sql });
 
   function actionForDraft(actionType) {
     if (RETIRED_ACTION_TYPES.has(actionType)) {
@@ -276,6 +280,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
   async function resolveStudentId(request, context) {
     if (context.studentId) return Number(context.studentId);
     const lookups = [
+      context.itemKeyId ? ['registrar_retake_item_keys', 'id', context.itemKeyId, 'student_id'] : null,
       context.annualId ? ['annual_enrollments', 'id', context.annualId, 'student_id'] : null,
       context.enrollmentId ? ['enrollments', 'id', context.enrollmentId, 'student_id'] : null,
       context.caseId ? ['finance_departure_cases', 'id', context.caseId, 'student_id'] : null,
@@ -283,7 +288,9 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     ].filter(Boolean);
     if (!lookups.length) return null;
     const [table, idColumn, idValue] = lookups[0];
-    const query = table === 'annual_enrollments'
+    const query = table === 'registrar_retake_item_keys'
+      ? 'SELECT annual.student_id FROM registrar_retake_item_keys AS item_key INNER JOIN annual_enrollments AS annual ON annual.id = item_key.annual_enrollment_id WHERE item_key.id = @entityId LIMIT 1'
+      : table === 'annual_enrollments'
       ? 'SELECT student_id FROM annual_enrollments WHERE id = @entityId LIMIT 1'
       : table === 'enrollments'
         ? 'SELECT annual.student_id FROM enrollments AS entity INNER JOIN annual_enrollments AS annual ON annual.id = entity.annual_enrollment_id WHERE entity.id = @entityId LIMIT 1'
@@ -352,6 +359,16 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
         .query('SELECT id FROM student_document_requests WHERE id = @requestId FOR UPDATE');
       await tx.request().input('requestId', sql.Char(36), context.requestId)
         .query('SELECT id FROM student_document_clearance_events WHERE request_id = @requestId ORDER BY id FOR UPDATE');
+    }
+    if (context.itemKeyId) {
+      await tx.request().input('itemKeyId', sql.BigInt, context.itemKeyId)
+        .query('SELECT id FROM registrar_retake_item_keys WHERE id = @itemKeyId FOR UPDATE');
+      await tx.request().input('itemKeyId', sql.BigInt, context.itemKeyId)
+        .query(`SELECT item.id FROM registrar_retake_referral_items AS item
+          WHERE item.item_key_id = @itemKeyId ORDER BY item.id FOR UPDATE`);
+      await tx.request().input('itemKeyId', sql.BigInt, context.itemKeyId)
+        .query(`SELECT decision.id FROM finance_retake_item_decisions AS decision
+          WHERE decision.item_key_id = @itemKeyId ORDER BY decision.id FOR UPDATE`);
     }
     if (context.schoolYear && context.gradeLevel && context.voucherCode) {
       await tx.request().input('scheduleYear', sql.NVarChar(20), context.schoolYear)
@@ -512,6 +529,35 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
             ON assignment.id = special.student_subject_id WHERE special.id = @specialSubjectId`);
       result.push(specialRows.recordset || []);
     }
+    if (context.itemKeyId) {
+      const retakeRows = await request.input('itemKeyId', sql.BigInt, context.itemKeyId)
+        .query(`SELECT item_key.id AS item_key_id, item_key.annual_enrollment_id,
+            referral.id AS referral_id, referral.revision_no, referral.status AS referral_status,
+            referral.is_current, referral.evaluation_reference, referral.readmission_evaluation_id AS referral_evaluation_id,
+            referral.readmission_evaluation_version AS referral_evaluation_version,
+            annual.readmission_evaluation_id AS annual_evaluation_id,
+            annual.readmission_evaluation_version AS annual_evaluation_version,
+            evaluation.status AS evaluation_status, evaluation.version AS evaluation_version,
+            item.id AS referral_item_id, item.subject_name, item.subject_id, item.target_term_number,
+            item.finance_explanation, enrollment.id AS enrollment_id, enrollment.enrollment_status,
+            enrollment.term_scope_status, assessment.id AS assessment_id,
+            decision.id AS decision_id, decision.decision, decision.charge_id,
+            decision.approved_amount, decision.charge_description, decision.decision_reason,
+            decision.superseded_at
+          FROM registrar_retake_item_keys AS item_key
+          INNER JOIN registrar_retake_referral_items AS item ON item.item_key_id = item_key.id
+          INNER JOIN registrar_retake_referrals AS referral ON referral.id = item.referral_id
+          INNER JOIN annual_enrollments AS annual ON annual.id = item_key.annual_enrollment_id
+          LEFT JOIN readmission_evaluations AS evaluation ON evaluation.id = annual.readmission_evaluation_id
+          LEFT JOIN enrollments AS enrollment ON enrollment.annual_enrollment_id = annual.id
+            AND enrollment.annual_term_number = item.target_term_number
+          LEFT JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.id
+          LEFT JOIN finance_retake_item_decisions AS decision ON decision.item_key_id = item_key.id
+            AND decision.superseded_at IS NULL
+          WHERE item_key.id = @itemKeyId AND referral.is_current = 1
+          ORDER BY item.id`);
+      result.push(retakeRows.recordset || []);
+    }
     if (context.enrollmentId) {
       const termRows = await request.input('enrollmentId', sql.Int, context.enrollmentId)
         .query(`SELECT enrollment.id, enrollment.student_id, enrollment.academic_term_id, enrollment.annual_enrollment_id,
@@ -640,6 +686,20 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           ' · current Finance decision ', COALESCE((SELECT clearance.clearance_status FROM student_document_clearance_events AS clearance
             WHERE clearance.request_id = request.id ORDER BY clearance.id DESC LIMIT 1), 'not yet decided')) AS target
         FROM student_document_requests AS request WHERE request.id = @requestId`, [['requestId', sql.Char(36), context.requestId]]);
+    }
+    if (context.itemKeyId) {
+      await row('Registrar retake referral item', `SELECT CONCAT(student.student_no, ' · ', annual.school_year, ' · ', annual.grade_level,
+          ' · ', annual.intake_kind, ' · Term ', item.target_term_number) AS context,
+          CONCAT(item.subject_name, CASE WHEN item.subject_id IS NULL THEN '' ELSE CONCAT(' · subject #', item.subject_id) END) AS item,
+          CONCAT('Referral revision ', referral.revision_no, ' · ', referral.evaluation_reference) AS reference,
+          item.finance_explanation AS finance_safe_explanation
+        FROM registrar_retake_item_keys AS item_key
+        INNER JOIN registrar_retake_referral_items AS item ON item.item_key_id = item_key.id
+        INNER JOIN registrar_retake_referrals AS referral ON referral.id = item.referral_id
+        INNER JOIN annual_enrollments AS annual ON annual.id = item_key.annual_enrollment_id
+        INNER JOIN students AS student ON student.id = annual.student_id
+        WHERE item_key.id = @itemKeyId AND referral.is_current = 1 AND referral.status = 'finalized'
+        ORDER BY item.id DESC LIMIT 1`, [['itemKeyId', sql.BigInt, context.itemKeyId]]);
     }
     if (context.annualId) {
       await row('Annual enrollment', `SELECT CONCAT(annual.school_year, ' · ', annual.grade_level, ' · ', COALESCE(NULLIF(annual.voucher_code, ''), 'voucher unavailable'),
@@ -795,6 +855,27 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     const financeUiReturnContext = normalizeFinanceReturnContext(context?.financeUiReturnContext);
     const studentId = await resolveStudentId(request, actionContext);
     const resolvedContext = { ...actionContext, ...(studentId ? { studentId } : {}) };
+    if (action.type === 'retake_item_decision' && context.itemKeyId) {
+      const targetResult = await tx.request().input('itemKeyId', sql.BigInt, context.itemKeyId)
+        .query(`SELECT annual.id AS annual_id, annual.school_year, annual.grade_level, annual.voucher_code,
+            annual.entry_term_number, enrollment.id AS enrollment_id
+          FROM registrar_retake_item_keys AS item_key
+          INNER JOIN annual_enrollments AS annual ON annual.id = item_key.annual_enrollment_id
+          INNER JOIN registrar_retake_referral_items AS item ON item.item_key_id = item_key.id
+          INNER JOIN registrar_retake_referrals AS referral ON referral.id = item.referral_id
+            AND referral.annual_enrollment_id = annual.id
+          LEFT JOIN enrollments AS enrollment ON enrollment.annual_enrollment_id = annual.id
+            AND enrollment.annual_term_number = item.target_term_number
+          WHERE item_key.id = @itemKeyId AND referral.is_current = 1 AND referral.status = 'finalized'
+          ORDER BY item.id DESC LIMIT 1`);
+      const target = targetResult.recordset?.[0];
+      if (!target) throw new FinanceReviewDraftError('This finalized retake item is no longer available for review.', 409);
+      Object.assign(resolvedContext, {
+        annualId: Number(target.annual_id), enrollmentId: target.enrollment_id == null ? null : Number(target.enrollment_id),
+        schoolYear: target.school_year, gradeLevel: target.grade_level, voucherCode: target.voucher_code,
+        entryTermNumber: Number(target.entry_term_number || 1)
+      });
+    }
     if (action.type === 'annual_assessment' && context.annualId) {
       const annual = await tx.request().input('annualId', sql.Int, context.annualId)
         .query(`SELECT annual.school_year, annual.grade_level, annual.voucher_code, annual.entry_term_number, annual.intake_status,
@@ -835,6 +916,19 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       fields: Object.entries(input).map(([name, value]) => ({ name, value: Array.isArray(value) ? value.map(String) : String(value ?? '') }))
     };
     preview.targetDetails = await actionTargetDetails(tx, action, resolvedContext);
+    if (action.type === 'retake_item_decision') {
+      const retakeReview = await retakePreviewService.previewFinanceDecision(tx, resolvedContext.itemKeyId, input);
+      preview.retakeDecision = {
+        decision: retakeReview.decision,
+        reason: retakeReview.reason,
+        chargeDescription: retakeReview.chargeDescription,
+        charge: retakeReview.charge
+      };
+      preview.editorOptions = { ...(preview.editorOptions || {}), retakeDecisions: [
+        { value: 'charge', label: 'Add a supplementary charge' },
+        { value: 'no_charge', label: 'Record no charge' }
+      ] };
+    }
     if (['annual_adjustment', 'annual_adjustment_reversal'].includes(action.type)) {
       preview.feeAdjustment = await feeAdjustmentReview(tx, action, resolvedContext, input);
     }
@@ -1193,7 +1287,8 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     return {
       annual: createAnnualFinanceService(options),
       cases: createAnnualFinanceCasesService(options),
-      documentClearance: createStudentDocumentFinanceClearanceService(options)
+      documentClearance: createStudentDocumentFinanceClearanceService(options),
+      retake: createRetakeReferralService({ ...options, annualFinanceService: createAnnualFinanceService(options) })
     };
   }
 

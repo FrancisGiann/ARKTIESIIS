@@ -1,0 +1,52 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page retake-page" id="main-content">
+  <header class="dashboard-heading">
+    <div><p class="eyebrow">Registrar · Academic referral</p><h1>Retake referrals</h1>
+      <p>Record structured retake items for current transferee and returning annual enrollments. Finance sees only finalized items and their Finance-safe explanations.</p></div>
+  </header>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+
+  <section class="finance-panel retake-create" aria-labelledby="retake-create-title">
+    <div class="finance-panel__heading"><div><h2 id="retake-create-title">Start a referral draft</h2><p>Choose the annual enrollment being reviewed. An existing return evaluation binding is captured by the server and must remain accepted at the same revision.</p></div></div>
+    <% if (targets.length) { %>
+      <form class="form-grid" method="post" action="/registrar/retake-referrals">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <input type="hidden" name="idempotencyKey" value="<%= idempotencyKey %>">
+        <label class="field field--wide" for="retake-annual"><span>Target annual enrollment</span>
+          <select id="retake-annual" name="annualEnrollmentId" required>
+            <option value="">Choose a student and annual enrollment</option>
+            <% for (const row of targets) { const evaluationLabel = row.readmission_evaluation_id ? ` · linked return evaluation revision ${row.readmission_evaluation_version}` : ''; %>
+              <option value="<%= row.annual_enrollment_id %>" <%= String(values.annualEnrollmentId || '') === String(row.annual_enrollment_id) ? 'selected' : '' %>>
+                <%= row.student_name %> · <%= row.student_no || 'Student number unavailable' %> · <%= row.school_year %> · <%= row.grade_level %> · <%= row.intake_kind %><%= evaluationLabel %>
+              </option>
+            <% } %>
+          </select>
+        </label>
+        <label class="field field--wide" for="retake-reference"><span>Registrar evaluation reference</span>
+          <input id="retake-reference" name="evaluationReference" value="<%= values.evaluationReference || '' %>" maxlength="160" required aria-describedby="retake-reference-help">
+          <small id="retake-reference-help">Use a short review label or reference that Finance can safely see. Academic notes and free-text evaluation details are not shared.</small>
+        </label>
+        <div class="form-actions"><button class="button button--primary" type="submit">Create draft referral</button></div>
+      </form>
+    <% } else { %>
+      <p class="dashboard-empty" role="status">No current transferee or returning annual enrollments are ready for a retake referral.</p>
+    <% } %>
+  </section>
+
+  <section class="finance-panel" aria-labelledby="retake-targets-title">
+    <div class="finance-panel__heading"><div><h2 id="retake-targets-title">Eligible annual enrollments</h2><p>Referral work stays separate from annual voucher, enrollment confirmation, and paper Finance-clearance states.</p></div></div>
+    <% if (targets.length) { %>
+      <div class="table-scroll" tabindex="0" aria-label="Eligible retake referral annual enrollments">
+        <table class="admin-table"><thead><tr><th>Student</th><th>Annual enrollment</th><th>Referral</th><th></th></tr></thead><tbody>
+          <% for (const row of targets) { %><tr>
+            <td data-label="Student"><strong><%= row.student_name %></strong><br><span class="muted-copy"><%= row.student_no || 'Student number unavailable' %> · LRN <%= row.lrn || 'unavailable' %></span></td>
+            <td data-label="Annual enrollment"><%= row.school_year %> · <%= row.grade_level %><br><span class="muted-copy"><%= row.intake_kind %> · entry Term <%= row.entry_term_number %></span></td>
+            <td data-label="Referral"><% if (row.current_referral_id) { %>Revision <%= row.current_referral_revision %> · <%= row.current_referral_status %><% } else { %>None recorded<% } %></td>
+            <td data-label="Action"><% if (row.current_referral_id) { %><a class="table-action" href="/registrar/retake-referrals/<%= row.current_referral_id %>">Open referral</a><% } else { %><span class="muted-copy">Start above</span><% } %></td>
+          </tr><% } %>
+        </tbody></table>
+      </div>
+    <% } else { %><p class="dashboard-empty">No eligible annual enrollment records.</p><% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

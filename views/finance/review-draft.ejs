@@ -6,7 +6,7 @@
   </header>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% if (previewUnavailable) { %>
-    <p class="form-alert" role="status">The current record could not be validated against this saved review. The pending draft is retained; edit its values and review again, or discard it.</p>
+    <p class="form-alert" role="status">The current record could not be validated against this saved review. Your pending draft and values are retained; wait until the record is available, then reload for a fresh review, or discard it.</p>
   <% } else if (status === 409 || draft.requiresReview) { %>
     <p class="form-alert" role="status">The session or current Finance records changed. Read the updated details before saving.</p>
   <% } %>
@@ -44,6 +44,23 @@
           <div><dt>Annual payment applications released</dt><dd>₱<%= correction.annualRelease %></dd></div>
           <div><dt>Eligible legacy reconciliations released</dt><dd>₱<%= correction.legacyRelease %></dd></div>
         </dl>
+      </section>
+    <% } %>
+
+    <% if (draft.actionType === 'retake_item_decision' && draft.preview.retakeDecision) { const retake = draft.preview.retakeDecision; %>
+      <section class="finance-review-fields" aria-label="Retake item Finance decision">
+        <h2>Retake item decision</h2>
+        <% if (retake.decision === 'no_charge') { %>
+          <p>No supplementary charge will be created. The saved decision includes the Finance reason below.</p>
+        <% } else { %>
+          <p>The approved amount is the gross charge. The existing approved-exemption rules apply once through the supplementary-charge process; the voucher rate is not applied again.</p>
+          <dl class="finance-review-fields">
+            <div><dt>Charge description</dt><dd><%= retake.chargeDescription %></dd></div>
+            <div><dt>Approved gross amount</dt><dd>₱<%= retake.charge.grossAmount %></dd></div>
+            <div><dt>Approved exemption applied</dt><dd>₱<%= retake.charge.approvedExemption %></dd></div>
+            <div><dt>Resulting payable amount</dt><dd>₱<%= retake.charge.payableAmount %></dd></div>
+          </dl>
+        <% } %>
       </section>
     <% } %>
 
@@ -252,7 +269,7 @@
         <label class="field"><span><input type="checkbox" name="financeAssessmentAttestation" value="1" required> I reviewed the approved fee schedule, selected options, and exact annual assessment shown above.</span></label>
         <label class="field"><span><input type="checkbox" name="zeroDpApproval" value="1"> If this entry-term DP is zero after approved waivers, I explicitly approve the zero-DP case.</span></label>
       <% } %>
-      <button class="button button--primary" type="submit" <%= previewUnavailable || (draft.actionType === 'departure_review' && draft.preview.departureReviewReady !== true) ? 'disabled' : '' %>>Review complete · Save update</button>
+      <button class="button button--primary" type="submit" <%= previewUnavailable || (draft.actionType === 'departure_review' && draft.preview.departureReviewReady !== true) ? 'disabled' : '' %>><%= draft.actionType === 'retake_item_decision' ? 'Save Finance decision' : 'Review complete · Save update' %></button>
     </form>
     <form method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/discard">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">

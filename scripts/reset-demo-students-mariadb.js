@@ -23,10 +23,14 @@ const RESET_TABLES = Object.freeze([
   'finance_legacy_reconciliation_batches', 'finance_transaction_reversals', 'enrollment_clearances',
   'term_clearance_events', 'term_finance_approvals', 'annual_registrar_confirmations',
   'finance_charge_adjustments', 'finance_exemption_applications', 'finance_exemption_rules',
-  'finance_exemption_cases', 'finance_departure_case_terms', 'finance_departure_cases',
+  'finance_exemption_cases', 'finance_departure_charge_reviews', 'finance_departure_cutoff_reviews',
+  'finance_departure_case_terms', 'finance_departure_cases',
   'finance_fee_comment_events', 'finance_handbook_number_events', 'finance_review_drafts',
+  'annual_finance_assessment_reviews', 'annual_enrollment_events',
+  'registrar_retake_referral_events', 'finance_retake_item_decisions', 'registrar_retake_referral_items',
+  'registrar_retake_item_keys', 'registrar_retake_referrals',
   'assessed_charges', 'annual_assessments', 'finance_legacy_opening_charges', 'financial_transactions',
-  'annual_enrollment_admin_revisions', 'annual_enrollment_events', 'annual_enrollment_tags',
+  'annual_enrollment_admin_revisions', 'annual_enrollment_tags',
   'annual_workflow_events', 'annual_special_subjects', 'student_subjects', 'enrollments',
   'annual_enrollments', 'pre_enrollment_events', 'pre_enrollment_receipts', 'pre_enrollment_revisions',
   'pre_enrollments', 'readmission_evaluation_events', 'readmission_evaluations', 'financial_accounts',
@@ -197,7 +201,7 @@ async function readPlan(connection, databaseName, { storageRoot, target } = {}) 
   if (String(serverIdentity.databaseName || '') !== databaseName) throw new ResetError('Connected database does not match the allowlisted target.');
   const [versions] = await connection.query('SELECT version FROM schema_migrations ORDER BY version');
   const schemaVersion = String(versions.at(-1)?.version || '');
-  if (schemaVersion !== 'v2.017') throw new ResetError('The reset helper requires the v2.017 schema.');
+  if (schemaVersion !== 'v2.021') throw new ResetError('The reset helper requires the v2.021 schema.');
   await checkUnexpectedReferences(connection, databaseName);
   const tables = [...new Set([...RESET_TABLES, ...PRESERVED_TABLES, ...STUDENT_AUTH_TABLES, 'users'])];
   const counts = {};

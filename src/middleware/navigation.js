@@ -4,6 +4,7 @@ const financeNavigationItems = [
   { id: 'finance-schedules', label: 'Fee schedules', href: '/finance/schedules', group: 'Finance' },
   { id: 'finance-reports', label: 'Reports', href: '/finance/reports', group: 'Finance' },
   { id: 'finance-departures', label: 'Stopped or transferred', href: '/finance/departures', group: 'Finance' },
+  { id: 'finance-retake-referrals', label: 'Retake review', href: '/finance/retake-referrals', group: 'Finance' },
   { id: 'finance-review-drafts', label: 'Unfinished reviews', href: '/finance/review-drafts', group: 'Finance' }
 ];
 
@@ -24,6 +25,7 @@ const navigationByRole = {
     { id: 'clearance', label: 'Paper clearance', href: '/registrar/records/clearance', group: 'Records' },
     { id: 'intake', label: 'Enrollments', href: '/registrar/intake', group: 'Records' },
     { id: 'pre-enrollments', label: 'Pre-enrollment records', href: '/pre-enrollments', group: 'Records' },
+    { id: 'retake-referrals', label: 'Retake referrals', href: '/registrar/retake-referrals', group: 'Records' },
     { id: 'documents', label: 'Document review', href: '/documents', group: 'Records' },
     { id: 'grade-submissions', label: 'Grade review', href: '/registrar/grade-submissions', group: 'Academic work' },
     { id: 'schedules', label: 'Class schedules', href: '/registrar/schedules', group: 'Academic work' },
@@ -72,6 +74,7 @@ function buildNavigation(role, currentPath = '') {
       || path.startsWith('/registrar/records/clearance/')
       || /^\/registrar\/records\/students\/[^/]+\/clearance(?:\/|$)/.test(path);
     else if (item.id === 'intake') current = path.startsWith('/registrar/intake');
+    else if (item.id === 'retake-referrals') current = path.startsWith('/registrar/retake-referrals');
     else if (item.id === 'subjects') current = path.startsWith('/registrar/records/subjects');
     else if (item.id === 'assignments') current = path.startsWith('/registrar/records/teacher-assignments');
     else if (item.id === 'academic-setup') current = role === 'registrar' && path === '/registrar/records' && query.get('view') === 'setup';
@@ -90,6 +93,7 @@ function buildNavigation(role, currentPath = '') {
     else if (item.id === 'finance-schedules') current = path.startsWith('/finance/schedules');
     else if (item.id === 'finance-reports') current = path.startsWith('/finance/reports');
     else if (item.id === 'finance-departures') current = path.startsWith('/finance/departures');
+    else if (item.id === 'finance-retake-referrals') current = path.startsWith('/finance/retake-referrals');
     else if (item.id === 'finance-review-drafts') current = path.startsWith('/finance/review-drafts');
     else if (item.id === 'documents') current = path === '/documents' || path.startsWith('/documents/');
     else if (item.id === 'home') current = path === '/student';
