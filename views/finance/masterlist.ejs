@@ -1,0 +1,164 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page finance-masterlist-page finance-accounts-page" id="main-content">
+  <% const filters = masterlist.filters; %>
+  <% const filterQuery = new URLSearchParams(); for (const [key, value] of Object.entries(filters)) { if (key !== 'page' && value !== null && value !== '') filterQuery.set(key, String(value)); } %>
+  <% const csvHref = `/finance/accounts.csv${filterQuery.size ? `?${filterQuery.toString()}` : ''}`; %>
+  <% const pageHref = (page) => { const params = new URLSearchParams(filterQuery); params.set('page', String(page)); return `/finance?${params.toString()}`; }; %>
+  <% const selectedTermNumber = filters.placementTerm; %>
+  <% const termContextLabel = selectedTermNumber ? `Term ${selectedTermNumber}` : 'selected placement term'; %>
+  <% const selectedCounts = selectedTermNumber ? masterlist.counts[selectedTermNumber] : null; %>
+  <% const moneyDisplay = (amount) => amount == null ? '—' : `₱${amount}`; %>
+  <% const balanceDisplay = (amount) => amount == null ? '—' : String(amount).startsWith('-') ? `₱${String(amount).slice(1)} credit` : `₱${amount}`; %>
+  <% const clearanceDisplay = (term) => !term || term.scopeStatus === 'not_applicable' ? 'Not applicable'
+    : term.financeClearance === 'signed' ? `Signed${term.financeClearanceDate ? ` · ${String(term.financeClearanceDate).slice(0, 10)}` : ''}`
+      : term.financeClearance === 'revoked' ? `Revoked${term.financeClearanceDate ? ` · ${String(term.financeClearanceDate).slice(0, 10)}` : ''}` : 'Not recorded'; %>
+  <% const tuitionColumn = (installment) => (masterlist.termColumns[selectedTermNumber] || []).find((fee) => fee.canonicalTuition === installment); %>
+  <% const legacyTuitionColumn = (term) => (masterlist.termColumns[selectedTermNumber] || []).find((fee) => fee.category === 'tuition' && fee.lineName.toLowerCase() === 'tuition' && !fee.canonicalTuition && feeCell(term, fee).chargeIds?.length); %>
+  <% const hasCanonicalTuitionCharges = (term) => (masterlist.termColumns[selectedTermNumber] || []).some((fee) => fee.canonicalTuition && (feeCell(term, fee).savedScheduleFee || feeCell(term, fee).chargeIds?.length)); %>
+  <% const feeCell = (term, fee) => fee && term?.fees?.[fee.key] ? term.fees[fee.key] : { status: term?.scopeStatus === 'not_applicable' ? 'Not applicable' : 'Unavailable', applications: [] }; %>
+  <% const detailId = (row) => `finance-account-details-${row.annualEnrollmentId}`; %>
+  <% const panelId = (row, key) => `${detailId(row)}-${key}`; %>
+  <% const paymentStatusLabels = selectedCounts ? [['Fully paid', selectedCounts.fullyPaid], ['Partially paid', selectedCounts.partiallyPaid], ['Unpaid', selectedCounts.unpaid], ['No payment required', selectedCounts.noPaymentRequired], ['Unavailable', selectedCounts.unavailable]] : []; %>
+  <header class="dashboard-heading finance-masterlist-heading finance-accounts-heading">
+    <div><h1>Student accounts</h1></div>
+    <a class="button button--secondary" href="<%= csvHref %>">Download full CSV</a>
+  </header>
+
+  <section class="finance-panel finance-masterlist-filters" aria-labelledby="finance-accounts-filter-title">
+    <h2 id="finance-accounts-filter-title" class="finance-accounts-filter-title">Find student accounts</h2>
+    <form method="get" action="/finance" class="finance-masterlist-filter-form finance-accounts-filter-form">
+      <label class="field finance-accounts-search"><span>Name, student number, or LRN</span><input type="search" name="search" maxlength="100" value="<%= filters.search %>" autocomplete="off"></label>
+      <label class="field"><span>Placement term</span><select id="finance-masterlist-term" name="placementTerm" required><option value="" disabled <%= selectedTermNumber == null ? 'selected' : '' %>>Choose term</option><% for (const term of masterlist.options.placementTerms) { %><option value="<%= term %>" <%= selectedTermNumber === term ? 'selected' : '' %>>Term <%= term %></option><% } %></select></label>
+      <button class="button button--primary finance-accounts-apply-button" type="submit">Apply filters</button>
+      <% const selectedSection = filters.section === 'unassigned' ? 'Unassigned' : masterlist.options.sections.find((section) => section.id === filters.section)?.label || 'All sections'; %>
+      <% const activeFilterCount = [filters.gradeLevel, filters.voucherCode, filters.status, filters.financeStatus, filters.cluster, filters.strand, filters.installment !== 'whole' ? filters.installment : ''].filter(Boolean).length; %>
+      <p class="finance-accounts-active-context" aria-live="polite"><strong><%= filters.schoolYear === 'all' ? 'All years' : filters.schoolYear || 'Choose a school year' %></strong><span><%= selectedTermNumber ? `Term ${selectedTermNumber}` : 'Choose a placement term' %><% if (filters.section) { %> · <%= selectedSection %><% } %></span><span><%= masterlist.totalRecords.toLocaleString('en-US') %> matching annual accounts</span></p>
+      <details id="finance-masterlist-filters" class="finance-accounts-filter-disclosure"<%= masterlist.needsScopeSelection ? ' open' : '' %>>
+        <summary><strong>Filters</strong><% if (activeFilterCount) { %><span><%= activeFilterCount %> active</span><% } %></summary>
+        <div class="finance-accounts-filter-content">
+          <div class="finance-accounts-filter-grid">
+            <label class="field"><span>School year</span><select id="finance-masterlist-year" name="schoolYear" required><option value="" disabled <%= !filters.schoolYear ? 'selected' : '' %>>Choose a school year</option><option value="all" <%= filters.schoolYear === 'all' ? 'selected' : '' %>>All years</option><% for (const year of masterlist.options.schoolYears) { %><option value="<%= year %>" <%= filters.schoolYear === year ? 'selected' : '' %>><%= year %></option><% } %></select></label>
+            <label class="field"><span>Grade</span><select id="finance-masterlist-grade" name="gradeLevel"><option value="">All grades</option><% for (const grade of masterlist.options.grades) { %><option value="<%= grade %>" <%= filters.gradeLevel === grade ? 'selected' : '' %>><%= grade %></option><% } %></select><small id="finance-masterlist-grade-help" class="field-help" hidden aria-live="polite"></small></label>
+            <label class="field"><span id="finance-masterlist-section-label">Section in <%= termContextLabel %></span><select id="finance-masterlist-section" name="section"><option value="">All sections</option><option value="unassigned" <%= filters.section === 'unassigned' ? 'selected' : '' %>>Unassigned</option><% for (const section of masterlist.options.sections) { %><option value="<%= section.id %>" <%= filters.section === section.id ? 'selected' : '' %>><%= section.label %></option><% } %></select><small id="finance-masterlist-section-help" class="field-help" hidden aria-live="polite"></small></label>
+          <label class="field"><span>Voucher type</span><select name="voucherCode"><option value="">All voucher types</option><% for (const voucher of ['PUB', 'ESC', 'NV']) { %><option value="<%= voucher %>" <%= filters.voucherCode === voucher ? 'selected' : '' %>><%= voucher %></option><% } %></select></label>
+          <label class="field"><span>Enrollment status in <%= termContextLabel %></span><select name="status"><option value="">All statuses</option><% for (const [value, label] of [['pending_payment','Pending activation'],['enrolled','Enrolled'],['cancelled','Cancelled'],['dropped','Dropped'],['transferred','Transferred']]) { %><option value="<%= value %>" <%= filters.status === value ? 'selected' : '' %>><%= label %></option><% } %></select></label>
+          <label class="field"><span>Payment status in <%= termContextLabel %></span><select name="financeStatus"><option value="">All payment statuses</option><% for (const [value, label] of [['unpaid','Unpaid'],['partially_paid','Partially paid'],['fully_paid','Fully paid'],['no_payment_required','No payment required'],['needs_review','Status unavailable / needs review']]) { %><option value="<%= value %>" <%= filters.financeStatus === value ? 'selected' : '' %>><%= label %></option><% } %></select></label>
+          <label class="field"><span>Payment period in <%= termContextLabel %></span><select name="installment"><% for (const [value, label] of [['whole','Entire term'],['dp','Down payment'],['prelim','Preliminary'],['midterm','Midterm'],['finals','Finals']]) { %><option value="<%= value %>" <%= filters.installment === value ? 'selected' : '' %>><%= label %></option><% } %></select></label>
+          <label class="field"><span>Cluster in <%= termContextLabel %></span><input type="text" name="cluster" maxlength="100" value="<%= filters.cluster %>"></label>
+          <label class="field"><span>Strand in <%= termContextLabel %></span><input type="text" name="strand" maxlength="100" value="<%= filters.strand %>"></label>
+          </div>
+          <p class="finance-accounts-filter-help">Payment status, period, section, and enrollment filters apply to Term <%= selectedTermNumber %>; annual balances and term status counts still cover the full filtered accounts.</p>
+          <div class="finance-masterlist-filter-actions finance-accounts-filter-actions"><a class="table-action" href="/finance">Clear filters</a></div>
+        </div>
+      </details>
+    </form>
+  </section>
+
+  <section class="finance-panel finance-accounts-results" aria-labelledby="finance-accounts-results-title">
+    <div class="finance-accounts-results-heading"><h2 id="finance-accounts-results-title">Annual accounts</h2></div>
+    <% if (selectedCounts) { %><div class="finance-accounts-counts" aria-labelledby="finance-accounts-count-title">
+      <div class="finance-accounts-count-heading"><h3 id="finance-accounts-count-title">Term <%= selectedTermNumber %> status counts</h3><p>All filtered accounts</p></div>
+      <dl class="finance-accounts-status-counts"><% for (const [label, count] of paymentStatusLabels) { %><div><dt><%= label %></dt><dd><%= count.toLocaleString('en-US') %></dd></div><% } %><% if (selectedCounts.notApplicable) { %><div><dt>Not applicable</dt><dd><%= selectedCounts.notApplicable.toLocaleString('en-US') %></dd></div><% } %></dl>
+      <details class="finance-accounts-other-counts"><summary>Counts for other terms</summary><div><% for (const termNumber of [1, 2, 3].filter((number) => number !== selectedTermNumber)) { const counts = masterlist.counts[termNumber]; %><section><h4>Term <%= termNumber %></h4><p>Fully paid <strong><%= counts.fullyPaid.toLocaleString('en-US') %></strong> · Partially paid <strong><%= counts.partiallyPaid.toLocaleString('en-US') %></strong> · Unpaid <strong><%= counts.unpaid.toLocaleString('en-US') %></strong> · No payment required <strong><%= counts.noPaymentRequired.toLocaleString('en-US') %></strong> · Unavailable <strong><%= counts.unavailable.toLocaleString('en-US') %></strong><% if (counts.notApplicable) { %> · Not applicable <strong><%= counts.notApplicable.toLocaleString('en-US') %></strong><% } %></p></section><% } %></div></details>
+    </div><% } %>
+    <% if (!masterlist.totalRecords) { %>
+      <% if (masterlist.needsScopeSelection) { %>
+        <p class="empty-state" role="status"><% if (!masterlist.currentScopeConfigured && masterlist.options.schoolYears.length) { %>No unique configured current year and placement term is available. Choose a school year and placement term, or ask the Registrar to complete term setup.<% } else { %>Choose a school year and placement term to load annual accounts.<% } %></p>
+      <% } else { %><p class="empty-state" role="status">No annual accounts match these filters.</p><% } %>
+    <% } else { %>
+      <div class="finance-masterlist-pagination finance-accounts-pagination">
+        <p>Showing <strong><%= masterlist.pagination.from %>–<%= masterlist.pagination.to %></strong> of <strong><%= masterlist.pagination.totalRecords %></strong> annual accounts</p>
+        <nav aria-label="Student account pages">
+          <% if (masterlist.pagination.page > 1) { %><a class="button button--secondary" href="<%= pageHref(masterlist.pagination.page - 1) %>">Previous</a><% } else { %><span class="finance-masterlist-page-disabled" aria-disabled="true">Previous</span><% } %>
+          <span>Page <%= masterlist.pagination.page %> of <%= masterlist.pagination.totalPages %></span>
+          <% if (masterlist.pagination.page < masterlist.pagination.totalPages) { %><a class="button button--secondary" href="<%= pageHref(masterlist.pagination.page + 1) %>">Next</a><% } else { %><span class="finance-masterlist-page-disabled" aria-disabled="true">Next</span><% } %>
+        </nav>
+      </div>
+      <table class="finance-accounts-table">
+        <thead><tr><th scope="col">Student</th><th scope="col">Section · Term <%= selectedTermNumber %></th><th scope="col">DP</th><th scope="col">Prelim</th><th scope="col">Midterm</th><th scope="col">Finals</th><th scope="col">Other fees</th><th scope="col">Term balance</th></tr></thead>
+        <tbody>
+          <% for (const row of masterlist.rows) { const term = row.terms[selectedTermNumber]; const rowDetailId = detailId(row); const legacyTuition = legacyTuitionColumn(term); const legacyTuitionCell = feeCell(term, legacyTuition); const legacyTuitionOnly = Boolean(legacyTuition && !hasCanonicalTuitionCharges(term)); const isNotApplicable = term.scopeStatus === 'not_applicable'; %>
+            <tr class="finance-accounts-row">
+              <td class="finance-accounts-student" data-label="Student"><a href="<%= row.accountHref %>"><strong><%= row.studentName || 'Name unavailable' %></strong></a><span>Student no. <%= row.studentNo || 'Not recorded' %><%= filters.schoolYear === 'all' ? ` · ${row.schoolYear}` : '' %></span><% if (row.voucherReviewRequired) { %><span class="finance-accounts-review-flag">Voucher review required</span><% } %><button type="button" class="finance-accounts-expand" data-finance-account-toggle data-finance-account-row="<%= rowDetailId %>" aria-expanded="false" aria-controls="<%= panelId(row, 'account') %>">Account and term details</button></td>
+              <td class="finance-accounts-section" data-label="Section · Term <%= selectedTermNumber %>"><strong><%= isNotApplicable ? 'Not applicable' : term.sectionName || term.section %></strong><% if (!isNotApplicable && term.sectionContext) { %><span><%= term.sectionContext %></span><% } %></td>
+              <% if (legacyTuitionOnly) { %>
+                <td class="finance-accounts-payment finance-accounts-legacy-summary" data-label="Tuition installment detail" colspan="4"><button type="button" class="finance-accounts-installment finance-accounts-legacy-tuition" data-finance-account-toggle data-finance-account-row="<%= rowDetailId %>" aria-expanded="false" aria-controls="<%= panelId(row, 'whole-tuition') %>" aria-label="Show saved whole-term tuition details for <%= row.studentName || 'student' %>"><strong>Installment breakdown not recorded</strong><span>Whole-term tuition · Applied <%= moneyDisplay(legacyTuitionCell.applied) %></span><span>Balance <%= balanceDisplay(legacyTuitionCell.balance) %></span></button></td>
+              <% } else { %>
+                <% for (const [installment, label] of [['dp','Down payment'],['prelim','Preliminary'],['midterm','Midterm'],['finals','Finals']]) { const fee = tuitionColumn(installment); const cell = feeCell(term, fee); %>
+                  <td class="finance-accounts-payment" data-label="<%= label %>"><button type="button" class="finance-accounts-installment<%= cell.status.includes('Unavailable') || cell.status === 'No assessment' || cell.status.includes('missing') ? ' finance-accounts-installment--unavailable' : '' %>" data-finance-account-toggle data-finance-account-row="<%= rowDetailId %>" aria-expanded="false" aria-controls="<%= panelId(row, installment) %>" aria-label="Show <%= label %> payment details for <%= row.studentName || 'student' %>"><strong><%= cell.status %></strong><span>Applied <%= moneyDisplay(cell.applied) %></span><span>Balance <%= balanceDisplay(cell.balance) %></span></button></td>
+                <% } %>
+              <% } %>
+              <td class="finance-accounts-payment" data-label="Other fees"><button type="button" class="finance-accounts-installment finance-accounts-other-fees" data-finance-account-toggle data-finance-account-row="<%= rowDetailId %>" aria-expanded="false" aria-controls="<%= panelId(row, 'other') %>" aria-label="Show other fee payment details for <%= row.studentName || 'student' %>"><strong><%= term.otherFees?.status || 'Unavailable' %></strong><span>Applied <%= moneyDisplay(term.otherFees?.applied) %></span><span>Balance <%= balanceDisplay(term.otherFees?.balance) %></span></button><% if (legacyTuition && !legacyTuitionOnly) { %><button type="button" class="finance-accounts-installment finance-accounts-legacy-tuition" data-finance-account-toggle data-finance-account-row="<%= rowDetailId %>" aria-expanded="false" aria-controls="<%= panelId(row, 'whole-tuition') %>" aria-label="Show saved whole-term tuition details for <%= row.studentName || 'student' %>"><strong>Whole-term tuition</strong><span>Applied <%= moneyDisplay(legacyTuitionCell.applied) %></span><span>Balance <%= balanceDisplay(legacyTuitionCell.balance) %></span></button><% } %></td>
+              <td class="finance-accounts-term-balance" data-label="Term balance"><strong><%= balanceDisplay(term.balance) %></strong><span class="finance-masterlist-status<%= term.paymentAvailability === 'unavailable' ? ' finance-masterlist-status--unavailable' : '' %><%= isNotApplicable ? ' finance-masterlist-status--na' : '' %>"><%= term.status %></span></td>
+            </tr>
+            <tr id="<%= rowDetailId %>" class="finance-accounts-detail-row" hidden>
+              <td colspan="8">
+                <section id="<%= panelId(row, 'account') %>" class="finance-accounts-panel" data-finance-account-panel="account" hidden aria-labelledby="<%= panelId(row, 'account') %>-title">
+                  <div class="finance-accounts-detail-heading"><h3 id="<%= panelId(row, 'account') %>-title"><%= row.schoolYear %> · <%= row.gradeLevel %> · <%= row.voucherCode || 'Voucher unavailable' %> annual account</h3><a class="table-action" href="<%= row.accountHref %>">Open full account</a></div>
+                  <div class="finance-accounts-annual-summary"><dl>
+                    <div><dt>Annual state</dt><dd><%= row.intakeStatus %></dd></div><div><dt>Assessment readiness</dt><dd><%= row.readiness %></dd></div>
+                    <div><dt>Assessed voucher / schedule</dt><dd><%= row.assessedVoucherCode || 'Not assessed' %><%= row.assessmentVersion ? ` · v${row.assessmentVersion}` : '' %></dd></div>
+                    <div><dt>Voucher review</dt><dd><%= row.voucherReviewRequired ? 'Required' : 'No review flag' %></dd></div>
+                    <div><dt>Student number</dt><dd><%= row.studentNo || 'Not recorded' %></dd></div><div><dt>LRN</dt><dd><%= row.lrn || 'Not recorded' %></dd></div>
+                    <div><dt>Selected-year balance</dt><dd><%= balanceDisplay(row.selectedYearBalance) %></dd></div>
+                    <div><dt>Earlier-year balances</dt><dd><%= balanceDisplay(row.earlierYearBalance) %> · <%= row.earlierYearStatus %></dd></div>
+                    <div><dt>Earlier account balance</dt><dd><%= balanceDisplay(row.earlierAccountBalance) %></dd></div>
+                    <div><dt>Opening liability</dt><dd><%= balanceDisplay(row.openingLiability) %></dd></div>
+                    <div><dt>Unused payment credit</dt><dd><%= balanceDisplay(row.unusedPaymentCredit) %></dd></div>
+                  </dl></div>
+                  <% if (row.voucherReviewRequired && row.voucherReviewReason) { %><p class="finance-accounts-review-reason">Voucher review reason: <%= row.voucherReviewReason %></p><% } %>
+                  <div class="finance-accounts-term-details"><% for (const termNumber of [1, 2, 3]) { const yearTerm = row.terms[termNumber]; %>
+                    <section aria-labelledby="<%= rowDetailId %>-term-<%= termNumber %>"><h4 id="<%= rowDetailId %>-term-<%= termNumber %>">Term <%= termNumber %> · <%= yearTerm.status %></h4><dl>
+                      <div><dt>Section</dt><dd><%= yearTerm.section %><%= yearTerm.sectionContext ? ` · ${yearTerm.sectionContext}` : '' %></dd></div>
+                      <div><dt>Enrollment state</dt><dd><%= yearTerm.enrollmentStatus %></dd></div>
+                      <div><dt>Registrar confirmation</dt><dd><%= yearTerm.registrarConfirmation || 'Needs registrar confirmation' %></dd></div>
+                      <div><dt>Finance clearance</dt><dd><%= clearanceDisplay(yearTerm) %></dd></div>
+                      <div><dt>Term applied</dt><dd><%= moneyDisplay(yearTerm.applied) %></dd></div>
+                      <div><dt>Term balance</dt><dd><%= balanceDisplay(yearTerm.balance) %></dd></div>
+                    </dl></section>
+                  <% } %></div>
+                </section>
+                <% for (const [installment, label] of [['dp','Down payment'],['prelim','Preliminary'],['midterm','Midterm'],['finals','Finals']]) { const expected = (masterlist.termColumns[selectedTermNumber] || []).filter((fee) => fee.canonicalTuition === installment); const visibleFees = expected.filter((fee) => feeCell(term, fee).savedScheduleFee || feeCell(term, fee).chargeIds?.length); %>
+                  <section id="<%= panelId(row, installment) %>" class="finance-accounts-panel" data-finance-account-panel="<%= installment %>" hidden aria-labelledby="<%= panelId(row, installment) %>-title"><h3 class="finance-accounts-detail-title" id="<%= panelId(row, installment) %>-title"><%= label %> · Term <%= selectedTermNumber %></h3>
+                    <div class="finance-accounts-fee-details"><% for (const fee of visibleFees) { const cell = feeCell(term, fee); %>
+                    <article class="finance-accounts-fee-detail"><h5><%= fee.label %><span><%= cell.status %></span></h5>
+                      <dl><div><dt>Gross assessed</dt><dd><%= moneyDisplay(cell.gross) %></dd></div><div><dt>Approved discount / waiver</dt><dd><%= moneyDisplay(cell.coverage) %></dd></div><div><dt>Finance adjustments</dt><dd><%= moneyDisplay(cell.adjustments) %></dd></div><div><dt>Payable</dt><dd><%= balanceDisplay(cell.configured) %></dd></div><div><dt>Applied</dt><dd><%= moneyDisplay(cell.applied) %></dd></div><div><dt>Balance</dt><dd><%= balanceDisplay(cell.balance) %></dd></div></dl>
+                      <% if (cell.reason) { %><p class="finance-accounts-fee-reason"><%= cell.reason %></p><% } %>
+                      <% if (cell.applications?.length) { %><ul class="finance-accounts-applications"><% for (const application of cell.applications) { %><li><strong><%= application.type %> · <%= application.date %></strong><span>Reference: <%= application.reference %></span><span>Original ₱<%= application.original %> · Applied ₱<%= application.current %> · Released ₱<%= application.released %></span><span><%= application.receiptIssued ? 'Receipt issued' : 'Receipt not recorded' %><%= application.reversed ? ' · Reversed' : '' %></span></li><% } %></ul><% } else { %><p class="finance-accounts-no-applications">No payment applications recorded.</p><% } %>
+                    </article>
+                    <% } %><% if (!visibleFees.length) { %><p class="empty-state">No saved <%= label.toLowerCase() %> charge detail. Whole-term tuition, if recorded, remains in its separate details panel; no installment split is inferred.</p><% } %></div>
+                  </section>
+                <% } %>
+                <% if (legacyTuition) { %>
+                  <section id="<%= panelId(row, 'whole-tuition') %>" class="finance-accounts-panel" data-finance-account-panel="whole-tuition" hidden aria-labelledby="<%= panelId(row, 'whole-tuition') %>-title"><h3 class="finance-accounts-detail-title" id="<%= panelId(row, 'whole-tuition') %>-title">Whole-term tuition · Term <%= selectedTermNumber %></h3><p class="finance-accounts-legacy-split">Installment breakdown not recorded. This is the saved whole-term amount; no split has been inferred.</p>
+                    <article class="finance-accounts-fee-detail"><h5><%= legacyTuition.label %><span><%= legacyTuitionCell.status %></span></h5><dl><div><dt>Gross assessed</dt><dd><%= moneyDisplay(legacyTuitionCell.gross) %></dd></div><div><dt>Approved discount / waiver</dt><dd><%= moneyDisplay(legacyTuitionCell.coverage) %></dd></div><div><dt>Finance adjustments</dt><dd><%= moneyDisplay(legacyTuitionCell.adjustments) %></dd></div><div><dt>Payable</dt><dd><%= balanceDisplay(legacyTuitionCell.configured) %></dd></div><div><dt>Applied</dt><dd><%= moneyDisplay(legacyTuitionCell.applied) %></dd></div><div><dt>Balance</dt><dd><%= balanceDisplay(legacyTuitionCell.balance) %></dd></div></dl>
+                      <% if (legacyTuitionCell.applications?.length) { %><ul class="finance-accounts-applications"><% for (const application of legacyTuitionCell.applications) { %><li><strong><%= application.type %> · <%= application.date %></strong><span>Reference: <%= application.reference %></span><span>Original ₱<%= application.original %> · Applied ₱<%= application.current %> · Released ₱<%= application.released %></span><span><%= application.receiptIssued ? 'Receipt issued' : 'Receipt not recorded' %><%= application.reversed ? ' · Reversed' : '' %></span></li><% } %></ul><% } else { %><p class="finance-accounts-no-applications">No payment applications recorded.</p><% } %>
+                    </article>
+                  </section>
+                <% } %>
+                <% const otherFees = (masterlist.termColumns[selectedTermNumber] || []).filter((fee) => !fee.canonicalTuition && !(fee.category === 'tuition' && fee.lineName.toLowerCase() === 'tuition')); const visibleOtherFees = otherFees.filter((fee) => { const cell = feeCell(term, fee); return cell.savedScheduleFee || cell.chargeIds?.length; }); %>
+                <section id="<%= panelId(row, 'other') %>" class="finance-accounts-panel" data-finance-account-panel="other" hidden aria-labelledby="<%= panelId(row, 'other') %>-title"><h3 class="finance-accounts-detail-title" id="<%= panelId(row, 'other') %>-title">Other fees · Term <%= selectedTermNumber %></h3>
+                  <div class="finance-accounts-fee-details"><% for (const fee of visibleOtherFees) { const cell = feeCell(term, fee); %>
+                    <article class="finance-accounts-fee-detail"><h5><%= fee.label %><span><%= cell.status %></span></h5>
+                      <dl><div><dt>Gross assessed</dt><dd><%= moneyDisplay(cell.gross) %></dd></div><div><dt>Approved discount / waiver</dt><dd><%= moneyDisplay(cell.coverage) %></dd></div><div><dt>Finance adjustments</dt><dd><%= moneyDisplay(cell.adjustments) %></dd></div><div><dt>Payable</dt><dd><%= balanceDisplay(cell.configured) %></dd></div><div><dt>Applied</dt><dd><%= moneyDisplay(cell.applied) %></dd></div><div><dt>Balance</dt><dd><%= balanceDisplay(cell.balance) %></dd></div></dl>
+                      <% if (cell.reason) { %><p class="finance-accounts-fee-reason"><%= cell.reason %></p><% } %>
+                      <% if (cell.applications?.length) { %><ul class="finance-accounts-applications"><% for (const application of cell.applications) { %><li><strong><%= application.type %> · <%= application.date %></strong><span>Reference: <%= application.reference %></span><span>Original ₱<%= application.original %> · Applied ₱<%= application.current %> · Released ₱<%= application.released %></span><span><%= application.receiptIssued ? 'Receipt issued' : 'Receipt not recorded' %><%= application.reversed ? ' · Reversed' : '' %></span></li><% } %></ul><% } else { %><p class="finance-accounts-no-applications">No payment applications recorded.</p><% } %>
+                    </article>
+                  <% } %><% if (!visibleOtherFees.length) { %><p class="empty-state">No other configured or assessed fee detail is recorded for Term <%= selectedTermNumber %>.</p><% } %></div>
+                </section>
+              </td>
+            </tr>
+          <% } %>
+        </tbody>
+      </table>
+      <noscript><p class="finance-accounts-noscript">JavaScript is off, so account and fee details are shown beneath each student.</p></noscript>
+      <div class="finance-masterlist-pagination finance-accounts-pagination finance-accounts-pagination--bottom">
+        <p>Showing <strong><%= masterlist.pagination.from %>–<%= masterlist.pagination.to %></strong> of <strong><%= masterlist.pagination.totalRecords %></strong> annual accounts</p>
+        <nav aria-label="Student account pages"><% if (masterlist.pagination.page > 1) { %><a class="button button--secondary" href="<%= pageHref(masterlist.pagination.page - 1) %>">Previous</a><% } else { %><span class="finance-masterlist-page-disabled" aria-disabled="true">Previous</span><% } %><span>Page <%= masterlist.pagination.page %> of <%= masterlist.pagination.totalPages %></span><% if (masterlist.pagination.page < masterlist.pagination.totalPages) { %><a class="button button--secondary" href="<%= pageHref(masterlist.pagination.page + 1) %>">Next</a><% } else { %><span class="finance-masterlist-page-disabled" aria-disabled="true">Next</span><% } %></nav>
+      </div>
+    <% } %>
+  </section>
+  <details class="finance-overview-method finance-masterlist-method"><summary>How to read account status</summary><p>Section, enrollment, Finance-status, and payment-period filters apply to the selected placement term. The balance and status counts remain whole-term and cover the full filtered cohort. Installment cells show saved assessment detail, applied payments, and balance. A legacy whole-term amount stays together with an explicit unsplit label. Missing confirmation or assessment detail stays unavailable; configured zero, optional fees, credits, and not-applicable terms remain distinct. Finance clearance is a recorded Finance account decision and does not follow from paid fees.</p><p>The CSV contains all three terms and all matching annual accounts. LRN values use a leading apostrophe in the CSV so spreadsheet software keeps leading zeroes as text; currency values remain numeric.</p></details>
+</main>
+<script src="/js/finance-masterlist-filters.js" defer></script>
+<%- include('../partials/foot') %>

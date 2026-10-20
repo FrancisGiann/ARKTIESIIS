@@ -33,7 +33,7 @@
     </div>
 
     <% if (overview.needsSchoolYearSelection) { %>
-      <p class="dashboard-empty" role="status"><% if (overview.schoolYears.length) { %>Choose a school year above to review Finance status.<% } else { %>No configured school year is available yet. Set up a school year and terms before reviewing Finance status.<% } %></p>
+      <p class="dashboard-empty" role="status"><% if (!overview.schoolYears.length) { %>No configured school year is available yet. Set up a school year and terms before reviewing Finance status.<% } else if (overview.currentScopeConfigured) { %>Choose a school year above to review Finance status.<% } else { %>No unique configured current year and term is available. Choose a year and term, or ask Registrar to complete term setup.<% } %></p>
     <% } else if (overview.needsTermSelection) { %>
       <p class="dashboard-empty" role="status"><% if (overview.availableTerms.length) { %>Choose a term above to review Finance status.<% } else { %>No configured terms are available for <%= overview.selectedSchoolYear %>.<% } %></p>
     <% } else { %>

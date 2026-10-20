@@ -86,7 +86,7 @@ function buildNavigation(role, currentPath = '') {
       ? path.startsWith('/student/finance')
       : false;
     else if (item.id === 'finance-overview') current = path === '/finance/overview';
-    else if (item.id === 'finance-roster') current = path === '/finance' || financeStudentPath;
+    else if (item.id === 'finance-roster') current = path === '/finance' || path === '/finance/accounts.csv' || financeStudentPath;
     else if (item.id === 'finance-schedules') current = path.startsWith('/finance/schedules');
     else if (item.id === 'finance-reports') current = path.startsWith('/finance/reports');
     else if (item.id === 'finance-departures') current = path.startsWith('/finance/departures');

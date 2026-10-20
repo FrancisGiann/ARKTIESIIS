@@ -398,6 +398,7 @@ test('finance schedule and allocation input stays cent-exact and ignores blank o
   ]);
   assert.deepEqual(lines.slice(0, 12).map((line) => line.amount), ['0.00', '100.10', ...Array(10).fill('0.00')]);
   assert.equal(lines[12].isOptional, true);
+  assert.equal(lines[12].installment, 'Once', 'a miscellaneous fee keeps its explicit saved installment label rather than inferring one from its name');
   assert.deepEqual(tuitionInstallmentBreakdown(lines)[0].installments.map(({ label, configured, amount }) => [label, configured, amount]), [
     ['DP', true, '0.00'], ['Prelim', true, '100.10'], ['Midterm', true, '0.00'], ['Finals', true, '0.00']
   ]);

@@ -97,7 +97,7 @@ test('registrar dashboard data is restricted to an active registrar actor', asyn
 test('finance overview applies configured-year and grade filters with reversal-aware term charge semantics', async () => {
   const database = queryPool(({ statement }) => {
     if (statement.includes('FROM users')) return { recordset: [{ id: 9 }] };
-    if (statement.includes('FROM student_document_requests AS request')) return { recordset: [{ document_clearance_count: 2, departure_review_count: 1, saved_review_count: 3 }] };
+    if (statement.includes('FROM student_document_requests AS request')) return { recordset: [{ document_clearance_count: 2, departure_review_count: 1, saved_review_count: 3, global_current_term_count: 1 }] };
     if (statement.includes('FROM FinanceTermClassification')) return { recordset: [
       { finance_status: 'unpaid', student_count: 3 },
       { finance_status: 'partially_paid', student_count: 1 },
@@ -130,6 +130,60 @@ test('finance overview applies configured-year and grade filters with reversal-a
   assert.doesNotMatch(counts.statement, /payment_date/);
 });
 
+test('finance overview selects only one globally current configured term by default and respects explicit empty selections', async () => {
+  const makeService = (configuredRows, globalCurrentTermCount = 1) => {
+    const database = queryPool(({ statement }) => {
+      if (statement.includes('FROM users')) return { recordset: [{ id: 9 }] };
+      if (statement.includes('FROM student_document_requests AS request')) return { recordset: [{ document_clearance_count: 0, departure_review_count: 0, saved_review_count: 0, global_current_term_count: globalCurrentTermCount }] };
+      if (statement.includes('school_year_term_order AS configured')) return { recordset: configuredRows };
+      if (statement.includes('SELECT DISTINCT grade_level')) return { recordset: [{ grade_level: 'Grade 11' }] };
+      if (statement.includes('SELECT DISTINCT section.id AS section_id')) return { recordset: [] };
+      if (statement.includes('FROM FinanceTermClassification')) return { recordset: [{ finance_status: 'unpaid', student_count: 2 }] };
+      throw new Error(`Unexpected query: ${statement}`);
+    });
+    return { database, service: createFinanceDashboardService({ getPool: database.getPool, sql: fakeSql() }) };
+  };
+
+  const current = makeService(terms);
+  const defaultResult = await current.service.getOverview(9);
+  const defaultCounts = current.database.calls.find((call) => call.statement.includes('FROM FinanceTermClassification'));
+  assert.equal(defaultResult.selectedSchoolYear, '2026-2027');
+  assert.equal(defaultResult.selectedTermId, '62');
+  assert.equal(defaultResult.currentScopeConfigured, true);
+  assert.equal(defaultCounts.values.schoolYear, '2026-2027');
+  assert.equal(defaultCounts.values.termId, 62);
+  assert.equal(defaultResult.totalEligible, 2);
+
+  const blank = makeService(terms);
+  const blankResult = await blank.service.getOverview(9, { schoolYear: '', termId: '' });
+  assert.equal(blankResult.selectedSchoolYear, '');
+  assert.equal(blankResult.selectedTermId, '');
+  assert.equal(blankResult.currentScopeConfigured, true, 'explicit blank filters are distinct from missing current setup');
+  assert.equal(blankResult.needsSchoolYearSelection, true);
+  assert.equal(blank.database.calls.length, 3, 'explicit empty filters do not fall through to current-term counts');
+
+  const noCurrent = makeService(terms.map((term) => ({ ...term, is_current: 0 })), 0);
+  const noCurrentResult = await noCurrent.service.getOverview(9);
+  assert.equal(noCurrentResult.selectedSchoolYear, '');
+  assert.equal(noCurrentResult.currentScopeConfigured, false);
+  assert.equal(noCurrentResult.needsSchoolYearSelection, true);
+  assert.equal(noCurrent.database.calls.length, 3, 'no current configuration does not choose an arbitrary saved year/term');
+
+  const ambiguousCurrent = makeService(terms.map((term) => ({ ...term, is_current: [61, 62].includes(term.academic_term_id) ? 1 : 0 })), 2);
+  const ambiguousResult = await ambiguousCurrent.service.getOverview(9);
+  assert.equal(ambiguousResult.selectedSchoolYear, '');
+  assert.equal(ambiguousResult.currentScopeConfigured, false);
+  assert.equal(ambiguousResult.needsSchoolYearSelection, true);
+  assert.equal(ambiguousCurrent.database.calls.length, 3, 'multiple current terms require an explicit selection');
+
+  const mappedPlusUnmappedCurrent = makeService(terms, 2);
+  const mappedPlusUnmappedResult = await mappedPlusUnmappedCurrent.service.getOverview(9);
+  assert.equal(mappedPlusUnmappedResult.selectedSchoolYear, '');
+  assert.equal(mappedPlusUnmappedResult.currentScopeConfigured, false);
+  assert.equal(mappedPlusUnmappedResult.needsSchoolYearSelection, true,
+    'an extra unmapped globally current academic term makes the default ambiguous too');
+});
+
 test('finance overview authorization excludes other active roles before loading finance records', async () => {
   const database = queryPool(() => ({ recordset: [] }));
   const service = createFinanceDashboardService({ getPool: database.getPool, sql: fakeSql() });
@@ -154,7 +208,7 @@ test('dashboards ask staff to choose a school year when no configured current te
 
   const financeDatabase = queryPool(({ statement }) => {
     if (statement.includes('FROM users')) return { recordset: [{ id: 9 }] };
-    if (statement.includes('FROM student_document_requests AS request')) return { recordset: [{ document_clearance_count: 0, departure_review_count: 0, saved_review_count: 0 }] };
+    if (statement.includes('FROM student_document_requests AS request')) return { recordset: [{ document_clearance_count: 0, departure_review_count: 0, saved_review_count: 0, global_current_term_count: 0 }] };
     if (statement.includes('school_year_term_order AS configured')) return { recordset: terms.map((term) => ({ ...term, is_current: 0 })) };
     throw new Error(`Unexpected query: ${statement}`);
   });

@@ -2404,6 +2404,7 @@ function createAnnualFinanceService({
     const chargesResult = await transaction.request().input('studentId', sql.Int, studentId).query(`SELECT charge.id AS charge_id, charge.enrollment_id,
           annual.school_year, annual.grade_level, annual.voucher_code, enrollment.annual_term_number, term.term,
           section.name AS section_name, charge.fee_category, charge.line_name, charge.installment,
+          CAST(COALESCE(schedule_line.is_optional, 0) AS UNSIGNED) AS is_optional,
           CAST(charge.gross_amount AS CHAR(40)) AS amount,
           CAST(charge.waived_amount AS CHAR(40)) AS waived_amount,
           CAST(COALESCE((SELECT SUM(adjustment.amount) FROM finance_charge_adjustments AS adjustment WHERE adjustment.charge_id = charge.id), 0) AS CHAR(40)) AS adjustments,
@@ -2415,6 +2416,7 @@ function createAnnualFinanceService({
         INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
         INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
         LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
+        LEFT JOIN finance_schedule_lines AS schedule_line ON schedule_line.id = charge.schedule_line_id
         LEFT JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
         WHERE annual.student_id = @studentId ORDER BY annual.school_year, enrollment.annual_term_number, charge.id`);
     const eventsResult = await eventsRequest.query(`

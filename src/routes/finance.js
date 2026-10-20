@@ -8,6 +8,8 @@ const {
   FinanceReportsError, FINANCE_REPORT_QUERY_PHASES, createAnnualFinanceReportsService
 } = require('../services/annualFinanceReportsService');
 const { FinanceDashboardError, createFinanceDashboardService } = require('../services/financeDashboardService');
+const { FinanceMasterlistError, createFinanceMasterlistService } = require('../services/financeMasterlistService');
+const { createCsvColumns, csvHeader, csvRow } = require('../utils/financeMasterlistCsv');
 const {
   StudentDocumentFinanceClearanceError,
   createStudentDocumentFinanceClearanceService
@@ -52,6 +54,21 @@ function paymentRecoveryValues(input = {}) {
   };
 }
 
+function writeResponseChunk(response, chunk) {
+  if (response.destroyed) return Promise.reject(new Error('The client closed the finance masterlist stream.'));
+  if (response.write(chunk)) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      response.removeListener('drain', onDrain);
+      response.removeListener('close', onClose);
+    };
+    const onDrain = () => { cleanup(); resolve(); };
+    const onClose = () => { cleanup(); reject(new Error('The client closed the finance masterlist stream.')); };
+    response.once('drain', onDrain);
+    response.once('close', onClose);
+  });
+}
+
 function recoveryFields(input = {}) {
   const blocked = new Set(['_csrf', 'csrfToken', 'idempotencyKey', 'reviewRevision', 'reviewFingerprint']);
   return Object.entries(input && typeof input === 'object' && !Array.isArray(input) ? input : {})
@@ -66,12 +83,13 @@ function recoveryFields(input = {}) {
     .filter((field) => field.value !== '');
 }
 
-function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, documentClearanceService, financeReviewActionService, sessionSecret = '', logger = console } = {}) {
+function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, documentClearanceService, financeReviewActionService, sessionSecret = '', logger = console } = {}) {
   const router = express.Router();
   const annual = annualFinanceService || createAnnualFinanceService({ getPool, sql });
   const cases = financeCasesService || createAnnualFinanceCasesService({ getPool, sql });
   const reports = financeReportsService || createAnnualFinanceReportsService({ getPool, sql });
   const dashboard = financeDashboardService || createFinanceDashboardService({ getPool, sql });
+  const masterlist = financeMasterlistService || createFinanceMasterlistService({ getPool, sql });
   const documentClearance = documentClearanceService || createStudentDocumentFinanceClearanceService({ getPool, sql });
   const reviewActions = financeReviewActionService || createFinanceReviewActionService({ getPool, sql });
 
@@ -580,6 +598,52 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     }
   }
 
+  async function renderFinanceAccounts(req, res) {
+    try {
+      const result = await masterlist.list(req.authUser.id, req.query);
+      return res.set('Cache-Control', 'private, no-store').render('finance/masterlist', {
+        title: 'Student accounts', currentUser: req.authUser, masterlist: result
+      });
+    } catch (error) {
+      if (error instanceof FinanceMasterlistError && error.status < 500) {
+        return res.status(error.status).set('Cache-Control', 'private, no-store').render('error', {
+          title: 'Student accounts', message: error.message
+        });
+      }
+      const supportReference = crypto.randomUUID().slice(0, 12);
+      const diagnosticsError = error instanceof FinanceMasterlistError ? error.cause || error : error;
+      logger.error?.('Finance student accounts request failed.', {
+        supportReference, operation: 'finance.accounts.load',
+        ...(error instanceof FinanceMasterlistError && error.queryPhase ? { queryPhase: error.queryPhase } : {}),
+        ...safeErrorDiagnostics(diagnosticsError)
+      });
+      return res.status(error instanceof FinanceMasterlistError ? error.status : 503)
+        .set('Cache-Control', 'private, no-store').render('error', {
+          title: 'Service Unavailable', message: `Student accounts could not be loaded. Support reference: ${supportReference}.`
+        });
+    }
+  }
+
+  function redirectLegacyMasterlist(req, res, destination) {
+    const bounds = {
+      search: 100, schoolYear: 20, termId: 10, gradeLevel: 50, sectionId: 10, section: 10,
+      placementTerm: 1, cluster: 100, strand: 100, voucherCode: 3, status: 30,
+      financeStatus: 30, installment: 20, page: 6
+    };
+    const params = new URLSearchParams();
+    for (const [key, limit] of Object.entries(bounds)) {
+      if (!Object.prototype.hasOwnProperty.call(req.query, key)) continue;
+      const value = req.query[key];
+      if (typeof value !== 'string' || value.length > limit || /[\u0000-\u001f\u007f]/.test(value)) {
+        return res.status(400).set('Cache-Control', 'private, no-store').render('error', {
+          title: 'Student accounts', message: 'Choose valid student account filters.'
+        });
+      }
+      params.set(key, value);
+    }
+    return res.redirect(302, `${destination}${params.size ? `?${params.toString()}` : ''}`);
+  }
+
   async function renderScheduleWorkspace(req, res, { status = 200, error = null, formValues = null } = {}) {
     try {
       const schedules = await annual.listSchedules(req.authUser.id);
@@ -635,7 +699,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         load('fee_schedules', () => annual.listSchedules(req.authUser.id)),
         load('finance_cases', () => cases.getStudentCases(req.authUser.id, studentId))
       ]);
-      const accountProjection = createStatementProjection(ledger);
+      const accountProjection = createStatementProjection(ledger, { includeStaffFeeApplications: true });
       const tokens = { payment: crypto.randomUUID(), assessment: crypto.randomUUID(), ...tokenOverrides };
       for (const payment of ledger.availablePayments) tokens[`allocation:${payment.payment_id}`] = crypto.randomUUID();
       for (const payment of ledger.events.filter((event) => event.event_type === 'payment')) {
@@ -665,7 +729,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       const accountView = accountViews.includes(accountViewOverride) ? accountViewOverride
         : accountViews.includes(req.query.view) ? req.query.view : 'overview';
       const backParams = new URLSearchParams();
-      for (const key of ['Search', 'SchoolYear', 'TermId', 'GradeLevel', 'SectionId', 'Cluster', 'Strand', 'VoucherCode', 'Status', 'FinanceStatus', 'Installment', 'Page']) {
+      for (const key of ['Search', 'SchoolYear', 'TermId', 'GradeLevel', 'SectionId', 'Section', 'PlacementTerm', 'Cluster', 'Strand', 'VoucherCode', 'Status', 'FinanceStatus', 'Installment', 'Page']) {
         if (typeof req.query[`back${key}`] === 'string' && req.query[`back${key}`]) backParams.set(key[0].toLowerCase() + key.slice(1), req.query[`back${key}`]);
       }
       const accountTabs = accountViews.map((view) => ({ view, label: ({ overview: 'Overview', payments: 'Payments', charges: 'Fees', clearance: 'Term account clearance', history: 'History' })[view] }));
@@ -674,7 +738,9 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         annualFeeBalance: accountProjection.summary.annualFeeBalance,
         hasEarlierAccountBalance: accountProjection.summary.showPreviousAccountBalance,
         hasPreviouslyConfirmedBalance: accountProjection.summary.showPreviouslyConfirmedBalance,
-        chargeBreakdown: accountProjection.charges, chargeGroups: accountProjection.chargeGroups, schedules,
+        chargeBreakdown: accountProjection.charges, chargeGroups: accountProjection.chargeGroups,
+        feeBreakdownYears: accountProjection.feeBreakdownYears,
+        feeApplicationsByCharge: accountProjection.staffFeeApplicationsByCharge, schedules,
         financeCases, preview, openingPreview, tokens, error, paymentValues, preservedValues, failedAction, notice: req.query.notice || null,
         paymentStatusPresentation,
         accountView, accountTabs, backHref: `/finance${backParams.size ? `?${backParams.toString()}` : ''}`
@@ -775,7 +841,49 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The finance overview could not be loaded.' });
     }
   });
-  router.get('/', (req, res) => renderAnnualRoster(req, res));
+  router.get('/masterlist', (req, res) => redirectLegacyMasterlist(req, res, '/finance'));
+  router.get('/masterlist.csv', (req, res) => redirectLegacyMasterlist(req, res, '/finance/accounts.csv'));
+  router.get('/accounts.csv', async (req, res) => {
+    let responseStarted = false;
+    let csvColumns = null;
+    try {
+      await masterlist.streamExport(req.authUser.id, req.query, async ({ masterlist: result, rows, first }) => {
+        if (first) {
+          csvColumns = createCsvColumns(result);
+          res.status(200).set({
+            'Cache-Control': 'private, no-store',
+            'Content-Type': 'text/csv; charset=utf-8',
+            'Content-Disposition': 'attachment; filename="finance-accounts.csv"',
+            'X-Content-Type-Options': 'nosniff'
+          });
+          responseStarted = true;
+          await writeResponseChunk(res, csvHeader(csvColumns));
+        } else {
+          for (const row of rows) await writeResponseChunk(res, csvRow(row, csvColumns));
+        }
+      });
+      return res.end();
+    } catch (error) {
+      if (responseStarted || res.headersSent) return res.destroy();
+      if (error instanceof FinanceMasterlistError && error.status < 500) {
+        return res.status(error.status).set('Cache-Control', 'private, no-store').render('error', {
+          title: 'Finance masterlist export', message: error.message
+        });
+      }
+      const supportReference = crypto.randomUUID().slice(0, 12);
+      const diagnosticsError = error instanceof FinanceMasterlistError ? error.cause || error : error;
+      logger.error?.('Finance masterlist export failed.', {
+        supportReference, operation: 'finance.masterlist.export',
+        ...(error instanceof FinanceMasterlistError && error.queryPhase ? { queryPhase: error.queryPhase } : {}),
+        ...safeErrorDiagnostics(diagnosticsError)
+      });
+      return res.status(error instanceof FinanceMasterlistError ? error.status : 503)
+        .set('Cache-Control', 'private, no-store').render('error', {
+          title: 'Service Unavailable', message: `Finance masterlist export could not be prepared. Support reference: ${supportReference}.`
+        });
+    }
+  });
+  router.get('/', (req, res) => renderFinanceAccounts(req, res));
   router.get('/legacy', (_req, res) => res.status(410).set('Cache-Control', 'private, no-store').render('error', {
     title: 'Earlier account history retired', message: 'The earlier account history workspace has been retired. Open Student accounts to review balances and payments.'
   }));
@@ -1040,7 +1148,9 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
   router.post('/students/:id/annual/adjustments/:adjustmentId/reverse', (req, res) => {
     const studentId = normalizeId(req.params.id);
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
-    return performAnnualAction(req, res, studentId, () => annual.reverseAdjustment(req.authUser.id, studentId, req.params.adjustmentId, req.body), 'adjustmentReversed', `adjustmentReversal:${req.params.adjustmentId}`);
+    return performAnnualAction(req, res, studentId, () => annual.reverseAdjustment(req.authUser.id, studentId, req.params.adjustmentId, req.body), 'adjustmentReversed', `adjustmentReversal:${req.params.adjustmentId}`, {
+      accountView: 'charges', failedActionPath: `/students/${studentId}/annual/adjustments/${req.params.adjustmentId}/reverse`
+    });
   });
   router.post('/students/:id/annual/legacy-payments/:transactionId/reconcile', (req, res) => {
     const studentId = normalizeId(req.params.id);

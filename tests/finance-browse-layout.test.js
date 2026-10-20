@@ -6,6 +6,7 @@ const ejs = require('ejs');
 const { createFinanceRouter } = require('../src/routes/finance');
 const { AnnualFinanceError, createAnnualFinanceService } = require('../src/services/annualFinanceService');
 const { FinanceReportsError } = require('../src/services/annualFinanceReportsService');
+const { FinanceMasterlistError } = require('../src/services/financeMasterlistService');
 const { formatMoney } = require('../src/utils/formatMoney');
 const { createStatementProjection } = require('../src/utils/financeStatementProjection');
 const { paymentStatusPresentation } = require('../src/utils/financeStatusPresentation');
@@ -13,11 +14,32 @@ const { paymentStatusPresentation } = require('../src/utils/financeStatusPresent
 const viewsDirectory = path.join(__dirname, '../views/finance');
 
 async function renderFinanceView(name, locals) {
+  const accountProjection = name === 'annual-student' && locals.ledger
+    ? createStatementProjection(locals.ledger, { includeStaffFeeApplications: true }) : null;
   return ejs.renderFile(path.join(viewsDirectory, name + '.ejs'), {
     title: 'Finance test', formatMoney, failedAction: null, preservedValues: [], paymentValues: null,
-    clearanceValues: {}, transactionValues: {}, formValues: {}, paymentStatusPresentation, ...locals
+    clearanceValues: {}, transactionValues: {}, formValues: {}, paymentStatusPresentation,
+    ...(accountProjection ? {
+      feeBreakdownYears: accountProjection.feeBreakdownYears,
+      feeApplicationsByCharge: accountProjection.staffFeeApplicationsByCharge
+    } : {}), ...locals
   });
 }
+
+test('shared finance fee breakdown keeps its disclosure and layout elements properly nested', () => {
+  const partial = readFileSync(path.join(__dirname, '../views/partials/finance-fee-breakdown.ejs'), 'utf8')
+    .replace(/<%[\s\S]*?%>/g, '');
+  const stack = [];
+  const voidElements = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+  for (const match of partial.matchAll(/<\/?([a-z][a-z0-9-]*)(?:\s[^<>]*?)?\s*\/?>/gi)) {
+    const tag = match[1].toLowerCase();
+    const closing = match[0].startsWith('</');
+    const selfClosing = match[0].endsWith('/>');
+    if (closing) assert.equal(stack.pop(), tag, `unexpected closing </${tag}> in shared fee breakdown`);
+    else if (!selfClosing && !voidElements.has(tag)) stack.push(tag);
+  }
+  assert.deepEqual(stack, [], 'every shared fee breakdown element must close within its parent layout');
+});
 
 function responseRecorder() {
   return {
@@ -70,6 +92,14 @@ test('finance account and reports load failures return support references withou
         throw new FinanceReportsError('Finance report details could not be loaded.', 503, { cause, queryPhase: 'details_data' });
       }
     },
+    financeMasterlistService: {
+      async list() {
+        const cause = new Error('sensitive student account query detail');
+        cause.code = 'ER_INVALID_GROUP_FUNC_USE'; cause.errno = 1111; cause.sqlState = 'HY000';
+        throw new FinanceMasterlistError('Finance masterlist could not be loaded.', 503, { cause, queryPhase: 'annual_rows' });
+      },
+      async streamExport() { throw new Error('unused'); }
+    },
     logger: { error(...args) { diagnostics.push(args); } }
   });
   const routeHandler = (routePath) => router.stack.find((layer) => layer.route?.path === routePath)?.route.stack[0].handle;
@@ -112,9 +142,9 @@ test('finance account and reports load failures return support references withou
   const rosterResponse = responseRecorder();
   await routeHandler('/')({ query: {}, authUser: { id: 7 } }, rosterResponse);
   assert.equal(rosterResponse.statusCode, 503);
-  assert.match(rosterResponse.locals.message, /student accounts are temporarily unavailable\. Support reference: [a-f0-9-]+/i);
-  assert.equal(diagnostics[2][1].operation, 'finance.roster.load');
-  assert.equal(diagnostics[2][1].queryPhase, 'count');
+  assert.match(rosterResponse.locals.message, /Student accounts could not be loaded\. Support reference: [a-f0-9-]+/i);
+  assert.equal(diagnostics[2][1].operation, 'finance.accounts.load');
+  assert.equal(diagnostics[2][1].queryPhase, 'annual_rows');
   assert.equal(diagnostics[2][1].errorCode, 'ER_INVALID_GROUP_FUNC_USE');
   assert.equal(diagnostics[2][1].errorNumber, 1111);
   assert.equal(diagnostics[2][1].sqlState, 'HY000');
@@ -595,12 +625,14 @@ test('finance annual roster separates page data, classification, and balances in
     schedules: [], tokens: { payment: 'test-payment-token', assessment: 'test-assessment-token', 'adjustment:81': 'test-adjustment-token', 'feeComment:81': 'test-comment-token' },
     csrfToken: 'test-csrf-token', notice: null, error: null, preview: null, openingPreview: null
   };
-  const accountProjection = createStatementProjection(accountLocals.ledger);
+  const accountProjection = createStatementProjection(accountLocals.ledger, { includeStaffFeeApplications: true });
   accountLocals.annualFeeBalance = accountProjection.summary.annualFeeBalance;
   accountLocals.hasEarlierAccountBalance = accountProjection.summary.showPreviousAccountBalance;
   accountLocals.hasPreviouslyConfirmedBalance = accountProjection.summary.showPreviouslyConfirmedBalance;
   accountLocals.chargeBreakdown = accountProjection.charges;
   accountLocals.chargeGroups = accountProjection.chargeGroups;
+  accountLocals.feeBreakdownYears = accountProjection.feeBreakdownYears;
+  accountLocals.feeApplicationsByCharge = accountProjection.staffFeeApplicationsByCharge;
   const accountHtml = await renderFinanceView('annual-student', accountLocals);
   assert.match(accountHtml, /aria-current="page">Overview<\/a>/);
   assert.match(accountHtml, /Student number: S-22 · LRN: 001234567890/);
@@ -652,21 +684,55 @@ test('finance annual roster separates page data, classification, and balances in
   assert.doesNotMatch(emptyAssessedBreakdown, /No school-year fees have been assessed/);
 
   const feeBreakdown = accountHtml.match(/<section class="finance-panel" aria-labelledby="charge-history-title" data-finance-view="overview charges">[\s\S]*?<\/section>/)?.[0] || '';
-  assert.match(feeBreakdown, /Fee breakdown[\s\S]*?fee amount − approved coverage \+ adjustments − payments applied = remaining due[\s\S]*?Adjustments can increase or reduce a fee/);
-  const latestYearFees = accountHtml.match(/<details class="finance-fee-school-year"[^>]*\bopen[^>]*>[\s\S]*?<\/details>/)?.[0] || '';
-  const earlierYearFees = accountHtml.match(/<details class="finance-fee-school-year"(?![^>]*\bopen)[^>]*>[\s\S]*?<\/details>/)?.[0] || '';
-  assert.match(latestYearFees, /2026-2027[\s\S]*?Term balance due ₱40\.00[\s\S]*?Tuition · Whole term[\s\S]*?Fee amount[\s\S]*?₱40\.00[\s\S]*?Approved coverage[\s\S]*?₱10\.00[\s\S]*?Adjustments[\s\S]*?₱0\.00[\s\S]*?Payments applied[\s\S]*?₱0\.00[\s\S]*?Remaining due[\s\S]*?₱30\.00[\s\S]*?Activity fee · Whole term[\s\S]*?₱10\.00/);
+  assert.match(feeBreakdown, /Fee breakdown[\s\S]*?An approved waiver or exemption reduces the assessed fee[\s\S]*?Voucher rates are already reflected in the schedule and are not deducted again/);
+  const firstYearStart = accountHtml.indexOf('<details class="finance-fee-school-year"');
+  const secondYearStart = accountHtml.indexOf('<details class="finance-fee-school-year"', firstYearStart + 1);
+  const latestYearFees = accountHtml.slice(firstYearStart, secondYearStart < 0 ? undefined : secondYearStart);
+  const earlierYearFees = accountHtml.slice(secondYearStart < 0 ? accountHtml.length : secondYearStart);
+  assert.match(latestYearFees, /2026-2027[\s\S]*?Term subtotal ₱40\.00 due[\s\S]*?Tuition · Whole term[\s\S]*?Assessed fee[\s\S]*?₱40\.00[\s\S]*?Discounts \/ exemptions[\s\S]*?−₱10\.00[\s\S]*?Adjustments[\s\S]*?₱0\.00[\s\S]*?Payments applied[\s\S]*?₱0\.00[\s\S]*?Balance[\s\S]*?₱30\.00 due[\s\S]*?Activity fee · Whole term[\s\S]*?₱10\.00/);
   assert.match(earlierYearFees, /2025-2026[\s\S]*?Earlier tuition · Whole term[\s\S]*?₱100\.00[\s\S]*?₱0\.00[\s\S]*?₱15\.00[\s\S]*?₱85\.00/);
-  assert.doesNotMatch(feeBreakdown, /<table|<th>|name="_csrf"/, 'overview shows the breakdown without edit forms');
+  assert.match(feeBreakdown, /<table[\s\S]*?<th scope="col">Fee \/ installment/);
+  assert.doesNotMatch(feeBreakdown, /<form\b|name="_csrf"/, 'overview shows the breakdown without edit forms');
+  assert.equal((feeBreakdown.match(/class="finance-fee-term-group"/g) || []).length, 2);
+  assert.doesNotMatch(feeBreakdown, /<details class="finance-fee-term-group" open/,
+    'Finance term details are collapsed by default while their balance totals remain in each summary');
+
+  const statementHtml = await renderFinanceView('statement', {
+    currentUser: { id: 7, role: 'finance' }, ledger: { ...accountLocals.ledger, feeBreakdownYears: accountLocals.feeBreakdownYears },
+    formatFinanceDateTime: () => 'Oct 20, 2026'
+  });
+  const statementBreakdown = statementHtml.match(/<section class="finance-panel" aria-labelledby="statement-charges-title">[\s\S]*?<\/section>/)?.[0] || '';
+  assert.equal((statementBreakdown.match(/class="finance-fee-term-group" open/g) || []).length, 2,
+    'the Statement of Account keeps every fee term expanded');
+  assert.equal((statementBreakdown.match(/class="finance-fee-shared-headings"/g) || []).length, 2);
+  assert.doesNotMatch(statementBreakdown, /<form\b|name="_csrf"/);
+  const stylesheet = readFileSync(path.join(__dirname, '../public/css/app.css'), 'utf8');
+  assert.match(stylesheet, /\.finance-statement details > :not\(summary\) \{ display: block !important; \}/,
+    'printing forces all statement fee disclosures open, even if a user closed one on screen');
+  assert.match(stylesheet, /\.finance-statement \.finance-fee-table-accessible-head \{ position: static/);
 
   const chargesLocals = structuredClone(accountLocals);
   chargesLocals.accountView = 'charges';
   const chargesHtml = await renderFinanceView('annual-student', chargesLocals);
   const chargesBreakdown = chargesHtml.match(/<section class="finance-panel" aria-labelledby="charge-history-title" data-finance-view="overview charges">[\s\S]*?<\/section>/)?.[0] || '';
-  assert.match(chargesBreakdown, /<summary>Add adjustment<\/summary>/);
+  assert.match(chargesBreakdown, /<summary>Adjust<\/summary>/);
+  assert.match(chargesBreakdown, /class="finance-fee-shared-headings" aria-hidden="true"/);
+  assert.match(chargesBreakdown, /<colgroup><col class="finance-fee-breakdown-col--label"><col class="finance-fee-breakdown-col--amount">(?:<col class="finance-fee-breakdown-col--amount">){4}<\/colgroup>/,
+    'the shared column header and every term table use the same explicit six-column widths');
+  assert.equal((chargesBreakdown.match(/class="finance-fee-shared-headings"/g) || []).length, 2,
+    'each school-year breakdown has one compact shared visible set of column headings');
+  assert.match(chargesBreakdown, /<details class="finance-fee-term-group"[^>]*>\s*<summary><strong>Term 2<\/strong><span>Term subtotal/,
+    'term totals remain visible while their fee detail rows are collapsed');
+  assert.match(chargesBreakdown, /data-balance-state="due"><strong>₱30\.00 due/);
   assert.match(chargesBreakdown, /name="_csrf" value="test-csrf-token"/);
   assert.match(chargesBreakdown, /name="idempotencyKey" value="test-adjustment-token"/);
   assert.match(chargesBreakdown, /name="idempotencyKey" value="test-comment-token"/);
+  assert.match(stylesheet, /\.finance-fee-breakdown-table \{ width: 100%; min-width: 58rem; table-layout: fixed; \}/);
+  assert.match(stylesheet, /\.finance-fee-shared-headings \{[^}]*grid-template-columns: 29% repeat\(5, 14\.2%\)/);
+  assert.match(stylesheet, /@media \(max-width: 1100px\) \{\s*\.finance-fee-shared-headings \{ display: none; \}/,
+    'mobile card rows use their own labels without an overflowing duplicate shared header');
+  assert.match(stylesheet, /@media \(max-width: 700px\) \{\s*\.table-scroll > \.finance-fee-breakdown-table \{ width: 100%; min-width: 0; \}/,
+    'mobile fee rows reflow as cards instead of forcing a wide table');
 
   const pendingReviewLocals = structuredClone(chargesLocals);
   Object.assign(pendingReviewLocals.ledger.terms[0], {
@@ -694,9 +760,24 @@ test('finance annual roster separates page data, classification, and balances in
     const recoveryHtml = await renderFinanceView('annual-student', recoveryLocals);
     assert.match(recoveryHtml, /<details class="finance-fee-school-year" open>\s*<summary><strong>2025-2026<\/strong>/,
       `the older school-year section opens when a ${action} submission needs correction`);
-    assert.match(recoveryHtml, new RegExp(`<summary><strong>2025-2026<\\/strong>[\\s\\S]*?<details open><summary>${action === 'adjustments' ? 'Add adjustment' : 'Fee comments · \\d+'}`),
+    assert.match(recoveryHtml, /<details class="finance-fee-term-group" open>/,
+      'the term containing a failed adjustment or comment opens for recovery');
+    assert.match(recoveryHtml, action === 'adjustments'
+      ? /<details class="finance-fee-adjustment-details" open><summary>Adjust<\/summary>/
+      : /<details class="finance-fee-comment-details" open><summary>Add comment<\/summary>/,
       `the matching ${action} disclosure opens along with its school-year section`);
   }
+
+  const reversalRecoveryLocals = structuredClone(chargesLocals);
+  reversalRecoveryLocals.ledger.adjustments.push({ adjustment_id: 90, charge_id: 83, amount: '5.00', reason: 'Older adjustment',
+    reverses_adjustment_id: null, created_at: new Date('2026-02-01T00:00:00Z'), already_reversed: false });
+  reversalRecoveryLocals.tokens['adjustmentReversal:90'] = 'test-reversal-token';
+  reversalRecoveryLocals.failedAction = { path: '/students/22/annual/adjustments/90/reverse', input: { reason: '' } };
+  const reversalRecoveryHtml = await renderFinanceView('annual-student', reversalRecoveryLocals);
+  assert.match(reversalRecoveryHtml, /<details class="finance-fee-school-year" open>\s*<summary><strong>2025-2026<\/strong>/,
+    'an adjustment reversal failure opens the matching school-year details');
+  assert.match(reversalRecoveryHtml, /<details class="finance-fee-term-group" open>[\s\S]*?<details class="finance-fee-staff-details" open>[\s\S]*?test-reversal-token[\s\S]*?Reversal reason/,
+    'an adjustment reversal failure opens Finance fee details and preserves the reversal form');
 
   const archivedLocals = structuredClone(accountLocals);
   archivedLocals.ledger.student.status = 'archived';
@@ -776,10 +857,12 @@ test('finance annual roster separates page data, classification, and balances in
   const settledProjection = createStatementProjection(settledLocals.ledger);
   settledLocals.chargeBreakdown = settledProjection.charges;
   settledLocals.chargeGroups = settledProjection.chargeGroups;
+  settledLocals.feeBreakdownYears = settledProjection.feeBreakdownYears;
   const settledHtml = await renderFinanceView('annual-student', settledLocals);
   const settledBreakdown = settledHtml.match(/<section class="finance-panel" aria-labelledby="charge-history-title" data-finance-view="overview charges">[\s\S]*?<\/section>/)?.[0] || '';
   assert.doesNotMatch(settledBreakdown, /No school-year fees have been assessed/);
-  assert.match(settledBreakdown, /Remaining due[\s\S]*?₱0\.00/, 'assessed fees remain visible when fully paid');
+  assert.match(settledBreakdown, /data-label="Balance"><strong>₱0\.00<\/strong>/, 'assessed fees remain visible when fully paid');
+  assert.match(settledBreakdown, /<span class="finance-fee-status finance-fee-status--settled">Fully paid<\/span>/, 'the fee status distinguishes payment completion from a zero configured amount');
 
   const noCurrentTermLocals = structuredClone(zeroLocals);
   noCurrentTermLocals.ledger.terms[0].is_current = '0';
@@ -977,6 +1060,29 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
   assert.match(departureHtml, /name="idempotencyKey" value="41111111-1111-4111-8111-111111111111"/);
   assert.match(departureHtml, /Save Finance review and corrections/);
   assert.doesNotMatch(departureHtml, /<fieldset/);
+
+  const recoveredDepartureHtml = await renderFinanceView('departures', {
+    currentUser: null, csrfToken: 'csrf-token', error: 'Review corrections need attention.', notice: null,
+    failedAction: { path: '/departure-cases/71/review', input: {
+      reason: 'Keep typed review reason.', adjustments: [{ chargeId: '301', amount: '-1.25', reason: 'Correct the saved fee.' }]
+    } },
+    departures: [{
+      departure_case_id: 71, student_name: 'Ari Kim', student_no: 'S-22', school_year: '2026-2027',
+      grade_level: 'Grade 11', departure_type: 'dropped', effective_date: '2026-10-01',
+      reason: 'Registrar record reason.', idempotencyKey: '41111111-1111-4111-8111-111111111111',
+      terms: [{ enrollment_id: 82, annual_term_number: 2, academic_activity_review_required: false, charges: [
+        { charge_id: 301, line_name: 'Tuition', installment: 'DP', amount_due: '25.50' },
+        { charge_id: 302, line_name: 'Activity fee', installment: 'Whole term', amount_due: '10.00' }
+      ] }]
+    }]
+  });
+  assert.match(recoveredDepartureHtml, /<details class="finance-departure-term" open>\s*<summary><strong>Term 2<\/strong><span>2 fees · ₱35\.50 due/);
+  assert.match(recoveredDepartureHtml, /<details class="finance-departure-charge-adjustment" open>[\s\S]*?value="-1\.25"[\s\S]*?value="Correct the saved fee\."/);
+  assert.match(recoveredDepartureHtml, /name="departureChargeId" value="301"[\s\S]*?name="departureAdjustmentAmount"[\s\S]*?name="departureAdjustmentReason"/);
+  assert.equal((recoveredDepartureHtml.match(/name="departureChargeId"/g) || []).length, 2);
+  assert.equal((recoveredDepartureHtml.match(/name="departureAdjustmentAmount"/g) || []).length, 2);
+  assert.equal((recoveredDepartureHtml.match(/name="departureAdjustmentReason"/g) || []).length, 2,
+    'closing a per-fee disclosure leaves every aligned charge/amount/reason form control present');
 });
 
 test('schedule validation reopens the form with submitted fee lines and idempotency key', async () => {

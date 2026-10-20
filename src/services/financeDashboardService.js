@@ -23,6 +23,15 @@ function filterString(value, maxLength) {
   return typeof value === 'string' && value.length <= maxLength ? value.trim() : '';
 }
 
+function optionalQueryFilter(filters, key, maxLength) {
+  if (!Object.prototype.hasOwnProperty.call(filters, key)) return { provided: false, value: '' };
+  const value = filters[key];
+  if (typeof value !== 'string' || value.length > maxLength) {
+    throw new FinanceDashboardError(`Choose a valid ${key === 'schoolYear' ? 'school year' : 'term'}.`);
+  }
+  return { provided: true, value: value.trim() };
+}
+
 const STATUS_LABELS = Object.freeze([
   { status: FINANCE_STATUS.UNPAID, label: 'Unpaid' },
   { status: FINANCE_STATUS.PARTIAL, label: 'Partially paid' },
@@ -47,7 +56,8 @@ function createFinanceDashboardService({ getPool = defaultGetPool, sql = default
         (SELECT COUNT(*) FROM finance_departure_cases AS departure
           WHERE departure.finance_status = 'pending') AS departure_review_count,
         (SELECT COUNT(*) FROM finance_review_drafts AS draft
-          WHERE draft.owner_user_id = @actorId AND draft.status = 'pending') AS saved_review_count`);
+          WHERE draft.owner_user_id = @actorId AND draft.status = 'pending') AS saved_review_count,
+        (SELECT COUNT(*) FROM academic_terms AS term WHERE term.is_current = 1) AS global_current_term_count`);
     const queueRow = queueResult.recordset?.[0] || {};
     const queueCounts = {
       documentClearance: Number(queueRow.document_clearance_count || 0),
@@ -69,16 +79,22 @@ function createFinanceDashboardService({ getPool = defaultGetPool, sql = default
       isCurrent: row.is_current === true || row.is_current === 1
     }));
     const schoolYears = [...new Set(configuredTerms.map((term) => term.schoolYear))];
-    const currentTerm = configuredTerms.find((term) => term.isCurrent) || null;
-    const requestedYear = filterString(filters.schoolYear, 20);
-    if (requestedYear && !schoolYears.includes(requestedYear)) throw new FinanceDashboardError('Choose a configured school year.');
-    const selectedSchoolYear = requestedYear || currentTerm?.schoolYear || '';
+    const currentTerms = configuredTerms.filter((term) => term.isCurrent
+      && term.schoolYear && Number.isSafeInteger(term.academicTermId) && term.academicTermId > 0
+      && Number.isInteger(term.termNumber) && term.termNumber >= 1 && term.termNumber <= 3);
+    const globalCurrentTermCount = Number(queueRow.global_current_term_count || 0);
+    const currentTerm = globalCurrentTermCount === 1 && currentTerms.length === 1 ? currentTerms[0] : null;
+    const requestedYear = optionalQueryFilter(filters, 'schoolYear', 20);
+    const requestedTerm = optionalQueryFilter(filters, 'termId', 12);
+    const selectedRequestedYear = requestedYear.provided ? requestedYear.value : currentTerm?.schoolYear || '';
+    if (requestedYear.value && !schoolYears.includes(requestedYear.value)) throw new FinanceDashboardError('Choose a configured school year.');
+    const selectedSchoolYear = selectedRequestedYear;
     const availableTerms = configuredTerms.filter((term) => term.schoolYear === selectedSchoolYear);
-    const requestedTermId = filterString(filters.termId, 12);
-    const selectedTerm = requestedTermId
-      ? availableTerms.find((term) => String(term.academicTermId) === requestedTermId)
-      : availableTerms.find((term) => term.isCurrent) || availableTerms[0] || null;
-    if (requestedTermId && !selectedTerm) throw new FinanceDashboardError('Choose a configured term in the selected school year.');
+    const selectedTerm = requestedTerm.value
+      ? availableTerms.find((term) => String(term.academicTermId) === requestedTerm.value)
+      : requestedTerm.provided ? null
+        : currentTerm && currentTerm.schoolYear === selectedSchoolYear ? currentTerm : null;
+    if (requestedTerm.value && !selectedTerm) throw new FinanceDashboardError('Choose a configured term in the selected school year.');
     const selectedGrade = filterString(filters.gradeLevel, 50);
     if (selectedGrade && !['Grade 11', 'Grade 12'].includes(selectedGrade)) throw new FinanceDashboardError('Choose Grade 11 or Grade 12.');
     const selectedVoucher = filterString(filters.voucherCode, 10);
@@ -116,6 +132,7 @@ function createFinanceDashboardService({ getPool = defaultGetPool, sql = default
         selectedSchoolYear, selectedTermId: '', selectedTerm: null, selectedGrade, selectedVoucher, selectedSectionId, selectedInstallment,
         statusCounts: STATUS_LABELS.map((item) => ({ ...item, count: 0 })), totalEligible: 0,
         queueCounts,
+        currentScopeConfigured: Boolean(currentTerm),
         needsSchoolYearSelection: !selectedSchoolYear, needsTermSelection: Boolean(selectedSchoolYear) };
     }
 
@@ -143,6 +160,7 @@ function createFinanceDashboardService({ getPool = defaultGetPool, sql = default
       selectedGrade, selectedVoucher, selectedSectionId, selectedInstallment, sections, statusCounts,
       queueCounts,
       totalEligible: statusCounts.reduce((sum, item) => sum + item.count, 0),
+      currentScopeConfigured: Boolean(currentTerm),
       needsSchoolYearSelection: false, needsTermSelection: false
     };
   }

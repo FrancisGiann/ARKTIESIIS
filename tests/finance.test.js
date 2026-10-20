@@ -6,6 +6,7 @@ const { createApp } = require('../src/app');
 const { ACTION_WRITERS, SAFE_ACTIONS, actionByPath, createFinanceReviewActionService, normalizeActionInput, normalizeFinanceReturnContext, financeActionContext } = require('../src/services/financeReviewActionService');
 const { AnnualFinanceError, createAnnualFinanceService } = require('../src/services/annualFinanceService');
 const { FinanceReviewDraftError, createFinanceReviewDraftService, validatePositivePaymentAmount } = require('../src/services/financeReviewDraftService');
+const { buildMasterlistProjection, createFinanceMasterlistService } = require('../src/services/financeMasterlistService');
 const {
   FinanceServiceError,
   createFinanceService,
@@ -1046,20 +1047,30 @@ test('a pending review stays editable and discardable when current-target valida
 
 test('finance routes retire legacy account entry and preserve annual account access for finance staff', async () => {
   const calls = [];
+  const masterlistCalls = [];
   const annualFinanceService = {
     async listRoster(actorId, filters) { calls.push(['annualRoster', actorId, filters]); return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; },
     async getStudentLedger() { return { terms: [] }; }
   };
+  const financeMasterlistService = {
+    async list(actorId, filters) {
+      masterlistCalls.push({ actorId, filters });
+      return { ...buildMasterlistProjection({}, {
+        schoolYear: '2026-2027', gradeLevel: '', voucherCode: '', search: '', section: '',
+        placementTerm: 1, page: 1
+      }), options: { schoolYears: ['2026-2027'], grades: [], sections: [], placementTerms: [1, 2, 3] } };
+    }
+  };
   const reviewProbe = createReviewRouteProbe();
-  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, annualFinanceService, financeReviewActionService: reviewProbe }), async (baseUrl) => {
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, annualFinanceService, financeMasterlistService, financeReviewActionService: reviewProbe }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
     const redirect = await fetch(`${baseUrl}/dashboard`, { headers: { cookie }, redirect: 'manual' });
     assert.equal(redirect.headers.get('location'), '/finance/overview');
     const workspace = await fetch(`${baseUrl}/finance`, { headers: { cookie } });
     assert.equal(workspace.status, 200);
     const workspaceHtml = await workspace.text();
-    assert.match(workspaceHtml, /Student accounts/);
-    assert.ok(calls.some(([name]) => name === 'annualRoster'));
+    assert.match(workspaceHtml, /<h1>Student accounts<\/h1>/);
+    assert.deepEqual(masterlistCalls.map(({ actorId }) => actorId), [7]);
 
     const legacyWorkspace = await fetch(`${baseUrl}/finance/legacy`, { headers: { cookie }, redirect: 'manual' });
     const legacyHtml = await legacyWorkspace.text();
@@ -1076,12 +1087,12 @@ test('finance routes retire legacy account entry and preserve annual account acc
       });
       assert.equal(retiredPost.status, 410, `${path} must be unavailable even without a valid CSRF token`);
     }
-    assert.deepEqual(calls.map(([name]) => name), ['annualRoster']);
+    assert.deepEqual(calls, [], 'canonical Student accounts does not call the retired roster service');
   });
 
   const serviceCallsBeforeDeniedRequests = calls.length;
   for (const role of ['student', 'registrar']) {
-    const app = createApp({ databasePool: makeAuthPool(role), environment, annualFinanceService });
+    const app = createApp({ databasePool: makeAuthPool(role), environment, annualFinanceService, financeMasterlistService });
     await withServer(app, async (baseUrl) => {
       const cookie = await signIn(baseUrl, role);
       const response = await fetch(`${baseUrl}/finance`, { headers: { cookie }, redirect: 'manual' });
@@ -1093,7 +1104,7 @@ test('finance routes retire legacy account entry and preserve annual account acc
     });
   }
   const adminReviewProbe = createReviewRouteProbe();
-  await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, annualFinanceService, financeReviewActionService: adminReviewProbe }), async (baseUrl) => {
+  await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment, annualFinanceService, financeMasterlistService, financeReviewActionService: adminReviewProbe }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'database_admin');
     const accountPage = await fetch(`${baseUrl}/finance/students/22`, { headers: { cookie }, redirect: 'manual' });
     assert.equal(accountPage.status, 303);
@@ -1108,17 +1119,17 @@ test('finance routes retire legacy account entry and preserve annual account acc
   assert.equal(calls.length, serviceCallsBeforeDeniedRequests, 'database administrator redirects and retired paths need no legacy service call');
 });
 
-test('invalid finance roster text returns a controlled 400 instead of a service-unavailable response', async () => {
-  const annualFinanceService = createAnnualFinanceService({
+test('invalid Finance account search returns a controlled 400 before database access', async () => {
+  const financeMasterlistService = createFinanceMasterlistService({
     getPool: async () => { throw new Error('malformed search must be rejected before database access'); },
     sql: fakeSql()
   });
-  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, annualFinanceService }), async (baseUrl) => {
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeMasterlistService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
     const response = await fetch(`${baseUrl}/finance?search=%00`, { headers: { cookie } });
     const html = await response.text();
     assert.equal(response.status, 400);
-    assert.match(html, /Search must be 100 printable characters or fewer\./);
+    assert.match(html, /Choose a valid search\./);
     assert.doesNotMatch(html, /Service Unavailable|malformed search must be rejected/);
   });
 });

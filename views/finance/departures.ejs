@@ -12,6 +12,23 @@
         const recoveryPath = `/departure-cases/${departure.departure_case_id}/review`;
         const recovered = failedAction?.path === recoveryPath ? failedAction.input : {};
         const recoveredAdjustment = (chargeId) => (recovered.adjustments || []).find((item) => String(item.chargeId) === String(chargeId)) || {};
+        const parseCents = (value) => {
+          const match = String(value ?? '').trim().match(/^(-?)(\d+)(?:\.(\d{1,2}))?$/);
+          if (!match) return null;
+          const cents = BigInt(match[2]) * 100n + BigInt((match[3] || '').padEnd(2, '0'));
+          return match[1] ? -cents : cents;
+        };
+        const displayCents = (value) => {
+          if (value == null) return 'Balance unavailable';
+          const negative = value < 0n;
+          const absolute = negative ? -value : value;
+          const formatted = formatMoney(`${absolute / 100n}.${String(absolute % 100n).padStart(2, '0')}`);
+          return negative ? `₱${formatted} credit` : `₱${formatted} due`;
+        };
+        const termHasRecovery = (term) => term.charges.some((charge) => {
+          const row = recoveredAdjustment(charge.charge_id);
+          return row.amount !== undefined || row.reason !== undefined;
+        });
         const effectiveDate = departure.effective_date instanceof Date
           ? departure.effective_date.toISOString().slice(0, 10)
           : String(departure.effective_date).slice(0, 10);
@@ -36,21 +53,26 @@
                     <span>No annual charges are linked to this placement.</span>
                     <% if (term.academic_activity_review_required === true || term.academic_activity_review_required === 1) { %><span class="finance-review-flag">Academic activity exists; verify grade and schedule history separately.</span><% } %>
                   </div>
-                <% } else { %>
-                  <section class="finance-departure-term">
-                    <h4>Term <%= term.annual_term_number %></h4>
+                <% } else { const termTotalCents = term.charges.reduce((total, charge) => { const amount = parseCents(charge.amount_due); return amount == null || total == null ? null : total + amount; }, 0n); %>
+                  <details class="finance-departure-term" <%= termHasRecovery(term) ? 'open' : '' %>>
+                    <summary><strong>Term <%= term.annual_term_number %></strong><span><%= term.charges.length %> fees · <%= displayCents(termTotalCents) %></span></summary>
                     <% if (term.academic_activity_review_required === true || term.academic_activity_review_required === 1) { %><p class="finance-review-flag">Academic activity exists in this affected placement; verify grade and schedule history separately.</p><% } %>
                     <div class="finance-departure-charge-list">
                       <% for (const charge of term.charges) { %>
                         <div class="finance-departure-charge">
                           <input type="hidden" name="departureChargeId" value="<%= charge.charge_id %>">
                           <% const recoveredRow = recoveredAdjustment(charge.charge_id); %>
-                          <label class="field"><span><%= charge.line_name %> · <%= charge.installment %> · remaining ₱<%= formatMoney(charge.amount_due) %></span><input name="departureAdjustmentAmount" inputmode="decimal" maxlength="14" placeholder="No correction" value="<%= recoveredRow.amount || '' %>"></label>
-                          <label class="field"><span>Correction reason</span><input name="departureAdjustmentReason" maxlength="1000" placeholder="Required when amount is entered" value="<%= recoveredRow.reason || '' %>"></label>
+                          <details class="finance-departure-charge-adjustment" <%= recoveredRow.amount !== undefined || recoveredRow.reason !== undefined ? 'open' : '' %>>
+                            <summary><strong><%= charge.line_name %> · <%= charge.installment %></strong><span>Remaining ₱<%= formatMoney(charge.amount_due) %> · Enter correction</span></summary>
+                            <div class="finance-departure-charge-fields">
+                              <label class="field"><span>Correction amount (PHP)</span><input name="departureAdjustmentAmount" inputmode="decimal" maxlength="14" placeholder="No correction" value="<%= recoveredRow.amount || '' %>"></label>
+                              <label class="field"><span>Correction reason</span><input name="departureAdjustmentReason" maxlength="1000" placeholder="Required when amount is entered" value="<%= recoveredRow.reason || '' %>"></label>
+                            </div>
+                          </details>
                         </div>
                       <% } %>
                     </div>
-                  </section>
+                  </details>
                 <% } %>
               <% } %>
             </div>

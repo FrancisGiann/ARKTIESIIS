@@ -5,6 +5,8 @@ const ejs = require('ejs');
 const { createStatementProjection, createStudentFinanceProjection } = require('../src/utils/financeStatementProjection');
 const { formatMoney } = require('../src/utils/formatMoney');
 
+const financeBreakdownTemplate = path.join(__dirname, '..', 'views', 'partials', 'finance-fee-breakdown.ejs');
+
 test('statement prints nonzero negative earlier balances for staff and keeps student privacy flags', async () => {
   const ledger = {
     student: { id: 501, first_name: 'Mika', middle_name: '', last_name: 'Santos', suffix: '', student_no: 'SHS-2026-0501' },
@@ -137,10 +139,117 @@ test('student and Finance projections expose the same canonical balances and fee
     { due_amount: '10.00', other_adjustments: '0.00' }
   ]);
   assert.deepEqual(studentProjection.chargeGroups.map(({ school_year, term, due }) => ({ school_year, term, due })), [
-    { school_year: '2025-2026', term: 'Term 1', due: '20.00' },
     { school_year: '2026-2027', term: 'Term 1', due: '35.00' },
     { school_year: '2026-2027', term: 'Term 2', due: '-5.00' },
-    { school_year: '2026-2027', term: 'Term 3', due: '10.00' }
+    { school_year: '2026-2027', term: 'Term 3', due: '10.00' },
+    { school_year: '2025-2026', term: 'Term 1', due: '20.00' }
   ]);
   assert.doesNotMatch(JSON.stringify(studentProjection), /Staff-only adjustment reason|PRIVATE-REF/);
+});
+
+test('fee breakdown orders years, terms, canonical tuition and miscellaneous installments, while preserving incomplete saved rows', async () => {
+  const charges = [
+    { charge_id: 1, school_year: '2025-2026', annual_term_number: 2, term: 'Term 2', fee_category: 'tuition', line_name: 'Tuition', installment: 'Whole term', amount: '400.00', waived_amount: '0.00', allocated: '0.00', remaining_due: '400.00' },
+    { charge_id: 2, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', fee_category: 'miscellaneous', line_name: 'Laboratory', installment: 'Finals', amount: '4.00', waived_amount: '0.00', allocated: '0.00', remaining_due: '4.00' },
+    { charge_id: 3, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', fee_category: 'tuition', line_name: 'Tuition', installment: 'Finals', amount: '100.00', waived_amount: '0.00', allocated: '0.00', remaining_due: '100.00' },
+    { charge_id: 4, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', fee_category: 'miscellaneous', line_name: 'Laboratory', installment: 'DP', amount: '1.00', waived_amount: '0.00', allocated: '0.00', remaining_due: '1.00' },
+    { charge_id: 5, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', fee_category: 'tuition', line_name: 'Tuition', installment: 'DP', amount: '100.00', waived_amount: '0.00', allocated: '100.00', remaining_due: '0.00' },
+    { charge_id: 6, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', fee_category: 'miscellaneous', line_name: 'Laboratory', installment: 'Prelim', amount: '2.00', waived_amount: '0.00', allocated: '0.00', remaining_due: '2.00' },
+    { charge_id: 7, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', fee_category: 'tuition', line_name: 'Tuition', installment: 'Prelim', amount: '100.00', waived_amount: '0.00', allocated: '0.00', remaining_due: '100.00' },
+    { charge_id: 8, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', fee_category: 'miscellaneous', line_name: 'Laboratory', installment: 'Midterm', amount: '3.00', waived_amount: '0.00', allocated: '0.00', remaining_due: '3.00' },
+    { charge_id: 9, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', fee_category: 'tuition', line_name: 'Tuition', installment: 'Midterm', amount: '100.00', waived_amount: '0.00', allocated: '0.00', remaining_due: '100.00' },
+    { charge_id: 10, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', fee_category: 'miscellaneous', line_name: 'Laboratory', installment: 'As needed', amount: '5.00', waived_amount: '0.00', allocated: '0.00', remaining_due: '5.00' },
+    { charge_id: 11, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', fee_category: 'tuition', line_name: 'Tuition', installment: 'DP', amount: '50.00', waived_amount: '0.00', allocated: '0.00', remaining_due: '50.00', is_optional: 1 }
+  ];
+  const projection = createStatementProjection({ charges, events: [] });
+  assert.deepEqual(projection.feeBreakdownYears.map((year) => year.school_year), ['2026-2027', '2025-2026']);
+  const currentTerm = projection.feeBreakdownYears[0].terms[0];
+  assert.equal(currentTerm.tuitionBreakdownRecorded, false, 'an optional or duplicate canonical tuition row means the split is incomplete');
+  assert.deepEqual(currentTerm.charges.map(({ fee_category, installment }) => `${fee_category}:${installment}`), [
+    'tuition:DP', 'tuition:DP', 'tuition:Prelim', 'tuition:Midterm', 'tuition:Finals',
+    'miscellaneous:DP', 'miscellaneous:Prelim', 'miscellaneous:Midterm', 'miscellaneous:Finals', 'miscellaneous:As needed'
+  ]);
+  const archivedYear = projection.feeBreakdownYears[1];
+  const archivedTerm = archivedYear.terms[0];
+  assert.equal(archivedTerm.tuitionBreakdownRecorded, false);
+  assert.equal(archivedTerm.charges[0].installment, 'Whole term', 'the saved whole-term label is not replaced with estimated installments');
+
+  const html = await ejs.renderFile(financeBreakdownTemplate, {
+    ledger: { student: { id: 5 }, adjustments: [], feeComments: [] }, years: [archivedYear],
+    staffOnlyDetails: false, formatMoney, csrfToken: '', tokens: {}
+  });
+  assert.match(html, /Tuition installment breakdown not recorded/);
+  assert.match(html, /Tuition · Whole term/);
+  assert.match(html, /₱400\.00/);
+  assert.match(html, /Discounts \/ exemptions/);
+});
+
+test('staff application history reports multiple applications, legacy reconciliation, releases, reversals, and missing references', async () => {
+  const ledger = {
+    student: { id: 5 },
+    charges: [{ charge_id: 81, school_year: '2026-2027', annual_term_number: 1, term: 'Term 1', fee_category: 'tuition', line_name: 'Tuition', installment: 'DP', amount: '100.00', waived_amount: '0.00', allocated: '75.00', remaining_due: '25.00' }],
+    allocationHistory: [
+      { allocation_id: 41, payment_id: 501, charge_id: 81, payment_date: new Date('2026-08-01T00:00:00Z'), reference_no: 'REC-501', original_amount: '60.00', remaining_amount: '40.00', released_amount: '20.00', is_reversed: 0 },
+      { allocation_id: 42, payment_id: 502, charge_id: 81, payment_date: new Date('2026-08-02T00:00:00Z'), reference_no: 'REC-502', original_amount: '30.00', remaining_amount: '0.00', released_amount: '10.00', is_reversed: 1 }
+    ],
+    legacyReconciliationHistory: [
+      { reconciliation_id: 43, transaction_id: 503, charge_id: 81, original_amount: '20.00', remaining_amount: '15.00', released_amount: '5.00', payment_date: null, reference_no: null }
+    ],
+    adjustments: [{ adjustment_id: 9, charge_id: 81, amount: '-1.00', reason: 'STAFF-ONLY-ADJUSTMENT-REASON', created_at: '2026-08-03' }],
+    feeComments: [{ charge_id: 81, actor_name: 'STAFF-ONLY-NAME', comment: 'STAFF-ONLY-FEE-COMMENT', created_at: '2026-08-03' }],
+    events: []
+  };
+  const financeProjection = createStatementProjection(ledger, { includeStaffFeeApplications: true });
+  const applications = financeProjection.staffFeeApplicationsByCharge['81'];
+  assert.deepEqual(applications.map(({ application_kind, original_amount, still_applied_amount, released_display_amount, reversed_display_amount }) => ({
+    application_kind, original_amount, still_applied_amount, released_display_amount, reversed_display_amount
+  })), [
+    { application_kind: 'payment', original_amount: '60.00', still_applied_amount: '40.00', released_display_amount: '20.00', reversed_display_amount: '0.00' },
+    { application_kind: 'payment', original_amount: '30.00', still_applied_amount: '0.00', released_display_amount: '10.00', reversed_display_amount: '20.00' },
+    { application_kind: 'earlier payment', original_amount: '20.00', still_applied_amount: '15.00', released_display_amount: '5.00', reversed_display_amount: '0.00' }
+  ]);
+  assert.equal(applications[2].payment_date, null);
+  assert.equal(applications[2].reference_no, null);
+
+  const safeProjection = createStudentFinanceProjection({
+    ...ledger,
+    staffFeeApplicationsByCharge: { 81: [{ private_remarks: 'STAFF-ONLY-PAYMENT-REMARK' }] }
+  });
+  assert.equal(Object.hasOwn(safeProjection, 'staffFeeApplicationsByCharge'), false);
+  const studentHtml = await ejs.renderFile(financeBreakdownTemplate, {
+    ledger: safeProjection, years: safeProjection.feeBreakdownYears, staffOnlyDetails: false,
+    feeApplicationsByCharge: financeProjection.staffFeeApplicationsByCharge,
+    formatMoney, csrfToken: '', tokens: {}
+  });
+  assert.doesNotMatch(studentHtml, /Payment applications|STAFF-ONLY|REC-501|Earlier payment #503/);
+  const staffHtml = await ejs.renderFile(financeBreakdownTemplate, {
+    ledger, years: financeProjection.feeBreakdownYears, staffOnlyDetails: true,
+    feeApplicationsByCharge: financeProjection.staffFeeApplicationsByCharge,
+    accountView: 'overview', archivedStudent: false, failedAction: null,
+    formatMoney, csrfToken: '', tokens: {}
+  });
+  assert.match(staffHtml, /Payment applications · 3/);
+  assert.match(staffHtml, /₱60\.00[\s\S]*?₱40\.00[\s\S]*?₱20\.00/);
+  assert.match(staffHtml, /₱30\.00[\s\S]*?₱0\.00[\s\S]*?₱10\.00[\s\S]*?₱20\.00/);
+  assert.match(staffHtml, /Earlier payment #503[\s\S]*?Date not recorded[\s\S]*?No receipt reference recorded/);
+  assert.match(staffHtml, /STAFF-ONLY-ADJUSTMENT-REASON/);
+});
+
+test('charge status distinguishes unpaid, partial, paid, zero-required, credit, and negative fee basis', () => {
+  const projection = createStatementProjection({ charges: [
+    { charge_id: 1, school_year: '2026-2027', term: 'Term 1', annual_term_number: 1, line_name: 'Unpaid', amount: '10.00', allocated: '0.00', remaining_due: '10.00' },
+    { charge_id: 2, school_year: '2026-2027', term: 'Term 1', annual_term_number: 1, line_name: 'Partial', amount: '10.00', allocated: '4.00', remaining_due: '6.00' },
+    { charge_id: 3, school_year: '2026-2027', term: 'Term 1', annual_term_number: 1, line_name: 'Paid', amount: '10.00', allocated: '10.00', remaining_due: '0.00' },
+    { charge_id: 4, school_year: '2026-2027', term: 'Term 1', annual_term_number: 1, line_name: 'Configured zero', amount: '0.00', allocated: '0.00', remaining_due: '0.00' },
+    { charge_id: 5, school_year: '2026-2027', term: 'Term 1', annual_term_number: 1, line_name: 'Overpayment', amount: '10.00', allocated: '12.00', remaining_due: '-2.00' },
+    { charge_id: 6, school_year: '2026-2027', term: 'Term 1', annual_term_number: 1, line_name: 'Negative basis', amount: '10.00', adjustments: '-12.00', allocated: '0.00', remaining_due: '-2.00' }
+  ] });
+  assert.deepEqual(projection.charges.map(({ payment_status, balance_kind, fee_basis_negative }) => ({ payment_status, balance_kind, fee_basis_negative })), [
+    { payment_status: 'Unpaid', balance_kind: 'due', fee_basis_negative: false },
+    { payment_status: 'Partially paid', balance_kind: 'due', fee_basis_negative: false },
+    { payment_status: 'Fully paid', balance_kind: 'settled', fee_basis_negative: false },
+    { payment_status: 'No payment required', balance_kind: 'settled', fee_basis_negative: false },
+    { payment_status: 'Fully paid', balance_kind: 'credit', fee_basis_negative: false },
+    { payment_status: 'Review fee basis', balance_kind: 'credit', fee_basis_negative: true }
+  ]);
 });

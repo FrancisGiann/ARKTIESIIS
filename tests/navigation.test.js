@@ -38,7 +38,20 @@ function createAuthPool(role) {
   return getPool;
 }
 
-function services({ ownStudentRecords = null } = {}) {
+function emptyMasterlist() {
+  return {
+    filters: { schoolYear: '2026-2027', gradeLevel: '', voucherCode: '', search: '', section: '', placementTerm: 1, page: 1 },
+    options: { schoolYears: ['2026-2027'], grades: [], sections: [], placementTerms: [1, 2, 3] },
+    termColumns: { 1: [], 2: [], 3: [] },
+    counts: Object.fromEntries([1, 2, 3].map((term) => [term, {
+      fullyPaid: 0, partiallyPaid: 0, unpaid: 0, noPaymentRequired: 0, unavailable: 0, notApplicable: 0
+    }])),
+    totalRecords: 0, rows: [],
+    pagination: { page: 1, pageSize: 20, totalRecords: 0, totalPages: 1, from: 0, to: 0 }
+  };
+}
+
+function services({ ownStudentRecords = null, financeMasterlistService = null } = {}) {
   return {
     preEnrollmentService: {
       async list() {
@@ -109,6 +122,10 @@ function services({ ownStudentRecords = null } = {}) {
     annualFinanceService: {
       async listRoster() { return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; },
       async getStudentLedger() { return { terms: [] }; }
+    },
+    financeMasterlistService: financeMasterlistService || {
+      async list() { return emptyMasterlist(); },
+      async streamExport(_actorId, _filters, onBatch) { await onBatch({ masterlist: emptyMasterlist(), rows: [], first: true }); }
     },
     classScheduleService: { async getOwnStudentSchedule() { return []; } }
   };
@@ -228,6 +245,7 @@ test('finance navigation keeps student accounts selected for annual accounts, st
   const contexts = [
     ['/finance/overview', 'finance-overview', '/finance/overview'],
     ['/finance', 'finance-roster', '/finance'],
+    ['/finance/accounts.csv', 'finance-roster', '/finance'],
     ['/finance/schedules', 'finance-schedules', '/finance/schedules'],
     ['/finance/reports', 'finance-reports', '/finance/reports'],
     ['/finance/departures', 'finance-departures', '/finance/departures'],
@@ -328,11 +346,11 @@ test('authenticated navigation only exposes destinations available to each role'
         assert.match(html, /href="\/teacher\/grades"/);
       }
       if (scenario.role === 'finance') {
-        assert.match(html, /class="finance-panel"/);
-        assert.match(html, /id="annual-roster-filter-title"/);
-        assert.match(html, /<h2 id="annual-roster-filter-title">Find student accounts<\/h2>/);
+        assert.match(html, /class="finance-panel finance-masterlist-filters"/);
+        assert.match(html, /id="finance-accounts-filter-title"/);
+        assert.match(html, /<h2 id="finance-accounts-filter-title"[^>]*>Find student accounts<\/h2>/);
         const main = html.match(/<main class="page-shell dashboard-page finance-page(?: [^"]*)?"[\s\S]*?<\/main>/)?.[0];
-        assert.ok(main, 'finance roster should render');
+        assert.ok(main, 'Student accounts should render');
         assert.doesNotMatch(main, /href="\/finance\/(?:schedules|reports|departures|legacy)"/, 'finance destinations appear once in the shared navigation');
         assert.doesNotMatch(html, /finance-dashboard-summary|Finance at a glance/);
       }
@@ -350,6 +368,56 @@ test('authenticated navigation only exposes destinations available to each role'
       for (const href of scenario.forbidden) assert.doesNotMatch(html, new RegExp(`href="${href.replace('/', '\\/')}`));
     });
   }
+});
+
+test('canonical Student accounts and CSV are Finance-only; legacy masterlist routes redirect safely', async () => {
+  const calls = [];
+  const financeMasterlistService = {
+    async list(actorId, filters) { calls.push(['list', actorId, filters]); return emptyMasterlist(); },
+    async streamExport(actorId, filters, onBatch) {
+      calls.push(['export', actorId, filters]);
+      await onBatch({ masterlist: emptyMasterlist(), rows: [], first: true });
+    }
+  };
+  const app = createApp({ databasePool: createAuthPool('finance'), environment,
+    ...services({ financeMasterlistService }) });
+  await withServer(app, async (baseUrl) => {
+    const financeCookie = await signIn(baseUrl, 'finance');
+    const screen = await fetch(`${baseUrl}/finance?schoolYear=2026-2027`, { headers: { cookie: financeCookie } });
+    const html = await screen.text();
+    assert.equal(screen.status, 200);
+    assert.equal(screen.headers.get('cache-control'), 'private, no-store');
+    assert.match(html, /<h1>Student accounts<\/h1>/);
+    assert.match(html, /No annual accounts match these filters/);
+    assert.deepEqual(navigationLabels(html).filter((label) => label === 'Student accounts'), ['Student accounts']);
+
+    const oldPage = await fetch(`${baseUrl}/finance/masterlist?schoolYear=2026-2027&placementTerm=2`, { headers: { cookie: financeCookie }, redirect: 'manual' });
+    assert.equal(oldPage.status, 302);
+    assert.equal(oldPage.headers.get('location'), '/finance?schoolYear=2026-2027&placementTerm=2');
+    const oldCsv = await fetch(`${baseUrl}/finance/masterlist.csv?schoolYear=2026-2027&termId=41&installment=prelim`, { headers: { cookie: financeCookie }, redirect: 'manual' });
+    assert.equal(oldCsv.status, 302);
+    assert.equal(oldCsv.headers.get('location'), '/finance/accounts.csv?schoolYear=2026-2027&termId=41&installment=prelim');
+    const malformedAlias = await fetch(`${baseUrl}/finance/masterlist?search=a&search=b`, { headers: { cookie: financeCookie }, redirect: 'manual' });
+    assert.equal(malformedAlias.status, 400, 'legacy redirects reject repeated/non-scalar query values');
+
+    const csv = await fetch(`${baseUrl}/finance/accounts.csv?schoolYear=2026-2027`, { headers: { cookie: financeCookie } });
+    assert.equal(csv.status, 200);
+    assert.equal(csv.headers.get('cache-control'), 'private, no-store');
+    assert.equal(csv.headers.get('content-disposition'), 'attachment; filename="finance-accounts.csv"');
+    assert.match(await csv.text(), /Student name.*School year.*Selected-year balance/);
+
+    for (const role of ['registrar', 'front_desk', 'teacher', 'student']) {
+      const roleApp = createApp({ databasePool: createAuthPool(role), environment, ...services({ financeMasterlistService }) });
+      await withServer(roleApp, async (roleBaseUrl) => {
+        const cookie = await signIn(roleBaseUrl, role);
+        const denied = await fetch(`${roleBaseUrl}/finance/masterlist`, { headers: { cookie }, redirect: 'manual' });
+        assert.equal(denied.status, 403, `${role} cannot use the legacy Finance path`);
+        const deniedCanonical = await fetch(`${roleBaseUrl}/finance`, { headers: { cookie } });
+        assert.equal(deniedCanonical.status, 403, `${role} cannot open Student accounts`);
+      });
+    }
+  });
+  assert.deepEqual(calls.map(([kind]) => kind), ['list', 'export'], 'denied roles never reach the masterlist service');
 });
 
 test('database administrator audit page has its own current navigation destination and empty state', async () => {

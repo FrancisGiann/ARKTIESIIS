@@ -167,12 +167,12 @@ test('student pages are separate, read-only destinations bound to the authentica
     assert.match(financeHtml, /Confirmed previous balance[\s\S]*?₱80\.00/);
     assert.match(financeHtml, /Unused payment credit[\s\S]*?₱500\.00[\s\S]*?not included in the account balance/);
     assert.match(financeHtml, /Term balance context[\s\S]*?already included in school-year fees due above[\s\S]*?Latest school-year balance · 2026-2027/);
-    assert.match(financeHtml, /Fee breakdown[\s\S]*?assessed amount − approved coverage \+ other adjustments − payments applied = remaining due/);
-    assert.match(financeHtml, /Assessed amount[\s\S]*?₱1,500\.00[\s\S]*?Approved coverage[\s\S]*?−₱200\.00[\s\S]*?Other adjustments[\s\S]*?−₱50\.00[\s\S]*?Payments applied[\s\S]*?−₱250\.00[\s\S]*?Remaining due[\s\S]*?₱1,000\.00/);
+    assert.match(financeHtml, /Fee breakdown[\s\S]*?An approved waiver or exemption reduces the assessed fee[\s\S]*?Voucher rates are already reflected in the schedule and are not deducted again/);
+    assert.match(financeHtml, /data-label="Assessed fee">₱1,500\.00[\s\S]*?data-label="Discounts \/ exemptions">−₱200\.00[\s\S]*?data-label="Adjustments">−₱50\.00[\s\S]*?data-label="Payments applied">−₱250\.00[\s\S]*?data-label="Balance"><strong>₱1,000\.00 due/);
     assert.doesNotMatch(financeHtml, /Combined account balance|Available payment credit|Latest assessed year|Fees and payments by school year/);
-    assert.match(financeHtml, /2026-2027 · Term 1[\s\S]*?Remaining due[\s\S]*?₱3,990\.00/);
-    assert.match(financeHtml, /Paid materials fee[\s\S]*?Approved coverage<\/dt><dd>₱0\.00[\s\S]*?Payments applied<\/dt><dd>−₱100\.00/);
-    assert.match(financeHtml, /Covered activity fee[\s\S]*?Approved coverage<\/dt><dd>−₱100\.00[\s\S]*?Payments applied<\/dt><dd>₱0\.00/);
+    assert.match(financeHtml, /<details class="finance-fee-school-year" open>[\s\S]*?<strong>2026-2027<\/strong>[\s\S]*?<details class="finance-fee-term-group" open>[\s\S]*?<strong>Term 1<\/strong><span>Term subtotal ₱3,990\.00 due[\s\S]*?data-label="Balance"><strong>₱3,990\.00 due/);
+    assert.match(financeHtml, /Paid materials fee · Term 2[\s\S]*?Fully paid[\s\S]*?data-label="Discounts \/ exemptions">₱0\.00[\s\S]*?data-label="Payments applied">−₱100\.00/);
+    assert.match(financeHtml, /Covered activity fee · Term 2[\s\S]*?No payment required[\s\S]*?data-label="Discounts \/ exemptions">−₱100\.00[\s\S]*?data-label="Payments applied">₱0\.00/);
     assert.doesNotMatch(financeHtml, /−₱0\.00/, 'zero deductions are shown as zero, without an apparent negative amount');
     assert.doesNotMatch(financeHtml, /\blegacy\b/i, 'student-facing labels use plain language');
     assert.match(financeHtml, /Current term · Term 2 · 2026-2027[\s\S]*?₱1,000\.00/);
@@ -214,8 +214,8 @@ test('student pages are separate, read-only destinations bound to the authentica
     assert.equal(statementResponse.status, 200);
     assert.match(statementHtml, /All school-year fees due[\s\S]*?₱4,990\.00/);
     assert.match(statementHtml, /Combined account balance[\s\S]*?₱5,190\.00/);
-    assert.match(statementHtml, /Fee breakdown[\s\S]*?Approved coverage[\s\S]*?₱0\.00[\s\S]*?Payments applied[\s\S]*?₱0\.00/);
-    assert.match(statementHtml, /data-label="Payments applied">₱250\.00<\/td>/, 'the print statement shows applied payments as a positive applied amount, like the Finance account breakdown');
+    assert.match(statementHtml, /Fee breakdown[\s\S]*?Discounts \/ exemptions[\s\S]*?₱0\.00[\s\S]*?Payments applied[\s\S]*?₱0\.00/);
+    assert.match(statementHtml, /data-label="Payments applied">−₱250\.00<\/td>/, 'the print statement presents applied payments as deductions in the same way as the Finance account breakdown');
     assert.doesNotMatch(statementHtml, /−₱0\.00|\blegacy\b/i, 'student statement omits zero negative-looking deductions and old account terminology');
 
     studentFinanceLedger = {
@@ -261,7 +261,8 @@ test('student pages are separate, read-only destinations bound to the authentica
     const negativeDueHtml = await negativeDueResponse.text();
     assert.equal(negativeDueResponse.status, 200);
     assert.match(negativeDueHtml, /Account balance[\s\S]*?−₱2\.00/);
-    assert.match(negativeDueHtml, /Remaining due[\s\S]*?−₱2\.00/);
+    assert.match(negativeDueHtml, /data-label="Balance"><strong>₱2\.00 credit/);
+    assert.match(negativeDueHtml, /Review fee basis/);
     assert.doesNotMatch(negativeDueHtml, /−₱0\.00/);
     assert.deepEqual(calls.records, [7, 7, 7, 7]);
     assert.deepEqual(calls.summaries, [], 'student home does not load a document summary used only by removed shortcuts');

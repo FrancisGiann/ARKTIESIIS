@@ -5,6 +5,7 @@ const { readFileSync } = require('node:fs');
 const { once } = require('node:events');
 const bcrypt = require('bcrypt');
 const { createApp } = require('../src/app');
+const { buildMasterlistProjection } = require('../src/services/financeMasterlistService');
 const { initialize: initializeFinanceOverviewFilters } = require('../public/js/finance-overview-filters');
 
 const password = 'Correct-Horse-Battery-12';
@@ -99,7 +100,7 @@ const registrarOverview = {
 
 const financeOverview = {
   schoolYears: ['2026-2027'], gradeLevels: ['Grade 11', 'Grade 12'],
-  selectedSchoolYear: '2026-2027', selectedGrade: '', needsSchoolYearSelection: false,
+  selectedSchoolYear: '2026-2027', selectedGrade: '', needsSchoolYearSelection: false, currentScopeConfigured: true,
   queueCounts: { documentClearance: 4, departureReview: 2, savedReviews: 1 },
   availableTerms: [{ academicTermId: 62, term: 'Second Term' }], selectedTermId: '62',
   selectedTerm: { term: 'Second Term' }, selectedInstallment: 'whole', selectedVoucher: '', selectedSectionId: '',
@@ -120,11 +121,13 @@ function appFor(role, calls = [], intakeRows = [], intakeOptions = { schoolYears
     financeDashboardService: {
       async getOverview(actorId, filters) {
         calls.push(['finance', actorId, filters]);
+        const selectedSchoolYear = Object.hasOwn(filters, 'schoolYear') ? filters.schoolYear : financeOverviewData.selectedSchoolYear;
+        const selectedTermId = Object.hasOwn(filters, 'termId') ? filters.termId : financeOverviewData.selectedTermId;
         return {
           ...financeOverviewData,
-          selectedSchoolYear: filters.schoolYear || financeOverviewData.selectedSchoolYear,
-          selectedTermId: filters.termId || financeOverviewData.selectedTermId,
-          selectedTerm: String(filters.termId || financeOverviewData.selectedTermId) === '61' ? { term: 'First Term' } : financeOverviewData.selectedTerm,
+          selectedSchoolYear,
+          selectedTermId,
+          selectedTerm: String(selectedTermId) === '61' ? { term: 'First Term' } : selectedTermId ? financeOverviewData.selectedTerm : null,
           selectedInstallment: filters.installment || financeOverviewData.selectedInstallment,
           selectedGrade: filters.gradeLevel || '',
           selectedSectionId: filters.sectionId || '',
@@ -134,6 +137,19 @@ function appFor(role, calls = [], intakeRows = [], intakeOptions = { schoolYears
     },
     annualFinanceService: {
       async listRoster() { return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; }
+    },
+    financeMasterlistService: {
+      async list(actorId, filters = {}) {
+        calls.push(['accounts', actorId, filters]);
+        const projection = buildMasterlistProjection({}, {
+          schoolYear: filters.schoolYear == null ? '2026-2027' : filters.schoolYear === '' ? 'all' : filters.schoolYear,
+          gradeLevel: filters.gradeLevel || '', voucherCode: filters.voucherCode || '', search: filters.search || '',
+          section: filters.section || filters.sectionId || '', cluster: filters.cluster || '', strand: filters.strand || '',
+          status: filters.status || '', financeStatus: filters.financeStatus || '', installment: filters.installment || 'whole',
+          termId: filters.termId || '', placementTerm: Number(filters.placementTerm) || 1, page: Number(filters.page) || 1
+        });
+        return { ...projection, options: { schoolYears: ['2026-2027'], grades: ['Grade 11', 'Grade 12'], sections: [{ id: '11', label: 'STEM A' }], placementTerms: [1, 2, 3] } };
+      }
     },
     annualEnrollmentService: {
       async listAnnualEnrollmentsPage(actorId, filters) {
@@ -314,29 +330,38 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     assert.match(appCss, /\.finance-payment-statuses\s*\{[^}]*grid-template-columns:\s*repeat\(5,/);
     assert.match(appCss, /\.finance-payment-status:focus-visible\s*\{/);
     assert.match(appCss, /\.finance-other-tasks__list\s*\{/);
-    assert.deepEqual(calls.map(([name, actorId]) => [name, actorId]), [['finance', 7]]);
-
     const rosterResponse = await fetch(`${baseUrl}/finance`, { headers: { cookie } });
     const rosterHtml = await rosterResponse.text();
     assert.equal(rosterResponse.status, 200);
-    assert.match(rosterHtml, /<h2 id="annual-roster-filter-title">Find student accounts<\/h2>/);
-    assert.match(rosterHtml, /<label for="annual-roster-installment">Payment period<\/label>/);
+    assert.match(rosterHtml, /<h1>Student accounts<\/h1>/);
+    assert.match(rosterHtml, /<details id="finance-masterlist-filters" class="finance-accounts-filter-disclosure">/);
+    assert.match(rosterHtml, /name="installment"/);
     assert.match(rosterHtml, /<option value="whole"[^>]*>Entire term<\/option>/);
     assert.match(rosterHtml, /<option value="dp"[^>]*>Down payment<\/option>/);
     assert.match(rosterHtml, /<option value="prelim"[^>]*>Preliminary<\/option>/);
-    assert.doesNotMatch(rosterHtml, /Tuition tracking|Whole term|>DP<|>Prelim</);
     assert.match(rosterHtml, /href="\/finance" aria-current="page"/);
+    assert.deepEqual(calls.map(([name, actorId]) => [name, actorId]), [['finance', 7], ['accounts', 7]]);
   });
 });
 
-test('finance overview distinguishes an unselected configured year or term from missing configuration', async () => {
+test('finance overview distinguishes an unselected configured year from missing current-term setup', async () => {
   const cases = [
     {
       data: {
         ...financeOverview, schoolYears: ['2027-2028'], selectedSchoolYear: '', selectedTermId: '', selectedTerm: null,
-        availableTerms: [], needsSchoolYearSelection: true, needsTermSelection: false
+        availableTerms: [], needsSchoolYearSelection: true, needsTermSelection: false, currentScopeConfigured: false
       },
       path: '/finance/overview',
+      yearOptionText: 'Choose school year',
+      termDisabled: true,
+      message: 'No unique configured current year and term is available. Choose a year and term, or ask Registrar to complete term setup.'
+    },
+    {
+      data: {
+        ...financeOverview, selectedSchoolYear: '', selectedTermId: '', selectedTerm: null, availableTerms: [],
+        needsSchoolYearSelection: true, needsTermSelection: false, currentScopeConfigured: true
+      },
+      path: '/finance/overview?schoolYear=&termId=',
       yearOptionText: 'Choose school year',
       termDisabled: true,
       message: 'Choose a school year above to review Finance status.'
@@ -364,7 +389,7 @@ test('finance overview distinguishes an unselected configured year or term from 
       assert.ok(yearSelect && termSelect, 'expected school year and term selections');
       if (item.yearOptionText) assert.match(yearSelect, /<option value="" disabled selected>Choose school year<\/option>/);
       if (item.termDisabled) assert.match(termSelect, /<select name="termId" required disabled>/);
-      assert.match(html, new RegExp(item.message));
+      assert.ok(html.includes(item.message));
       if (item.yearOptionText) assert.doesNotMatch(html, /No configured school year is available yet/);
     });
   }

@@ -17,7 +17,6 @@
   <% } else { %>
     <% const summary = annualLedger.summary; %>
     <% const pesoAmount = (amount) => { const text = String(amount ?? '0.00'); const negative = text.startsWith('-'); const value = formatMoney(negative ? text.slice(1) : text); return negative ? `−₱${value}` : `₱${value}`; }; %>
-    <% const deductionAmount = (amount) => { const value = String(amount ?? '0.00'); return /^-?0(?:\.0{1,2})?$/.test(value) ? `₱${formatMoney('0.00')}` : `−₱${formatMoney(value.replace(/^-/, ''))}`; }; %>
     <% const currentTermPlacement = annualLedger.terms.find((term) => term.is_current === true || term.is_current === 1 || term.is_current === '1') || null; %>
     <% const showTermBalanceContext = Boolean(summary.annualBalanceSchoolYear || currentTermPlacement || Number(summary.priorTermYearDebt) > 0); %>
     <% const recentFinanceEvents = annualLedger.events.slice(-5).reverse(); %>
@@ -60,31 +59,11 @@
         <div class="student-finance-section-heading">
           <div>
             <h3 id="finance-charges-title">Fee breakdown</h3>
-            <p>For each fee: assessed amount − approved coverage + other adjustments − payments applied = remaining due. Adjustments can increase or reduce a fee.</p>
+            <p>An approved waiver or exemption reduces the assessed fee. Voucher rates are already reflected in the schedule and are not deducted again. Term balances are already included in school-year fees above.</p>
           </div>
         </div>
-        <% if (annualLedger.chargeGroups?.length) { %>
-          <div class="student-finance-charge-groups">
-            <% for (const group of annualLedger.chargeGroups) { %>
-              <section class="student-finance-charge-group" aria-label="<%= group.school_year %>, <%= group.term %>">
-                <div class="student-finance-charge-group__heading"><h4><%= group.school_year %> · <%= group.term %></h4><p><span>Remaining due</span><strong><%= pesoAmount(group.due) %></strong></p></div>
-                <ul class="student-finance-charge-list">
-                  <% for (const charge of group.charges) { %>
-                    <li class="student-finance-charge">
-                      <h5><%= charge.line_name %><% if (charge.installment) { %> · <%= charge.installment %><% } %><% if (charge.fee_category) { %><span class="student-finance-charge__category"><%= String(charge.fee_category).replaceAll('_', ' ').replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()) %></span><% } %></h5>
-                      <dl class="student-finance-charge__details">
-                        <div><dt>Assessed amount</dt><dd><%= pesoAmount(charge.assessed_amount) %></dd></div>
-                        <div><dt>Approved coverage</dt><dd><%= deductionAmount(charge.coverage_amount) %></dd></div>
-                        <div><dt>Other adjustments</dt><dd><%= pesoAmount(charge.other_adjustments) %></dd></div>
-                        <div><dt>Payments applied</dt><dd><%= deductionAmount(charge.applied_amount) %></dd></div>
-                        <div class="student-finance-charge__due"><dt>Remaining due</dt><dd><%= pesoAmount(charge.due_amount) %></dd></div>
-                      </dl>
-                    </li>
-                  <% } %>
-                </ul>
-              </section>
-            <% } %>
-          </div>
+        <% if (annualLedger.feeBreakdownYears?.length) { %>
+          <%- include('../partials/finance-fee-breakdown', { ledger: annualLedger, years: annualLedger.feeBreakdownYears, staffOnlyDetails: false, openAllYears: true, tableClass: 'portal-table' }) %>
         <% } else { %>
           <p class="student-finance-empty">No fees have been assessed for any school year yet. Your account balance may still include earlier balances shown above.</p>
         <% } %>
