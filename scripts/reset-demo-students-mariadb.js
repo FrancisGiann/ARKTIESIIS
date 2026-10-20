@@ -24,7 +24,7 @@ const RESET_TABLES = Object.freeze([
   'term_clearance_events', 'term_finance_approvals', 'annual_registrar_confirmations',
   'finance_charge_adjustments', 'finance_exemption_applications', 'finance_exemption_rules',
   'finance_exemption_cases', 'finance_departure_charge_reviews', 'finance_departure_cutoff_reviews',
-  'finance_departure_case_terms', 'finance_departure_cases',
+  'finance_departure_application_events', 'finance_departure_case_terms', 'finance_departure_cases',
   'finance_fee_comment_events', 'finance_handbook_number_events', 'finance_review_drafts',
   'annual_finance_assessment_reviews', 'annual_enrollment_events',
   'registrar_retake_referral_events', 'finance_retake_item_decisions', 'registrar_retake_referral_items',
@@ -201,7 +201,7 @@ async function readPlan(connection, databaseName, { storageRoot, target } = {}) 
   if (String(serverIdentity.databaseName || '') !== databaseName) throw new ResetError('Connected database does not match the allowlisted target.');
   const [versions] = await connection.query('SELECT version FROM schema_migrations ORDER BY version');
   const schemaVersion = String(versions.at(-1)?.version || '');
-  if (schemaVersion !== 'v2.021') throw new ResetError('The reset helper requires the v2.021 schema.');
+  if (schemaVersion !== 'v2.022') throw new ResetError('The reset helper requires the v2.022 schema.');
   await checkUnexpectedReferences(connection, databaseName);
   const tables = [...new Set([...RESET_TABLES, ...PRESERVED_TABLES, ...STUDENT_AUTH_TABLES, 'users'])];
   const counts = {};

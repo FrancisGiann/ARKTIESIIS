@@ -47,7 +47,7 @@ test('retake referrals preserve revisions and decisions, validate Finance depend
     } finally { connection.release(); }
 
     const [versions] = await appPool.execute('SELECT version FROM schema_migrations ORDER BY version');
-    assert.equal(versions.at(-1)?.version, 'v2.021');
+    assert.equal(versions.at(-1)?.version, 'v2.022');
 
     async function createUser(role, label) {
       const [result] = await appPool.execute(`INSERT INTO users (email, password_hash, role, is_active)

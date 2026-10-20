@@ -23,6 +23,11 @@ const emptyClearanceOverview = { async getStudentClearanceOverview() {
   return { totalRecords: 0, completed: 0, incomplete: 0, notReviewed: 0, notAttended: 0, notApplicable: 0 };
 } };
 
+test('Manila calendar dates change at local midnight for scheduled departures', () => {
+  assert.equal(currentManilaDate(new Date('2026-10-20T15:59:59.999Z')), '2026-10-20');
+  assert.equal(currentManilaDate(new Date('2026-10-20T16:00:00.000Z')), '2026-10-21');
+});
+
 async function withServer(app, run) {
   const server = app.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -136,6 +141,39 @@ test('return eligibility requires current configured departure or an evidenced s
   assert.equal(departure.departure.termNumber, 2,
     'future placements changed by one departure case do not replace its effective term');
   assert.equal(departure.departure.term, 'Term 2');
+
+  const scheduledDeparture = derive('2026-2027', [{ school_year: '2026-2027', intake_status: 'enrolled',
+    departure_case_id: 81, departure_type: 'transferred', effective_date: '2026-12-01',
+    departure_application_status: 'scheduled', departure_term_number: 2 }], [
+    { school_year: '2026-2027', term_number: 2, enrollment_status: 'enrolled', departure_case_id: 81,
+      departure_application_status: 'scheduled', effective_enrollment_id: 20 },
+    { school_year: '2026-2027', term_number: 3, enrollment_status: 'pending_payment', departure_case_id: 81,
+      departure_application_status: 'scheduled', effective_enrollment_id: 20 }
+  ]);
+  assert.equal(scheduledDeparture.eligible, false, 'a future scheduled departure does not grant return eligibility');
+  assert.equal(scheduledDeparture.departure, null, 'the un-applied case is not treated as a departure event');
+
+  const externalDeparture = derive('2026-2027', [{ school_year: '2026-2027', intake_status: 'enrolled',
+    departure_case_id: 82, departure_type: 'transferred', effective_date: '2026-12-01',
+    departure_application_status: 'needs_review', departure_term_number: 1 }], [
+    { enrollment_id: 22, school_year: '2026-2027', term: 'Term 2', term_number: 2, enrollment_status: 'transferred',
+      departure_case_id: 82, departure_application_status: 'needs_review', effective_enrollment_id: 21,
+      departure_type: 'dropped', effective_date: '2026-12-01', departure_term_number: 1 }
+  ]);
+  assert.equal(externalDeparture.eligible, true, 'an independently changed placement remains valid departure evidence');
+  assert.equal(externalDeparture.departure.departureType, 'transferred');
+  assert.equal(externalDeparture.departure.termNumber, 2, 'the actual placement term is used instead of scheduled-case metadata');
+  assert.equal(externalDeparture.departure.effectiveDate, null, 'an unresolved scheduled effective date is not attached to external status evidence');
+  assert.equal(externalDeparture.departure.departureCaseId, null);
+
+  const appliedWithoutAnnualProjection = derive('2026-2027', [], [
+    { enrollment_id: 21, school_year: '2026-2027', term: 'Term 1', term_number: 1, enrollment_status: 'transferred',
+      departure_case_id: 83, departure_application_status: 'applied', effective_enrollment_id: 21,
+      departure_type: 'transferred', effective_date: '2026-11-01', departure_term_number: 1, departure_term: 'Term 1' }
+  ]);
+  assert.equal(appliedWithoutAnnualProjection.eligible, true);
+  assert.equal(appliedWithoutAnnualProjection.departure.departureCaseId, 83,
+    'a standalone applied enrollment projection can still use the applied case evidence');
 
   assert.equal(derive('2027-2028', [], [
     { school_year: '2026-2027', term: 'Term 2', term_number: 2, enrollment_status: 'transferred' },

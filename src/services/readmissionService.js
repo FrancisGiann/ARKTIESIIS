@@ -43,28 +43,41 @@ function deriveReturnEligibility({ currentSchoolYear = null, annualEnrollments =
   const latestYear = allYears.length ? Math.max(...allYears) : null;
 
   const latestDeparture = [...relevantAnnuals.flatMap((row) => {
-    const hasCase = Boolean(row.departure_case_id);
-    const directlyDeparted = ['dropped', 'transferred'].includes(row.intake_status);
-    return hasCase || directlyDeparted ? [{
+    const unresolvedCase = ['scheduled', 'needs_review'].includes(row.departure_application_status);
+    if (row.departure_case_id && !unresolvedCase) return [{
       schoolYear: row.school_year,
       year: row.year,
-      departureType: row.departure_type || row.intake_status,
+      departureType: row.departure_type,
       effectiveDate: row.effective_date || null,
       termNumber: positiveTermNumber(row.departure_term_number),
       term: row.departure_term || null,
       effectiveEnrollmentId: Number(row.effective_enrollment_id) || null,
-      departureCaseId: row.departure_case_id || null
+      departureCaseId: row.departure_case_id
+    }];
+    return ['dropped', 'transferred'].includes(row.intake_status) ? [{
+      schoolYear: row.school_year,
+      year: row.year,
+      departureType: row.intake_status,
+      effectiveDate: null,
+      termNumber: positiveTermNumber(row.entry_term_number),
+      term: null,
+      effectiveEnrollmentId: null,
+      departureCaseId: null
     }] : [];
-  }), ...relevantEnrollments.filter((row) => ['dropped', 'transferred'].includes(row.enrollment_status)).map((row) => ({
-    schoolYear: row.school_year || row.enrollment_school_year,
-    year: row.year,
-    departureType: row.departure_type || row.enrollment_status,
-    effectiveDate: row.effective_date || null,
-    termNumber: positiveTermNumber(row.departure_case_id ? row.departure_term_number : row.term_number),
-    term: row.departure_case_id ? row.departure_term : row.term,
-    effectiveEnrollmentId: Number(row.effective_enrollment_id || row.enrollment_id) || null,
-    departureCaseId: row.departure_case_id || null
-  }))].sort((left, right) => right.year - left.year || (Number(right.termNumber) || 0) - (Number(left.termNumber) || 0))[0] || null;
+  }), ...relevantEnrollments.filter((row) => ['dropped', 'transferred'].includes(row.enrollment_status)).map((row) => {
+    const hasAppliedCase = Boolean(row.departure_case_id)
+      && !['scheduled', 'needs_review'].includes(row.departure_application_status);
+    return {
+      schoolYear: row.school_year || row.enrollment_school_year,
+      year: row.year,
+      departureType: hasAppliedCase ? row.departure_type : row.enrollment_status,
+      effectiveDate: hasAppliedCase ? row.effective_date || null : null,
+      termNumber: positiveTermNumber(hasAppliedCase ? row.departure_term_number : row.term_number),
+      term: (hasAppliedCase ? row.departure_term : row.term) || null,
+      effectiveEnrollmentId: Number(hasAppliedCase ? row.effective_enrollment_id : row.enrollment_id) || null,
+      departureCaseId: hasAppliedCase ? row.departure_case_id : null
+    };
+  })].sort((left, right) => right.year - left.year || (Number(right.termNumber) || 0) - (Number(left.termNumber) || 0))[0] || null;
 
   let eligible = false;
   let basis = null;
@@ -212,9 +225,10 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
     const lockClause = lockRows ? ' FOR UPDATE' : '';
     const currentTerm = await request().query(`SELECT school_year FROM academic_terms WHERE is_current = 1 LIMIT 1${lockClause}`);
     const annualResult = await request().input('studentId', sql.Int, studentId)
-      .query(`SELECT annual.id, annual.school_year, annual.intake_status,
+      .query(`SELECT annual.id, annual.school_year, annual.intake_status, annual.entry_term_number,
           departure.id AS departure_case_id, departure.effective_enrollment_id,
           departure.departure_type, departure.effective_date,
+          departure.application_status AS departure_application_status,
           departure_order.term_number AS departure_term_number, effective_term.term AS departure_term
         FROM annual_enrollments AS annual
         LEFT JOIN finance_departure_cases AS departure ON departure.annual_enrollment_id = annual.id
@@ -228,6 +242,7 @@ function createReadmissionService({ getPool = defaultGetPool, sql = defaultSql, 
           COALESCE(term_order.term_number, enrollment.annual_term_number) AS term_number,
           annual.intake_status, departure.id AS departure_case_id, departure.effective_enrollment_id,
           departure.departure_type, departure.effective_date,
+          departure.application_status AS departure_application_status,
           departure_order.term_number AS departure_term_number, departure_term.term AS departure_term
         FROM enrollments AS enrollment
         INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id

@@ -292,7 +292,7 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     assert.match(overviewHtml, /Entire term/);
     assert.match(overviewHtml, /Down payment/);
     assert.match(overviewHtml, /Preliminary/);
-    assert.match(overviewHtml, /Stopped or transferred/);
+    assert.match(overviewHtml, /Departure fee reviews/);
     assert.match(overviewHtml, /Document request fee review/);
     assert.match(overviewHtml, /Unfinished reviews/);
     assert.match(overviewHtml, /Other finance tasks/);
@@ -301,7 +301,7 @@ test('finance overview is the dashboard destination and leaves the searchable ro
     assert.doesNotMatch(overviewHtml, /Finance · Current work|placements match| placements<\/p>/);
     assert.doesNotMatch(overviewHtml, /Legacy account history|href="\/finance\/legacy/);
     assert.equal([...overviewHtml.matchAll(/<li><a href="\/finance\//g)].length, 3);
-    assert.match(overviewHtml, /<span>Stopped or transferred<\/span><strong>2<\/strong>/);
+    assert.match(overviewHtml, /<span>Departure fee reviews<\/span><strong>2<\/strong>/);
     assert.match(overviewHtml, /<span>Document request fee review<\/span><strong>4<\/strong>/);
     assert.match(overviewHtml, /<span>Unfinished reviews<\/span><strong>1<\/strong>/);
     assert.match(overviewHtml, /href="\/finance\/overview" aria-current="page"/);

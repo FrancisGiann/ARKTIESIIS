@@ -998,12 +998,12 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       }
       const departures = [...grouped.values()].map((item) => ({ ...item, idempotencyKey: crypto.randomUUID() }));
       return res.status(status).set('Cache-Control', 'private, no-store').render('finance/departures', {
-        title: 'Stopped or transferred finance review', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), departures,
-        failedAction, error, notice: req.query.notice === 'saved' ? 'Finance review saved for a stopped or transferred student.' : null
+        title: 'Departure fee reviews', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), departures,
+        failedAction, error, notice: req.query.notice === 'saved' ? 'Departure fee review saved.' : null
       });
     } catch (error) {
-      if (error instanceof FinanceCasesError) return res.status(error.status).render('error', { title: 'Stopped or transferred finance review', message: error.message });
-      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The stopped or transferred review queue could not be loaded.' });
+      if (error instanceof FinanceCasesError) return res.status(error.status).render('error', { title: 'Departure fee reviews', message: error.message });
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The departure fee review queue could not be loaded.' });
     }
   }
 
@@ -1167,7 +1167,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       });
       return res.redirect(303, '/finance/departures?notice=saved');
     } catch (error) {
-      if (error instanceof FinanceCasesError) return res.status(error.status).render('error', { title: 'Stopped or transferred finance review', message: error.message });
+      if (error instanceof FinanceCasesError) return res.status(error.status).render('error', { title: 'Departure fee reviews', message: error.message });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The Finance review could not be saved.' });
     }
   });

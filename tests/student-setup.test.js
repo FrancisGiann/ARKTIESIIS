@@ -20,6 +20,7 @@ const { AnnualFinanceError } = require('../src/services/annualFinanceService');
 const { latestBirthDate } = require('../src/services/studentRecordsService');
 const { validateTransaction, createFinanceService } = require('../src/services/financeService');
 const { TermClearanceSummaryUnavailableError } = require('../src/services/termClearanceService');
+const { requireRole } = require('../src/middleware/roles');
 
 function fakeSql() {
   return {
@@ -146,6 +147,96 @@ test('term activation stays blocked with a clear message when clearance schema l
     assert.match(html, /Enrollment confirmation and term activation remain blocked/);
     assert.match(html, /This term cannot be activated/);
     assert.doesNotMatch(html, /Activate term|action="\/registrar\/intake\/45\/finalize/);
+  });
+});
+
+test('scheduled departure preview and recording retain Registrar role and CSRF protection', async () => {
+  const app = express();
+  app.set('views', path.join(__dirname, '..', 'views'));
+  app.set('view engine', 'ejs');
+  app.use(express.urlencoded({ extended: false }));
+  app.use((req, _res, next) => {
+    req.authUser = { id: registrar.id, role: req.get('x-role') || 'registrar' };
+    req.session = { csrfToken: 'scheduled-departure-csrf' };
+    next();
+  });
+  const calls = [];
+  const record = {
+    parent: { first_name: 'Synthetic', last_name: 'Learner', student_no: 'SYN-1', school_year: '2026-2027',
+      grade_level: 'Grade 11', intake_kind: 'new', entry_term_number: 2, annual_enrollment_id: 71, student_id: 41,
+      enrollment_start_date: '2026-08-01', registrar_confirmation_id: 'confirmed', intake_status: 'enrolled', student_status: 'active' },
+    terms: [{ enrollment_id: 102, annual_term_number: 2, term: 'Term 2', term_scope_status: 'applicable',
+      enrollment_status: 'enrolled', section_name: 'Synthetic Section', section_id: 5 }],
+    administrationHistory: [], tags: [], subjects: [], departure: null
+  };
+  const annualEnrollmentService = {
+    async previewDeparture(actorId, annualId, enrollmentId, input) {
+      calls.push(['preview', actorId, annualId, enrollmentId, input.effectiveDate]);
+      if (input.effectiveDate < '2026-08-01') {
+        throw new AnnualEnrollmentError('The departure date cannot precede the enrollment start date.', 409);
+      }
+      return [{ enrollment_id: 102, annual_term_number: 2, term: 'Term 2', enrollment_status: 'enrolled', section_name: 'Synthetic Section', academic_activity_review_required: false }];
+    },
+    async getAnnualManagementRecord() { return record; },
+    async createDepartureCase(actorId, annualId, enrollmentId, input) {
+      calls.push(['create', actorId, annualId, enrollmentId, input.effectiveDate]);
+      record.departure = { departure_type: input.departureType, effective_date: input.effectiveDate,
+        application_status: 'scheduled', finance_status: 'pending' };
+      return { applicationStatus: 'scheduled' };
+    }
+  };
+  app.use('/registrar/intake', requireRole('registrar'), createAnnualStudentIntakeRouter({ annualEnrollmentService }));
+
+  await withServer(app, async (baseUrl) => {
+    const url = `${baseUrl}/registrar/intake/71/departure-preview`;
+    const withoutCsrf = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ effectiveEnrollmentId: '102' }) });
+    assert.equal(withoutCsrf.status, 403);
+    assert.deepEqual(calls, [], 'an invalid form token is rejected before loading the affected placements');
+
+    const financeRequest = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-role': 'finance' },
+      body: new URLSearchParams({ _csrf: 'scheduled-departure-csrf', effectiveEnrollmentId: '102' }) });
+    assert.equal(financeRequest.status, 403);
+    assert.deepEqual(calls, [], 'Finance cannot open the Registrar placement preview');
+
+    const invalidPreview = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: 'scheduled-departure-csrf', effectiveEnrollmentId: '102', departureType: 'transferred',
+        effectiveDate: '2026-07-01', reason: 'Synthetic future departure' }) });
+    const invalidHtml = await invalidPreview.text();
+    assert.equal(invalidPreview.status, 409);
+    assert.match(invalidHtml, /The departure date cannot precede the enrollment start date/);
+    assert.match(invalidHtml, /name="effectiveDate" type="date" value="2026-07-01"/);
+    assert.match(invalidHtml, /<textarea[^>]*id="departure-reason"[^>]*>[\s\S]*Synthetic future departure[\s\S]*<\/textarea>/);
+    assert.doesNotMatch(invalidHtml, /Placement review|Schedule future departure|Apply dated departure now/);
+
+    const preview = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: 'scheduled-departure-csrf', effectiveEnrollmentId: '102', departureType: 'transferred',
+        effectiveDate: '2099-10-21', reason: 'Synthetic future departure' }) });
+    const previewHtml = await preview.text();
+    assert.equal(preview.status, 200);
+    assert.deepEqual(calls[0], ['preview', registrar.id, '71', '102', '2026-07-01']);
+    assert.deepEqual(calls[1], ['preview', registrar.id, '71', '102', '2099-10-21']);
+    assert.match(previewHtml, /update automatically on that date/);
+    assert.match(previewHtml, /name="effectiveDate" type="date" value="2099-10-21"/);
+    assert.match(previewHtml, /<textarea[^>]*id="departure-reason"[^>]*>[\s\S]*Synthetic future departure[\s\S]*<\/textarea>/);
+
+    const scheduled = await fetch(`${baseUrl}/registrar/intake/71/departure`, { method: 'POST',
+      redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: 'scheduled-departure-csrf', effectiveEnrollmentId: '102', departureType: 'transferred',
+        effectiveDate: '2099-10-21', reason: 'Synthetic future departure' }) });
+    assert.equal(scheduled.status, 303);
+    assert.equal(scheduled.headers.get('location'), '/registrar/intake/71/manage?notice=departureScheduled');
+    assert.deepEqual(calls[2], ['create', registrar.id, '71', '102', '2099-10-21']);
+
+    const read = await fetch(`${baseUrl}${scheduled.headers.get('location')}`);
+    const readHtml = await read.text();
+    assert.equal(read.status, 200);
+    assert.match(readHtml, /The departure was scheduled\. Affected placements remain unchanged until its effective date\./);
+    assert.match(readHtml, /<h3>Departure scheduled<\/h3>/);
+    assert.match(readHtml, /2099-10-21/);
+
+    const administrationNotice = await fetch(`${baseUrl}/registrar/intake/71/manage?notice=administrationSaved`);
+    assert.match(await administrationNotice.text(), /Annual administration details saved\./);
   });
 });
 

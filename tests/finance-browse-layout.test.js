@@ -1048,8 +1048,8 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
       terms: [{ enrollment_id: 82, annual_term_number: 2, academic_activity_review_required: true, charges: [] }]
     }]
   });
-  assert.match(departureHtml, /<h1>Students who stopped or transferred<\/h1>/);
-  assert.match(departureHtml, /Finance reviews fees and balances for the affected terms/);
+  assert.match(departureHtml, /<h1>Departure fee reviews<\/h1>/);
+  assert.match(departureHtml, /Finance reviews the recorded case, effective date, fees, and balances/);
   const departureSummary = departureHtml.match(/<details class="finance-departure-case"\s*>\s*<summary>([\s\S]*?)<\/summary>/)?.[1] || '';
   assert.match(departureSummary, /1 affected terms · 0 fees to review/);
   assert.doesNotMatch(departureSummary, /Registrar record reason/);

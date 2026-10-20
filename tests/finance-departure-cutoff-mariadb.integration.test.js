@@ -48,7 +48,7 @@ test('Finance departure cutoff migration and reviewed writes preserve payable ba
     } finally { setupConnection.release(); }
 
     const [versions] = await appPool.execute('SELECT version FROM schema_migrations ORDER BY version');
-    assert.equal(versions.at(-1)?.version, 'v2.021', 'the disposable database applies the complete forward sequence through migration 021');
+    assert.equal(versions.at(-1)?.version, 'v2.022', 'the disposable database applies the complete forward sequence through migration 022');
     const [migrationTables] = await appPool.execute(`SELECT table_name FROM information_schema.tables
       WHERE table_schema = ? AND table_name IN ('finance_departure_cutoff_reviews', 'finance_departure_charge_reviews') ORDER BY table_name`, [databaseName]);
     assert.deepEqual(migrationTables.map((row) => row.table_name), ['finance_departure_charge_reviews', 'finance_departure_cutoff_reviews']);
@@ -315,13 +315,25 @@ test('Finance departure cutoff migration and reviewed writes preserve payable ba
     const staleCase = await createDeparture({ label: 'stale', effectiveTerm: 2, affectedTerms: [2], charges: [
       { term: 2, installment: 'Finals', amount: '50.00' }
     ] });
+    await appPool.execute(`UPDATE finance_departure_cases
+      SET application_status = 'scheduled', application_updated_at = UTC_TIMESTAMP(3)
+      WHERE id = ?`, [staleCase.caseId]);
     const draftService = createFinanceReviewDraftService({ getPool: async () => new PoolFacade(appPool), sql });
     const reviewActions = createFinanceReviewActionService({ getPool: async () => new PoolFacade(appPool), sql, draftService });
     const staleDraftIdentity = await reviewActions.startDraft(financeId, 'a'.repeat(64), `/departure-cases/${staleCase.caseId}/review`, {
       cutoffInstallment: 'midterm', reason: 'Synthetic stale-preview test',
       chargeReviews: makeReviews(staleCase.charges, { reduce: () => true })
     });
-    const staleDraft = await reviewActions.getDraft(financeId, staleDraftIdentity.id);
+    const initialStaleDraft = await reviewActions.getDraft(financeId, staleDraftIdentity.id);
+    assert.match(initialStaleDraft.preview.targetDetails.find((row) => row.label === 'Departure review')?.value || '', /Scheduled · placements remain unchanged/);
+    await appPool.execute(`UPDATE finance_departure_cases
+      SET application_status = 'needs_review', application_review_reason = 'target_placement_changed',
+        application_updated_at = UTC_TIMESTAMP(3)
+      WHERE id = ?`, [staleCase.caseId]);
+    const staleDraft = await reviewActions.freshReview(financeId, 'a'.repeat(64), staleDraftIdentity.id);
+    assert.equal(staleDraft.requiresReview, true, 'a lifecycle transition invalidates a pending Finance review draft');
+    assert.match(staleDraft.preview.targetDetails.find((row) => row.label === 'Departure review')?.value || '',
+      /Needs Registrar review · This scheduled departure did not change placement statuses · An affected placement changed after scheduling/);
     assert.equal(staleDraft.preview.departureReviewReady, true);
     assert.equal(staleDraft.preview.departureChargeReviews[0].reason, 'Overall Finance reason: Synthetic stale-preview test',
       'the initial overall reason becomes the evidence fallback for fees without a per-charge note');

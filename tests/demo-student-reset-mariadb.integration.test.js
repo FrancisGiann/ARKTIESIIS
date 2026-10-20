@@ -26,15 +26,15 @@ async function createFixture(admin, suffix) {
   await admin.query(`CREATE DATABASE ${quoteDatabase(databaseName)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
   await admin.query(`USE ${quoteDatabase(databaseName)}`);
   await applyStatements(admin, readSqlFile(path.join(projectRoot, 'database/mariadb/schema.sql')));
-  const expectedVersions = ['v2.001', ...Array.from({ length: 20 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`)];
+  const expectedVersions = ['v2.001', ...Array.from({ length: 21 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`)];
   for (const migration of readForwardMigrations()) {
-    if (migration.version > 'v2.021') break;
+    if (migration.version > 'v2.022') break;
     await applyStatements(admin, migration.statements);
     await admin.execute('INSERT INTO schema_migrations (version) VALUES (?)', [migration.version]);
   }
   const [fixtureVersions] = await admin.query('SELECT version FROM schema_migrations ORDER BY version');
   assert.deepEqual(fixtureVersions.map(({ version }) => version), expectedVersions,
-    'the reset rehearsal fixture must match the helper’s exact supported v2.021 schema');
+    'the reset rehearsal fixture must match the helper’s exact supported v2.022 schema');
   return databaseName;
 }
 

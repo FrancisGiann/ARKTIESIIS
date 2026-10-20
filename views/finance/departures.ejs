@@ -1,10 +1,10 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-departures-page" id="main-content">
   <a class="context-back" href="/finance">Back to student accounts</a>
-  <header class="dashboard-heading"><div><h1>Students who stopped or transferred</h1><p>When the registrar records a student as stopped or transferred, Finance reviews fees and balances for the affected terms. Academic history and any remaining account debt stay on record.</p></div></header>
+  <header class="dashboard-heading"><div><h1>Departure fee reviews</h1><p>Finance reviews the recorded case, effective date, fees, and balances. A scheduled future case does not change enrollment status before its effective date. Academic history and any remaining account debt stay on record.</p></div></header>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
-  <% if (!departures.length) { %><section class="finance-panel"><p class="empty-state">No students who stopped or transferred are waiting for Finance review.</p></section><% } %>
+  <% if (!departures.length) { %><section class="finance-panel"><p class="empty-state">No departure cases are waiting for Finance review.</p></section><% } %>
   <div class="finance-departure-list">
     <% for (const departure of departures) { %>
       <%
@@ -32,11 +32,15 @@
       <details class="finance-departure-case" <%= failedAction?.path === recoveryPath ? 'open' : '' %>>
         <summary>
           <span class="finance-departure-identity"><strong><%= departure.student_name %></strong><span><%= departure.student_no %></span></span>
-          <span class="finance-departure-type"><strong><%= departure.departure_type === 'dropped' ? 'Stopped' : 'Transferred' %></strong><time datetime="<%= effectiveDate %>">Effective <%= effectiveDate %></time></span>
+          <span class="finance-departure-type"><strong><%= departure.application_status === 'scheduled' ? `Scheduled · ${departure.departure_type === 'dropped' ? 'Stopped' : 'Transferred'}` : departure.application_status === 'needs_review' ? 'Needs Registrar review' : departure.application_status === 'legacy_applied' ? `Historical · ${departure.departure_type === 'dropped' ? 'Stopped' : 'Transferred'}` : departure.departure_type === 'dropped' ? 'Stopped' : 'Transferred' %></strong><time datetime="<%= effectiveDate %>">Effective <%= effectiveDate %></time></span>
           <span class="finance-departure-context"><strong><%= departure.school_year %> · <%= departure.grade_level %></strong><span>Departure placement: Term <%= effectiveTermNumber || 'unavailable' %> · <%= departure.terms.length %> affected terms · <%= chargeCount %> fees to review</span></span>
           <span class="finance-departure-review-cue">Review fees</span>
         </summary>
         <div class="finance-departure-case-body">
+          <% if (departure.application_status === 'scheduled') { %><p><strong>Placement status:</strong> No enrollment status has changed yet. The departure will apply on <%= effectiveDate %> in Asia/Manila if its saved targets remain valid. Finance may review the recorded case now; this does not apply the placement update.</p>
+          <% } else if (departure.application_status === 'needs_review') { %><p><strong>Placement status:</strong> This scheduled departure did not change placement statuses. <%= departure.application_review_message || 'The scheduled departure needs Registrar review before placement statuses can change.' %> Finance may still review the recorded case separately.</p>
+          <% } else if (departure.application_status === 'legacy_applied') { %><p><strong>Placement history:</strong> This case predates scheduled departure tracking. Existing enrollment and Finance history was preserved; no earlier status changes were inferred.</p>
+          <% } else { %><p><strong>Placement history:</strong> The Registrar departure has been applied. Academic activity flagged here includes assignments present when it was applied.</p><% } %>
           <p><strong>Registrar reason:</strong> <%= departure.reason %></p>
           <form class="form-stack" method="post" action="/finance/departure-cases/<%= departure.departure_case_id %>/review">
             <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= departure.idempotencyKey %>">

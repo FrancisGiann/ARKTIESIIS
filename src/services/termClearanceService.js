@@ -1449,7 +1449,8 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     const sourceResult = await transaction.request().input('sourceId', sql.Int, sourceId).input('studentId', sql.Int, owner.student_id)
       .query(`SELECT source.id, source.student_id, source.school_year, source.grade_level, source.intake_status,
           source.entry_term_number,
-          EXISTS(SELECT 1 FROM finance_departure_cases AS departure WHERE departure.annual_enrollment_id = source.id) AS has_departure
+          EXISTS(SELECT 1 FROM finance_departure_cases AS departure WHERE departure.annual_enrollment_id = source.id
+            AND departure.application_status IN ('applied', 'legacy_applied')) AS has_departure
         FROM annual_enrollments AS source WHERE source.id = @sourceId AND source.student_id = @studentId FOR UPDATE`);
     const source = sourceResult.recordset?.[0];
     const targetYear = Number(String(annual.school_year).slice(0, 4));
@@ -1569,7 +1570,8 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
         .input('schoolYear', sql.NVarChar(20), expectedYear)
         .query(`SELECT source.id, source.school_year, source.grade_level, source.intake_status,
             source.entry_term_number,
-            EXISTS(SELECT 1 FROM finance_departure_cases AS departure WHERE departure.annual_enrollment_id = source.id) AS has_departure
+            EXISTS(SELECT 1 FROM finance_departure_cases AS departure WHERE departure.annual_enrollment_id = source.id
+              AND departure.application_status IN ('applied', 'legacy_applied')) AS has_departure
           FROM annual_enrollments AS source
           WHERE source.student_id = @studentId AND source.school_year = @schoolYear
           ORDER BY source.id FOR UPDATE`);
@@ -1633,7 +1635,8 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
       const sourceResult = await transaction.request().input('sourceId', sql.Int, sourceId)
         .input('studentId', sql.Int, annual.student_id).input('expectedYear', sql.NVarChar(20), expectedYear)
         .query(`SELECT source.id, source.school_year, source.grade_level, source.intake_status,
-            EXISTS(SELECT 1 FROM finance_departure_cases AS departure WHERE departure.annual_enrollment_id = source.id) AS has_departure
+            EXISTS(SELECT 1 FROM finance_departure_cases AS departure WHERE departure.annual_enrollment_id = source.id
+              AND departure.application_status IN ('applied', 'legacy_applied')) AS has_departure
           FROM annual_enrollments AS source
           WHERE source.id = @sourceId AND source.student_id = @studentId AND source.school_year = @expectedYear FOR UPDATE`);
       const source = sourceResult.recordset?.[0];

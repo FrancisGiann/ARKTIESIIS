@@ -4,6 +4,7 @@ const { parseMoneyCents, formatMoneyCents } = require('./financeService');
 const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
 const { runSerializableTransaction } = require('./transactionRetry');
 const { normalizeLastPayableInstallment, classifyDepartureCharge, proposedDepartureReduction, LAST_PAYABLE_OPTIONS } = require('./departureFinanceReview');
+const { CONFLICT_MESSAGES: DEPARTURE_CONFLICT_MESSAGES } = require('./departureLifecycleService');
 
 const ID = /^\d{1,10}$/;
 const BIG_ID = /^\d{1,18}$/;
@@ -484,6 +485,7 @@ function createAnnualFinanceCasesService({
       const debtBefore = (await debtRevisions.readSnapshot(tx, ownerStudentId)).canonicalBalanceCents;
       const caseResult = await tx.request().input('caseId', sql.BigInt, departureCaseId)
         .query(`SELECT departure.id, departure.annual_enrollment_id, departure.finance_status,
+            departure.application_status,
             departure.effective_enrollment_id, departure.review_idempotency_key, departure.review_request_fingerprint,
             annual.student_id, student.status AS student_status, effective.annual_term_number AS effective_term_number,
             effective.annual_enrollment_id AS effective_annual_id, effective.student_id AS effective_student_id
@@ -688,8 +690,11 @@ function createAnnualFinanceCasesService({
       pool.request().input('studentId', sql.Int, studentId).query(`SELECT departure.id AS departure_case_id, departure.annual_enrollment_id,
           annual.school_year, departure.effective_date, departure.departure_type, departure.reason,
           departure.finance_status, departure.review_reason, departure.reviewed_at,
+          departure.application_status, departure.application_review_reason,
           effective.annual_term_number AS departure_term_number, cutoff.last_payable_installment,
-          terms.enrollment_id, terms.academic_activity_review_required, enrollment.annual_term_number,
+          terms.enrollment_id,
+          COALESCE(terms.academic_activity_review_required_at_application, terms.academic_activity_review_required) AS academic_activity_review_required,
+          enrollment.annual_term_number,
           charge.id AS charge_id, charge.line_name, charge.installment, CAST(due.amount_due AS CHAR(40)) AS amount_due
         FROM finance_departure_cases AS departure
         INNER JOIN annual_enrollments AS annual ON annual.id = departure.annual_enrollment_id
@@ -705,7 +710,10 @@ function createAnnualFinanceCasesService({
     for (const row of departures.recordset || []) {
       let item = departureCases.get(Number(row.departure_case_id));
       if (!item) {
-        item = { ...row, terms: [] };
+        item = { ...row,
+          application_review_message: DEPARTURE_CONFLICT_MESSAGES[row.application_review_reason]
+            || (row.application_review_reason ? 'The scheduled departure needs Registrar review before placement statuses can change.' : null),
+          terms: [] };
         departureCases.set(Number(row.departure_case_id), item);
       }
       let term = item.terms.find((candidate) => Number(candidate.enrollment_id) === Number(row.enrollment_id));
@@ -724,8 +732,10 @@ function createAnnualFinanceCasesService({
     const result = await pool.request().query(`SELECT departure.id AS departure_case_id, annual.student_id, student.student_no,
         CONCAT_WS(' ', student.first_name, NULLIF(student.middle_name, ''), student.last_name, NULLIF(student.suffix, '')) AS student_name,
         annual.school_year, annual.grade_level, departure.effective_date, departure.departure_type, departure.reason,
+        departure.application_status, departure.application_review_reason,
         departure.effective_enrollment_id, effective.annual_term_number AS departure_term_number,
-        terms.enrollment_id, enrollment.annual_term_number, terms.academic_activity_review_required,
+        terms.enrollment_id, enrollment.annual_term_number,
+        COALESCE(terms.academic_activity_review_required_at_application, terms.academic_activity_review_required) AS academic_activity_review_required,
         charge.id AS charge_id, charge.fee_category, charge.line_name, charge.installment,
         CAST(charge.amount + COALESCE(adjustments.total, 0) AS CHAR(40)) AS payable_basis,
         CAST(due.amount_due AS CHAR(40)) AS amount_due
@@ -741,7 +751,10 @@ function createAnnualFinanceCasesService({
         ON adjustments.charge_id = charge.id
       WHERE departure.finance_status = 'pending'
       ORDER BY departure.effective_date, departure.id, enrollment.annual_term_number, charge.id`);
-    return result.recordset || [];
+    return (result.recordset || []).map((row) => ({ ...row,
+      application_review_message: DEPARTURE_CONFLICT_MESSAGES[row.application_review_reason]
+        || (row.application_review_reason ? 'The scheduled departure needs Registrar review before placement statuses can change.' : null)
+    }));
   }
 
   return { approveExemptionCase, applyApprovedExemptionsForCharge, billSpecialSubject, reviewDepartureCase,

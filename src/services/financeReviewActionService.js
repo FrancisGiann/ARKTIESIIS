@@ -8,6 +8,7 @@ const { createStudentDocumentFinanceClearanceService } = require('./studentDocum
 const { createRetakeReferralService } = require('./retakeReferralService');
 const { FinanceReviewDraftError, createFinanceReviewDraftService, validatePositivePaymentAmount } = require('./financeReviewDraftService');
 const { FinanceServiceError, parseMoneyCents, formatMoneyCents } = require('./financeService');
+const { CONFLICT_MESSAGES: DEPARTURE_CONFLICT_MESSAGES } = require('./departureLifecycleService');
 const { formatFeePurpose } = require('../utils/paymentPurpose');
 const {
   LAST_PAYABLE_OPTIONS, normalizeLastPayableInstallment, classifyDepartureCharge,
@@ -507,8 +508,11 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       const departureRows = await request.input('caseId', sql.BigInt, context.caseId)
         .query(`SELECT case_record.id, case_record.annual_enrollment_id, case_record.effective_enrollment_id,
           case_record.effective_date, case_record.departure_type, case_record.finance_status, case_record.review_reason,
-          case_record.review_idempotency_key, effective.annual_term_number AS effective_term_number,
+          case_record.review_idempotency_key, case_record.application_status,
+          case_record.application_review_reason, case_record.application_updated_at,
+          effective.annual_term_number AS effective_term_number,
           term.enrollment_id, term.academic_activity_review_required,
+          term.enrollment_status_at_application, term.academic_activity_review_required_at_application, term.applied_at,
           cutoff.id AS cutoff_review_id, cutoff.last_payable_installment, cutoff.request_fingerprint AS cutoff_fingerprint,
           charge_review.charge_id, charge_review.decision, charge_review.proposed_reduction_amount,
           charge_review.reviewed_reduction_amount, charge_review.payable_before_amount, charge_review.payable_after_amount
@@ -731,12 +735,28 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       [['specialSubjectId', sql.BigInt, context.specialSubjectId], ['studentId', sql.Int, context.studentId]]);
     }
     if (context.caseId) {
-      await row('Stopped or transferred review', `SELECT CONCAT(annual.school_year, ' · ', annual.grade_level, ' · ', departure.departure_type,
-          ' · effective ', DATE_FORMAT(departure.effective_date, '%Y-%m-%d'), ' · saved departure placement Term ', effective.annual_term_number,
-          ' · Finance status ', departure.finance_status) AS target
+      const result = await tx.request().input('caseId', sql.BigInt, context.caseId)
+        .query(`SELECT annual.school_year, annual.grade_level, departure.departure_type,
+          DATE_FORMAT(departure.effective_date, '%Y-%m-%d') AS effective_date,
+          effective.annual_term_number AS effective_term_number, departure.finance_status,
+          departure.application_status, departure.application_review_reason
         FROM finance_departure_cases AS departure INNER JOIN annual_enrollments AS annual ON annual.id = departure.annual_enrollment_id
         INNER JOIN enrollments AS effective ON effective.id = departure.effective_enrollment_id
-        WHERE departure.id = @caseId`, [['caseId', sql.BigInt, context.caseId]]);
+        WHERE departure.id = @caseId`);
+      const departure = result.recordset?.[0];
+      if (departure) {
+        const applicationContext = departure.application_status === 'scheduled'
+          ? `Scheduled · placements remain unchanged until ${departure.effective_date} (Asia/Manila)`
+          : departure.application_status === 'needs_review'
+            ? `Needs Registrar review · This scheduled departure did not change placement statuses${DEPARTURE_CONFLICT_MESSAGES[departure.application_review_reason] ? ` · ${DEPARTURE_CONFLICT_MESSAGES[departure.application_review_reason]}` : ''}`
+            : departure.application_status === 'legacy_applied'
+              ? 'Historical placement status preserved'
+              : 'Applied · placement status update recorded';
+        details.push({ label: 'Departure review', value: [departure.school_year, departure.grade_level,
+          departure.departure_type === 'dropped' ? 'stopped' : 'transferred', `effective ${departure.effective_date}`,
+          `saved departure placement Term ${departure.effective_term_number}`, `Finance status ${departure.finance_status}`,
+          applicationContext].filter(Boolean).join(' · ') });
+      } else details.push({ label: 'Departure review', value: 'No current matching record; review required' });
     }
     const legacyTransactionId = context.transactionId || context.paymentTransactionId;
     if (legacyTransactionId) {

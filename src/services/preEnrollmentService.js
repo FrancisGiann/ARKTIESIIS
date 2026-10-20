@@ -421,7 +421,8 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
       .input('schoolYear', sql.NVarChar(20), record.schoolYear)
       .query(`SELECT annual.school_year, annual.intake_status,
           EXISTS(SELECT 1 FROM finance_departure_cases AS departure
-            WHERE departure.annual_enrollment_id = annual.id) AS has_departure
+            WHERE departure.annual_enrollment_id = annual.id
+              AND departure.application_status IN ('applied', 'legacy_applied')) AS has_departure
         FROM annual_enrollments AS annual
         WHERE annual.student_id = @studentId AND annual.school_year < @schoolYear
         ORDER BY annual.school_year DESC, annual.id DESC FOR UPDATE`);

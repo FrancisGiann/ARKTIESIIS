@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const bcrypt = require('bcrypt');
 const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = require('../config/database');
-const { validateStudent, StudentRecordsError, normalizeRecordId, applyAddressInput } = require('./studentRecordsService');
+const { validateStudent, StudentRecordsError, normalizeRecordId, applyAddressInput, currentManilaDate } = require('./studentRecordsService');
 const { ADDRESS_DEFINITIONS, StudentAddressError, normalizeStructuredAddress } = require('../utils/studentAddress');
 const { allocateStudentNumber, StudentNumberAllocationError } = require('./studentNumberAllocator');
 const { normalizeIntakeChecklistUpdates } = require('./physicalChecklistService');
@@ -10,6 +10,7 @@ const { RETRYABLE_TRANSACTION_CODES, runSerializableTransaction } = require('./t
 const { TermClearanceError } = require('./termClearanceService');
 const { REVIEWABLE_PROFILE_FIELDS, PROFILE_REVIEW_GROUPS, profileReviewFingerprint } = require('../utils/studentProfileReview');
 const { createTemporaryPassword, createStudentActivationPassword, validStudentActivationIdentity } = require('../utils/temporaryPassword');
+const { CONFLICT_MESSAGES: DEPARTURE_CONFLICT_MESSAGES } = require('./departureLifecycleService');
 
 const BCRYPT_ROUNDS = 12;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -70,6 +71,17 @@ function normalizeDate(value, label) {
     throw new AnnualEnrollmentError(`${label} must be a valid calendar date.`);
   }
   return value;
+}
+
+function normalizeDepartureDetails(input = {}) {
+  if (!['dropped', 'transferred'].includes(input.departureType)) {
+    throw new AnnualEnrollmentError('Choose dropped or transferred.');
+  }
+  return {
+    departureType: input.departureType,
+    effectiveDate: normalizeDate(input.effectiveDate || '', 'Effective date'),
+    reason: printable(input.reason || '', 'Departure reason', 1000, { required: true })
+  };
 }
 
 const ANNUAL_ADMIN_STATUS_FIELDS = {
@@ -242,7 +254,8 @@ function createAnnualEnrollmentService({
   createPassword = createTemporaryPassword,
   physicalChecklistService = null,
   annualFinanceService = null,
-  termClearanceService = null
+  termClearanceService = null,
+  todayProvider = () => currentManilaDate()
 } = {}) {
   const debtRevisions = createFinanceDebtRevisionService({ getPool, sql, transactionFactory });
 
@@ -475,7 +488,20 @@ function createAnnualEnrollmentService({
         FROM annual_enrollment_admin_revisions AS revision
         LEFT JOIN staff_profiles AS staff ON staff.user_id = revision.actor_id
         WHERE revision.annual_enrollment_id = @annualEnrollmentId ORDER BY revision.created_at DESC, revision.id DESC`);
-    return { parent, terms: termsResult.recordset || [], tags: tagsResult.recordset || [],
+    const departureResult = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+      .query(`SELECT departure.id, departure.effective_date, departure.departure_type,
+          departure.application_status, departure.application_review_reason,
+          departure.effective_enrollment_id, effective.annual_term_number AS effective_term_number
+        FROM finance_departure_cases AS departure
+        LEFT JOIN enrollments AS effective ON effective.id = departure.effective_enrollment_id
+        WHERE departure.annual_enrollment_id = @annualEnrollmentId LIMIT 1`);
+    const departure = departureResult.recordset?.[0] || null;
+    if (departure?.application_review_reason) {
+      departure.application_review_message = DEPARTURE_CONFLICT_MESSAGES[departure.application_review_reason]
+        || 'The scheduled departure needs Registrar review before any placement status changes.';
+    }
+    return { parent, departure,
+      terms: termsResult.recordset || [], tags: tagsResult.recordset || [],
       subjects: (subjectsResult.recordset || []).map((subject) => ({ ...subject,
         schedules: schedulesBySubject.get(Number(subject.student_subject_id)) || [] })),
       administrationHistory: administrationHistoryResult.recordset || [] };
@@ -658,20 +684,25 @@ function createAnnualEnrollmentService({
     });
   }
 
-  async function previewDeparture(actorInput, annualEnrollmentInput, enrollmentInput) {
+  async function previewDeparture(actorInput, annualEnrollmentInput, enrollmentInput, input = undefined) {
     const annualEnrollmentId = normalizeId(annualEnrollmentInput, 'annual enrollment');
     const enrollmentId = normalizeId(enrollmentInput, 'enrollment');
+    const details = input === undefined ? null : normalizeDepartureDetails(input);
     const pool = await getPool();
     await requireRegistrar(pool.request(), actorInput);
     const result = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
       .input('enrollmentId', sql.Int, enrollmentId)
       .query(`SELECT annual.id AS annual_enrollment_id, annual.school_year, annual.entry_term_number,
+          annual.student_id AS annual_student_id, annual.intake_status, annual.enrollment_start_date,
+          student.status AS student_status,
           enrollment.id AS enrollment_id, enrollment.annual_term_number, enrollment.enrollment_status,
-          enrollment.term_scope_status, term.term, section.name AS section_name,
+          enrollment.student_id, enrollment.annual_enrollment_id AS enrollment_annual_id,
+          enrollment.term_scope_status, term.school_year AS term_school_year, term.term, section.name AS section_name,
           CASE WHEN EXISTS (SELECT 1 FROM student_subjects AS assignment WHERE assignment.enrollment_id = enrollment.id)
             THEN 1 ELSE 0 END AS academic_activity_review_required
         FROM enrollments AS enrollment
         INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
+        INNER JOIN students AS student ON student.id = annual.student_id
         INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
         LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
         WHERE annual.id = @annualEnrollmentId AND annual.id = (SELECT annual_enrollment_id FROM enrollments WHERE id = @enrollmentId)
@@ -680,8 +711,26 @@ function createAnnualEnrollmentService({
         ORDER BY enrollment.annual_term_number`);
     const rows = result.recordset || [];
     if (!rows.some((row) => Number(row.enrollment_id) === enrollmentId)) throw new AnnualEnrollmentError('Choose an applicable term placement in this annual enrollment.', 404);
+    const source = rows.find((row) => Number(row.enrollment_id) === enrollmentId);
+    if (!['pending', 'enrolled'].includes(source.intake_status)) {
+      throw new AnnualEnrollmentError('Choose an applicable placement from a current annual enrollment.', 409);
+    }
+    if (source.student_status === 'archived') throw new AnnualEnrollmentError('Archived student history is read-only.', 409);
+    if (rows.some((row) => Number(row.student_id) !== Number(source.annual_student_id)
+      || Number(row.enrollment_annual_id) !== annualEnrollmentId
+      || row.school_year !== row.term_school_year)) {
+      throw new AnnualEnrollmentError('An affected placement does not match its annual student and school-year records.', 409);
+    }
     if (rows.some((row) => !['pending_payment', 'enrolled'].includes(row.enrollment_status))) {
       throw new AnnualEnrollmentError('A term in the departure range has already changed status.', 409);
+    }
+    if (details) {
+      const startDate = source.enrollment_start_date instanceof Date
+        ? source.enrollment_start_date.toISOString().slice(0, 10)
+        : source.enrollment_start_date ? String(source.enrollment_start_date).slice(0, 10) : null;
+      if (startDate && details.effectiveDate < startDate) {
+        throw new AnnualEnrollmentError('The departure date cannot precede the enrollment start date.', 409);
+      }
     }
     return rows;
   }
@@ -689,35 +738,45 @@ function createAnnualEnrollmentService({
   async function createDepartureCase(actorInput, annualEnrollmentInput, enrollmentInput, input = {}) {
     const annualEnrollmentId = normalizeId(annualEnrollmentInput, 'annual enrollment');
     const enrollmentId = normalizeId(enrollmentInput, 'enrollment');
-    const departureType = input.departureType;
-    if (!['dropped', 'transferred'].includes(departureType)) throw new AnnualEnrollmentError('Choose dropped or transferred.');
-    const effectiveDate = normalizeDate(input.effectiveDate || '', 'Effective date');
-    const reason = printable(input.reason || '', 'Departure reason', 1000, { required: true });
+    const { departureType, effectiveDate, reason } = normalizeDepartureDetails(input);
     const idempotencyKey = normalizeUuid(input.idempotencyKey, 'departure submission');
     const fingerprint = crypto.createHash('sha256').update(JSON.stringify({ annualEnrollmentId, enrollmentId, departureType, effectiveDate, reason })).digest('hex');
     return runTransaction(async (transaction) => {
       const actor = await requireRegistrar(transaction.request(), actorInput);
       const existingToken = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
-        .query('SELECT id, effective_enrollment_id, request_fingerprint FROM finance_departure_cases WHERE idempotency_key = @idempotencyKey FOR UPDATE');
+        .query(`SELECT id, effective_enrollment_id, request_fingerprint, application_status, application_review_reason
+          FROM finance_departure_cases WHERE idempotency_key = @idempotencyKey FOR UPDATE`);
       if (existingToken.recordset?.[0]) {
         const prior = existingToken.recordset[0];
         if (Number(prior.effective_enrollment_id) !== enrollmentId || prior.request_fingerprint !== fingerprint) {
           throw new AnnualEnrollmentError('This departure token was already used for different details.', 409);
         }
-        return { departureCaseId: prior.id, alreadyRecorded: true };
+        return { departureCaseId: prior.id, applicationStatus: prior.application_status,
+          applicationReviewReason: prior.application_review_reason, alreadyRecorded: true };
       }
       const sourceResult = await transaction.request().input('enrollmentId', sql.Int, enrollmentId)
         .input('annualEnrollmentId', sql.Int, annualEnrollmentId)
-        .query(`SELECT enrollment.id, enrollment.annual_enrollment_id, enrollment.annual_term_number,
+        .query(`SELECT enrollment.id, enrollment.student_id, enrollment.academic_term_id,
+            enrollment.annual_enrollment_id, enrollment.annual_term_number,
             enrollment.term_scope_status, enrollment.enrollment_status, annual.intake_status,
-            annual.enrollment_start_date, student.status AS student_status
+            annual.student_id AS annual_student_id,
+            annual.intake_kind, annual.pre_enrollment_id, annual.readmission_evaluation_id,
+            annual.readmission_evaluation_version, annual.continuity_source_annual_enrollment_id,
+            annual.school_year, annual.grade_level, annual.entry_term_number,
+            annual.enrollment_start_date, term.school_year AS term_school_year,
+            student.status AS student_status
           FROM enrollments AS enrollment
           INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
-          INNER JOIN students AS student ON student.id = enrollment.student_id
+          INNER JOIN students AS student ON student.id = annual.student_id
+          INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
           WHERE enrollment.id = @enrollmentId AND annual.id = @annualEnrollmentId FOR UPDATE`);
       const source = sourceResult.recordset?.[0];
-      if (!source || source.intake_status === 'legacy' || source.term_scope_status !== 'applicable') {
+      if (!source || !['pending', 'enrolled'].includes(source.intake_status) || source.term_scope_status !== 'applicable') {
         throw new AnnualEnrollmentError('Choose an applicable placement from a current annual enrollment.', 409);
+      }
+      if (Number(source.student_id) !== Number(source.annual_student_id)
+        || source.school_year !== source.term_school_year) {
+        throw new AnnualEnrollmentError('The selected placement does not match its annual student and school-year records.', 409);
       }
       if (source.student_status === 'archived') throw new AnnualEnrollmentError('Archived student history is read-only.', 409);
       if (!['pending_payment', 'enrolled'].includes(source.enrollment_status)) throw new AnnualEnrollmentError('This placement has already changed status.', 409);
@@ -732,51 +791,113 @@ function createAnnualEnrollmentService({
       if (priorCase.recordset?.length) throw new AnnualEnrollmentError('A departure case already exists for this annual enrollment.', 409);
       const termsResult = await transaction.request().input('annualEnrollmentId', sql.Int, source.annual_enrollment_id)
         .input('termNumber', sql.TinyInt, source.annual_term_number)
-        .query(`SELECT enrollment.id, enrollment.enrollment_status,
+        .query(`SELECT enrollment.id, enrollment.student_id, enrollment.annual_enrollment_id,
+            enrollment.academic_term_id, enrollment.annual_term_number, enrollment.term_scope_status,
+            enrollment.enrollment_status, annual.school_year, term.school_year AS term_school_year,
+            annual.student_id AS annual_student_id,
             CASE WHEN EXISTS (SELECT 1 FROM student_subjects AS assignment
-              WHERE assignment.enrollment_id = enrollment.id FOR UPDATE) THEN 1 ELSE 0 END AS has_academic_activity
+              WHERE assignment.enrollment_id = enrollment.id) THEN 1 ELSE 0 END AS has_academic_activity
           FROM enrollments AS enrollment
+          INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id
+          INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
           WHERE enrollment.annual_enrollment_id = @annualEnrollmentId AND enrollment.term_scope_status = 'applicable'
             AND enrollment.annual_term_number >= @termNumber
           ORDER BY enrollment.annual_term_number FOR UPDATE`);
       const affected = termsResult.recordset || [];
+      if (affected.some((row) => Number(row.student_id) !== Number(source.student_id)
+        || Number(row.annual_student_id) !== Number(source.student_id)
+        || Number(row.annual_enrollment_id) !== Number(source.annual_enrollment_id)
+        || row.school_year !== source.school_year || row.term_school_year !== source.school_year)) {
+        throw new AnnualEnrollmentError('An affected placement does not match its annual student and school-year records.', 409);
+      }
       if (affected.some((row) => !['pending_payment', 'enrolled'].includes(row.enrollment_status))) {
         throw new AnnualEnrollmentError('A later applicable term already changed status. Review its history before recording a departure.', 409);
       }
       if (!affected.some((row) => Number(row.id) === enrollmentId)) throw new AnnualEnrollmentError('No applicable departure placements remain.', 409);
+      const today = todayProvider();
+      const applicationStatus = effectiveDate > today ? 'scheduled' : 'applied';
       const inserted = await transaction.request()
         .input('annualEnrollmentId', sql.Int, source.annual_enrollment_id).input('effectiveEnrollmentId', sql.Int, enrollmentId)
         .input('effectiveDate', sql.Date, effectiveDate).input('departureType', sql.NVarChar(20), departureType)
         .input('reason', sql.NVarChar(1000), reason).input('actorId', sql.Int, actor.id)
+        .input('applicationStatus', sql.VarChar(20), applicationStatus)
+        .input('studentId', sql.Int, source.student_id).input('schoolYear', sql.VarChar(20), source.school_year)
+        .input('gradeLevel', sql.VarChar(20), source.grade_level).input('entryTermNumber', sql.TinyInt, source.entry_term_number)
+        .input('intakeKind', sql.VarChar(20), source.intake_kind).input('preEnrollmentId', sql.UniqueIdentifier, source.pre_enrollment_id)
+        .input('readmissionEvaluationId', sql.UniqueIdentifier, source.readmission_evaluation_id)
+        .input('readmissionEvaluationVersion', sql.Int, source.readmission_evaluation_version)
+        .input('continuitySourceId', sql.Int, source.continuity_source_annual_enrollment_id)
         .input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey).input('fingerprint', sql.Char(64), fingerprint)
         .query(`INSERT INTO finance_departure_cases
-            (annual_enrollment_id, effective_enrollment_id, effective_date, departure_type, reason, recorded_by, idempotency_key, request_fingerprint)
-          VALUES (@annualEnrollmentId, @effectiveEnrollmentId, @effectiveDate, @departureType, @reason, @actorId, @idempotencyKey, @fingerprint)`);
+            (annual_enrollment_id, effective_enrollment_id, effective_date, departure_type, reason, recorded_by,
+              idempotency_key, request_fingerprint, application_status, student_id_at_recording,
+              school_year_at_recording, grade_level_at_recording, entry_term_number_at_recording,
+              intake_kind_at_recording, pre_enrollment_id_at_recording, readmission_evaluation_id_at_recording,
+              readmission_evaluation_version_at_recording, continuity_source_annual_enrollment_id_at_recording,
+              application_updated_at)
+          VALUES (@annualEnrollmentId, @effectiveEnrollmentId, @effectiveDate, @departureType, @reason, @actorId,
+            @idempotencyKey, @fingerprint, @applicationStatus, @studentId, @schoolYear, @gradeLevel,
+            @entryTermNumber, @intakeKind, @preEnrollmentId, @readmissionEvaluationId,
+            @readmissionEvaluationVersion, @continuitySourceId,
+            CASE WHEN @applicationStatus = 'applied' THEN UTC_TIMESTAMP(3) ELSE NULL END)`);
       const departureCaseId = inserted.insertId;
       if (!Number.isSafeInteger(departureCaseId) || departureCaseId < 1) throw new Error('Departure case insert returned no identifier.');
+      const beforeStatuses = [];
       for (const affectedTerm of affected) {
         await transaction.request().input('departureCaseId', sql.BigInt, departureCaseId)
-          .input('enrollmentId', sql.Int, affectedTerm.id)
+          .input('enrollmentId', sql.Int, affectedTerm.id).input('studentId', sql.Int, affectedTerm.student_id)
+          .input('annualId', sql.Int, affectedTerm.annual_enrollment_id)
+          .input('academicTermId', sql.Int, affectedTerm.academic_term_id)
+          .input('termNumber', sql.TinyInt, affectedTerm.annual_term_number)
+          .input('schoolYear', sql.VarChar(20), affectedTerm.term_school_year)
+          .input('termScopeStatus', sql.VarChar(20), affectedTerm.term_scope_status)
+          .input('status', sql.VarChar(20), affectedTerm.enrollment_status)
           .input('activityReview', sql.Bit, affectedTerm.has_academic_activity)
-          .query(`INSERT INTO finance_departure_case_terms (departure_case_id, enrollment_id, academic_activity_review_required)
-            VALUES (@departureCaseId, @enrollmentId, @activityReview)`);
-        const changed = await transaction.request().input('enrollmentId', sql.Int, affectedTerm.id)
-          .input('status', sql.NVarChar(30), departureType)
-          .query(`UPDATE enrollments SET enrollment_status = @status
-            WHERE id = @enrollmentId AND enrollment_status IN ('pending_payment', 'enrolled')`);
-        if (changed.rowsAffected?.[0] !== 1) throw new AnnualEnrollmentError('A placement changed while departure was being recorded.', 409);
-        await transaction.request().input('annualEnrollmentId', sql.Int, source.annual_enrollment_id)
-          .input('enrollmentId', sql.Int, affectedTerm.id).input('actorId', sql.Int, actor.id)
-          .input('reason', sql.NVarChar(1000), reason)
-          .query(`INSERT INTO annual_workflow_events (annual_enrollment_id, enrollment_id, actor_id, event_type, reason)
-            VALUES (@annualEnrollmentId, @enrollmentId, @actorId, 'departure_recorded', @reason)`);
+          .input('applicationStatus', sql.VarChar(20), applicationStatus)
+          .query(`INSERT INTO finance_departure_case_terms
+            (departure_case_id, enrollment_id, academic_activity_review_required, enrollment_status_at_recording,
+              student_id_at_recording, annual_enrollment_id_at_recording, academic_term_id_at_recording,
+              annual_term_number_at_recording, school_year_at_recording, term_scope_status_at_recording,
+              enrollment_status_at_application, academic_activity_review_required_at_application, applied_at)
+            VALUES (@departureCaseId, @enrollmentId, @activityReview, @status, @studentId, @annualId,
+              @academicTermId, @termNumber, @schoolYear, @termScopeStatus,
+              CASE WHEN @applicationStatus = 'applied' THEN @status ELSE NULL END,
+              CASE WHEN @applicationStatus = 'applied' THEN @activityReview ELSE NULL END,
+              CASE WHEN @applicationStatus = 'applied' THEN UTC_TIMESTAMP(3) ELSE NULL END)`);
+        beforeStatuses.push({ enrollmentId: Number(affectedTerm.id), status: affectedTerm.enrollment_status });
+        if (applicationStatus === 'applied') {
+          const changed = await transaction.request().input('enrollmentId', sql.Int, affectedTerm.id)
+            .input('status', sql.NVarChar(30), departureType).input('sourceStatus', sql.VarChar(20), affectedTerm.enrollment_status)
+            .query(`UPDATE enrollments SET enrollment_status = @status
+              WHERE id = @enrollmentId AND enrollment_status = @sourceStatus AND term_scope_status = 'applicable'`);
+          if (changed.rowsAffected?.[0] !== 1) throw new AnnualEnrollmentError('A placement changed while departure was being recorded.', 409);
+          await transaction.request().input('annualEnrollmentId', sql.Int, source.annual_enrollment_id)
+            .input('enrollmentId', sql.Int, affectedTerm.id).input('actorId', sql.Int, actor.id)
+            .input('reason', sql.NVarChar(1000), reason)
+            .query(`INSERT INTO annual_workflow_events (annual_enrollment_id, enrollment_id, actor_id, event_type, reason)
+              VALUES (@annualEnrollmentId, @enrollmentId, @actorId, 'departure_recorded', @reason)`);
+        }
       }
-      await writeAudit(transaction, actor, 'annual_departure_recorded', departureCaseId, {
+      await transaction.request().input('caseId', sql.BigInt, departureCaseId)
+        .input('eventType', sql.VarChar(20), applicationStatus)
+        .input('source', sql.VarChar(20), 'registrar').input('actorId', sql.Int, actor.id)
+        .input('actorRole', sql.VarChar(20), actor.role)
+        .input('details', sql.NVarChar(sql.MAX), JSON.stringify({
+          effectiveDate, departureType, affectedEnrollmentIds: affected.map((row) => Number(row.id)), beforeStatuses
+        }))
+        .query(`INSERT INTO finance_departure_application_events
+          (departure_case_id, event_type, source, actor_id, actor_role, details_json)
+          VALUES (@caseId, @eventType, @source, @actorId, @actorRole, @details)`);
+      if (applicationStatus === 'applied') await writeAudit(transaction, actor, 'annual_departure_recorded', departureCaseId, {
         annualEnrollmentId: source.annual_enrollment_id, effectiveEnrollmentId: enrollmentId,
         effectiveDate, departureType, affectedEnrollmentIds: affected.map((row) => row.id),
         academicActivityReviewEnrollmentIds: affected.filter((row) => row.has_academic_activity).map((row) => row.id)
       });
-      return { departureCaseId, affectedEnrollmentIds: affected.map((row) => row.id) };
+      else await writeAudit(transaction, actor, 'annual_departure_scheduled', departureCaseId, {
+        annualEnrollmentId: source.annual_enrollment_id, effectiveEnrollmentId: enrollmentId,
+        effectiveDate, departureType, affectedEnrollmentIds: affected.map((row) => row.id)
+      });
+      return { departureCaseId, applicationStatus, effectiveDate, affectedEnrollmentIds: affected.map((row) => row.id) };
     });
   }
 
@@ -1098,7 +1219,8 @@ function createAnnualEnrollmentService({
           .input('schoolYear', sql.NVarChar(20), entry.schoolYear)
           .query(`SELECT annual.id, annual.school_year, annual.grade_level, annual.intake_status,
               EXISTS(SELECT 1 FROM finance_departure_cases AS departure
-                WHERE departure.annual_enrollment_id = annual.id) AS has_departure
+                WHERE departure.annual_enrollment_id = annual.id
+                  AND departure.application_status IN ('applied', 'legacy_applied')) AS has_departure
             FROM annual_enrollments AS annual
             WHERE annual.student_id = @studentId AND annual.school_year < @schoolYear
             ORDER BY annual.school_year DESC, annual.id DESC FOR UPDATE`);

@@ -3,7 +3,7 @@ const financeNavigationItems = [
   { id: 'finance-roster', label: 'Student accounts', href: '/finance', group: 'Finance' },
   { id: 'finance-schedules', label: 'Fee schedules', href: '/finance/schedules', group: 'Finance' },
   { id: 'finance-reports', label: 'Reports', href: '/finance/reports', group: 'Finance' },
-  { id: 'finance-departures', label: 'Stopped or transferred', href: '/finance/departures', group: 'Finance' },
+  { id: 'finance-departures', label: 'Departure fee reviews', href: '/finance/departures', group: 'Finance' },
   { id: 'finance-retake-referrals', label: 'Retake review', href: '/finance/retake-referrals', group: 'Finance' },
   { id: 'finance-review-drafts', label: 'Unfinished reviews', href: '/finance/review-drafts', group: 'Finance' }
 ];

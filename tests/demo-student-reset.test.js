@@ -57,6 +57,7 @@ test('reset scope covers student operations while preserving every listed school
   assert.ok(RESET_TABLES.indexOf('finance_retake_item_decisions') < RESET_TABLES.indexOf('assessed_charges'));
   assert.ok(RESET_TABLES.indexOf('finance_departure_charge_reviews') < RESET_TABLES.indexOf('finance_departure_cutoff_reviews'));
   assert.ok(RESET_TABLES.indexOf('finance_departure_cutoff_reviews') < RESET_TABLES.indexOf('finance_departure_case_terms'));
+  assert.ok(RESET_TABLES.indexOf('finance_departure_application_events') < RESET_TABLES.indexOf('finance_departure_case_terms'));
   assert.ok(RESET_TABLES.indexOf('finance_departure_case_terms') < RESET_TABLES.indexOf('finance_departure_cases'));
   assert.ok(RESET_TABLES.indexOf('finance_departure_charge_reviews') < RESET_TABLES.indexOf('assessed_charges'));
   assert.ok(RESET_TABLES.indexOf('registrar_retake_referral_items') < RESET_TABLES.indexOf('registrar_retake_item_keys'));
@@ -66,7 +67,7 @@ test('reset scope covers student operations while preserving every listed school
     'student_term_clearances', 'annual_term_finalizations', 'annual_continuity_source_events',
     'annual_enrollments', 'pre_enrollments', 'readmission_evaluations', 'registrar_retake_referrals',
     'registrar_retake_referral_items', 'registrar_retake_item_keys', 'finance_retake_item_decisions', 'registrar_retake_referral_events',
-    'finance_departure_cutoff_reviews', 'finance_departure_charge_reviews', 'annual_finance_assessment_reviews',
+    'finance_departure_cutoff_reviews', 'finance_departure_charge_reviews', 'finance_departure_application_events', 'annual_finance_assessment_reviews',
     'teacher_grade_submissions', 'finance_payments', 'assessed_charges', 'financial_accounts', 'students']) {
     assert.ok(RESET_TABLES.includes(table), `${table} is included in the deliberate student reset scope`);
   }
@@ -83,7 +84,7 @@ test('reset scope covers student operations while preserving every listed school
 
 test('the approved inventory binds the same schema and rows to the configured endpoint', () => {
   const common = {
-    databaseName: 'demo', schemaVersion: 'v2.021', counts: { students: 226 }, students: 226,
+    databaseName: 'demo', schemaVersion: 'v2.022', counts: { students: 226 }, students: 226,
     studentUsers: 7, staffUsers: 9, fileReferences: [], fileSnapshot: [],
     serverIdentity: { databaseName: 'demo', hostname: 'db-a', port: 3306, serverId: 7, version: '11.8.9' }
   };

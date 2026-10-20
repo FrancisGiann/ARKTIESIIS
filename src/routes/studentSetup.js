@@ -660,9 +660,9 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         .map((item) => [item.student_subject_id, crypto.randomUUID()]));
       return setPrivateHeaders(res).status(status).render('records/annual-management', {
         title: 'Annual enrollment details', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), record,
-        preview, values, subjectTokens, tagToken: crypto.randomUUID(), departureToken: crypto.randomUUID(),
-        error, notice: req.query.notice === 'saved' ? 'Annual enrollment details saved.'
-          : req.query.notice === 'administrationSaved' ? 'Annual administration details saved.' : null
+        preview, values, todayManila: schoolLocalDate(), subjectTokens, tagToken: crypto.randomUUID(), departureToken: crypto.randomUUID(),
+        error, notice: ['saved', 'administrationSaved', 'departureScheduled', 'departureRecorded', 'departureNeedsReview']
+          .includes(req.query.notice) ? req.query.notice : null
       });
     } catch (loadError) {
       if (loadError instanceof AnnualEnrollmentError) return res.status(loadError.status).render('error', { title: 'Annual enrollment details', message: loadError.message });
@@ -891,7 +891,8 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
   router.post('/:annualId/departure-preview', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     try {
-      const preview = await service.previewDeparture(req.authUser.id, req.params.annualId, req.body?.effectiveEnrollmentId);
+      const preview = await service.previewDeparture(req.authUser.id, req.params.annualId,
+        req.body?.effectiveEnrollmentId, req.body || {});
       return renderManagement(req, res, req.params.annualId, { preview, values: req.body || {} });
     } catch (error) {
       if (error instanceof AnnualEnrollmentError) return renderManagement(req, res, req.params.annualId, { status: error.status, error: error.message, values: req.body || {} });
@@ -901,8 +902,10 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
   router.post('/:annualId/departure', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     try {
-      await service.createDepartureCase(req.authUser.id, req.params.annualId, req.body?.effectiveEnrollmentId, req.body || {});
-      return res.redirect(303, `/registrar/intake/${encodeURIComponent(req.params.annualId)}/manage?notice=departureRecorded`);
+      const result = await service.createDepartureCase(req.authUser.id, req.params.annualId, req.body?.effectiveEnrollmentId, req.body || {});
+      const notice = result.applicationStatus === 'scheduled' ? 'departureScheduled'
+        : result.applicationStatus === 'needs_review' ? 'departureNeedsReview' : 'departureRecorded';
+      return res.redirect(303, `/registrar/intake/${encodeURIComponent(req.params.annualId)}/manage?notice=${notice}`);
     } catch (error) {
       if (error instanceof AnnualEnrollmentError) return renderManagement(req, res, req.params.annualId, { status: error.status, error: error.message, values: req.body || {} });
       return res.status(503).render('error', { title: 'Annual enrollment details', message: 'The dated departure could not be saved.' });
