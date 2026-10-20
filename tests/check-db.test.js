@@ -69,7 +69,7 @@ test('MariaDB database check verifies migration versions, required tables, views
   assert.equal(state.exitCode, undefined);
   assert.equal(state.closed, 1);
   assert.match(state.logs[0], /MariaDB connectivity/);
-  assert.match(state.logs[0], /v2\.019/);
+  assert.match(state.logs[0], /v2\.020/);
   assert.ok(state.queries.some((statement) => statement.includes('information_schema.tables')));
   assert.ok(state.queries.some((statement) => statement.includes('information_schema.columns')));
   assert.ok(state.queries.every((statement) => !/\b(?:DB_NAME|OBJECT_ID|dbo\.|sys\.tables|TRIGGER)\b/i.test(statement)));
@@ -113,6 +113,15 @@ test('MariaDB database check requires durable annual Finance voucher-review cont
   const missingAssessmentLink = await runCheck({ missingColumn: 'annual_enrollment_events.finance_assessment_id' });
   assert.equal(missingAssessmentLink.exitCode, 1);
   assert.match(missingAssessmentLink.errors.join('\n'), /column annual_enrollment_events\.finance_assessment_id/);
+});
+
+test('MariaDB database check requires departure cutoff evidence tables and review keys', async () => {
+  const missingTable = await runCheck({ missingObject: 'finance_departure_charge_reviews' });
+  assert.equal(missingTable.exitCode, 1);
+  assert.match(missingTable.errors.join('\n'), /object finance_departure_charge_reviews/);
+  const missingIndex = await runCheck({ missingIndex: 'finance_departure_cutoff_reviews.UQ_finance_departure_cutoff_key' });
+  assert.equal(missingIndex.exitCode, 1);
+  assert.match(missingIndex.errors.join('\n'), /unique index finance_departure_cutoff_reviews\.UQ_finance_departure_cutoff_key/);
 });
 
 test('MariaDB database check verifies role, address, idempotency, LRN, and annual-source constraints', async () => {

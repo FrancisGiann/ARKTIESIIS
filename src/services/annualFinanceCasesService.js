@@ -3,6 +3,7 @@ const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = requir
 const { parseMoneyCents, formatMoneyCents } = require('./financeService');
 const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
 const { runSerializableTransaction } = require('./transactionRetry');
+const { normalizeLastPayableInstallment, classifyDepartureCharge, proposedDepartureReduction, LAST_PAYABLE_OPTIONS } = require('./departureFinanceReview');
 
 const ID = /^\d{1,10}$/;
 const BIG_ID = /^\d{1,18}$/;
@@ -83,6 +84,25 @@ function normalizeAdjustmentRows(value) {
     amountCents: parseMoneyCents(String(row.amount), { allowZero: false }),
     reason: text(row.reason || '', 'Correction reason', 1000, true)
   }));
+}
+
+function normalizeDepartureChargeReviews(value, defaultReason = '') {
+  let rows = value;
+  if (typeof rows === 'string') {
+    try { rows = JSON.parse(rows); } catch { throw new FinanceCasesError('Departure charge decisions are invalid.'); }
+  }
+  if (rows == null) return [];
+  if (!Array.isArray(rows) || rows.length > 120) throw new FinanceCasesError('A departure review may include up to 120 assessed charges.');
+  return rows.map((row) => {
+    const decision = typeof row?.decision === 'string' ? row.decision.trim().toLowerCase() : '';
+    if (!['retain', 'reduce'].includes(decision)) throw new FinanceCasesError('Choose keep or reduce for every affected fee.');
+    return {
+      chargeId: validId(row.chargeId, 'charge', true),
+      decision,
+      reductionCents: parseMoneyCents(String(row.reductionAmount ?? row.amount ?? '0.00'), { allowZero: true }),
+      reason: text(row.reason || '', 'Per-charge Finance reason', 1000, false) || defaultReason
+    };
+  });
 }
 
 function createAnnualFinanceCasesService({
@@ -441,8 +461,14 @@ function createAnnualFinanceCasesService({
     const departureCaseId = validId(departureCaseInput, 'departure case', true);
     const reason = text(input.reason, 'Finance departure review reason', 1000, true);
     const idempotencyKey = token(input.idempotencyKey, 'departure review');
-    const adjustments = normalizeAdjustmentRows(input.adjustments);
-    const fingerprint = requestFingerprint({ departureCaseId, reason, adjustments: adjustments.map((row) => ({ ...row, amount: formatMoneyCents(row.amountCents), amountCents: undefined })).sort((a, b) => a.chargeId - b.chargeId) });
+    const lastPayableInstallment = normalizeLastPayableInstallment(input.cutoffInstallment);
+    if (!LAST_PAYABLE_OPTIONS.includes(lastPayableInstallment)) throw new FinanceCasesError('Choose the last tuition installment payable in the saved departure term.');
+    const chargeReviews = normalizeDepartureChargeReviews(input.chargeReviews, reason);
+    const normalizedReviews = chargeReviews.map((row) => ({
+      chargeId: row.chargeId, decision: row.decision,
+      reductionAmount: formatMoneyCents(row.reductionCents), reason: row.reason
+    })).sort((a, b) => a.chargeId - b.chargeId);
+    const fingerprint = requestFingerprint({ departureCaseId, lastPayableInstallment, reason, chargeReviews: normalizedReviews });
     const pool = await getPool();
     const ownerResult = await pool.request().input('caseId', sql.BigInt, departureCaseId)
       .query(`SELECT annual.student_id FROM finance_departure_cases AS departure
@@ -458,11 +484,13 @@ function createAnnualFinanceCasesService({
       const debtBefore = (await debtRevisions.readSnapshot(tx, ownerStudentId)).canonicalBalanceCents;
       const caseResult = await tx.request().input('caseId', sql.BigInt, departureCaseId)
         .query(`SELECT departure.id, departure.annual_enrollment_id, departure.finance_status,
-            departure.review_idempotency_key, departure.review_request_fingerprint,
-            annual.student_id, student.status AS student_status
+            departure.effective_enrollment_id, departure.review_idempotency_key, departure.review_request_fingerprint,
+            annual.student_id, student.status AS student_status, effective.annual_term_number AS effective_term_number,
+            effective.annual_enrollment_id AS effective_annual_id, effective.student_id AS effective_student_id
           FROM finance_departure_cases AS departure
           INNER JOIN annual_enrollments AS annual  ON annual.id = departure.annual_enrollment_id
           INNER JOIN students AS student  ON student.id = annual.student_id
+          INNER JOIN enrollments AS effective ON effective.id = departure.effective_enrollment_id
           WHERE departure.id = @caseId FOR UPDATE`);
       const departure = caseResult.recordset?.[0];
       if (!departure) throw new FinanceCasesError('Departure case not found.', 404);
@@ -474,6 +502,9 @@ function createAnnualFinanceCasesService({
         if (storedKey === idempotencyKey.toLowerCase() && storedFingerprint === fingerprint.toLowerCase()) return { departureCaseId, alreadyReviewed: true, studentId: Number(departure.student_id) };
         throw new FinanceCasesError('This departure case was already reviewed. Record a separate audited adjustment for any later correction.', 409);
       }
+      await tx.request().input('caseId', sql.BigInt, departureCaseId)
+        .query(`SELECT enrollment_id FROM finance_departure_case_terms
+          WHERE departure_case_id = @caseId ORDER BY enrollment_id FOR UPDATE`);
       const priorToken = await tx.request().input('key', sql.UniqueIdentifier, idempotencyKey)
         .query('SELECT id FROM finance_departure_cases  WHERE review_idempotency_key = @key FOR UPDATE');
       if (priorToken.recordset?.length) {
@@ -488,32 +519,128 @@ function createAnnualFinanceCasesService({
           WHERE terms.departure_case_id = @caseId FOR UPDATE`);
       const eligibleEnrollmentIds = new Set((allowed.recordset || []).map((row) => Number(row.enrollment_id)));
       if (!eligibleEnrollmentIds.size || (allowed.recordset || []).some((row) => Number(row.student_id) !== Number(departure.student_id) || Number(row.annual_enrollment_id) !== Number(departure.annual_enrollment_id))) throw new FinanceCasesError('Departure case placements no longer match their annual enrollment.', 409);
-      const normalizedAdjustments = adjustments.sort((a, b) => a.chargeId - b.chargeId);
-      if (new Set(normalizedAdjustments.map((row) => row.chargeId)).size !== normalizedAdjustments.length) throw new FinanceCasesError('List each departure charge once.', 400);
-      for (const adjustment of normalizedAdjustments) {
-        const chargeResult = await tx.request().input('chargeId', sql.BigInt, adjustment.chargeId)
-          .query(`SELECT charge.id, charge.enrollment_id, charge.annual_enrollment_id,
-              CAST(charge.gross_amount AS CHAR(40)) AS gross_amount,
-              CAST(COALESCE(adjustments.total, 0) AS CHAR(40)) AS prior_adjustments
-            FROM assessed_charges AS charge
-            LEFT JOIN (SELECT charge_id, SUM(amount) AS total
-              FROM finance_charge_adjustments GROUP BY charge_id) AS adjustments ON adjustments.charge_id = charge.id
-            WHERE charge.id = @chargeId FOR UPDATE`);
-        const charge = chargeResult.recordset?.[0];
-        if (!charge || !eligibleEnrollmentIds.has(Number(charge.enrollment_id)) || Number(charge.annual_enrollment_id) !== Number(departure.annual_enrollment_id)) throw new FinanceCasesError('Each departure correction must target a charge from the affected terms of this same annual enrollment.', 409);
-        const grossCents = parseMoneyCents(String(charge.gross_amount));
-        const priorCents = parseMoneyCents(String(charge.prior_adjustments || '0.00'), { allowNegative: true, allowZero: true });
-        if (adjustment.amountCents > grossCents + priorCents) throw new FinanceCasesError('A departure correction cannot exceed the remaining charge basis.', 409);
-        const key = crypto.randomUUID();
-        const fp = requestFingerprint({ departureCaseId, chargeId: adjustment.chargeId, amount: formatMoneyCents(-adjustment.amountCents), reason: adjustment.reason });
-        await tx.request().input('chargeId', sql.BigInt, adjustment.chargeId).input('amount', sql.Decimal(12, 2), formatMoneyCents(-adjustment.amountCents))
-          .input('lineReason', sql.NVarChar(1000), adjustment.reason).input('key', sql.UniqueIdentifier, key)
-          .input('fingerprint', sql.NVarChar(64), fp).input('actorId', sql.Int, actor.id).input('departureCaseId', sql.BigInt, departureCaseId)
-          .query(`INSERT INTO finance_charge_adjustments
-            (charge_id, amount, reason, idempotency_key, request_fingerprint, recorded_by, departure_case_id)
-            VALUES (@chargeId, @amount, @lineReason, @key, @fingerprint, @actorId, @departureCaseId)`);
-        await releaseOverpayment(tx, actor, adjustment.chargeId, 'Approved departure adjustment released excess prior allocations as account credit.');
-        await requireFreshApproval(tx, actor, Number(charge.enrollment_id), 'Finance approved a departure correction to this term.');
+      if (Number(departure.effective_annual_id) !== Number(departure.annual_enrollment_id)
+        || Number(departure.effective_student_id) !== Number(departure.student_id)
+        || !eligibleEnrollmentIds.has(Number(departure.effective_enrollment_id))
+        || !Number.isInteger(Number(departure.effective_term_number))) {
+        throw new FinanceCasesError('The saved effective Registrar placement is no longer part of this departure case.', 409);
+      }
+      await tx.request().input('caseId', sql.BigInt, departureCaseId)
+        .query(`SELECT charge.id FROM assessed_charges AS charge
+          INNER JOIN finance_departure_case_terms AS terms ON terms.enrollment_id = charge.enrollment_id
+          WHERE terms.departure_case_id = @caseId ORDER BY charge.id FOR UPDATE`);
+      await tx.request().input('caseId', sql.BigInt, departureCaseId)
+        .query(`SELECT adjustment.id FROM finance_charge_adjustments AS adjustment
+          INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id
+          INNER JOIN finance_departure_case_terms AS terms ON terms.enrollment_id = charge.enrollment_id
+          WHERE terms.departure_case_id = @caseId ORDER BY adjustment.id FOR UPDATE`);
+      await tx.request().input('caseId', sql.BigInt, departureCaseId)
+        .query(`SELECT allocation.id FROM finance_payment_allocations AS allocation
+          INNER JOIN assessed_charges AS charge ON charge.id = allocation.charge_id
+          INNER JOIN finance_departure_case_terms AS terms ON terms.enrollment_id = charge.enrollment_id
+          WHERE terms.departure_case_id = @caseId ORDER BY allocation.id FOR UPDATE`);
+      await tx.request().input('caseId', sql.BigInt, departureCaseId)
+        .query(`SELECT release_record.id FROM finance_payment_allocation_releases AS release_record
+          INNER JOIN finance_payment_allocations AS allocation ON allocation.id = release_record.allocation_id
+          INNER JOIN assessed_charges AS charge ON charge.id = allocation.charge_id
+          INNER JOIN finance_departure_case_terms AS terms ON terms.enrollment_id = charge.enrollment_id
+          WHERE terms.departure_case_id = @caseId ORDER BY release_record.id FOR UPDATE`);
+      await tx.request().input('caseId', sql.BigInt, departureCaseId)
+        .query(`SELECT reconciliation.id FROM finance_legacy_reconciliations AS reconciliation
+          INNER JOIN assessed_charges AS charge ON charge.id = reconciliation.charge_id
+          INNER JOIN finance_departure_case_terms AS terms ON terms.enrollment_id = charge.enrollment_id
+          WHERE terms.departure_case_id = @caseId ORDER BY reconciliation.id FOR UPDATE`);
+      await tx.request().input('caseId', sql.BigInt, departureCaseId)
+        .query(`SELECT release_record.id FROM finance_legacy_reconciliation_releases AS release_record
+          INNER JOIN finance_legacy_reconciliations AS reconciliation ON reconciliation.id = release_record.reconciliation_id
+          INNER JOIN assessed_charges AS charge ON charge.id = reconciliation.charge_id
+          INNER JOIN finance_departure_case_terms AS terms ON terms.enrollment_id = charge.enrollment_id
+          WHERE terms.departure_case_id = @caseId ORDER BY release_record.id FOR UPDATE`);
+      const chargeResult = await tx.request().input('caseId', sql.BigInt, departureCaseId)
+        .query(`SELECT charge.id, charge.enrollment_id, charge.annual_enrollment_id, enrollment.annual_term_number,
+            charge.fee_category, charge.line_name, charge.installment,
+            CAST(charge.amount + COALESCE(adjustments.total, 0) AS CHAR(40)) AS payable_basis
+          FROM finance_departure_case_terms AS terms
+          INNER JOIN assessed_charges AS charge ON charge.enrollment_id = terms.enrollment_id
+          INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
+          LEFT JOIN (SELECT charge_id, SUM(amount) AS total FROM finance_charge_adjustments GROUP BY charge_id) AS adjustments
+            ON adjustments.charge_id = charge.id
+          WHERE terms.departure_case_id = @caseId ORDER BY enrollment.annual_term_number, charge.id`);
+      const charges = chargeResult.recordset || [];
+      const normalizedById = new Map();
+      for (const row of chargeReviews) {
+        if (normalizedById.has(row.chargeId)) throw new FinanceCasesError('List each departure fee once.', 400);
+        normalizedById.set(row.chargeId, row);
+      }
+      if (normalizedById.size !== charges.length || charges.some((charge) => !normalizedById.has(Number(charge.id)))) {
+        throw new FinanceCasesError('Review every fee in the saved departure placements, including fees kept at their full amount.', 409);
+      }
+      const effectiveTermNumber = Number(departure.effective_term_number);
+      const evidenceRows = [];
+      let totalReductionCents = 0n;
+      for (const charge of charges) {
+        const review = normalizedById.get(Number(charge.id));
+        if (!eligibleEnrollmentIds.has(Number(charge.enrollment_id))
+          || Number(charge.annual_enrollment_id) !== Number(departure.annual_enrollment_id)) {
+          throw new FinanceCasesError('Each reviewed fee must belong to a saved affected placement in this annual enrollment.', 409);
+        }
+        const payableBeforeCents = parseMoneyCents(String(charge.payable_basis), { allowNegative: true, allowZero: true });
+        const reviewCategory = classifyDepartureCharge(charge);
+        const proposedCents = proposedDepartureReduction({ charge, termNumber: Number(charge.annual_term_number),
+          departureTermNumber: effectiveTermNumber, lastPayableInstallment, payableBasisCents: payableBeforeCents });
+        const availableCents = payableBeforeCents > 0n ? payableBeforeCents : 0n;
+        if (review.reductionCents > availableCents) throw new FinanceCasesError('A departure reduction cannot exceed the current payable fee basis.', 409);
+        if (review.decision === 'retain' && review.reductionCents !== 0n) throw new FinanceCasesError('A fee kept at its full payable amount must have a zero reduction.', 400);
+        if (review.decision === 'reduce' && review.reductionCents <= 0n) throw new FinanceCasesError('Enter a positive reviewed amount for each fee marked for reduction.', 400);
+        evidenceRows.push({ charge, review, reviewCategory, proposedCents, payableBeforeCents,
+          payableAfterCents: payableBeforeCents - review.reductionCents });
+        totalReductionCents += review.reductionCents;
+      }
+      const cutoffInsert = await tx.request().input('caseId', sql.BigInt, departureCaseId)
+        .input('effectiveEnrollmentId', sql.Int, departure.effective_enrollment_id)
+        .input('effectiveTermNumber', sql.Int, effectiveTermNumber)
+        .input('lastPayableInstallment', sql.NVarChar(12), lastPayableInstallment)
+        .input('reviewReason', sql.NVarChar(1000), reason).input('actorId', sql.Int, actor.id)
+        .input('actorRole', sql.NVarChar(20), actor.role).input('key', sql.UniqueIdentifier, idempotencyKey)
+        .input('fingerprint', sql.NVarChar(64), fingerprint)
+        .query(`INSERT INTO finance_departure_cutoff_reviews
+          (departure_case_id, effective_enrollment_id, effective_term_number, last_payable_installment,
+            review_reason, reviewed_by, reviewed_by_role, idempotency_key, request_fingerprint)
+          VALUES (@caseId, @effectiveEnrollmentId, @effectiveTermNumber, @lastPayableInstallment,
+            @reviewReason, @actorId, @actorRole, @key, @fingerprint)`);
+      const cutoffReviewId = formatDbId(cutoffInsert, 'Departure cutoff review');
+      for (const evidence of evidenceRows) {
+        const { charge, review, reviewCategory, proposedCents, payableBeforeCents, payableAfterCents } = evidence;
+        await tx.request().input('cutoffReviewId', sql.BigInt, cutoffReviewId).input('caseId', sql.BigInt, departureCaseId)
+          .input('chargeId', sql.BigInt, charge.id).input('enrollmentId', sql.Int, charge.enrollment_id)
+          .input('termNumber', sql.Int, charge.annual_term_number).input('feeCategory', sql.NVarChar(40), String(charge.fee_category || ''))
+          .input('lineName', sql.NVarChar(120), String(charge.line_name || '')).input('installment', sql.NVarChar(40), String(charge.installment || ''))
+          .input('reviewCategory', sql.NVarChar(32), reviewCategory).input('decision', sql.NVarChar(12), review.decision)
+          .input('payableBefore', sql.Decimal(12, 2), formatMoneyCents(payableBeforeCents))
+          .input('proposedReduction', sql.Decimal(12, 2), formatMoneyCents(proposedCents))
+          .input('reviewedReduction', sql.Decimal(12, 2), formatMoneyCents(review.reductionCents))
+          .input('payableAfter', sql.Decimal(12, 2), formatMoneyCents(payableAfterCents))
+          .input('lineReason', sql.NVarChar(1000), review.reason)
+          .query(`INSERT INTO finance_departure_charge_reviews
+            (cutoff_review_id, departure_case_id, charge_id, enrollment_id, term_number, fee_category_snapshot,
+              line_name_snapshot, installment_snapshot, review_category, decision, payable_before_amount,
+              proposed_reduction_amount, reviewed_reduction_amount, payable_after_amount, review_reason)
+            VALUES (@cutoffReviewId, @caseId, @chargeId, @enrollmentId, @termNumber, @feeCategory,
+              @lineName, @installment, @reviewCategory, @decision, @payableBefore,
+              @proposedReduction, @reviewedReduction, @payableAfter, @lineReason)`);
+        if (review.reductionCents > 0n) {
+          const key = crypto.randomUUID();
+          const fp = requestFingerprint({ departureCaseId, cutoffReviewId, chargeId: Number(charge.id),
+            amount: formatMoneyCents(-review.reductionCents), reason: review.reason });
+          await tx.request().input('chargeId', sql.BigInt, charge.id).input('amount', sql.Decimal(12, 2), formatMoneyCents(-review.reductionCents))
+            .input('lineReason', sql.NVarChar(1000), review.reason).input('key', sql.UniqueIdentifier, key)
+            .input('fingerprint', sql.NVarChar(64), fp).input('actorId', sql.Int, actor.id).input('departureCaseId', sql.BigInt, departureCaseId)
+            .query(`INSERT INTO finance_charge_adjustments
+              (charge_id, amount, reason, idempotency_key, request_fingerprint, recorded_by, departure_case_id)
+              VALUES (@chargeId, @amount, @lineReason, @key, @fingerprint, @actorId, @departureCaseId)`);
+          await releaseOverpayment(tx, actor, Number(charge.id), 'Approved departure reduction released excess prior allocations as account credit.');
+          await requireFreshApproval(tx, actor, Number(charge.enrollment_id), 'Finance approved a departure fee reduction to this term.');
+        }
       }
       const updated = await tx.request().input('caseId', sql.BigInt, departureCaseId).input('actorId', sql.Int, actor.id)
         .input('reviewReason', sql.NVarChar(1000), reason).input('key', sql.UniqueIdentifier, idempotencyKey).input('fingerprint', sql.NVarChar(64), fingerprint)
@@ -522,9 +649,14 @@ function createAnnualFinanceCasesService({
             review_request_fingerprint = @fingerprint
           WHERE id = @caseId AND finance_status = 'pending';`);
       if (updated.rowsAffected?.at(-1) !== 1) throw new FinanceCasesError('The departure case changed during review. Reload it and try again.', 409);
-      await writeAudit(tx, actor, 'departure_case_reviewed', departureCaseId, { annualEnrollmentId: Number(departure.annual_enrollment_id), reason, adjustmentCount: normalizedAdjustments.length });
+      await writeAudit(tx, actor, 'departure_case_reviewed', departureCaseId, {
+        annualEnrollmentId: Number(departure.annual_enrollment_id), effectiveEnrollmentId: Number(departure.effective_enrollment_id),
+        effectiveTermNumber, lastPayableInstallment, reason, chargeDecisionCount: evidenceRows.length,
+        reductionCount: evidenceRows.filter((row) => row.review.reductionCents > 0n).length,
+        totalReduction: formatMoneyCents(totalReductionCents), cutoffReviewId
+      });
       await debtRevisions.recordIncreaseIfAny(tx, Number(departure.student_id), debtBefore);
-      return { departureCaseId, reviewed: true, studentId: Number(departure.student_id) };
+      return { departureCaseId, cutoffReviewId, reviewed: true, studentId: Number(departure.student_id) };
     });
   }
 
@@ -556,10 +688,13 @@ function createAnnualFinanceCasesService({
       pool.request().input('studentId', sql.Int, studentId).query(`SELECT departure.id AS departure_case_id, departure.annual_enrollment_id,
           annual.school_year, departure.effective_date, departure.departure_type, departure.reason,
           departure.finance_status, departure.review_reason, departure.reviewed_at,
+          effective.annual_term_number AS departure_term_number, cutoff.last_payable_installment,
           terms.enrollment_id, terms.academic_activity_review_required, enrollment.annual_term_number,
           charge.id AS charge_id, charge.line_name, charge.installment, CAST(due.amount_due AS CHAR(40)) AS amount_due
         FROM finance_departure_cases AS departure
         INNER JOIN annual_enrollments AS annual ON annual.id = departure.annual_enrollment_id
+        INNER JOIN enrollments AS effective ON effective.id = departure.effective_enrollment_id
+        LEFT JOIN finance_departure_cutoff_reviews AS cutoff ON cutoff.departure_case_id = departure.id
         INNER JOIN finance_departure_case_terms AS terms ON terms.departure_case_id = departure.id
         INNER JOIN enrollments AS enrollment ON enrollment.id = terms.enrollment_id
         LEFT JOIN assessed_charges AS charge ON charge.enrollment_id = enrollment.id
@@ -589,15 +724,21 @@ function createAnnualFinanceCasesService({
     const result = await pool.request().query(`SELECT departure.id AS departure_case_id, annual.student_id, student.student_no,
         CONCAT_WS(' ', student.first_name, NULLIF(student.middle_name, ''), student.last_name, NULLIF(student.suffix, '')) AS student_name,
         annual.school_year, annual.grade_level, departure.effective_date, departure.departure_type, departure.reason,
+        departure.effective_enrollment_id, effective.annual_term_number AS departure_term_number,
         terms.enrollment_id, enrollment.annual_term_number, terms.academic_activity_review_required,
-        charge.id AS charge_id, charge.line_name, charge.installment, CAST(due.amount_due AS CHAR(40)) AS amount_due
+        charge.id AS charge_id, charge.fee_category, charge.line_name, charge.installment,
+        CAST(charge.amount + COALESCE(adjustments.total, 0) AS CHAR(40)) AS payable_basis,
+        CAST(due.amount_due AS CHAR(40)) AS amount_due
       FROM finance_departure_cases AS departure
       INNER JOIN annual_enrollments AS annual ON annual.id = departure.annual_enrollment_id
       INNER JOIN students AS student ON student.id = annual.student_id
       INNER JOIN finance_departure_case_terms AS terms ON terms.departure_case_id = departure.id
       INNER JOIN enrollments AS enrollment ON enrollment.id = terms.enrollment_id
+      INNER JOIN enrollments AS effective ON effective.id = departure.effective_enrollment_id
       LEFT JOIN assessed_charges AS charge ON charge.enrollment_id = enrollment.id
       LEFT JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
+      LEFT JOIN (SELECT charge_id, SUM(amount) AS total FROM finance_charge_adjustments GROUP BY charge_id) AS adjustments
+        ON adjustments.charge_id = charge.id
       WHERE departure.finance_status = 'pending'
       ORDER BY departure.effective_date, departure.id, enrollment.annual_term_number, charge.id`);
     return result.recordset || [];

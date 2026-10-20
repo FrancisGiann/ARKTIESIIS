@@ -31,7 +31,8 @@ const REQUIRED_OBJECTS = Object.freeze([
   'pre_enrollments', 'pre_enrollment_receipts', 'pre_enrollment_events', 'pre_enrollment_revisions',
   'readmission_evaluations', 'readmission_evaluation_events', 'annual_continuity_source_events',
   'term_clearance_templates', 'term_clearance_template_items', 'student_term_clearances',
-  'student_term_clearance_items', 'student_term_clearance_events', 'annual_term_finalizations'
+  'student_term_clearance_items', 'student_term_clearance_events', 'annual_term_finalizations',
+  'finance_departure_cutoff_reviews', 'finance_departure_charge_reviews'
 ]);
 
 const REQUIRED_COLUMNS = Object.freeze({
@@ -67,7 +68,12 @@ const REQUIRED_COLUMNS = Object.freeze({
   student_term_clearances: ['enrollment_id', 'annual_enrollment_id', 'student_id', 'template_id', 'recording_mode', 'scope_status', 'scope_reason', 'inspected_on', 'attested_by', 'attested_at', 'version'],
   student_term_clearance_items: ['clearance_id', 'category', 'label_snapshot', 'teacher_context_status', 'applicability_status', 'signature_present', 'signer_name'],
   student_term_clearance_events: ['clearance_id', 'actor_id', 'event_type', 'before_json', 'after_json', 'idempotency_key'],
-  annual_term_finalizations: ['enrollment_id', 'student_id', 'idempotency_key', 'input_fingerprint', 'clearance_snapshot_fingerprint', 'result_json', 'finalized_by']
+  annual_term_finalizations: ['enrollment_id', 'student_id', 'idempotency_key', 'input_fingerprint', 'clearance_snapshot_fingerprint', 'result_json', 'finalized_by'],
+  finance_departure_cutoff_reviews: ['departure_case_id', 'effective_enrollment_id', 'effective_term_number',
+    'last_payable_installment', 'review_reason', 'reviewed_by', 'reviewed_by_role', 'idempotency_key', 'request_fingerprint'],
+  finance_departure_charge_reviews: ['cutoff_review_id', 'departure_case_id', 'charge_id', 'enrollment_id', 'term_number',
+    'fee_category_snapshot', 'line_name_snapshot', 'installment_snapshot', 'review_category', 'decision',
+    'payable_before_amount', 'proposed_reduction_amount', 'reviewed_reduction_amount', 'payable_after_amount', 'review_reason']
 });
 const REQUIRED_CONSTRAINTS = Object.freeze([
   { tableName: 'previous_school_report_card_status_events', constraintName: 'CK_previous_school_report_card_status_status', type: 'CHECK' },
@@ -85,7 +91,9 @@ const REQUIRED_CONSTRAINTS = Object.freeze([
   { tableName: 'annual_continuity_source_events', constraintName: 'CK_annual_continuity_source_event_reason', type: 'CHECK', clauseIncludes: 'reason' },
   { tableName: 'pre_enrollments', constraintName: 'CK_pre_enrollment_created_by_role', type: 'CHECK', clauseIncludes: 'front_desk' },
   { tableName: 'annual_enrollments', constraintName: 'CK_annual_enrollment_intake_kind', type: 'CHECK', clauseIncludes: 'readmission' },
-  { tableName: 'annual_registrar_confirmations', constraintName: 'CK_annual_registrar_confirmation_entry_dp_state', type: 'CHECK', clauseIncludes: 'zero_due' }
+  { tableName: 'annual_registrar_confirmations', constraintName: 'CK_annual_registrar_confirmation_entry_dp_state', type: 'CHECK', clauseIncludes: 'zero_due' },
+  { tableName: 'finance_departure_cutoff_reviews', constraintName: 'CK_finance_departure_cutoff_installment', type: 'CHECK', clauseIncludes: 'last_payable_installment' },
+  { tableName: 'finance_departure_charge_reviews', constraintName: 'CK_finance_departure_charge_review_result', type: 'CHECK', clauseIncludes: 'reviewed_reduction_amount' }
 ]);
 const REQUIRED_INDEXES = Object.freeze([
   { tableName: 'students', indexName: 'UX_students_user_id_linked', columns: ['user_id'] },
@@ -100,7 +108,12 @@ const REQUIRED_INDEXES = Object.freeze([
     columns: ['id', 'annual_enrollment_id', 'assessment_id'] },
   { tableName: 'annual_enrollment_events', indexName: 'IX_annual_enrollment_event_finance_assessment',
     columns: ['finance_assessment_id', 'created_at', 'id'], unique: false },
-  { tableName: 'annual_continuity_source_events', indexName: 'UQ_annual_continuity_source_event_token', columns: ['idempotency_key'] }
+  { tableName: 'annual_continuity_source_events', indexName: 'UQ_annual_continuity_source_event_token', columns: ['idempotency_key'] },
+  { tableName: 'finance_departure_cutoff_reviews', indexName: 'UQ_finance_departure_cutoff_case', columns: ['departure_case_id'] },
+  { tableName: 'finance_departure_cutoff_reviews', indexName: 'UQ_finance_departure_cutoff_key', columns: ['idempotency_key'] },
+  { tableName: 'finance_departure_cutoff_reviews', indexName: 'UQ_finance_departure_cutoff_context', columns: ['id', 'departure_case_id'] },
+  { tableName: 'finance_departure_charge_reviews', indexName: 'UQ_finance_departure_charge_review', columns: ['cutoff_review_id', 'charge_id'] },
+  { tableName: 'finance_departure_charge_reviews', indexName: 'IX_finance_departure_charge_review_case', columns: ['departure_case_id', 'term_number', 'charge_id'], unique: false }
 ]);
 const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'annual_finance_assessment_reviews', constraintName: 'FK_annual_finance_assessment_review_annual',
@@ -138,9 +151,23 @@ const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'annual_term_finalizations', constraintName: 'FK_annual_term_finalization_enrollment',
     columnName: 'enrollment_id', referencedTable: 'enrollments', referencedColumn: 'id' },
   { tableName: 'term_clearance_template_items', constraintName: 'FK_term_clearance_template_item_template',
-    columnName: 'template_id', referencedTable: 'term_clearance_templates', referencedColumn: 'id' }
+    columnName: 'template_id', referencedTable: 'term_clearance_templates', referencedColumn: 'id' },
+  { tableName: 'finance_departure_cutoff_reviews', constraintName: 'FK_finance_departure_cutoff_case',
+    columnName: 'departure_case_id', referencedTable: 'finance_departure_cases', referencedColumn: 'id' },
+  { tableName: 'finance_departure_cutoff_reviews', constraintName: 'FK_finance_departure_cutoff_enrollment',
+    columnName: 'effective_enrollment_id', referencedTable: 'enrollments', referencedColumn: 'id' },
+  { tableName: 'finance_departure_cutoff_reviews', constraintName: 'FK_finance_departure_cutoff_actor',
+    columnName: 'reviewed_by', referencedTable: 'users', referencedColumn: 'id' },
+  { tableName: 'finance_departure_charge_reviews', constraintName: 'FK_finance_departure_charge_review_charge',
+    columnName: 'charge_id', referencedTable: 'assessed_charges', referencedColumn: 'id' },
+  { tableName: 'finance_departure_charge_reviews', constraintName: 'FK_finance_departure_charge_review_enrollment',
+    columnName: 'enrollment_id', referencedTable: 'enrollments', referencedColumn: 'id' },
+  { tableName: 'finance_departure_charge_reviews', constraintName: 'FK_finance_departure_charge_review_context',
+    columnName: 'cutoff_review_id', referencedTable: 'finance_departure_cutoff_reviews', referencedColumn: 'id' },
+  { tableName: 'finance_departure_charge_reviews', constraintName: 'FK_finance_departure_charge_review_context',
+    columnName: 'departure_case_id', referencedTable: 'finance_departure_cutoff_reviews', referencedColumn: 'departure_case_id' }
 ]);
-const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 19 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 20 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 function bindInList(request, values, prefix) {
   return values.map((value, index) => {
@@ -261,7 +288,7 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
       process.exitCode = 1;
       return;
     }
-    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.019.`);
+    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.020.`);
   } catch {
     logger.error('MariaDB database check failed. Confirm DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD, then run npm run db:setup.');
     process.exitCode = 1;

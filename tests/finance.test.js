@@ -228,7 +228,7 @@ test('all 22 reviewed writers receive action-specific normalized raw form values
     { type: 'annual_supplementary_charge', path: '/students/22/annual/terms/14/supplementary-charges', service: 'annual', method: 'addSupplementaryCharge', body: form({ lineName: 'Retake', feeCategory: 'retake', amount: '30.00', installment: 'As incurred', reason: 'Approved' }) },
     { type: 'annual_special_subject_charge', path: '/students/22/annual/special-subjects/15/bill', service: 'cases', method: 'billSpecialSubject', body: form({ amount: '50.00', installment: 'As incurred', reason: 'Approved' }) },
     { type: 'annual_exemption', path: '/students/22/annual/12/exemptions', service: 'cases', method: 'approveExemptionCase', body: form({ reason: 'Approved', ruleTerm: ['1', '2'], ruleCategory: ['tuition', 'activity'], ruleLineName: ['', 'Field trip'], ruleAmount: ['', '15.00'], fullCoverageIndex: ['0'] }) },
-    { type: 'departure_review', path: '/departure-cases/16/review', service: 'cases', method: 'reviewDepartureCase', body: form({ decision: 'reviewed', reason: 'Checked', departureChargeId: ['51', '', '52'], departureAdjustmentAmount: ['-10.00', '', '5.00'], departureAdjustmentReason: ['Correction A', '', 'Correction B'] }) },
+    { type: 'departure_review', path: '/departure-cases/16/review', service: 'cases', method: 'reviewDepartureCase', body: form({ reason: 'Checked', cutoffInstallment: 'midterm', departureChargeId: ['51', '52'], departureDecision: ['reduce', 'retain'], departureReductionAmount: ['10.00', '0.00'], departureChargeReason: ['Future tuition not payable', 'Fee remains payable'] }) },
     { type: 'annual_payment_reversal', path: '/students/22/annual/payments/103/reverse', service: 'annual', method: 'reversePayment', body: form({ reason: 'Duplicate entry' }) },
     { type: 'annual_adjustment_reversal', path: '/students/22/annual/adjustments/104/reverse', service: 'annual', method: 'reverseAdjustment', body: form({ reason: 'Correction' }) },
     { type: 'legacy_payment_reconciliation', path: '/students/22/annual/legacy-payments/105/reconcile', service: 'annual', method: 'reconcileLegacyPayment', body: form({ reason: 'Matched', allocationTarget: ['charge:41', 'opening:42'], allocationAmount: ['5.00', '2.00'] }) },
@@ -277,11 +277,12 @@ test('all 22 reviewed writers receive action-specific normalized raw form values
       for (const key of ['ruleTerm', 'ruleCategory', 'ruleLineName', 'ruleAmount', 'fullCoverageIndex']) delete expectedInput[key];
     }
     if (item.type === 'departure_review') {
-      expectedInput.adjustments = [
-        { chargeId: '51', amount: '-10.00', reason: 'Correction A' },
-        { chargeId: '52', amount: '5.00', reason: 'Correction B' }
+      expectedInput.cutoffInstallment = 'midterm';
+      expectedInput.chargeReviews = [
+        { chargeId: '51', decision: 'reduce', reductionAmount: '10.00', reason: 'Future tuition not payable' },
+        { chargeId: '52', decision: 'retain', reductionAmount: '0.00', reason: 'Fee remains payable' }
       ];
-      for (const key of ['departureChargeId', 'departureAdjustmentAmount', 'departureAdjustmentReason']) delete expectedInput[key];
+      for (const key of ['departureChargeId', 'departureDecision', 'departureReductionAmount', 'departureChargeReason']) delete expectedInput[key];
     }
     assert.deepEqual(input, expectedInput, `${item.type} normalized raw form matches its canonical reviewed values`);
     const studentId = 22;
@@ -337,10 +338,12 @@ test('all 22 reviewed writers receive action-specific normalized raw form values
     { termNumber: '2', feeCategory: 'activity', lineName: 'Field trip', isFullCoverage: false, approvedAmount: '15.00' }
   ]);
   const departure = normalizeActionInput('departure_review', cases.find((item) => item.type === 'departure_review').body);
-  assert.deepEqual(departure.adjustments, [
-    { chargeId: '51', amount: '-10.00', reason: 'Correction A' },
-    { chargeId: '52', amount: '5.00', reason: 'Correction B' }
+  assert.deepEqual(departure.chargeReviews, [
+    { chargeId: '51', decision: 'reduce', reductionAmount: '10.00', reason: 'Future tuition not payable' },
+    { chargeId: '52', decision: 'retain', reductionAmount: '0.00', reason: 'Fee remains payable' }
   ]);
+  assert.equal(departure.cutoffInstallment, 'midterm');
+  assert.equal(departure.reason, 'Checked', 'the initial Finance reason remains in the saved review input');
 });
 
 test('saved reversal and allocation-release drafts return to account history', () => {
@@ -1013,6 +1016,162 @@ test('annual finance correction routes stay student-bound, CSRF-protected, and r
     assert.match(reversalHtml, /class="physical-requirements-item" open><summary>.*Payment #104/);
     assert.match(reversalHtml, /name="reason"[^>]*>Duplicate entry<\/textarea>/);
     assert.match(reversalHtml, /action="\/finance\/students\/22\/annual\/payments\/104\/reverse"/);
+  });
+});
+
+test('departure queue records the saved cutoff in a Finance draft and keeps CSRF and role checks', async () => {
+  const reviewProbe = createReviewRouteProbe();
+  const financeCasesService = {
+    async listPendingDepartureCases() {
+      return [{ departure_case_id: 81, student_name: 'Synthetic Student', student_no: 'CUTOFF-DEMO',
+        school_year: '2026-2027', grade_level: 'Grade 11', effective_date: '2027-04-01',
+        departure_type: 'transferred', reason: 'Synthetic Registrar transfer', departure_term_number: 2,
+        enrollment_id: 202, annual_term_number: 2, academic_activity_review_required: 0,
+        charge_id: 701, fee_category: 'tuition', line_name: 'Tuition', installment: 'Finals',
+        payable_basis: '125.00', amount_due: '-2.00' }];
+    }
+  };
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeCasesService,
+    financeReviewActionService: reviewProbe }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'finance');
+    const queue = await fetch(`${baseUrl}/finance/departures`, { headers: { cookie } });
+    const html = await queue.text();
+    assert.equal(queue.status, 200);
+    assert.match(html, /Departure placement: Term 2/);
+    assert.match(html, /Current payable amount ₱125\.00/);
+    assert.match(html, /signed remaining balance ₱2\.00 credit/);
+    assert.match(html, /name="cutoffInstallment" required/);
+    assert.match(html, /value="none"[^>]*>None payable/);
+    assert.match(html, /action="\/finance\/departure-cases\/81\/review"/);
+
+    const csrfToken = csrfFrom(html);
+    const denied = await fetch(`${baseUrl}/finance/departure-cases/81/review`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ cutoffInstallment: 'none', reason: 'Missing CSRF token' })
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(reviewProbe.starts.length, 0, 'a missing CSRF token cannot open or write a review draft');
+
+    const started = await fetch(`${baseUrl}/finance/departure-cases/81/review`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, cutoffInstallment: 'none', reason: 'Synthetic Finance reason' })
+    });
+    assert.equal(started.status, 303);
+    assert.equal(started.headers.get('location'), '/finance/review-drafts/41111111-1111-4111-8111-111111111111');
+    assert.equal(reviewProbe.starts.length, 1);
+    assert.equal(reviewProbe.starts[0].pathname, '/departure-cases/81/review');
+    assert.equal(reviewProbe.starts[0].input.cutoffInstallment, 'none');
+    assert.equal(reviewProbe.starts[0].input.reason, 'Synthetic Finance reason');
+  });
+
+  await withServer(createApp({ databasePool: makeAuthPool('student'), environment, financeCasesService,
+    financeReviewActionService: reviewProbe }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'student');
+    const denied = await fetch(`${baseUrl}/finance/departures`, { headers: { cookie } });
+    assert.equal(denied.status, 403, 'student accounts cannot view Finance departure cases');
+  });
+});
+
+test('departure draft edits can save incomplete decisions without hidden browser validation traps', async () => {
+  const draftId = '41111111-1111-4111-8111-111111111111';
+  let draft = {
+    id: draftId, actionType: 'departure_review', status: 'pending', revision: 1,
+    dependencyFingerprint: 'a'.repeat(64), sessionBindingHmac: 'b'.repeat(64), entityContext: { studentId: 22 },
+    input: { cutoffInstallment: '', reason: 'Synthetic overall review reason', chargeReviews: [{ chargeId: '701', termNumber: 2,
+      feeCategory: 'tuition', lineName: 'Tuition', installment: 'Finals', decision: '', reductionAmount: '0.00', reason: '' }] },
+    preview: { student: { name: 'Synthetic Student', studentNumber: 'CUTOFF-22' }, fields: [], departureTermNumber: 2,
+      departureReviewReady: false, departureChargeReviews: [{ chargeId: '701', termNumber: 2, feeCategory: 'tuition',
+        lineName: 'Tuition', installment: 'Finals', fee: 'Tuition', categoryLabel: 'Recorded tuition installment',
+        payableBefore: '100.00', proposedReduction: '100.00', decision: '', reductionAmount: '0.00', payableAfter: null,
+        reason: 'Overall Finance reason: Synthetic overall review reason' }] }
+  };
+  let savedInput = null;
+  const reviewActions = {
+    ...createReviewRouteProbe(),
+    async freshReview() { return structuredClone(draft); },
+    async getDraft(actorId, requestedDraftId) {
+      assert.equal(actorId, 7);
+      assert.equal(requestedDraftId, draftId);
+      return structuredClone(draft);
+    },
+    async updateDraft(actorId, _binding, requestedDraftId, input) {
+      assert.equal(actorId, 7);
+      assert.equal(requestedDraftId, draftId);
+      savedInput = structuredClone(input);
+      draft = { ...draft, revision: draft.revision + 1, input: structuredClone(input) };
+      return structuredClone(draft);
+    }
+  };
+
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeReviewActionService: reviewActions }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'finance');
+    const first = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
+    const firstHtml = await first.text();
+    assert.equal(first.status, 200);
+    assert.match(firstHtml, /Current payable amount before/);
+    assert.match(firstHtml, /Recorded tuition installment/);
+    assert.match(firstHtml, /Overall Finance reason: Synthetic overall review reason/,
+      'the reason from the initial case form is visible as per-charge evidence');
+    assert.match(firstHtml, /<details class="finance-review-edit finance-panel" open>/,
+      'incomplete departure drafts open their editor automatically');
+    assert.match(firstHtml, /<details class="finance-review-departure-term"\s*>\s*<summary><strong>Term 2/,
+      'incomplete departure previews keep fee terms collapsed');
+    assert.match(firstHtml, /name="field_cutoffInstallment"\s*>/);
+    assert.match(firstHtml, /name="field_reason" rows="3" maxlength="1000"/);
+    assert.match(firstHtml, /name="item_chargeReviews_0_decision"[^>]*>/);
+    assert.doesNotMatch(firstHtml, /name="item_chargeReviews_0_decision"[^>]*required/);
+    assert.match(firstHtml, /name="item_chargeReviews_0_reductionAmount"[^>]*>/);
+    assert.doesNotMatch(firstHtml, /name="item_chargeReviews_0_reductionAmount"[^>]*required/);
+    assert.match(firstHtml, /<button[^>]*disabled[^>]*>Review complete · Save update<\/button>/);
+
+    const update = await fetch(`${baseUrl}/finance/review-drafts/${draftId}/update`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfFrom(firstHtml), field_cutoffInstallment: '', field_reason: '',
+        item_chargeReviews_0_decision: '', item_chargeReviews_0_reductionAmount: '0.00', item_chargeReviews_0_reason: '' })
+    });
+    assert.equal(update.status, 303, 'an incomplete draft can be saved for later review');
+    assert.equal(savedInput.cutoffInstallment, '');
+    assert.equal(savedInput.reason, '');
+    assert.deepEqual(savedInput.chargeReviews, [{ chargeId: '701', termNumber: 2, feeCategory: 'tuition',
+      lineName: 'Tuition', installment: 'Finals', decision: '', reductionAmount: '0.00', reason: '' }]);
+
+    const refreshed = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
+    const refreshedHtml = await refreshed.text();
+    assert.equal(refreshed.status, 200);
+    assert.match(refreshedHtml, /name="field_cutoffInstallment"\s*>/);
+    assert.match(refreshedHtml, /<button[^>]*disabled[^>]*>Review complete · Save update<\/button>/);
+
+    const reviewedInput = { cutoffInstallment: 'midterm', reason: 'Synthetic overall review reason',
+      chargeReviews: [{ chargeId: '701', termNumber: 2, feeCategory: 'tuition', lineName: 'Tuition', installment: 'Finals',
+        decision: 'retain', reductionAmount: '0.00', reason: '' }] };
+    draft = { ...draft, revision: draft.revision + 1, input: reviewedInput,
+      preview: { ...draft.preview, departureLastPayableInstallment: 'midterm', departureReviewReady: true,
+        departureChargeReviews: [{ ...draft.preview.departureChargeReviews[0], decision: 'retain', reductionAmount: '0.00',
+          payableAfter: '100.00', reviewedReductionReady: true, reason: 'Overall Finance reason: Synthetic overall review reason' }] } };
+    const complete = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
+    const completeHtml = await complete.text();
+    assert.equal(complete.status, 200);
+    assert.match(completeHtml, /<strong>Last payable tuition installment:<\/strong> Midterm/,
+      'the selected cutoff is visible with the saved placement evidence');
+    assert.match(completeHtml, /Current payable amount after<\/dt><dd>₱100\.00/);
+    assert.match(completeHtml, /All decisions recorded/);
+    assert.match(completeHtml, /<button class="button button--primary" type="submit"\s*>Review complete · Save update<\/button>/,
+      'a complete review enables confirmation without this preview posting a mock finance write');
+
+    draft = { ...draft, input: { ...draft.input, cutoffInstallment: 'none' },
+      preview: { ...draft.preview, departureLastPayableInstallment: 'none' } };
+    const nonePayable = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
+    const nonePayableHtml = await nonePayable.text();
+    assert.equal(nonePayable.status, 200);
+    assert.match(nonePayableHtml, /<strong>Last payable tuition installment:<\/strong> None payable/);
+
+    draft = { ...draft, actionType: 'annual_payment', input: { enrollmentId: '77' },
+      preview: { student: { name: 'Synthetic Student', studentNumber: 'CUTOFF-22' }, fields: [],
+        editorOptions: { enrollments: [{ value: '77', label: 'Term 2', balance: '100.00' }] } } };
+    const generic = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
+    const genericHtml = await generic.text();
+    assert.match(genericHtml, /name="field_enrollmentId" required/,
+      'select fields on non-departure draft forms retain their existing required behavior');
   });
 });
 

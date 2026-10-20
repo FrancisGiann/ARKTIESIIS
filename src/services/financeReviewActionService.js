@@ -8,6 +8,10 @@ const { createStudentDocumentFinanceClearanceService } = require('./studentDocum
 const { FinanceReviewDraftError, createFinanceReviewDraftService, validatePositivePaymentAmount } = require('./financeReviewDraftService');
 const { FinanceServiceError, parseMoneyCents, formatMoneyCents } = require('./financeService');
 const { formatFeePurpose } = require('../utils/paymentPurpose');
+const {
+  LAST_PAYABLE_OPTIONS, normalizeLastPayableInstallment, classifyDepartureCharge,
+  proposedDepartureReduction
+} = require('./departureFinanceReview');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RETIRED_ACTION_TYPES = new Set(['legacy_account_create', 'legacy_transaction', 'legacy_enrollment_clearance']);
@@ -183,6 +187,14 @@ function departureAdjustments(body) {
     .filter((row) => row.chargeId && row.amount);
 }
 
+function departureChargeReviews(body) {
+  const ids = Array.isArray(body.departureChargeId) ? body.departureChargeId : body.departureChargeId == null ? [] : [body.departureChargeId];
+  const decisions = Array.isArray(body.departureDecision) ? body.departureDecision : body.departureDecision == null ? [] : [body.departureDecision];
+  const amounts = Array.isArray(body.departureReductionAmount) ? body.departureReductionAmount : body.departureReductionAmount == null ? [] : [body.departureReductionAmount];
+  const reasons = Array.isArray(body.departureChargeReason) ? body.departureChargeReason : body.departureChargeReason == null ? [] : [body.departureChargeReason];
+  return ids.map((chargeId, index) => ({ chargeId, decision: decisions[index] || '', reductionAmount: amounts[index] || '0.00', reason: reasons[index] || '' }));
+}
+
 function normalizeActionInput(actionType, body) {
   const returnFilterNames = new Set(FINANCE_RETURN_FILTERS.flatMap((field) => {
     const capitalized = field.key[0].toUpperCase() + field.key.slice(1);
@@ -211,8 +223,19 @@ function normalizeActionInput(actionType, body) {
     for (const key of ['ruleTerm', 'ruleCategory', 'ruleLineName', 'ruleAmount', 'fullCoverageIndex']) delete input[key];
   }
   if (actionType === 'departure_review') {
-    if (!Array.isArray(input.adjustments)) input.adjustments = departureAdjustments(input);
-    for (const key of ['departureChargeId', 'departureAdjustmentAmount', 'departureAdjustmentReason']) delete input[key];
+    const legacyAdjustments = Array.isArray(input.adjustments) ? input.adjustments : departureAdjustments(input);
+    if (!Array.isArray(input.chargeReviews)) {
+      input.chargeReviews = legacyAdjustments.length
+        ? legacyAdjustments.map((row) => ({ chargeId: row.chargeId, decision: 'reduce',
+          reductionAmount: row.amount || row.reductionAmount || '0.00', reason: row.reason || '' }))
+        : departureChargeReviews(input);
+    }
+    const cutoff = normalizeLastPayableInstallment(input.cutoffInstallment ?? input.departureCutoffInstallment);
+    input.cutoffInstallment = cutoff;
+    delete input.departureCutoffInstallment;
+    delete input.adjustments;
+    for (const key of ['departureChargeId', 'departureDecision', 'departureReductionAmount', 'departureChargeReason',
+      'departureAdjustmentAmount', 'departureAdjustmentReason']) delete input[key];
   }
   return input;
 }
@@ -360,6 +383,10 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
         .query('SELECT id FROM finance_departure_cases WHERE id = @caseId FOR UPDATE');
       await tx.request().input('caseId', sql.BigInt, context.caseId)
         .query('SELECT enrollment_id FROM finance_departure_case_terms WHERE departure_case_id = @caseId ORDER BY enrollment_id FOR UPDATE');
+      await tx.request().input('caseId', sql.BigInt, context.caseId)
+        .query('SELECT id FROM finance_departure_cutoff_reviews WHERE departure_case_id = @caseId FOR UPDATE');
+      await tx.request().input('caseId', sql.BigInt, context.caseId)
+        .query('SELECT id FROM finance_departure_charge_reviews WHERE departure_case_id = @caseId ORDER BY charge_id FOR UPDATE');
     }
     if (context.specialSubjectId) {
       await tx.request().input('specialSubjectId', sql.BigInt, context.specialSubjectId)
@@ -463,9 +490,17 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       const departureRows = await request.input('caseId', sql.BigInt, context.caseId)
         .query(`SELECT case_record.id, case_record.annual_enrollment_id, case_record.effective_enrollment_id,
           case_record.effective_date, case_record.departure_type, case_record.finance_status, case_record.review_reason,
-          case_record.review_idempotency_key, term.enrollment_id, term.academic_activity_review_required
+          case_record.review_idempotency_key, effective.annual_term_number AS effective_term_number,
+          term.enrollment_id, term.academic_activity_review_required,
+          cutoff.id AS cutoff_review_id, cutoff.last_payable_installment, cutoff.request_fingerprint AS cutoff_fingerprint,
+          charge_review.charge_id, charge_review.decision, charge_review.proposed_reduction_amount,
+          charge_review.reviewed_reduction_amount, charge_review.payable_before_amount, charge_review.payable_after_amount
           FROM finance_departure_cases AS case_record LEFT JOIN finance_departure_case_terms AS term
-            ON term.departure_case_id = case_record.id WHERE case_record.id = @caseId ORDER BY term.enrollment_id`);
+            ON term.departure_case_id = case_record.id
+          INNER JOIN enrollments AS effective ON effective.id = case_record.effective_enrollment_id
+          LEFT JOIN finance_departure_cutoff_reviews AS cutoff ON cutoff.departure_case_id = case_record.id
+          LEFT JOIN finance_departure_charge_reviews AS charge_review ON charge_review.departure_case_id = case_record.id
+          WHERE case_record.id = @caseId ORDER BY term.enrollment_id, charge_review.charge_id`);
       result.push(departureRows.recordset || []);
     }
     if (context.specialSubjectId) {
@@ -637,8 +672,10 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     }
     if (context.caseId) {
       await row('Stopped or transferred review', `SELECT CONCAT(annual.school_year, ' · ', annual.grade_level, ' · ', departure.departure_type,
-          ' · effective ', DATE_FORMAT(departure.effective_date, '%Y-%m-%d'), ' · Finance status ', departure.finance_status) AS target
+          ' · effective ', DATE_FORMAT(departure.effective_date, '%Y-%m-%d'), ' · saved departure placement Term ', effective.annual_term_number,
+          ' · Finance status ', departure.finance_status) AS target
         FROM finance_departure_cases AS departure INNER JOIN annual_enrollments AS annual ON annual.id = departure.annual_enrollment_id
+        INNER JOIN enrollments AS effective ON effective.id = departure.effective_enrollment_id
         WHERE departure.id = @caseId`, [['caseId', sql.BigInt, context.caseId]]);
     }
     const legacyTransactionId = context.transactionId || context.paymentTransactionId;
@@ -813,11 +850,6 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
         amount: rule.isFullCoverage ? 'Full coverage' : rule.approvedAmount || '—'
       }));
     }
-    if (Array.isArray(input.adjustments)) {
-      preview.departureAdjustments = input.adjustments.map((adjustment) => ({
-        charge: `Charge #${adjustment.chargeId || 'review required'}`, amount: adjustment.amount || '—', reason: adjustment.reason || ''
-      }));
-    }
     if (['annual_payment', 'annual_credit_allocation', 'legacy_payment_reconciliation'].includes(action.type) && studentId) {
       const dueRows = await tx.request().input('studentId', sql.Int, studentId)
         .query(`SELECT target.target_kind, target.target_id, target.amount_due, target.target_label
@@ -908,30 +940,97 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       preview.entryTermNumber = Number(resolvedContext.entryTermNumber || 1);
     }
     if (action.type === 'departure_review' && context.caseId) {
-      const departureCharges = await tx.request().input('caseId', sql.BigInt, context.caseId)
-        .query(`SELECT charge.id, annual.school_year, enrollment.annual_term_number, charge.line_name, charge.installment,
-            CONCAT(annual.school_year, ' · Term ', enrollment.annual_term_number, ' · ', charge.line_name,
-              CASE WHEN LOWER(charge.line_name) = 'tuition' THEN CONCAT(' · ', charge.installment) ELSE '' END) AS label,
-            CAST(due.amount_due AS CHAR(40)) AS amount_due
-          FROM finance_departure_case_terms AS case_term
-          INNER JOIN assessed_charges AS charge ON charge.enrollment_id = case_term.enrollment_id
-          INNER JOIN finance_departure_cases AS departure ON departure.id = case_term.departure_case_id
+      const caseResult = await tx.request().input('caseId', sql.BigInt, context.caseId)
+        .query(`SELECT departure.id, departure.annual_enrollment_id, departure.effective_enrollment_id,
+            effective.annual_term_number AS departure_term_number, annual.school_year, annual.grade_level
+          FROM finance_departure_cases AS departure
           INNER JOIN annual_enrollments AS annual ON annual.id = departure.annual_enrollment_id
-          INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
-          INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
-          WHERE case_term.departure_case_id = @caseId ORDER BY enrollment.annual_term_number, charge.id`);
-      const chargeOptions = (departureCharges.recordset || []).map((row) => ({
-        value: `charge:${row.id}`, label: String(row.label), balance: String(row.amount_due)
+          INNER JOIN enrollments AS effective ON effective.id = departure.effective_enrollment_id
+          WHERE departure.id = @caseId`);
+      const departureCase = caseResult.recordset?.[0];
+      const departureCharges = departureCase ? await tx.request().input('caseId', sql.BigInt, context.caseId)
+        .query(`SELECT charge.id, charge.enrollment_id, enrollment.annual_term_number,
+            charge.fee_category, charge.line_name, charge.installment,
+            CAST(charge.amount + COALESCE(adjustments.total, 0) AS CHAR(40)) AS payable_basis
+          FROM finance_departure_case_terms AS case_term
+          INNER JOIN enrollments AS enrollment ON enrollment.id = case_term.enrollment_id
+          INNER JOIN assessed_charges AS charge ON charge.enrollment_id = enrollment.id
+          LEFT JOIN (SELECT charge_id, SUM(amount) AS total FROM finance_charge_adjustments GROUP BY charge_id) AS adjustments
+            ON adjustments.charge_id = charge.id
+          WHERE case_term.departure_case_id = @caseId
+          ORDER BY enrollment.annual_term_number, charge.id`) : { recordset: [] };
+      const cutoffInstallment = normalizeLastPayableInstallment(input.cutoffInstallment);
+      const departureTermNumber = Number(departureCase?.departure_term_number || 0);
+      const existingRows = Array.isArray(input.chargeReviews) ? input.chargeReviews : [];
+      const submittedById = new Map(existingRows.filter((row) => row && /^\d{1,18}$/.test(String(row.chargeId || '')))
+        .map((row) => [String(row.chargeId), row]));
+      const allTargetsCovered = existingRows.length === (departureCharges.recordset || []).length
+        && submittedById.size === existingRows.length
+        && (departureCharges.recordset || []).every((charge) => submittedById.has(String(charge.id)));
+      const chargeReviews = (departureCharges.recordset || []).map((charge) => {
+        const chargeId = String(charge.id);
+        const basisCents = parseMoneyCents(String(charge.payable_basis), { allowNegative: true, allowZero: true });
+        const reviewCategory = classifyDepartureCharge(charge);
+        const proposedCents = proposedDepartureReduction({ charge,
+          termNumber: Number(charge.annual_term_number), departureTermNumber,
+          lastPayableInstallment: cutoffInstallment, payableBasisCents: basisCents });
+        const supplied = submittedById.get(chargeId);
+        return {
+          chargeId,
+          termNumber: Number(charge.annual_term_number),
+          feeCategory: String(charge.fee_category || ''),
+          lineName: String(charge.line_name || ''),
+          installment: String(charge.installment || ''),
+          reviewCategory,
+          payableBefore: formatMoneyCents(basisCents),
+          proposedReduction: formatMoneyCents(proposedCents),
+          decision: allTargetsCovered && ['retain', 'reduce'].includes(String(supplied?.decision || '').toLowerCase())
+            ? String(supplied.decision).toLowerCase() : '',
+          reductionAmount: !allTargetsCovered || supplied?.reductionAmount == null || supplied.reductionAmount === ''
+            ? formatMoneyCents(proposedCents) : String(supplied.reductionAmount),
+          reason: allTargetsCovered && typeof supplied?.reason === 'string' ? supplied.reason : ''
+        };
+      });
+      input.chargeReviews = chargeReviews.map(({ chargeId, decision, reductionAmount, reason }) => ({ chargeId, decision, reductionAmount, reason }));
+      const reviewDecisionReady = (row) => {
+        if (!['retain', 'reduce'].includes(row.decision) || typeof row.reason !== 'string' || row.reason.length > 1000
+          || /[\u0000-\u001f\u007f]/.test(row.reason)) return false;
+        try {
+          const reduction = parseMoneyCents(row.reductionAmount, { allowZero: true });
+          const payable = parseMoneyCents(row.payableBefore, { allowNegative: true, allowZero: true });
+          return reduction <= (payable > 0n ? payable : 0n)
+            && (row.decision === 'retain' ? reduction === 0n : reduction > 0n);
+        } catch { return false; }
+      };
+      const decisionsReady = chargeReviews.every(reviewDecisionReady);
+      preview.departureTermNumber = departureTermNumber || null;
+      preview.departureLastPayableInstallment = cutoffInstallment || null;
+      preview.departureChargeReviews = chargeReviews.map((row) => ({
+        ...row,
+        fee: [row.feeCategory, row.lineName].filter(Boolean).join(' · '),
+        categoryLabel: row.reviewCategory === 'canonical_tuition' ? 'Recorded tuition installment'
+          : row.reviewCategory === 'manual_tuition' ? 'Whole-term / noncanonical tuition · manual review'
+            : 'Individual fee · Finance review',
+        reason: row.reason || (input.reason ? `Overall Finance reason: ${input.reason}` : ''),
+        reviewedReductionReady: reviewDecisionReady(row),
+        payableAfter: (() => {
+          if (!reviewDecisionReady(row)) return null;
+          try {
+            const before = parseMoneyCents(row.payableBefore, { allowNegative: true, allowZero: true });
+            const reduction = parseMoneyCents(row.reductionAmount, { allowZero: true });
+            return formatMoneyCents(before - reduction);
+          } catch { return null; }
+        })()
       }));
-      preview.editorOptions = { ...(preview.editorOptions || {}), departureCharges: chargeOptions };
-      const labels = new Map(chargeOptions.map((option) => [String(option.value).slice('charge:'.length), option.label]));
-      preview.departureAdjustments = (Array.isArray(input.adjustments) ? input.adjustments : []).map((adjustment) => ({
-        charge: labels.get(String(adjustment.chargeId)) || 'Balance no longer available',
-        amount: adjustment.amount || '—', reason: adjustment.reason || ''
-      }));
+      preview.departureReviewReady = Boolean(departureCase && cutoffInstallment && LAST_PAYABLE_OPTIONS.includes(cutoffInstallment)
+        && departureTermNumber >= 1 && departureTermNumber <= 3 && allTargetsCovered && decisionsReady);
+      preview.departureHasChargeRows = chargeReviews.length > 0;
+      preview.departureReviewReasonReady = typeof input.reason === 'string' && input.reason.trim().length > 0
+        && input.reason.trim().length <= 1000 && !/[\u0000-\u001f\u007f]/.test(input.reason);
+      preview.departureReviewReady = preview.departureReviewReady && preview.departureReviewReasonReady;
     }
     const fieldLabels = Object.entries(input)
-      .filter(([name, value]) => !['allocations', 'allocationMode', 'rules', 'lines', 'adjustments', 'expectedPreviousSchedule'].includes(name)
+      .filter(([name, value]) => !['allocations', 'allocationMode', 'rules', 'lines', 'adjustments', 'chargeReviews', 'expectedPreviousSchedule'].includes(name)
         && !/id$/i.test(name) && (value == null || ['string', 'number', 'boolean'].includes(typeof value)))
       .map(([name, value]) => ({ name,
         value: Array.isArray(value) ? value.filter((item) => ['string', 'number', 'boolean'].includes(typeof item)).map(String).join(', ') : String(value ?? '') }));
@@ -1055,8 +1154,10 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     const draft = await drafts.getDraft(actorId, draftId);
     if (draft.status !== 'pending') return draft;
     const action = actionForDraft(draft.actionType);
-    const review = await previewOutsideTransaction(action, draft.entityContext, draft.input);
-    if (draft.sessionBindingHmac !== sessionBindingHmac || draft.dependencyFingerprint !== review.dependencyFingerprint || draft.reviewExpired) {
+    const normalizedInput = normalizeActionInput(action.type, draft.input);
+    const inputChanged = JSON.stringify(normalizedInput) !== JSON.stringify(draft.input);
+    const review = await previewOutsideTransaction(action, draft.entityContext, normalizedInput);
+    if (draft.sessionBindingHmac !== sessionBindingHmac || draft.dependencyFingerprint !== review.dependencyFingerprint || draft.reviewExpired || inputChanged) {
       draft.revision = await drafts.updateDraftInput(actorId, draft.id, sessionBindingHmac, review.normalizedInput, review);
       draft.sessionBindingHmac = sessionBindingHmac;
       draft.dependencyFingerprint = review.dependencyFingerprint;

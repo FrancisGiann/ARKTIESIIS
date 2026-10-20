@@ -18,6 +18,7 @@ const { FinanceReviewDraftError } = require('../services/financeReviewDraftServi
 const { actionByPath, createFinanceReviewActionService, normalizeActionInput, normalizeFinanceReturnContext } = require('../services/financeReviewActionService');
 const { createStatementProjection } = require('../utils/financeStatementProjection');
 const { paymentStatusPresentation } = require('../utils/financeStatusPresentation');
+const { LAST_PAYABLE_OPTIONS } = require('../services/departureFinanceReview');
 const { formatFinanceDateTime, manilaWeekStartDate } = require('../utils/financeDateTime');
 const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
 
@@ -114,6 +115,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       optionalLineId: 'Optional schedule line', scheduleId: 'Reviewed schedule', scheduleVersion: 'Reviewed schedule version',
       status: 'Decision', clearanceStatus: 'Clearance status', ledgerReviewConfirmed: 'Ledger reviewed',
       paymentArrangement: 'Payment arrangement', financeNote: 'Private Finance note', effectiveDate: 'Effective date',
+      cutoffInstallment: 'Last payable tuition installment', chargeReviews: 'Fees and Finance decisions',
       departureType: 'Departure type', adjustmentAmount: 'Adjustment amount', reversesAdjustmentId: 'Adjustment being reversed'
     };
     if (labels[value]) return labels[value];
@@ -129,6 +131,9 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
       if (['enrollmentId', 'clearEnrollmentId'].includes(name)) return options.enrollments;
       if (name === 'paymentTransactionId') return options.payments;
       if (name === 'optionalLineId') return options.optionalScheduleLines;
+      if (name === 'cutoffInstallment') return LAST_PAYABLE_OPTIONS.map((value) => ({
+        value, label: value === 'none' ? 'None payable' : value.toUpperCase()
+      }));
       return null;
     }
     const fields = [];
@@ -143,7 +148,13 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
             rules: ['termNumber', 'feeCategory', 'lineName', 'isFullCoverage', 'approvedAmount'],
             adjustments: ['target', 'amount', 'reason']
           };
+          const departureRows = new Map((draft.preview?.departureChargeReviews || [])
+            .map((row) => [String(row.chargeId), row]));
           const rows = value.map((row) => {
+            if (name === 'chargeReviews') {
+              const reviewed = departureRows.get(String(row.chargeId)) || {};
+              return { ...reviewed, ...row };
+            }
             if (name === 'allocations' || name === 'adjustments') {
               const target = row.chargeId ? `charge:${row.chargeId}` : row.openingLiabilityId ? `opening:${row.openingLiabilityId}` : '';
               return { target, amount: row.amount || '', ...(name === 'adjustments' ? { reason: row.reason || '' } : {}) };
@@ -152,6 +163,10 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
           });
           if (name === 'lines') {
             fields.push({ name, label: reviewFieldLabel(name), kind: 'schedule', lines: rows.map((row, index) => ({ ...row, index })) });
+            continue;
+          }
+          if (name === 'chargeReviews') {
+            fields.push({ name, label: reviewFieldLabel(name), kind: 'departure-charges', rows: rows.map((row, index) => ({ ...row, index })) });
             continue;
           }
           const properties = [...new Set([...rows.flatMap((row) => Object.keys(row)), ...(defaults[name] || [])])]
@@ -192,7 +207,8 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
             allocations: ['target', 'amount'],
             lines: ['termNumber', 'feeCategory', 'lineName', 'installment', 'amount', 'isOptional'],
             rules: ['termNumber', 'feeCategory', 'lineName', 'isFullCoverage', 'approvedAmount'],
-            adjustments: ['target', 'amount', 'reason']
+            adjustments: ['target', 'amount', 'reason'],
+            chargeReviews: ['decision', 'reductionAmount', 'reason']
           };
           const properties = [...new Set([...value.flatMap((row) => Object.keys(row)), ...(defaults[name] || [])])];
           const rows = [];
@@ -202,7 +218,12 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
               const field = body[`item_${name}_${index}_${key}`];
               row[key] = field === undefined ? (value[index]?.[key] ?? '') : field;
             }
-            if ((name === 'allocations' || name === 'adjustments') && typeof row.target === 'string') {
+            if (name === 'chargeReviews') {
+              row.chargeId = value[index]?.chargeId || '';
+              row.decision = body[`item_${name}_${index}_decision`] ?? row.decision ?? '';
+              row.reductionAmount = body[`item_${name}_${index}_reductionAmount`] ?? row.reductionAmount ?? '0.00';
+              row.reason = body[`item_${name}_${index}_reason`] ?? row.reason ?? '';
+            } else if ((name === 'allocations' || name === 'adjustments') && typeof row.target === 'string') {
               const match = /^(charge|opening):(\d{1,18})$/.exec(row.target);
               if (name === 'allocations') {
                 row.chargeId = match?.[1] === 'charge' ? match[2] : '';
@@ -213,7 +234,9 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
             for (const booleanKey of ['isOptional', 'isFullCoverage']) {
               if (typeof row[booleanKey] === 'string') row[booleanKey] = row[booleanKey] === '1' || row[booleanKey].toLowerCase() === 'true';
             }
-            const meaningful = name === 'lines'
+            const meaningful = name === 'chargeReviews'
+              ? Boolean(row.chargeId)
+              : name === 'lines'
               ? [row.lineName, row.amount].some((entry) => entry !== '' && entry != null)
               : name === 'rules'
                 ? [row.feeCategory, row.lineName, row.approvedAmount].some((entry) => entry !== '' && entry != null)
@@ -562,12 +585,13 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     })).filter((rule) => [rule.feeCategory, rule.lineName, rule.approvedAmount].some((value) => value !== ''));
   }
 
-  function departureAdjustmentsFromForm(body = {}) {
+  function departureChargeReviewsFromForm(body = {}) {
     const charges = repeated(body.departureChargeId);
-    const amounts = repeated(body.departureAdjustmentAmount);
-    const reasons = repeated(body.departureAdjustmentReason);
-    return charges.map((chargeId, index) => ({ chargeId, amount: amounts[index] || '', reason: reasons[index] || '' }))
-      .filter((row) => row.chargeId && row.amount);
+    const decisions = repeated(body.departureDecision);
+    const amounts = repeated(body.departureReductionAmount);
+    const reasons = repeated(body.departureChargeReason);
+    return charges.map((chargeId, index) => ({ chargeId, decision: decisions[index] || '',
+      reductionAmount: amounts[index] || '0.00', reason: reasons[index] || '' }));
   }
 
   async function renderAnnualRoster(req, res, { status = 200, error = null } = {}) {
@@ -1132,7 +1156,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     try {
       await cases.reviewDepartureCase(req.authUser.id, req.params.caseId, {
-        ...req.body, adjustments: departureAdjustmentsFromForm(req.body)
+        ...req.body, chargeReviews: departureChargeReviewsFromForm(req.body)
       });
       return res.redirect(303, '/finance/departures?notice=saved');
     } catch (error) {

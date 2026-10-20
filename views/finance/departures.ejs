@@ -11,7 +11,7 @@
         const chargeCount = departure.terms.reduce((count, term) => count + term.charges.length, 0);
         const recoveryPath = `/departure-cases/${departure.departure_case_id}/review`;
         const recovered = failedAction?.path === recoveryPath ? failedAction.input : {};
-        const recoveredAdjustment = (chargeId) => (recovered.adjustments || []).find((item) => String(item.chargeId) === String(chargeId)) || {};
+        const effectiveTermNumber = Number(departure.departure_term_number || 0);
         const parseCents = (value) => {
           const match = String(value ?? '').trim().match(/^(-?)(\d+)(?:\.(\d{1,2}))?$/);
           if (!match) return null;
@@ -25,10 +25,6 @@
           const formatted = formatMoney(`${absolute / 100n}.${String(absolute % 100n).padStart(2, '0')}`);
           return negative ? `₱${formatted} credit` : `₱${formatted} due`;
         };
-        const termHasRecovery = (term) => term.charges.some((charge) => {
-          const row = recoveredAdjustment(charge.charge_id);
-          return row.amount !== undefined || row.reason !== undefined;
-        });
         const effectiveDate = departure.effective_date instanceof Date
           ? departure.effective_date.toISOString().slice(0, 10)
           : String(departure.effective_date).slice(0, 10);
@@ -37,14 +33,19 @@
         <summary>
           <span class="finance-departure-identity"><strong><%= departure.student_name %></strong><span><%= departure.student_no %></span></span>
           <span class="finance-departure-type"><strong><%= departure.departure_type === 'dropped' ? 'Stopped' : 'Transferred' %></strong><time datetime="<%= effectiveDate %>">Effective <%= effectiveDate %></time></span>
-          <span class="finance-departure-context"><strong><%= departure.school_year %> · <%= departure.grade_level %></strong><span><%= departure.terms.length %> affected terms · <%= chargeCount %> charges to review</span></span>
+          <span class="finance-departure-context"><strong><%= departure.school_year %> · <%= departure.grade_level %></strong><span>Departure placement: Term <%= effectiveTermNumber || 'unavailable' %> · <%= departure.terms.length %> affected terms · <%= chargeCount %> fees to review</span></span>
           <span class="finance-departure-review-cue">Review fees</span>
         </summary>
         <div class="finance-departure-case-body">
           <p><strong>Registrar reason:</strong> <%= departure.reason %></p>
           <form class="form-stack" method="post" action="/finance/departure-cases/<%= departure.departure_case_id %>/review">
             <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= departure.idempotencyKey %>">
-            <div class="admin-section__heading"><div><h3>Fees for affected terms</h3><p>Enter an amount only for a correction Finance approves. Blank rows stay unchanged. Corrections above the unpaid amount return prior payments to unused account credit.</p></div></div>
+            <div class="admin-section__heading"><div><h3>Saved departure and fee basis</h3><p>The saved Registrar effective placement determines the departure term. This first step opens a Finance review draft with proposed reductions for later recorded tuition installments; Finance then decides and records every fee individually.</p></div></div>
+            <label class="field"><span>Last payable tuition installment in Term <%= effectiveTermNumber || 'unavailable' %></span><select name="cutoffInstallment" required>
+              <option value="">Choose the last payable installment</option>
+              <% for (const option of [{ value: 'none', label: 'None payable' }, { value: 'dp', label: 'DP' }, { value: 'prelim', label: 'Prelim' }, { value: 'midterm', label: 'Midterm' }, { value: 'finals', label: 'Finals' }]) { %><option value="<%= option.value %>" <%= recovered.cutoffInstallment === option.value ? 'selected' : '' %>><%= option.label %></option><% } %>
+            </select></label>
+            <p class="muted-copy">Exemptions and previous adjustments are already reflected in the current payable amount. Tuition is classified only by its fee category and recorded tuition installment; whole-term tuition is never split or estimated. Miscellaneous and named fees receive separate Finance keep/reduce decisions.</p>
             <div class="finance-departure-terms">
               <% for (const term of departure.terms) { %>
                 <% if (!term.charges.length) { %>
@@ -54,21 +55,14 @@
                     <% if (term.academic_activity_review_required === true || term.academic_activity_review_required === 1) { %><span class="finance-review-flag">Academic activity exists; verify grade and schedule history separately.</span><% } %>
                   </div>
                 <% } else { const termTotalCents = term.charges.reduce((total, charge) => { const amount = parseCents(charge.amount_due); return amount == null || total == null ? null : total + amount; }, 0n); %>
-                  <details class="finance-departure-term" <%= termHasRecovery(term) ? 'open' : '' %>>
+                  <details class="finance-departure-term" <%= Number(term.annual_term_number) === effectiveTermNumber ? 'open' : '' %>>
                     <summary><strong>Term <%= term.annual_term_number %></strong><span><%= term.charges.length %> fees · <%= displayCents(termTotalCents) %></span></summary>
                     <% if (term.academic_activity_review_required === true || term.academic_activity_review_required === 1) { %><p class="finance-review-flag">Academic activity exists in this affected placement; verify grade and schedule history separately.</p><% } %>
                     <div class="finance-departure-charge-list">
                       <% for (const charge of term.charges) { %>
                         <div class="finance-departure-charge">
-                          <input type="hidden" name="departureChargeId" value="<%= charge.charge_id %>">
-                          <% const recoveredRow = recoveredAdjustment(charge.charge_id); %>
-                          <details class="finance-departure-charge-adjustment" <%= recoveredRow.amount !== undefined || recoveredRow.reason !== undefined ? 'open' : '' %>>
-                            <summary><strong><%= charge.line_name %> · <%= charge.installment %></strong><span>Remaining ₱<%= formatMoney(charge.amount_due) %> · Enter correction</span></summary>
-                            <div class="finance-departure-charge-fields">
-                              <label class="field"><span>Correction amount (PHP)</span><input name="departureAdjustmentAmount" inputmode="decimal" maxlength="14" placeholder="No correction" value="<%= recoveredRow.amount || '' %>"></label>
-                              <label class="field"><span>Correction reason</span><input name="departureAdjustmentReason" maxlength="1000" placeholder="Required when amount is entered" value="<%= recoveredRow.reason || '' %>"></label>
-                            </div>
-                          </details>
+                          <strong><%= charge.fee_category %> · <%= charge.line_name %><% if (charge.installment) { %> · <%= charge.installment %><% } %></strong>
+                          <span>Current payable amount ₱<%= formatMoney(charge.payable_basis) %> · signed remaining balance <%= displayCents(parseCents(charge.amount_due)) %></span>
                         </div>
                       <% } %>
                     </div>
@@ -77,7 +71,7 @@
               <% } %>
             </div>
             <label class="field"><span>Finance review reason</span><textarea name="reason" rows="3" maxlength="1000" required><%= recovered.reason || '' %></textarea></label>
-            <button class="button button--primary" type="submit">Save Finance review and corrections</button>
+            <button class="button button--primary" type="submit">Review cutoff and open Finance draft</button>
           </form>
         </div>
       </details>

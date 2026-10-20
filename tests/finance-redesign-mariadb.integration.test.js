@@ -806,7 +806,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       const query = { ...statusQuery, installment };
       await directGetHandler(router, '/')(requestFor(query), rosterResponse);
       assert.equal(rosterResponse.statusCode, 200, `${installment} roster status link renders`);
-      assert.equal(rosterResponse.view, 'finance/annual-roster');
+      assert.equal(rosterResponse.view, 'finance/masterlist');
       assert.match(rosterResponse.html, /Ari Sample/);
       assert.match(rosterResponse.html, /Needs registrar confirmation/);
       const accountUrl = [...rosterResponse.html.matchAll(/href="(\/finance\/students\/\d+\/annual\?[^\"]*)"/g)]

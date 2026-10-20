@@ -11,11 +11,11 @@ const { splitSqlStatements, readSqlFile, readForwardMigrations, validateAppliedV
   assert.match(statements[1], /\`semi;colon\`/);
 });
 
-test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.019 migrations', () => {
+test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.020 migrations', () => {
   const baseline = readSqlFile(path.resolve('database/mariadb/schema.sql'));
   assert.ok(baseline.some((statement) => /v2\.001/.test(statement)));
   const migrations = readForwardMigrations();
-  assert.deepEqual(migrations.map(({ version }) => version), Array.from({ length: 18 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
+  assert.deepEqual(migrations.map(({ version }) => version), Array.from({ length: 19 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
   assert.ok(migrations.every(({ statements }) => statements.length > 0));
   const wholePaper = migrations.find(({ version }) => version === 'v2.018');
   assert.equal(wholePaper.statements[0].match(/\bALTER\s+TABLE\s+student_term_clearances\b/gi)?.length, 1);
@@ -27,6 +27,11 @@ test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.019 migra
   assert.match(financeHandoff.statements[0], /CREATE TABLE annual_finance_assessment_reviews/i);
   assert.match(financeHandoff.statements[2], /finance_review_id BIGINT NULL/i);
   assert.match(financeHandoff.statements[2], /entry_dp_state_at_confirmation/i);
+  const departureCutoff = migrations.find(({ version }) => version === 'v2.020');
+  assert.match(departureCutoff.statements[0], /CREATE TABLE finance_departure_cutoff_reviews/i);
+  assert.match(departureCutoff.statements[1], /CREATE TABLE finance_departure_charge_reviews/i);
+  assert.doesNotMatch(departureCutoff.statements.join('\n'), /UPDATE\s+finance_departure_cases/i,
+    'historical reviewed cases are not given inferred cutoff decisions');
 });
 
 test('setup rejects Hostinger-incompatible schema DDL', () => {
@@ -57,6 +62,9 @@ test('setup refuses unknown or discontinuous migration history', () => {
   )));
   assert.doesNotThrow(() => validateAppliedVersions(new Set(
     Array.from({ length: 19 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
+  )));
+  assert.doesNotThrow(() => validateAppliedVersions(new Set(
+    Array.from({ length: 20 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
   )));
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.017', 'v2.018'])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.019'])), /history is inconsistent/);

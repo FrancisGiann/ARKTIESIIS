@@ -13,7 +13,7 @@
 
   <section class="finance-review-summary finance-panel" aria-labelledby="review-summary-title">
     <div class="finance-review-summary__heading">
-      <div><h2 id="review-summary-title">Review details</h2><p>Current status: ready for review. Check the student, amounts, and destinations before saving.</p></div>
+    <div><h2 id="review-summary-title">Review details</h2><p>Check the saved record, every fee decision, and each amount before saving.</p></div>
       <% if (draft.preview.student) { %>
         <div class="finance-review-student"><strong><%= draft.preview.student.name %></strong><span><%= draft.preview.student.studentNumber || 'Student number unavailable' %></span></div>
       <% } %>
@@ -98,12 +98,38 @@
       </div>
     <% } %>
 
-    <% if (draft.preview.departureAdjustments?.length) { %>
-      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Reviewed fees and corrections for a stopped or transferred student">
-        <table class="admin-table"><caption>Charge corrections</caption><thead><tr><th>Charge</th><th>Amount</th><th>Reason</th></tr></thead>
-          <tbody><% for (const item of draft.preview.departureAdjustments) { %><tr><td data-label="Charge"><%= item.charge %></td><td data-label="Amount">₱<%= item.amount %></td><td data-label="Reason"><%= item.reason %></td></tr><% } %></tbody>
-        </table>
-      </div>
+    <% if (draft.actionType === 'departure_review') { %>
+      <section class="finance-review-fields" aria-label="Tuition cutoff evidence">
+        <h2>Departure tuition cutoff</h2>
+        <p>The departure term comes from the saved Registrar placement: <strong><%= draft.preview.departureTermNumber ? `Term ${draft.preview.departureTermNumber}` : 'Placement unavailable' %></strong>. The cutoff records the last tuition installment payable in that term.</p>
+        <p><strong>Last payable tuition installment:</strong> <%= ({ dp: 'DP', prelim: 'Prelim', midterm: 'Midterm', finals: 'Finals', none: 'None payable' })[String(draft.preview.departureLastPayableInstallment || '').toLowerCase()] || 'Not recorded' %></p>
+        <% if (!draft.preview.departureReviewReady) { %><p class="form-alert" role="status">Complete the cutoff, choose keep or reduce for every affected fee, and enter a valid reviewed amount. The overall Finance reason is saved for any fee without a specific note.</p><% } %>
+      </section>
+      <% if (draft.preview.departureChargeReviews?.length) { %>
+        <div class="finance-review-departure-preview" aria-label="Reviewed fees and proposed departure reductions">
+          <% for (const termNumber of [1, 2, 3]) { const termItems = draft.preview.departureChargeReviews.filter((item) => Number(item.termNumber) === termNumber); if (!termItems.length) continue; const pendingDecisions = termItems.filter((item) => !['retain', 'reduce'].includes(item.decision)).length; %>
+            <details class="finance-review-departure-term" <%= draft.preview.departureReviewReady === true && termNumber === Number(draft.preview.departureTermNumber) ? 'open' : '' %>>
+              <summary><strong>Term <%= termNumber %> · <%= termItems.length %> fee<%= termItems.length === 1 ? '' : 's' %></strong><span><%= pendingDecisions ? `${pendingDecisions} decision${pendingDecisions === 1 ? '' : 's'} pending` : 'All decisions recorded' %></span></summary>
+              <div class="finance-review-departure-term__fees">
+                <% for (const item of termItems) { %>
+                  <article class="finance-review-departure-fee">
+                    <h3><%= item.fee %><% if (item.installment) { %> · <%= item.installment %><% } %></h3>
+                    <dl class="finance-review-fields">
+                      <div><dt>Classification</dt><dd><%= item.categoryLabel %></dd></div>
+                      <div><dt>Current payable amount before</dt><dd>₱<%= item.payableBefore %></dd></div>
+                      <div><dt>Proposed reduction</dt><dd>₱<%= item.proposedReduction %></dd></div>
+                      <div><dt>Finance decision</dt><dd><%= item.decision || 'Pending' %></dd></div>
+                      <div><dt>Reviewed reduction</dt><dd><%= item.reviewedReductionReady ? `₱${item.reductionAmount}` : 'Pending' %></dd></div>
+                      <div><dt>Current payable amount after</dt><dd><%= !item.reviewedReductionReady || item.payableAfter == null ? 'Review required' : `₱${item.payableAfter}` %></dd></div>
+                      <div><dt>Finance reason</dt><dd><%= item.reason || 'Overall reason required' %></dd></div>
+                    </dl>
+                  </article>
+                <% } %>
+              </div>
+            </details>
+          <% } %>
+        </div>
+      <% } else { %><p class="finance-review-empty-note">No assessed charges are linked to the saved departure placements. The Finance review still records the explicit tuition cutoff.</p><% } %>
     <% } %>
 
     <% if (previewFields.length) { %>
@@ -111,7 +137,7 @@
     <% } %>
   </section>
 
-  <details class="finance-review-edit finance-panel">
+  <details class="finance-review-edit finance-panel" <%= draft.actionType === 'departure_review' && draft.preview.departureReviewReady !== true ? 'open' : '' %>>
     <summary>Edit saved details</summary>
     <div class="finance-review-edit__body">
       <p>Changing a value saves an updated draft. Review the summary again before saving.</p>
@@ -119,7 +145,7 @@
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <% for (const field of editorFields) { %>
           <% if (field.kind === 'select') { %>
-            <label class="field"><span><%= field.label %></span><select name="field_<%= field.name %>" required>
+            <label class="field"><span><%= field.label %></span><select name="field_<%= field.name %>" <%= draft.actionType === 'departure_review' && field.name === 'cutoffInstallment' ? '' : 'required' %>>
               <option value="">Choose <%= field.label.toLowerCase() %></option>
               <% for (const option of field.options || []) { %><option value="<%= option.value %>" <%= String(option.value) === String(field.value) ? 'selected' : '' %>><%= option.label %></option><% } %>
             </select></label>
@@ -128,7 +154,7 @@
               <% if (field.boolean) { %>
                 <select name="field_<%= field.name %>"><option value="1" <%= field.value ? 'selected' : '' %>>Yes</option><option value="0" <%= field.value ? '' : 'selected' %>>No</option></select>
               <% } else if (field.multiline) { %>
-                <textarea name="field_<%= field.name %>" rows="3" maxlength="2000"><%= field.value ?? '' %></textarea>
+                <textarea name="field_<%= field.name %>" rows="3" maxlength="<%= draft.actionType === 'departure_review' && field.name === 'reason' ? '1000' : '2000' %>"><%= field.value ?? '' %></textarea>
               <% } else { %>
                 <input name="field_<%= field.name %>" value="<%= field.value ?? '' %>" maxlength="1000">
               <% } %>
@@ -161,6 +187,22 @@
                 <label class="field"><span>Amount (PHP)</span><input name="item_lines_<%= index %>_amount" inputmode="decimal" maxlength="14"></label>
                 <label class="field"><span>Selection</span><select name="item_lines_<%= index %>_isOptional"><option value="0" selected>Required</option><option value="1">Optional</option></select></label>
               </details>
+            </fieldset>
+          <% } else if (field.kind === 'departure-charges') { %>
+            <fieldset class="finance-review-row-editor finance-review-departure-editor"><legend><%= field.label %></legend>
+              <p>Choose keep or reduce for every fee. Recorded tuition-installment proposals use the current payable amount after existing adjustments and exemptions. Whole-term tuition has no automatic split; miscellaneous and named fees are reviewed individually.</p>
+              <% for (const termNumber of [1, 2, 3]) { const termRows = field.rows.filter((row) => Number(row.termNumber) === termNumber); if (!termRows.length) continue; %>
+                <details class="finance-review-term-editor" <%= termNumber === Number(draft.preview.departureTermNumber) ? 'open' : '' %>><summary>Term <%= termNumber %> · <%= termRows.length %> fee<%= termRows.length === 1 ? '' : 's' %></summary>
+                  <% for (const row of termRows) { %>
+                    <div class="finance-review-fee-line"><h3><%= row.feeCategory %> · <%= row.lineName %><%= row.installment ? ` · ${row.installment}` : '' %></h3>
+                      <p><%= row.categoryLabel %> · current payable amount ₱<%= row.payableBefore %> · proposed reduction ₱<%= row.proposedReduction %></p>
+                      <label class="field"><span>Finance decision</span><select name="item_chargeReviews_<%= row.index %>_decision"><option value="">Choose keep or reduce</option><option value="retain" <%= row.decision === 'retain' ? 'selected' : '' %>>Keep full payable amount</option><option value="reduce" <%= row.decision === 'reduce' ? 'selected' : '' %>>Reduce manually/review proposal</option></select></label>
+                      <label class="field"><span>Reviewed reduction (PHP; enter 0.00 when keeping)</span><input name="item_chargeReviews_<%= row.index %>_reductionAmount" value="<%= row.reductionAmount ?? '0.00' %>" inputmode="decimal" maxlength="14"></label>
+                      <label class="field"><span>Specific Finance reason (optional; blank uses the overall reason)</span><textarea name="item_chargeReviews_<%= row.index %>_reason" rows="2" maxlength="1000"><%= row.reason ?? '' %></textarea></label>
+                    </div>
+                  <% } %>
+                </details>
+              <% } %>
             </fieldset>
           <% } else if (field.kind === 'rows') { %>
             <fieldset class="finance-review-row-editor"><legend><%= field.label %></legend>
@@ -210,7 +252,7 @@
         <label class="field"><span><input type="checkbox" name="financeAssessmentAttestation" value="1" required> I reviewed the approved fee schedule, selected options, and exact annual assessment shown above.</span></label>
         <label class="field"><span><input type="checkbox" name="zeroDpApproval" value="1"> If this entry-term DP is zero after approved waivers, I explicitly approve the zero-DP case.</span></label>
       <% } %>
-      <button class="button button--primary" type="submit" <%= previewUnavailable ? 'disabled' : '' %>>Review complete · Save update</button>
+      <button class="button button--primary" type="submit" <%= previewUnavailable || (draft.actionType === 'departure_review' && draft.preview.departureReviewReady !== true) ? 'disabled' : '' %>>Review complete · Save update</button>
     </form>
     <form method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/discard">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">

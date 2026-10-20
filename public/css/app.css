@@ -2235,6 +2235,14 @@ label { font-size: 0.84rem; }
 .finance-review-term-editor[open] > summary { grid-column: 1 / -1; }
 .finance-review-fee-line { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.7rem; padding: 0.7rem 0; border-bottom: 1px solid var(--line); }
 .finance-review-fee-line > strong { grid-column: 1 / -1; }
+.finance-review-departure-preview { display: grid; gap: 0.35rem; margin: 0.85rem 0 1rem; }
+.finance-review-departure-term { padding: 0.55rem 0.75rem; border: 1px solid var(--line); border-radius: var(--radius-control); }
+.finance-review-departure-term > summary { min-height: 2.75rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.35rem 0.8rem; color: var(--accent); cursor: pointer; font-weight: 700; }
+.finance-review-departure-term > summary span { color: var(--muted); font-size: 0.82rem; font-weight: 600; }
+.finance-review-departure-term__fees { display: grid; gap: 0.5rem; }
+.finance-review-departure-fee { min-width: 0; padding: 0.65rem 0; border-top: 1px solid var(--line); }
+.finance-review-departure-fee h3 { margin: 0.1rem 0 0.25rem; font-size: 0.95rem; overflow-wrap: anywhere; }
+.finance-review-departure-fee .finance-review-fields { margin: 0.35rem 0 0; }
 .finance-review-schedule-editor { display: grid; gap: 0.5rem; }
 .finance-review-schedule-editor > legend { font-weight: 750; }
 .finance-review-schedule-editor > p { color: var(--muted); font-size: 0.85rem; }
