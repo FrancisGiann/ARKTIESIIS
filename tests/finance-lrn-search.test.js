@@ -84,6 +84,8 @@ function createRosterService() {
             return { recordset: matches.map(pageData) };
           }
           if (statement.includes('classification.annual_enrollment_id IN')) return { recordset: [] };
+          if (statement.includes('FROM v_finance_effective_assessed_charges AS charge')
+            && statement.includes('v_finance_assessed_charge_due')) return { recordset: [] };
           if (statement.includes('FROM assessed_charges AS charge')) return { recordset: [] };
           if (statement.includes('FROM v_finance_legacy_account_balance')) return { recordset: [] };
           if (statement.includes('FROM v_finance_opening_liability_due')) return { recordset: [] };

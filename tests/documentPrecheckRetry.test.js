@@ -135,7 +135,7 @@ test('staff can retry an active report-card precheck and SQL rechecks the archiv
   const { service, state } = retryService({ documentType: 'report_card', isLegacyArchive: false });
   assert.deepEqual(await service.requestPrecheckRetry(7, '84'), { id: 84, status: 'pending' });
   const update = state.queries.find(({ statement }) => statement.includes("SET status = 'pending'"));
-  assert.match(update.statement, /document_type = 'report_card' AND is_legacy_archive = 0/);
+  assert.match(update.statement, /document_type IN \('good_moral', 'psa_birth_certificate', 'report_card'\)[\s\S]*AND \(document_type <> 'report_card' OR is_legacy_archive = 0\)/);
   assert.equal(state.audit.action, 'registrar.document_precheck_retry_queued');
 });
 

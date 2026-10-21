@@ -1,0 +1,68 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page records-page" id="main-content">
+  <a class="context-back" href="/registrar/records/students/<%= workspace.student.id %>">Back to student overview</a>
+  <%- include('../partials/student-record-navigation', { student: workspace.student, activeStudentView: 'requirements' }) %>
+  <header class="page-heading"><div><p class="eyebrow">Registrar workspace</p><h2>Custom enrollment requirements</h2>
+    <p>Requirement names and instructions are saved on each assignment. Staff notes and withdrawal reasons remain private.</p></div></header>
+  <% const studentArchived = workspace.student.status === 'archived'; %>
+  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <form class="filter-bar" method="get" action="/registrar/records/students/<%= workspace.student.id %>/requirements">
+    <div class="field"><label for="requirement-school-year">School year</label><select id="requirement-school-year" name="schoolYear" required>
+      <% for (const year of workspace.schoolYears) { %><option value="<%= year %>" <%= workspace.selectedSchoolYear === year ? 'selected' : '' %>><%= year %></option><% } %>
+    </select></div><button class="button button--secondary" type="submit">View year</button>
+  </form>
+  <% if (studentArchived) { %><p class="empty-state">This student record is archived. Assignments and evidence are read-only.</p>
+  <% } else if (workspace.catalog.length && workspace.selectedSchoolYear) { %>
+    <section class="admin-section" aria-labelledby="assign-custom-requirement-title">
+      <h3 id="assign-custom-requirement-title">Assign a requirement for <%= workspace.selectedSchoolYear %></h3>
+      <form class="form-stack" method="post" action="/registrar/records/students/<%= workspace.student.id %>/requirements">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="schoolYear" value="<%= workspace.selectedSchoolYear %>">
+        <div class="admin-form-grid">
+          <div class="field"><label for="custom-requirement">Custom requirement</label><select id="custom-requirement" name="catalogItem" required>
+            <% for (const item of workspace.catalog) { %><option value="<%= item.id %>:<%= item.version_no %>"><%= item.display_name %> · <%= item.channel %> · revision <%= item.version_no %></option><% } %>
+          </select><small>Reload if the catalog changes before you save.</small></div>
+          <div class="field"><label for="requirement-required">Requirement policy</label><select id="requirement-required" name="isRequired"><option value="1">Required</option><option value="0">Optional</option></select></div>
+        </div>
+        <button class="button button--primary button--align-start" type="submit">Assign to student</button>
+      </form>
+    </section>
+  <% } else if (!workspace.selectedSchoolYear) { %><p class="empty-state">No school year is available for this student yet. Create the school-year term before assigning custom requirements.</p>
+  <% } else { %><p class="empty-state">There are no active custom requirements in the catalog.</p><% } %>
+  <section class="admin-section" aria-labelledby="assigned-requirements-title">
+    <h3 id="assigned-requirements-title">Assignments for <%= workspace.selectedSchoolYear || 'no selected year' %></h3>
+    <% if (workspace.assignments.length) { %><div class="records-request-list">
+      <% for (const assignment of workspace.assignments) { %>
+        <article class="academic-enrollment" aria-labelledby="assignment-<%= assignment.id %>">
+          <h4 id="assignment-<%= assignment.id %>"><%= assignment.display_name %> <span class="record-status"><%= assignment.status === 'active' ? 'Active' : 'Withdrawn' %></span></h4>
+          <p><strong>Channel:</strong> <%= assignment.channel %> · <strong>Policy:</strong> <%= assignment.is_required ? 'Required' : 'Optional' %> · <strong>Catalog revision:</strong> <%= assignment.catalog_version_snapshot %> · <strong>Assignment revision:</strong> <%= assignment.version_no %></p>
+          <p class="requirement-student-instructions"><%= assignment.student_instructions %></p>
+          <% if (assignment.withdrawal_reason) { %><p class="muted-copy">Private withdrawal reason: <%= assignment.withdrawal_reason %></p><% } %>
+          <% if (!studentArchived && assignment.status === 'active' && ['paper', 'both'].includes(assignment.channel)) { %>
+            <form class="form-stack records-compact-form" method="post" action="/registrar/records/students/<%= workspace.student.id %>/requirements/<%= assignment.id %>/paper">
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="schoolYear" value="<%= workspace.selectedSchoolYear %>"><input type="hidden" name="idempotencyKey" value="<%= assignment.paperToken %>">
+              <div class="admin-form-grid"><div class="field"><label for="paper-status-<%= assignment.id %>">Paper evidence status</label><select id="paper-status-<%= assignment.id %>" name="status"><% for (const value of ['pending','received','verified','correction','rejected']) { %><option value="<%= value %>" <%= assignment.latest_paper_status === value ? 'selected' : '' %>><%= value.replaceAll('_',' ') %></option><% } %></select></div>
+                <div class="field"><label for="paper-note-<%= assignment.id %>">Staff note</label><input id="paper-note-<%= assignment.id %>" name="note" maxlength="1000" value="" placeholder="Private staff history"></div></div>
+              <fieldset class="form-fieldset"><legend>Manual source inspection for verified status</legend><p class="muted-copy">Select every item before saving a verified paper-copy status.</p>
+                <label class="checkbox-field"><input type="checkbox" name="checklist[sourceInspected]" value="yes">Source document physically inspected</label>
+                <label class="checkbox-field"><input type="checkbox" name="checklist[typeConfirmed]" value="yes">Document type matches the assigned requirement</label>
+                <label class="checkbox-field"><input type="checkbox" name="checklist[readableComplete]" value="yes">Material is readable and complete</label>
+              </fieldset>
+              <button class="button button--secondary button--align-start" type="submit">Record paper evidence</button>
+            </form>
+          <% } %>
+          <% if (assignment.latest_paper_status) { %><p><strong>Latest paper status:</strong> <%= assignment.latest_paper_status %></p><% } %>
+          <% if (assignment.latest_document_status) { %><p><strong>Latest digital status:</strong> <%= assignment.latest_document_status %><% if (assignment.latest_document_id) { %> · <a class="text-link" href="/documents/<%= assignment.latest_document_id %>">Open submission</a><% } %></p><% } %>
+          <% if (!studentArchived && assignment.status === 'active') { %>
+            <form method="post" action="/registrar/records/students/<%= workspace.student.id %>/requirements/<%= assignment.id %>/withdraw" class="form-stack records-compact-form">
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="version" value="<%= assignment.version_no %>"><input type="hidden" name="schoolYear" value="<%= workspace.selectedSchoolYear %>">
+              <div class="field"><label for="withdraw-reason-<%= assignment.id %>">Reason for withdrawal</label><input id="withdraw-reason-<%= assignment.id %>" name="reason" maxlength="1000" required></div>
+              <button class="button button--secondary button--align-start" type="submit">Withdraw assignment</button>
+            </form>
+          <% } %>
+        </article>
+      <% } %>
+    </div><% } else { %><p class="empty-state">No custom requirements are assigned for this school year.</p><% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

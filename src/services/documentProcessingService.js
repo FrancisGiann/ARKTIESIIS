@@ -19,6 +19,7 @@ const PROCESSING_RECOVERY_INTERVAL_MS = 30000;
 const PROCESSING_RECOVERY_BATCH_SIZE = 100;
 const PROCESSING_RECOVERY_MESSAGE = 'Gemini field extraction did not finish within the recovery window. Staff review is required.';
 const PROCESSING_LABEL = 'Gemini field extraction';
+const GEMINI_PRECHECK_DOCUMENT_TYPES = Object.freeze(['good_moral', 'psa_birth_certificate', 'report_card']);
 
 class DocumentProcessingError extends Error {
   constructor(message, status = 503) {
@@ -121,7 +122,7 @@ function createDocumentProcessingService({
         .input('documentId', sql.Int, documentId)
         .query(`UPDATE documents
           SET status = 'processing', processing_started_at = UTC_TIMESTAMP()
-          WHERE id = @documentId AND status = 'pending' AND document_type <> 'form_137'
+          WHERE id = @documentId AND status = 'pending' AND document_type IN ('good_moral', 'psa_birth_certificate', 'report_card')
             AND (document_type <> 'report_card' OR is_legacy_archive = 0)`);
       if (claimed.rowsAffected?.[0] !== 1) return null;
       const result = await transaction.request().input('documentId', sql.Int, documentId)
@@ -159,7 +160,7 @@ function createDocumentProcessingService({
     return runTransaction(async (transaction) => {
       const candidateResult = await transaction.request().query(`SELECT id
         FROM documents
-        WHERE status = 'pending' AND document_type <> 'form_137'
+        WHERE status = 'pending' AND document_type IN ('good_moral', 'psa_birth_certificate', 'report_card')
           AND (document_type <> 'report_card' OR is_legacy_archive = 0)
         ORDER BY created_at, id
         LIMIT 1 FOR UPDATE`);
@@ -170,7 +171,8 @@ function createDocumentProcessingService({
         .query(`UPDATE documents
           SET status = 'processing', processing_started_at = UTC_TIMESTAMP()
           WHERE id = @documentId AND status = 'pending'
-            AND document_type <> 'form_137' AND (document_type <> 'report_card' OR is_legacy_archive = 0)`);
+            AND document_type IN ('good_moral', 'psa_birth_certificate', 'report_card')
+            AND (document_type <> 'report_card' OR is_legacy_archive = 0)`);
       if (claimed.rowsAffected?.[0] !== 1) return null;
 
       const result = await transaction.request().input('documentId', sql.Int, candidateId)
@@ -292,7 +294,7 @@ function createDocumentProcessingService({
         .input('staleAfterMs', sql.Int, staleAfterMs)
         .input('batchSize', sql.Int, recoveryLimit)
         .query(`SELECT id FROM documents
-          WHERE status = 'processing' AND document_type <> 'form_137'
+          WHERE status = 'processing' AND document_type IN ('good_moral', 'psa_birth_certificate', 'report_card')
             AND (document_type <> 'report_card' OR is_legacy_archive = 0)
             AND (processing_started_at IS NULL OR processing_started_at < TIMESTAMPADD(MICROSECOND, -(@staleAfterMs * 1000), UTC_TIMESTAMP()))
           ORDER BY CASE WHEN processing_started_at IS NULL THEN 0 ELSE 1 END, processing_started_at, id
@@ -327,6 +329,15 @@ function createDocumentProcessingService({
   }
 
   async function processClaimedDocument(document) {
+    if (!GEMINI_PRECHECK_DOCUMENT_TYPES.includes(document?.document_type)
+      || (document.document_type === 'report_card' && (document.is_legacy_archive === true || document.is_legacy_archive === 1))) {
+      await runTransaction(async (transaction) => {
+        await transaction.request().input('documentId', sql.Int, document?.id)
+          .query(`UPDATE documents SET status = 'needs_review', processing_started_at = NULL
+            WHERE id = @documentId AND status = 'processing' AND requirement_assignment_id IS NOT NULL`);
+      });
+      return false;
+    }
     let outcome;
     let fileBuffer = null;
     try {

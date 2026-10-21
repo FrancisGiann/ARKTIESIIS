@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const crypto = require('node:crypto');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
@@ -22,6 +23,8 @@ const {
   latestBirthDate
 } = require('../services/studentRecordsService');
 const { PROGRAM_CATALOG } = require('../utils/paperProgramCatalog');
+const { RegistrarMasterlistError, createRegistrarMasterlistService } = require('../services/registrarMasterlistService');
+const { RequirementServiceError, createRequirementService } = require('../services/requirementService');
 
 const notices = {
   studentCreated: 'Student profile created.',
@@ -227,7 +230,7 @@ function clearanceFormAttempt(body, kind, rawRecordId) {
   return recordId ? { kind, recordId, values: safeClearanceFormValues(body) } : null;
 }
 
-function createStudentRecordsRouter({ getPool, sql, studentRecordsService, academicRecordsService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService, termClearanceService } = {}) {
+function createStudentRecordsRouter({ getPool, sql, studentRecordsService, academicRecordsService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService, termClearanceService, registrarMasterlistService, requirementService } = {}) {
   const router = express.Router();
   const service = studentRecordsService || createStudentRecordsService({ getPool, sql });
   const academics = academicRecordsService || createAcademicRecordsService({ getPool, sql });
@@ -238,6 +241,18 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
   const gradeOverview = gradeOverviewService || createRegistrarGradeOverviewService({ getPool, sql });
   const readmissions = readmissionService || createReadmissionService({ getPool, sql });
   const termClearances = termClearanceService || createTermClearanceService({ getPool, sql });
+  const masterlist = registrarMasterlistService || createRegistrarMasterlistService({ getPool, sql });
+  const requirements = requirementService || createRequirementService({ getPool, sql });
+  const masterlistExportLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 2,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => `user:${req.authUser?.id || 'unknown'}`,
+    handler: (req, res) => res.status(429).render('error', {
+      title: 'Too Many Requests', message: 'Wait a minute before preparing another enrollment masterlist.'
+    })
+  });
 
   async function loadWorkspace(search = '', termId = '', page = 1) {
     return service.listWorkspace(search, termId, page);
@@ -478,6 +493,47 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     returnStatus: typeof req.query.returnStatus === 'string' ? req.query.returnStatus : '',
     notice: notices[req.query.notice] || null
   }));
+
+  router.get('/masterlist', async (req, res) => {
+    try {
+      const options = await masterlist.getFilterOptions(req.authUser.id, req.query);
+      return res.status(200).set('Cache-Control', 'private, no-store').render('records/masterlist-options', {
+        title: 'Enrollment masterlist', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), options, error: null
+      });
+    } catch (loadError) {
+      const isInputError = loadError instanceof RegistrarMasterlistError;
+      return res.status(isInputError ? loadError.status : 503).set('Cache-Control', 'private, no-store').render('records/masterlist-options', {
+        title: 'Enrollment masterlist', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        options: { schoolYears: [], gradeLevels: ['Grade 11', 'Grade 12'], terms: [1, 2, 3], sections: [], selectedSchoolYear: '', selectedGradeLevel: 'Grade 12', selectedTermNumber: null, selectedSectionId: '' },
+        error: isInputError ? loadError.message : 'Masterlist filters could not be loaded.'
+      });
+    }
+  });
+
+  router.get('/masterlist.xlsx', masterlistExportLimiter, async (req, res) => {
+    let exported;
+    try {
+      exported = await masterlist.generateExport(req.authUser.id, req.query);
+    } catch (error) {
+      const isInputError = error instanceof RegistrarMasterlistError;
+      return res.status(isInputError ? error.status : 503).set('Cache-Control', 'private, no-store').render('error', {
+        title: isInputError && error.status < 500 ? 'Masterlist unavailable' : 'Service Unavailable',
+        message: isInputError ? error.message : 'The enrollment masterlist could not be generated.'
+      });
+    }
+    const safeYear = exported.filters.schoolYear.replace(/[^A-Za-z0-9-]/g, '_');
+    const safeGrade = exported.filters.gradeLevel ? exported.filters.gradeLevel.replace(/[^A-Za-z0-9-]/g, '_').toLowerCase() : 'all-grades';
+    const filename = `enrollment-masterlist-${safeGrade}-${safeYear}.xlsx`;
+    res.set({
+      'Cache-Control': 'private, no-store, max-age=0',
+      Pragma: 'no-cache',
+      'X-Content-Type-Options': 'nosniff'
+    });
+    return res.download(exported.filePath, filename, (sendError) => {
+      void exported.cleanup().catch(() => {});
+      if (sendError && !res.headersSent) res.status(503).render('error', { title: 'Download unavailable', message: 'The enrollment masterlist download could not be completed.' });
+    });
+  });
 
   function renderUnlinkedEvaluation(req, res, { evaluation = null, values = {}, error = null, status = 200, expectedVersion = null, recovered = false } = {}) {
     return res.status(status).set('Cache-Control', 'private, no-store').render('records/unlinked-return-evaluation', {
@@ -750,6 +806,63 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       title: 'Signature checklist retired',
       message: 'Use the term checkbox to record whether the registrar inspected the returned paper form.'
     });
+  });
+
+  async function renderRequirementWorkspace(req, res, { status = 200, error = null } = {}) {
+    const studentId = normalizeRecordId(req.params.id);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      const workspace = await requirements.getAssignmentWorkspace(req.authUser.id, studentId, req.query.schoolYear || req.body?.schoolYear || '');
+      workspace.assignments = workspace.assignments.map((assignment) => ({ ...assignment, paperToken: crypto.randomUUID() }));
+      return res.status(status).set('Cache-Control', 'private, no-store').render('records/student-requirements', {
+        title: 'Enrollment requirements', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        workspace, error, notice: req.query.notice === 'assigned' ? 'Requirement assigned.'
+          : req.query.notice === 'withdrawn' ? 'Requirement withdrawn. Existing evidence history remains available.'
+            : req.query.notice === 'paperRecorded' ? 'Paper evidence recorded in the requirement history.' : null
+      });
+    } catch (loadError) {
+      if (loadError instanceof RequirementServiceError) return res.status(loadError.status).render('error', { title: 'Enrollment requirements', message: loadError.message });
+      return res.status(503).render('error', { title: 'Enrollment requirements unavailable', message: 'The requirement assignments could not be loaded.' });
+    }
+  }
+
+  router.get('/students/:id/requirements', (req, res) => renderRequirementWorkspace(req, res));
+  router.post('/students/:id/requirements', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    const studentId = normalizeRecordId(req.params.id);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      const [catalogId, catalogVersion] = typeof req.body?.catalogItem === 'string' ? req.body.catalogItem.split(':') : [];
+      await requirements.assign(req.authUser.id, studentId, { ...req.body, catalogId, catalogVersion });
+      return res.redirect(303, `/registrar/records/students/${studentId}/requirements?schoolYear=${encodeURIComponent(req.body.schoolYear)}&notice=assigned`);
+    } catch (error) {
+      if (error instanceof RequirementServiceError) return renderRequirementWorkspace(req, res, { status: error.status, error: error.message });
+      return res.status(503).render('error', { title: 'Enrollment requirements unavailable', message: 'The requirement could not be assigned.' });
+    }
+  });
+  router.post('/students/:id/requirements/:assignmentId/withdraw', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    const studentId = normalizeRecordId(req.params.id);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      await requirements.withdraw(req.authUser.id, req.params.assignmentId, { ...req.body, studentId });
+      return res.redirect(303, `/registrar/records/students/${studentId}/requirements?schoolYear=${encodeURIComponent(req.body.schoolYear || '')}&notice=withdrawn`);
+    } catch (error) {
+      if (error instanceof RequirementServiceError) return renderRequirementWorkspace(req, res, { status: error.status, error: error.message });
+      return res.status(503).render('error', { title: 'Enrollment requirements unavailable', message: 'The requirement could not be withdrawn.' });
+    }
+  });
+  router.post('/students/:id/requirements/:assignmentId/paper', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    const studentId = normalizeRecordId(req.params.id);
+    if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
+    try {
+      await requirements.recordPaper(req.authUser.id, req.params.assignmentId, { ...req.body, studentId });
+      return res.redirect(303, `/registrar/records/students/${studentId}/requirements?schoolYear=${encodeURIComponent(req.body.schoolYear || '')}&notice=paperRecorded`);
+    } catch (error) {
+      if (error instanceof RequirementServiceError) return renderRequirementWorkspace(req, res, { status: error.status, error: error.message });
+      return res.status(503).render('error', { title: 'Enrollment requirements unavailable', message: 'The paper evidence could not be recorded.' });
+    }
   });
 
   router.get('/students/:id', (req, res) => renderStudentOverview(req, res, {

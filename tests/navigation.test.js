@@ -270,12 +270,12 @@ test('finance navigation keeps student accounts selected for annual accounts, st
 
 test('authenticated navigation only exposes destinations available to each role', async () => {
   const cases = [
-    { role: 'database_admin', path: '/admin', labels: ['Overview', 'User accounts', 'Student records', 'Paper clearance', 'Pre-enrollment records', 'Activity log', 'Documents', 'Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Departure fee reviews', 'Retake review', 'Unfinished reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/registrar/records/clearance', '/pre-enrollments', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/retake-referrals', '/finance/review-drafts'], forbidden: [] },
+    { role: 'database_admin', path: '/admin', labels: ['Overview', 'User accounts', 'Student records', 'Paper clearance', 'Enrollment requirements', 'Pre-enrollment records', 'Activity log', 'Documents', 'Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Departure fee reviews', 'Retake review', 'Unfinished reviews'], hrefs: ['/admin', '/admin/users', '/registrar/records', '/registrar/records/clearance', '/admin/requirements', '/pre-enrollments', '/admin/audit', '/documents', '/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/retake-referrals', '/finance/review-drafts'], forbidden: [] },
     { role: 'registrar', path: '/registrar', labels: ['Overview', 'Student records', 'Paper clearance', 'Enrollments', 'Pre-enrollment records', 'Retake referrals', 'Document review', 'Grade review', 'Class schedules', 'Subjects', 'Teacher assignments', 'Academic setup'], forbidden: ['/finance', '/admin'] },
     { role: 'front_desk', path: '/pre-enrollments', labels: ['Pre-enrollment records'], hrefs: ['/pre-enrollments'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/documents', '/admin'] },
     { role: 'teacher', path: '/teacher', labels: ['My classes', 'Submit grades'], forbidden: ['/registrar/records', '/registrar/grade-submissions', '/finance', '/admin'] },
     { role: 'finance', path: '/finance', labels: ['Overview', 'Student accounts', 'Fee schedules', 'Reports', 'Departure fee reviews', 'Retake review', 'Unfinished reviews'], hrefs: ['/finance/overview', '/finance', '/finance/schedules', '/finance/reports', '/finance/departures', '/finance/retake-referrals', '/finance/review-drafts'], forbidden: ['/registrar/records', '/documents', '/admin'] },
-    { role: 'student', path: '/student', labels: ['Home', 'Class schedule', 'Grades', 'Fees &amp; payments', 'My records', 'Documents'], forbidden: ['/registrar/records', '/finance', '/admin'] }
+    { role: 'student', path: '/student', labels: ['Home', 'Class schedule', 'Grades', 'Fees &amp; payments', 'My records', 'Documents', 'Enrollment progress'], forbidden: ['/registrar/records', '/finance', '/admin'] }
   ];
 
   for (const scenario of cases) {
@@ -461,14 +461,14 @@ test('student overview stays concise while all destinations remain in sidebar an
     assert.match(main, /class="student-quick-links"[\s\S]*href="\/student\/grades"[\s\S]*href="\/documents"[\s\S]*href="\/student\/finance"/);
     assert.doesNotMatch(main, /₱|Approved grades|Enrollment history/);
 
-    const destinations = ['Home', 'Class schedule', 'Grades', 'Fees &amp; payments', 'My records', 'Documents'];
+    const destinations = ['Home', 'Class schedule', 'Grades', 'Fees &amp; payments', 'My records', 'Documents', 'Enrollment progress'];
     assert.deepEqual(navigationLabels(html), destinations);
     const mobileNavigation = html.match(/<details class="mobile-nav">([\s\S]*?)<\/details>/)?.[1];
     assert.ok(mobileNavigation);
     const mobileLabels = [...mobileNavigation.matchAll(/class="mobile-nav__link[^\"]*"[^>]*>([\s\S]*?)<\/a>/g)]
       .map((match) => match[1].replace(/<[^>]+>/g, '').trim());
     assert.deepEqual(mobileLabels, [...destinations, 'Account settings']);
-    for (const href of ['/student/schedule', '/student/grades', '/student/finance', '/student/records', '/documents']) {
+    for (const href of ['/student/schedule', '/student/grades', '/student/finance', '/student/records', '/documents', '/student/enrollment']) {
       assert.ok(html.includes(`href="${href}"`), `${href} remains discoverable from the role navigation`);
     }
   });

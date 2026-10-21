@@ -38,6 +38,7 @@ function configuredMaxMegabytes(environment) {
 }
 
 function documentTypeLabel(value) {
+  if (typeof value === 'string' && /^custom_[0-9a-f]{32}$/.test(value)) return 'Custom enrollment requirement';
   return DOCUMENT_TYPES.find((documentType) => documentType.value === value)?.label || 'Document';
 }
 
@@ -310,6 +311,20 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       return res.redirect(303, `/documents/${result.id}?notice=uploaded`);
     } catch (error) {
       return renderError(res, error, 'The document could not be uploaded.');
+    } finally {
+      clearUploadBuffer(req.file);
+    }
+  });
+
+  router.post('/custom-requirements/:assignmentId', parseUpload, async (req, res) => {
+    try {
+      if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+      if (req.authUser.role !== 'student') return res.status(403).render('error', { title: 'Forbidden', message: 'Custom requirement uploads are available through the assigned student account.' });
+      const result = await service.upload(req.authUser.id, { ...req.body, requirementAssignmentId: req.params.assignmentId }, req.file);
+      if (result.status === 'pending') processingService.schedulePendingProcessing();
+      return res.redirect(303, `/student/enrollment?schoolYear=${encodeURIComponent(req.body.schoolYear || '')}&notice=customUploaded`);
+    } catch (error) {
+      return renderError(res, error, 'The custom requirement could not be uploaded.');
     } finally {
       clearUploadBuffer(req.file);
     }

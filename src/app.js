@@ -14,7 +14,7 @@ const { formatStudentPlacement } = require('./utils/formatStudentPlacement');
 
 const projectRoot = path.resolve(__dirname, '..');
 
-function createApp({ databasePool = getPool, environment = env, twoFactorService, accountService, accountInvitationService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, financeReviewActionService, registrarDashboardService, annualEnrollmentService, preEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService, termClearanceService, retakeReferralService } = {}) {
+function createApp({ databasePool = getPool, environment = env, twoFactorService, accountService, accountInvitationService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, registrarMasterlistService, requirementService, financeReviewActionService, registrarDashboardService, annualEnrollmentService, preEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService, termClearanceService, retakeReferralService } = {}) {
   const app = express();
   const stylesheetPath = path.join(projectRoot, 'public', 'css', 'app.css');
   app.locals.formatMoney = formatMoney;
@@ -44,7 +44,7 @@ function createApp({ databasePool = getPool, environment = env, twoFactorService
     }
   }));
 
-  app.use(createRouter({ getPool: databasePool, environment, twoFactorService, accountService, accountInvitationService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, financeReviewActionService, registrarDashboardService, annualEnrollmentService, preEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService, termClearanceService, retakeReferralService }));
+  app.use(createRouter({ getPool: databasePool, environment, twoFactorService, accountService, accountInvitationService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, registrarMasterlistService, requirementService, financeReviewActionService, registrarDashboardService, annualEnrollmentService, preEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService, termClearanceService, retakeReferralService }));
 
   app.use((req, res) => {
     res.status(404).render('error', {

@@ -1,0 +1,45 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page records-page" id="main-content">
+  <a class="context-back" href="/admin">Back to admin overview</a>
+  <header class="page-heading"><div><p class="eyebrow">Database administration</p><h1>Enrollment requirement catalog</h1>
+    <p>Custom labels and student instructions are saved as versioned snapshots on new assignments. Deactivation prevents future assignment and does not remove existing work.</p></div></header>
+  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <section class="admin-section" aria-labelledby="new-requirement-title">
+    <h2 id="new-requirement-title">Add a custom requirement</h2>
+    <form class="form-stack" method="post" action="/admin/requirements">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <div class="admin-form-grid">
+        <div class="field"><label for="requirement-name">Requirement name</label><input id="requirement-name" name="displayName" maxlength="120" required></div>
+        <div class="field"><label for="requirement-channel">Evidence channel</label><select id="requirement-channel" name="channel" required><option value="paper">Paper</option><option value="digital">Digital upload</option><option value="both">Paper and digital</option></select></div>
+        <div class="field field--wide"><label for="requirement-instructions">Student instructions</label><textarea id="requirement-instructions" name="instructions" maxlength="1000" rows="3" required></textarea><small>These instructions are visible to the assigned student. Keep private review notes out of this field.</small></div>
+      </div>
+      <button class="button button--primary button--align-start" type="submit">Create requirement</button>
+    </form>
+  </section>
+  <section class="admin-section" aria-labelledby="catalog-list-title">
+    <h2 id="catalog-list-title">Saved requirements</h2>
+    <% if (catalog.length) { %><div class="records-request-list">
+      <% for (const item of catalog) { const builtin = item.is_builtin === true || item.is_builtin === 1; %>
+        <article class="academic-enrollment" aria-labelledby="requirement-<%= item.id %>">
+          <h3 id="requirement-<%= item.id %>"><%= item.display_name %> <span class="record-status"><%= builtin ? 'Built-in' : item.is_active ? 'Active' : 'Inactive' %></span></h3>
+          <p><strong>Channel:</strong> <%= item.channel %> · <strong>Revision:</strong> <%= item.version_no %></p>
+          <p class="requirement-student-instructions"><%= item.student_instructions %></p>
+          <% if (!builtin) { %>
+            <form class="form-stack records-compact-form" method="post" action="/admin/requirements/<%= item.id %>">
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="version" value="<%= item.version_no %>">
+              <div class="admin-form-grid">
+                <div class="field"><label for="name-<%= item.id %>">Requirement name</label><input id="name-<%= item.id %>" name="displayName" maxlength="120" value="<%= item.display_name %>" required></div>
+                <div class="field"><label for="channel-<%= item.id %>">Evidence channel</label><select id="channel-<%= item.id %>" name="channel"><% for (const channel of ['paper','digital','both']) { %><option value="<%= channel %>" <%= item.channel === channel ? 'selected' : '' %>><%= channel %></option><% } %></select></div>
+                <div class="field field--wide"><label for="instructions-<%= item.id %>">Student instructions</label><textarea id="instructions-<%= item.id %>" name="instructions" maxlength="1000" rows="3" required><%= item.student_instructions %></textarea></div>
+                <div class="field"><label for="active-<%= item.id %>">Assignment availability</label><select id="active-<%= item.id %>" name="isActive"><option value="1" <%= item.is_active ? 'selected' : '' %>>Active</option><option value="0" <%= !item.is_active ? 'selected' : '' %>>Inactive</option></select></div>
+              </div>
+              <button class="button button--secondary button--align-start" type="submit">Save revision</button>
+            </form>
+          <% } %>
+        </article>
+      <% } %>
+    </div><% } else { %><p class="empty-state">No requirements are available.</p><% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

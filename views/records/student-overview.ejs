@@ -10,6 +10,11 @@
   <% if (returnEvaluationError) { %><p class="form-alert" role="alert" tabindex="-1"><%= returnEvaluationError %></p><% } %>
 
   <% if (studentView === 'overview') { %>
+  <section class="admin-section" aria-labelledby="custom-requirements-title">
+    <h2 id="custom-requirements-title">Custom enrollment requirements</h2>
+    <p>Assign school-defined paper or digital requirements for a school year. Existing work and its history remain available if an assignment is withdrawn.</p>
+    <a class="button button--secondary" href="/registrar/records/students/<%= student.id %>/requirements">Manage custom requirements</a>
+  </section>
   <section class="student-record-status-grid" aria-label="Student record status">
     <article class="admin-section">
       <h2>Next action</h2>

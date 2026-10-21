@@ -1,0 +1,56 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page admin-page records-page" id="main-content">
+  <section class="dashboard-heading records-heading">
+    <div>
+      <h1>Enrollment masterlist</h1>
+      <p>Prepare a school-year report from recorded student, term-placement, and paper-checklist information.</p>
+    </div>
+    <a class="button button--secondary" href="/registrar/records">Back to student records</a>
+  </section>
+
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+
+  <section class="admin-section" aria-labelledby="masterlist-filters-title">
+    <div class="admin-section__heading"><div><h2 id="masterlist-filters-title">Choose the cohort</h2><p>Term and section select which students are included. Each selected student keeps every recorded placement for that school year in the workbook.</p></div></div>
+    <form method="get" action="/registrar/records/masterlist.xlsx" class="form-stack records-compact-form">
+      <div class="admin-form-grid">
+        <div class="field">
+          <label for="masterlist-school-year">School year</label>
+          <select id="masterlist-school-year" name="schoolYear" required>
+            <% if (!options.selectedSchoolYear) { %><option value="" selected disabled>Choose a school year</option><% } %>
+            <% for (const year of options.schoolYears || []) { %><option value="<%= year %>" <%= year === options.selectedSchoolYear ? 'selected' : '' %>><%= year %><%= year === options.currentSchoolYear ? ' · current' : '' %></option><% } %>
+          </select>
+        </div>
+        <div class="field">
+          <label for="masterlist-grade">Grade level</label>
+          <select id="masterlist-grade" name="gradeLevel">
+            <% for (const grade of options.gradeLevels || []) { %><option value="<%= grade %>" <%= grade === options.selectedGradeLevel ? 'selected' : '' %>><%= grade %></option><% } %>
+          </select>
+        </div>
+        <div class="field">
+          <label for="masterlist-term">Term placement</label>
+          <select id="masterlist-term" name="term">
+            <option value="">All terms</option>
+            <% for (const term of options.terms || []) { %><option value="<%= term %>" <%= Number(term) === Number(options.selectedTermNumber) ? 'selected' : '' %>>Term <%= term %></option><% } %>
+          </select>
+        </div>
+        <div class="field">
+          <label for="masterlist-section">Section</label>
+          <select id="masterlist-section" name="sectionId">
+            <option value="">All sections</option>
+            <% for (const section of options.sections || []) { %><option value="<%= section.id %>" data-term="<%= section.termNumber %>" data-year="<%= section.schoolYear %>" data-grade="<%= section.gradeLevel %>" <%= String(section.id) === String(options.selectedSectionId) ? 'selected' : '' %>>Term <%= section.termNumber %> · <%= section.name %><%= section.strand ? ` · ${section.strand}` : '' %> · <%= section.schoolYear %> · <%= section.gradeLevel %></option><% } %>
+          </select>
+        </div>
+      </div>
+      <p class="muted-copy">The workbook includes the full selected cohort, independent of the on-screen student-record pages. Exports above 10,000 students are rejected and must be narrowed.</p>
+      <button class="button button--primary button--align-start" type="submit">Download enrollment masterlist</button>
+    </form>
+  </section>
+
+  <section class="admin-section" aria-labelledby="masterlist-coverage-title">
+    <div class="admin-section__heading"><div><h2 id="masterlist-coverage-title">Source coverage</h2><p>The workbook follows the school’s 70-column masterlist order. It uses linked student profile fields, annual enrollment voucher data, term placements, and recorded paper checklist status. Paper status never comes from a digital upload.</p></div></div>
+    <p class="muted-copy">Previous-year semester placement, LIS/VMS status, grades, guidance and internal-agreement notes, property issue records, and digital-document evidence are left blank because this system has no authoritative matching field. Term remarks report only the saved enrollment status; DO/TO uses a recorded departure date and reason. The Form 137/SF10 column uses its separate staff-only paper history. The three term sheets reconcile every included student to a confirmed-enrolled or separate status row.</p>
+  </section>
+</main>
+<script defer src="/js/registrar-masterlist-filters.js?v=<%= assetVersion %>"></script>
+<%- include('../partials/foot') %>

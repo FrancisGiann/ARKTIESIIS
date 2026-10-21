@@ -472,9 +472,9 @@ test('queue claim and stale recovery scope report cards to active lifecycle rows
     const claim = statements.find((statement) => statement.includes("status = 'pending'"));
     const recovery = statements.find((statement) => statement.includes("status = 'processing'"));
     for (const statement of [claim, recovery]) {
-      assert.match(statement, /document_type <> 'form_137'/);
+      assert.match(statement, /document_type IN \('good_moral', 'psa_birth_certificate', 'report_card'\)/);
       assert.match(statement, /document_type <> 'report_card' OR is_legacy_archive = 0/);
-      assert.doesNotMatch(statement, /document_type NOT IN \('form_137', 'report_card'\)/);
+      assert.doesNotMatch(statement, /document_type = 'form_137'|custom_/);
     }
   } finally {
     await fs.rm(storageDirectory, { recursive: true, force: true });

@@ -14,6 +14,7 @@ const navigationByRole = {
     { id: 'accounts', label: 'User accounts', href: '/admin/users', group: 'People and records' },
     { id: 'students', label: 'Student records', href: '/registrar/records', group: 'People and records' },
     { id: 'clearance', label: 'Paper clearance', href: '/registrar/records/clearance', group: 'People and records' },
+    { id: 'requirements', label: 'Enrollment requirements', href: '/admin/requirements', group: 'People and records' },
     { id: 'pre-enrollments', label: 'Pre-enrollment records', href: '/pre-enrollments', group: 'People and records' },
     { id: 'audit', label: 'Activity log', href: '/admin/audit', group: 'Activity & documents' },
     { id: 'documents', label: 'Documents', href: '/documents', group: 'Activity & documents' },
@@ -47,7 +48,8 @@ const navigationByRole = {
     { id: 'grades', label: 'Grades', href: '/student/grades', group: 'My school' },
     { id: 'finance', label: 'Fees & payments', href: '/student/finance', group: 'My school' },
     { id: 'records', label: 'My records', href: '/student/records', group: 'My school' },
-    { id: 'documents', label: 'Documents', href: '/documents', group: 'My school' }
+    { id: 'documents', label: 'Documents', href: '/documents', group: 'My school' },
+    { id: 'enrollment', label: 'Enrollment progress', href: '/student/enrollment', group: 'My school' }
   ]
 };
 
@@ -66,6 +68,7 @@ function buildNavigation(role, currentPath = '') {
     else if (item.id === 'front-desk-pre-enrollments') current = path.startsWith('/pre-enrollments');
     else if (item.id === 'pre-enrollments') current = path.startsWith('/pre-enrollments');
     else if (item.id === 'accounts') current = path.startsWith('/admin/users') || path.startsWith('/admin/student-accounts');
+    else if (item.id === 'requirements') current = path.startsWith('/admin/requirements');
     else if (item.id === 'audit') current = path === '/admin/audit';
     else if (item.id === 'students') current = !/^\/registrar\/records\/students\/[^/]+\/clearance(?:\/|$)/.test(path)
       && ((path === '/registrar/records' && (role !== 'registrar' || query.get('view') !== 'setup'))
@@ -85,6 +88,7 @@ function buildNavigation(role, currentPath = '') {
     else if (item.id === 'schedule') current = path.startsWith('/student/schedule');
     else if (item.id === 'grades') current = path.startsWith('/student/grades');
     else if (item.id === 'records') current = path.startsWith('/student/records');
+    else if (item.id === 'enrollment') current = path.startsWith('/student/enrollment');
     else if (item.id === 'finance') current = role === 'student'
       ? path.startsWith('/student/finance')
       : false;

@@ -1,0 +1,70 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page student-enrollment-page" id="main-content">
+  <header class="page-heading"><div><p class="eyebrow">Student workspace</p><h1>Enrollment progress</h1>
+    <p>Review term placements and the latest recorded requirement status for a school year. Enrollment confirmation and document review are separate records.</p></div></header>
+  <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+      <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% const enrollmentStatusLabels = { enrolled: 'Enrolled', pending_payment: 'Pending payment', dropped: 'Dropped', transferred: 'Transferred', not_applicable: 'Not applicable', cancelled: 'Cancelled' }; %>
+  <% if (!progress.student) { %><section class="admin-section"><h2>Student profile not linked</h2><p>Your account does not have a linked student record yet. Ask the registrar to connect it.</p></section>
+  <% } else { %>
+    <form class="filter-bar" method="get" action="/student/enrollment">
+      <div class="field"><label for="enrollment-school-year">School year</label><select id="enrollment-school-year" name="schoolYear" required>
+        <% for (const year of progress.schoolYears) { %><option value="<%= year %>" <%= progress.selectedSchoolYear === year ? 'selected' : '' %>><%= year %></option><% } %>
+      </select></div><button class="button button--secondary" type="submit">View year</button>
+    </form>
+    <% if (progress.selectedSchoolYear) { %>
+      <section class="admin-section" aria-labelledby="enrollment-record-title">
+        <h2 id="enrollment-record-title">Enrollment record · <%= progress.selectedSchoolYear %></h2>
+        <% if (progress.enrollment) { %><p><strong>Grade:</strong> <%= progress.enrollment.gradeLevel %> · <strong>Record status:</strong> <%= enrollmentStatusLabels[progress.enrollment.status] || progress.enrollment.status.replaceAll('_',' ') %></p>
+          <p><strong>Registrar confirmation:</strong> <%= progress.enrollment.confirmed ? 'Confirmed' : 'Not confirmed' %></p>
+        <% } else { %><p class="empty-state">No annual enrollment record is available for this year.</p><% } %>
+        <% if (progress.placements.length) { %><div class="records-request-list"><% for (const placement of progress.placements) { %>
+          <article class="academic-enrollment"><h3>Term <%= placement.annual_term_number %></h3>
+            <p><strong>Placement:</strong> <%= [placement.grade_level, placement.strand, placement.section_name].filter(Boolean).join(' · ') || 'Not recorded' %></p>
+            <p><strong>Term status:</strong> <%= placement.enrollment_status ? (enrollmentStatusLabels[placement.enrollment_status] || placement.enrollment_status.replaceAll('_',' ')) : 'Not recorded' %></p>
+          </article>
+        <% } %></div><% } else { %><p class="empty-state">No term placement is available for this school year.</p><% } %>
+      </section>
+      <section class="admin-section" aria-labelledby="paper-progress-title">
+        <h2 id="paper-progress-title">Paper requirements</h2>
+        <p class="muted-copy"><%= progress.paperEvidenceScope %></p>
+        <% if (progress.paperRequirements.length) { %><dl class="student-record-document-list"><% for (const item of progress.paperRequirements) { %>
+          <div><dt><%= item.label %><% if (item.optional) { %> <span class="muted-copy">Optional or applicability not confirmed</span><% } %></dt><dd><span class="record-document-status"><%= ({not_recorded:'Not recorded',not_applicable:'Marked not applicable',pending:'Pending',received:'Received',verified:'Staff checked',correction:'Correction needed',rejected:'Not accepted'})[item.status] || item.status %></span>
+            <% if (item.applicabilityNeedsConfirmation) { %><small>Applicability must be confirmed by school staff.</small><% } %>
+          </dd></div>
+        <% } %>
+          <div><dt>Previous-school report card · paper copy</dt><dd><span class="record-document-status"><%= ({not_recorded:'Not recorded',pending:'Pending',received:'Received',verified:'Staff checked',correction:'Correction needed',rejected:'Not accepted'})[progress.reportCardPaperStatus] || progress.reportCardPaperStatus %></span></dd></div>
+        </dl><% } else { %><p class="empty-state">Paper checklist status is unavailable. No requirement is marked complete.</p><% } %>
+      </section>
+      <section class="admin-section" aria-labelledby="digital-progress-title">
+        <h2 id="digital-progress-title">Supported digital submissions</h2>
+        <p class="muted-copy">The latest student-level status is shown because these built-in records are not tagged to a school year.</p>
+        <p><a class="text-link" href="/documents">Open my documents</a> to submit or correct a supported digital document.</p>
+        <dl class="student-record-document-list"><% for (const item of progress.digitalRequirements) { %>
+          <div><dt><%= ({good_moral:'Good Moral Certificate',psa_birth_certificate:'PSA birth certificate',report_card:'Previous-school report-card scan'})[item.code] %></dt><dd><span class="record-document-status"><%= ({not_submitted:'Not submitted',awaiting_review:'Awaiting review',awaiting_staff_review:'Awaiting staff review',staff_review_required:'Staff review required',correction_requested:'Correction requested',rejected:'Rejected',staff_accepted:'Staff accepted'})[item.status] || item.status %></span></dd></div>
+        <% } %></dl>
+      </section>
+      <section class="admin-section" aria-labelledby="custom-requirements-title">
+        <h2 id="custom-requirements-title">School-assigned requirements</h2>
+        <% if (progress.customRequirements.length) { %><div class="records-request-list"><% for (const item of progress.customRequirements) { %>
+          <article class="academic-enrollment" aria-labelledby="custom-requirement-<%= item.id %>">
+            <h3 id="custom-requirement-<%= item.id %>"><%= item.displayName %> <span class="record-status"><%= item.required ? 'Required' : 'Optional' %> · <%= item.assignmentStatus === 'active' ? 'Active assignment' : 'Withdrawn' %></span></h3>
+            <p class="requirement-student-instructions"><%= item.instructions %></p>
+            <% if (['paper','both'].includes(item.channel)) { %><p><strong>Paper status:</strong> <%= ({not_recorded:'Not recorded',pending:'Pending',received:'Received',verified:'Staff checked',correction:'Correction needed',rejected:'Not accepted'})[item.paperStatus] || item.paperStatus %></p><% } %>
+            <% if (['digital','both'].includes(item.channel)) { %><p><strong>Digital status:</strong> <%= ({not_submitted:'Not submitted',awaiting_staff_review:'Awaiting staff review',staff_review_required:'Staff review required',correction_requested:'Correction requested',rejected:'Rejected',staff_accepted:'Staff accepted'})[item.digitalStatus] || item.digitalStatus %></p>
+              <% if (item.canUpload && !progress.student.archived) { %><form class="form-stack records-compact-form" method="post" enctype="multipart/form-data" action="/documents/custom-requirements/<%= item.id %>">
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="documentType" value="<%= item.code %>"><input type="hidden" name="schoolYear" value="<%= progress.selectedSchoolYear %>">
+                <label for="custom-file-<%= item.id %>">Upload file</label><input id="custom-file-<%= item.id %>" name="document" type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" required>
+                <button class="button button--secondary button--align-start" type="submit">Submit requirement</button></form>
+              <% } else if (item.canCorrect && item.documentId && !progress.student.archived) { %><p>Staff requested a correction. <a class="text-link" href="/documents/<%= item.documentId %>">View the correction instruction and submission</a>.</p><form class="form-stack records-compact-form" method="post" enctype="multipart/form-data" action="/documents/<%= item.documentId %>/reupload">
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>"><label for="custom-correction-<%= item.id %>">Corrected file for <%= item.displayName %></label><input id="custom-correction-<%= item.id %>" name="document" type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" required>
+                <button class="button button--secondary button--align-start" type="submit">Upload correction</button></form>
+              <% } %>
+            <% } %>
+          </article>
+        <% } %></div><% } else { %><p class="empty-state">No custom requirements are assigned for this year.</p><% } %>
+      </section>
+    <% } else { %><section class="admin-section"><h2>School year unavailable</h2><p class="empty-state">No current or historical school year is linked to your student record.</p></section><% } %>
+  <% } %>
+</main>
+<%- include('../partials/foot') %>

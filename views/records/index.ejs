@@ -7,7 +7,7 @@
       <h1><%= view === 'setup' ? 'Academic setup' : 'Student records' %></h1>
       <p><%= view === 'setup' ? 'Set up school years, terms, and sections used by student records.' : `${currentUser.role === 'database_admin' ? 'Database administrator' : 'Registrar'} workspace · Main Branch` %></p>
     </div>
-    <% if (view === 'setup') { %><div class="admin-heading-actions"><a class="button button--secondary" href="/registrar/records">Back to student records</a></div><% } %>
+    <% if (view === 'setup') { %><div class="admin-heading-actions"><a class="button button--secondary" href="/registrar/records">Back to student records</a></div><% } else { %><div class="admin-heading-actions"><a class="button button--secondary" href="/registrar/records/masterlist">Download enrollment masterlist</a></div><% } %>
   </section>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>

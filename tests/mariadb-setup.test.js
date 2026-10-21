@@ -11,11 +11,11 @@ const { splitSqlStatements, readSqlFile, readForwardMigrations, validateAppliedV
   assert.match(statements[1], /\`semi;colon\`/);
 });
 
-test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.024 migrations', () => {
+test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.025 migrations', () => {
   const baseline = readSqlFile(path.resolve('database/mariadb/schema.sql'));
   assert.ok(baseline.some((statement) => /v2\.001/.test(statement)));
   const migrations = readForwardMigrations();
-  assert.deepEqual(migrations.map(({ version }) => version), Array.from({ length: 23 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
+  assert.deepEqual(migrations.map(({ version }) => version), Array.from({ length: 24 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
   assert.ok(migrations.every(({ statements }) => statements.length > 0));
   const wholePaper = migrations.find(({ version }) => version === 'v2.018');
   assert.equal(wholePaper.statements[0].match(/\bALTER\s+TABLE\s+student_term_clearances\b/gi)?.length, 1);
@@ -44,6 +44,10 @@ test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.024 migra
   assert.match(scheduledDeparture.statements.join('\n'), /CREATE TABLE finance_departure_application_events/i);
   assert.doesNotMatch(scheduledDeparture.statements.join('\n'), /UPDATE\s+enrollments|UPDATE\s+finance_departure_cases/i,
     'legacy departure application and placement history is not inferred or rewritten');
+  const customRequirements = migrations.find(({ version }) => version === 'v2.025');
+  assert.match(customRequirements.statements.join('\n'), /CREATE TABLE requirement_catalog/i);
+  assert.match(customRequirements.statements.join('\n'), /CREATE TABLE requirement_assignments/i);
+  assert.match(customRequirements.statements.join('\n'), /ADD requirement_assignment_id INT NULL/i);
   const restatement = migrations.find(({ version }) => version === 'v2.024');
   assert.equal(restatement.statements.filter((statement) => /^CREATE TRIGGER\b/i.test(statement)).length, 6);
   const exactTriggers = restatement.statements.filter((statement) => /^CREATE TRIGGER\b/i.test(statement));
@@ -128,7 +132,7 @@ test('setup refuses unknown or discontinuous migration history', () => {
     Array.from({ length: 21 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
   )));
   assert.doesNotThrow(() => validateAppliedVersions(new Set(
-    Array.from({ length: 24 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
+    Array.from({ length: 25 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
   )));
   assert.throws(() => validateAppliedVersions(new Set([
     ...Array.from({ length: 22 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`), 'v2.024'

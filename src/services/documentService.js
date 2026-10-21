@@ -18,6 +18,7 @@ const ID_PATTERN = /^\d{1,10}$/;
 const STAFF_ROLES = new Set(['registrar', 'database_admin']);
 const STUDENT_UPLOAD_DOCUMENT_TYPES = new Set(['good_moral', 'psa_birth_certificate', 'report_card']);
 const UPLOAD_DOCUMENT_TYPES = new Set(['good_moral', 'psa_birth_certificate']);
+const GEMINI_PRECHECK_DOCUMENT_TYPES = new Set(['good_moral', 'psa_birth_certificate', 'report_card']);
 const GEMINI_PRECHECK_PROCESSOR = 'Gemini field extraction';
 const ACTIONABLE_REGISTRAR_REVIEW_SQL = `d.status = 'needs_review'
   AND COALESCE(latest_decision.decision_type, '') <> 'correction_requested'
@@ -31,9 +32,15 @@ const ACTIONABLE_REGISTRAR_REVIEW_SQL = `d.status = 'needs_review'
       AND NOT EXISTS (
         SELECT 1 FROM documents AS newer
         WHERE newer.student_id = d.student_id AND newer.document_type = 'report_card'
+          AND newer.requirement_assignment_id <=> d.requirement_assignment_id
           AND newer.is_legacy_archive = 0 AND newer.upload_source = 'student'
           AND (newer.created_at > d.created_at OR (newer.created_at = d.created_at AND newer.id > d.id))
       ))
+    OR (d.requirement_assignment_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM documents AS newer
+      WHERE newer.requirement_assignment_id = d.requirement_assignment_id
+        AND (newer.created_at > d.created_at OR (newer.created_at = d.created_at AND newer.id > d.id))
+    ))
   )`;
 
 function studentReportCardSourceAccessSql(documentAlias) {
@@ -108,6 +115,11 @@ const GOOD_MORAL_CONTEXT_ITEM_V2 = {
   key: 'goodMoralContextLegible',
   label: 'I inspected the source and confirmed it contains readable Good Moral certificate title or character statement with surrounding certificate content; isolated name and school lines are insufficient.'
 };
+const CUSTOM_REQUIREMENT_CHECKLIST_ITEMS = Object.freeze([
+  { key: 'sourceInspected', label: 'I inspected the submitted source material.' },
+  { key: 'typeConfirmed', label: 'I confirmed the file matches the assigned requirement type.' },
+  { key: 'readableComplete', label: 'I confirmed the material is readable and complete.' }
+]);
 const VERIFICATION_CHECKLIST_VERSION = 2;
 const VERIFICATION_CHECKLIST_ITEMS_V1 = new Map([
   ['good_moral', [LINKED_STUDENT_NAME_ITEM_V1, SCHOOL_NAME_ITEM_V1, DOCUMENT_TYPE_ITEM_V1, ALL_PAGES_ITEM_V1]],
@@ -120,10 +132,12 @@ const VERIFICATION_CHECKLIST_ITEMS_V2 = new Map([
 ]);
 const VERIFICATION_CHECKLIST_ITEMS_BY_VERSION = new Map([
   [1, VERIFICATION_CHECKLIST_ITEMS_V1],
-  [VERIFICATION_CHECKLIST_VERSION, VERIFICATION_CHECKLIST_ITEMS_V2]
+  [VERIFICATION_CHECKLIST_VERSION, VERIFICATION_CHECKLIST_ITEMS_V2],
+  [3, new Map([['custom_requirement', CUSTOM_REQUIREMENT_CHECKLIST_ITEMS]])]
 ]);
 
 function verificationChecklistItems(documentType) {
+  if (typeof documentType === 'string' && documentType.startsWith('custom_')) return CUSTOM_REQUIREMENT_CHECKLIST_ITEMS;
   return VERIFICATION_CHECKLIST_ITEMS_V2.get(documentType) || [];
 }
 
@@ -135,7 +149,7 @@ function serializeVerificationChecklist(documentType, input) {
     throw new DocumentServiceError('Confirm every applicable source-inspection checklist item before verifying this submission.');
   }
   return JSON.stringify({
-    schemaVersion: VERIFICATION_CHECKLIST_VERSION,
+    schemaVersion: typeof documentType === 'string' && documentType.startsWith('custom_') ? 3 : VERIFICATION_CHECKLIST_VERSION,
     ...Object.fromEntries(items.map(({ key }) => [key, true]))
   });
 }
@@ -342,7 +356,8 @@ function normalizeId(value) {
 }
 
 function normalizeDocumentType(value) {
-  return ['form_137', 'report_card', 'good_moral', 'psa_birth_certificate'].includes(value) ? value : null;
+  return ['form_137', 'report_card', 'good_moral', 'psa_birth_certificate'].includes(value)
+    || (typeof value === 'string' && /^custom_[0-9a-f]{32}$/i.test(value)) ? value : null;
 }
 
 function safeOriginalFilename(value) {
@@ -444,6 +459,43 @@ function createDocumentService({
     const actor = result.recordset?.[0];
     if (!actor || !allowedRoles.has(actor.role)) throw new DocumentServiceError('Your document access is no longer active. Sign in again.', 403);
     return actor;
+  }
+
+  async function assertCustomAssignmentWritable(transaction, document) {
+    if (!document.requirement_assignment_id) return;
+
+    const studentResult = await transaction.request()
+      .input('studentId', sql.Int, document.student_id)
+      .query('SELECT status FROM students WHERE id = @studentId FOR UPDATE');
+    if (studentResult.recordset?.[0]?.status === 'archived') {
+      throw new DocumentServiceError('Archived student records are read-only.', 409);
+    }
+
+    const assignmentResult = await transaction.request()
+      .input('assignmentId', sql.Int, document.requirement_assignment_id)
+      .input('studentId', sql.Int, document.student_id)
+      .input('documentType', sql.NVarChar(60), document.document_type)
+      .query(`SELECT id, channel_snapshot, status FROM requirement_assignments
+        WHERE id = @assignmentId AND student_id = @studentId AND requirement_code = @documentType FOR UPDATE`);
+    const assignment = assignmentResult.recordset?.[0];
+    if (!assignment || !['digital', 'both'].includes(assignment.channel_snapshot)) {
+      throw new DocumentServiceError('This custom submission is not linked to a valid digital requirement assignment.', 409);
+    }
+    if (assignment.status !== 'active') {
+      throw new DocumentServiceError('Withdrawn requirements are read-only; the existing submission history is retained.', 409);
+    }
+
+    const newerResult = await transaction.request()
+      .input('assignmentId', sql.Int, document.requirement_assignment_id)
+      .input('documentId', sql.Int, document.id)
+      .input('createdAt', sql.DateTime2, document.created_at)
+      .query(`SELECT id FROM documents
+        WHERE requirement_assignment_id = @assignmentId
+          AND (created_at > @createdAt OR (created_at = @createdAt AND id > @documentId))
+        LIMIT 1`);
+    if (newerResult.recordset?.length) {
+      throw new DocumentServiceError('A newer custom submission exists; older versions are read-only.', 409);
+    }
   }
 
   async function requireReadActor(pool, actorInput) {
@@ -563,14 +615,15 @@ function createDocumentService({
 
   function studentTypeAllowed(actor, documentType) {
     if (documentType === 'form_137') return false;
+    if (documentType.startsWith('custom_')) return actor.role === 'student';
     return actor.role === 'student'
       ? STUDENT_UPLOAD_DOCUMENT_TYPES.has(documentType)
       : UPLOAD_DOCUMENT_TYPES.has(documentType);
   }
 
-  async function insertSubmission({ actor, studentId, documentType, file, metadata, supersedesDocumentId = null, onFileSaved }) {
+  async function insertSubmission({ actor, studentId, documentType, requirementAssignmentId = null, file, metadata, supersedesDocumentId = null, onFileSaved }) {
     const storedFilename = `${crypto.randomUUID()}${metadata.extension}`;
-    const initialStatus = 'pending';
+    const initialStatus = requirementAssignmentId ? 'needs_review' : 'pending';
     const filePath = await savePrivateFile(file.buffer, storedFilename);
     onFileSaved(filePath);
     const insertResult = await actor.transaction.request()
@@ -585,11 +638,12 @@ function createDocumentService({
       .input('initialStatus', sql.NVarChar(30), initialStatus)
       .input('isLegacyArchive', sql.Bit, 0)
       .input('supersedesDocumentId', sql.Int, supersedesDocumentId)
+      .input('requirementAssignmentId', sql.Int, requirementAssignmentId)
       .query(`INSERT INTO documents
           (student_id, document_type, original_filename, stored_filename, mime_type,
-          file_size_bytes, uploaded_by, upload_source, status, is_legacy_archive, supersedes_document_id)
+          file_size_bytes, uploaded_by, upload_source, status, is_legacy_archive, supersedes_document_id, requirement_assignment_id)
         VALUES (@studentId, @documentType, @originalFilename, @storedFilename, @mimeType,
-            @fileSizeBytes, @uploadedBy, @uploadSource, @initialStatus, @isLegacyArchive, @supersedesDocumentId)`);
+            @fileSizeBytes, @uploadedBy, @uploadSource, @initialStatus, @isLegacyArchive, @supersedesDocumentId, @requirementAssignmentId)`);
     const documentId = insertResult.insertId;
     if (!Number.isSafeInteger(documentId) || documentId < 1) throw new Error('Document insert returned no identifier.');
     if (supersedesDocumentId !== null && Number(supersedesDocumentId) === documentId) {
@@ -605,12 +659,14 @@ function createDocumentService({
     return { id: documentId, studentId, documentType, status: initialStatus };
   }
 
-  async function ensureLatestSubmissionAllowsNewOriginal(transaction, studentId, documentType) {
+  async function ensureLatestSubmissionAllowsNewOriginal(transaction, studentId, documentType, requirementAssignmentId = null) {
     const existingResult = await transaction.request()
       .input('studentId', sql.Int, studentId)
       .input('documentType', sql.NVarChar(50), documentType)
+      .input('requirementAssignmentId', sql.Int, requirementAssignmentId)
       .query(`SELECT id, status FROM documents
         WHERE student_id = @studentId AND document_type = @documentType
+          AND requirement_assignment_id <=> @requirementAssignmentId
           AND (@documentType <> 'report_card' OR is_legacy_archive = 0)
         ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE`);
     const latestSubmission = existingResult.recordset?.[0];
@@ -623,6 +679,12 @@ function createDocumentService({
     const values = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
     const documentType = normalizeDocumentType(values.documentType);
     if (!documentType) throw new DocumentServiceError('Choose a supported document type.');
+    const requirementAssignmentId = values.requirementAssignmentId == null || values.requirementAssignmentId === ''
+      ? null : normalizeId(values.requirementAssignmentId);
+    if (values.requirementAssignmentId && !requirementAssignmentId) throw new DocumentServiceError('Choose a valid requirement assignment.');
+    if (documentType.startsWith('custom_') !== Boolean(requirementAssignmentId)) {
+      throw new DocumentServiceError('Custom digital evidence must belong to an assigned school-year requirement.', 403);
+    }
     const metadata = validateUpload(file, maxUploadBytes);
     return runSubmissionTransaction(async (transaction, onFileSaved) => {
       const actor = await requireActor(transaction, actorInput, new Set(['student', ...STAFF_ROLES]));
@@ -643,9 +705,10 @@ function createDocumentService({
       if (actor.role === 'student') {
         const studentResult = await transaction.request()
           .input('actorId', sql.Int, actor.id)
-          .query('SELECT id FROM students WHERE user_id = @actorId FOR UPDATE');
+          .query('SELECT id, status FROM students WHERE user_id = @actorId FOR UPDATE');
         studentId = studentResult.recordset?.[0]?.id;
         if (!studentId) throw new DocumentServiceError('No student record is linked to this account.', 403);
+        if (studentResult.recordset?.[0]?.status === 'archived') throw new DocumentServiceError('Archived student records are read-only.', 409);
       } else {
         studentId = normalizeId(values.studentId);
         if (!studentId) throw new DocumentServiceError('Choose a valid student record.');
@@ -655,10 +718,19 @@ function createDocumentService({
         if (!studentResult.recordset?.length) throw new DocumentServiceError('Student record not found.', 404);
       }
 
-      await ensureLatestSubmissionAllowsNewOriginal(transaction, studentId, documentType);
+      if (documentType.startsWith('custom_')) {
+        if (actor.role !== 'student') throw new DocumentServiceError('Custom digital requirements can only be submitted through the assigned student account.', 403);
+        const assignmentResult = await transaction.request().input('assignmentId', sql.Int, requirementAssignmentId)
+          .input('studentId', sql.Int, studentId).input('documentType', sql.NVarChar(60), documentType)
+          .query(`SELECT id FROM requirement_assignments WHERE id = @assignmentId AND student_id = @studentId
+            AND requirement_code = @documentType AND status = 'active' AND channel_snapshot IN ('digital','both') FOR UPDATE`);
+        if (!assignmentResult.recordset?.length) throw new DocumentServiceError('This digital requirement is not available on your linked student account.', 404);
+      }
+
+      await ensureLatestSubmissionAllowsNewOriginal(transaction, studentId, documentType, requirementAssignmentId);
 
       const scopedActor = { ...actor, transaction };
-      return insertSubmission({ actor: scopedActor, studentId, documentType, file, metadata, onFileSaved });
+      return insertSubmission({ actor: scopedActor, studentId, documentType, requirementAssignmentId, file, metadata, onFileSaved });
     });
   }
 
@@ -671,19 +743,34 @@ function createDocumentService({
       const previousResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
         .input('actorId', sql.Int, actor.id)
-        .query(`SELECT d.id, d.student_id, d.document_type, d.upload_source, d.status,
-            d.is_legacy_archive, d.created_at, s.user_id AS student_user_id
+        .query(`SELECT d.id, d.student_id, d.document_type, d.requirement_assignment_id, assignment.status AS assignment_status,
+            assignment.channel_snapshot AS assignment_channel, d.upload_source, d.status,
+            d.is_legacy_archive, d.created_at, s.user_id AS student_user_id, s.status AS student_status
           FROM documents AS d
           INNER JOIN students AS s ON s.id = d.student_id
+          LEFT JOIN requirement_assignments AS assignment ON assignment.id = d.requirement_assignment_id
+            AND assignment.student_id = d.student_id AND assignment.requirement_code = d.document_type
           WHERE d.id = @documentId FOR UPDATE`);
       const previous = previousResult.recordset?.[0];
       if (!previous) throw new DocumentServiceError('Document not found.', 404);
+      if (actor.role === 'student' && previous.student_status === 'archived') throw new DocumentServiceError('Archived student records are read-only.', 409);
+      if (previous.document_type.startsWith('custom_')) {
+        if (actor.role !== 'student' || previous.upload_source !== 'student' || previous.student_user_id !== actor.id
+          || !previous.requirement_assignment_id || !previous.assignment_channel || !['digital', 'both'].includes(previous.assignment_channel)) {
+          throw new DocumentServiceError('Document not found.', 404);
+        }
+        const assignmentResult = await transaction.request().input('assignmentId', sql.Int, previous.requirement_assignment_id)
+          .input('studentId', sql.Int, previous.student_id).input('documentType', sql.NVarChar(60), previous.document_type)
+          .query(`SELECT id FROM requirement_assignments WHERE id = @assignmentId AND student_id = @studentId
+            AND requirement_code = @documentType AND status = 'active' AND channel_snapshot IN ('digital','both') FOR UPDATE`);
+        if (!assignmentResult.recordset?.length) throw new DocumentServiceError('This requirement is no longer available for a corrected upload.', 409);
+      }
       if (actor.role === 'student'
         && (previous.student_user_id !== actor.id
           || (previous.document_type === 'psa_birth_certificate' && previous.upload_source !== 'student')
           || (previous.document_type === 'report_card' && (previous.upload_source !== 'student'
             || previous.is_legacy_archive === true || previous.is_legacy_archive === 1))
-          || !STUDENT_UPLOAD_DOCUMENT_TYPES.has(previous.document_type))) {
+          || (!STUDENT_UPLOAD_DOCUMENT_TYPES.has(previous.document_type) && !previous.document_type.startsWith('custom_')))) {
         throw new DocumentServiceError('Document not found.', 404);
       }
       if (previous.document_type === 'form_137') {
@@ -738,6 +825,7 @@ function createDocumentService({
         actor: { ...actor, transaction },
         studentId: previous.student_id,
         documentType: previous.document_type,
+        requirementAssignmentId: previous.requirement_assignment_id || null,
         file,
         metadata,
         supersedesDocumentId: previous.id,
@@ -771,6 +859,7 @@ function createDocumentService({
       .input('documentType', sql.NVarChar(50), documentType === 'all' ? null : documentType)
       .input('statusFilter', sql.NVarChar(30), statusFilter === 'all' ? null : statusFilter)
       .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive,
+          assignment.display_name_snapshot AS requirement_display_name,
           CASE WHEN EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
               OR d.document_type <> 'report_card' OR ${studentReportCardSourceAccessSql('d')}
             THEN d.original_filename ELSE NULL END AS original_filename,
@@ -792,6 +881,8 @@ function createDocumentService({
           latest.created_at AS latest_review_at, latest_decision.decision_type AS latest_decision_type
         FROM documents AS d
         INNER JOIN students AS s ON s.id = d.student_id
+        LEFT JOIN requirement_assignments AS assignment ON assignment.id = d.requirement_assignment_id
+          AND assignment.student_id = d.student_id AND assignment.requirement_code = d.document_type
         LEFT JOIN v_document_latest_review_event AS latest ON latest.document_id = d.id
         LEFT JOIN v_document_latest_decision_event AS latest_decision ON latest_decision.document_id = d.id
         WHERE ((
@@ -1064,18 +1155,24 @@ function createDocumentService({
     const documentResult = await pool.request()
       .input('actorId', sql.Int, actor.id)
       .input('documentId', sql.Int, documentId)
-      .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.original_filename, d.stored_filename,
+      .query(`SELECT d.id, d.student_id, d.document_type, d.requirement_assignment_id, assignment.status AS assignment_status,
+          assignment.school_year AS requirement_school_year, assignment.display_name_snapshot AS requirement_display_name,
+          assignment.student_instructions_snapshot AS requirement_instructions,
+          d.is_legacy_archive, d.original_filename, d.stored_filename,
           d.mime_type, d.file_size_bytes, d.uploaded_by, d.upload_source, d.status,
           d.supersedes_document_id, d.created_at, s.user_id AS student_user_id,
           s.student_no, s.first_name, s.middle_name, s.last_name, u.role AS uploader_role
         FROM documents AS d
         INNER JOIN students AS s ON s.id = d.student_id
         INNER JOIN users AS u ON u.id = d.uploaded_by
+        LEFT JOIN requirement_assignments AS assignment ON assignment.id = d.requirement_assignment_id
+          AND assignment.student_id = d.student_id AND assignment.requirement_code = d.document_type
         WHERE d.id = @documentId
           AND (EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
             OR (EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role = 'student')
               AND s.user_id = @actorId
-              AND (d.document_type IN ('good_moral', 'psa_birth_certificate')
+              AND ((d.document_type IN ('good_moral', 'psa_birth_certificate') AND d.requirement_assignment_id IS NULL)
+                OR (d.requirement_assignment_id IS NOT NULL AND assignment.id IS NOT NULL AND d.upload_source = 'student')
                 OR ${studentReportCardSourceAccessSql('d')})))`);
     const document = documentResult.recordset?.[0];
     if (!document) return null;
@@ -1113,7 +1210,14 @@ function createDocumentService({
           CAST(NULL AS SIGNED) AS reviewer_id, CAST(NULL AS CHAR(201)) AS reviewer_name
         FROM document_review_events AS e
         WHERE e.document_id = @documentId AND e.action_type = 'correction_requested'
-          AND (@documentType NOT IN ('psa_birth_certificate', 'report_card') OR @uploadSource = 'student')
+          AND ((LEFT(@documentType, 7) <> 'custom_'
+              AND (@documentType NOT IN ('psa_birth_certificate', 'report_card') OR @uploadSource = 'student'))
+            OR (LEFT(@documentType, 7) = 'custom_' AND @assignmentStatus = 'active'
+              AND NOT EXISTS (SELECT 1 FROM documents AS newer
+                WHERE newer.requirement_assignment_id = @requirementAssignmentId
+                  AND (newer.created_at > (SELECT current_document.created_at FROM documents AS current_document WHERE current_document.id = @documentId)
+                    OR (newer.created_at = (SELECT current_document.created_at FROM documents AS current_document WHERE current_document.id = @documentId)
+                      AND newer.id > @documentId)))))
         ORDER BY e.created_at DESC, e.id DESC`;
     const decisionHistorySql = archivedReportCard
       ? 'SELECT CAST(NULL AS SIGNED) AS id WHERE 1 = 0'
@@ -1124,7 +1228,15 @@ function createDocumentService({
         WHERE e.document_id = @documentId ORDER BY e.created_at DESC, e.id DESC`
       : `SELECT e.id, e.decision_type,
           CASE WHEN e.decision_type IN ('rejected', 'correction_requested')
-              AND (@documentType NOT IN ('psa_birth_certificate', 'report_card') OR @uploadSource = 'student')
+              AND ((LEFT(@documentType, 7) <> 'custom_'
+                  AND (@documentType NOT IN ('psa_birth_certificate', 'report_card') OR @uploadSource = 'student'))
+                OR (LEFT(@documentType, 7) = 'custom_' AND e.decision_type = 'correction_requested'
+                  AND @assignmentStatus = 'active'
+                  AND NOT EXISTS (SELECT 1 FROM documents AS newer
+                    WHERE newer.requirement_assignment_id = @requirementAssignmentId
+                      AND (newer.created_at > (SELECT current_document.created_at FROM documents AS current_document WHERE current_document.id = @documentId)
+                        OR (newer.created_at = (SELECT current_document.created_at FROM documents AS current_document WHERE current_document.id = @documentId)
+                          AND newer.id > @documentId)))))
             THEN e.reason ELSE NULL END AS reason,
           CAST(NULL AS CHAR(500)) AS verification_checklist_json,
           e.created_at,
@@ -1136,6 +1248,7 @@ function createDocumentService({
       pool.request()
         .input('studentId', sql.Int, document.student_id)
         .input('documentType', sql.NVarChar(50), document.document_type)
+        .input('requirementAssignmentId', sql.Int, document.requirement_assignment_id || null)
         .input('actorId', sql.Int, actor.id)
         .query(`SELECT history_document.id,
             CASE WHEN EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
@@ -1146,12 +1259,14 @@ function createDocumentService({
               THEN history_document.mime_type ELSE NULL END AS mime_type,
             history_document.is_legacy_archive,
             history_document.status, history_document.supersedes_document_id, history_document.created_at,
-            CASE WHEN ${studentReportCardSourceAccessSql('history_document')} THEN 1 ELSE 0 END AS student_can_view_source,
+            CASE WHEN (history_document.requirement_assignment_id IS NOT NULL AND history_document.upload_source = 'student')
+                OR ${studentReportCardSourceAccessSql('history_document')} THEN 1 ELSE 0 END AS student_can_view_source,
             latest.action_type AS latest_review_action, latest_decision.decision_type AS latest_decision_type
           FROM documents AS history_document
           LEFT JOIN v_document_latest_review_event AS latest ON latest.document_id = history_document.id
           LEFT JOIN v_document_latest_decision_event AS latest_decision ON latest_decision.document_id = history_document.id
           WHERE history_document.student_id = @studentId AND history_document.document_type = @documentType
+            AND history_document.requirement_assignment_id <=> @requirementAssignmentId
             AND (history_document.document_type <> 'report_card' OR (history_document.is_legacy_archive = 0 AND history_document.upload_source = 'student'))
             AND (EXISTS (SELECT 1 FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin'))
               OR EXISTS (SELECT 1 FROM students AS history_student
@@ -1162,12 +1277,16 @@ function createDocumentService({
         .input('documentId', sql.Int, documentId)
         .input('documentType', sql.NVarChar(50), document.document_type)
         .input('uploadSource', sql.NVarChar(30), document.upload_source)
+        .input('requirementAssignmentId', sql.Int, document.requirement_assignment_id || null)
+        .input('assignmentStatus', sql.NVarChar(20), document.assignment_status || null)
         .query(reviewHistorySql),
       validationPromise,
       pool.request()
         .input('documentId', sql.Int, documentId)
         .input('documentType', sql.NVarChar(50), document.document_type)
         .input('uploadSource', sql.NVarChar(30), document.upload_source)
+        .input('requirementAssignmentId', sql.Int, document.requirement_assignment_id || null)
+        .input('assignmentStatus', sql.NVarChar(20), document.assignment_status || null)
         .query(decisionHistorySql)
     ]);
     const validationRow = validationResult.recordset?.[0];
@@ -1280,6 +1399,9 @@ function createDocumentService({
           WHERE d.id = @documentId FOR UPDATE`);
       const document = documentResult.recordset?.[0];
       if (!document) throw new DocumentServiceError('Document not found.', 404);
+      if (!GEMINI_PRECHECK_DOCUMENT_TYPES.has(document.document_type)) {
+        throw new DocumentServiceError('This submission is reviewed manually and is not eligible for an automated precheck.', 409);
+      }
 
       const finalDecisionResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
@@ -1316,8 +1438,8 @@ function createDocumentService({
         .query(`UPDATE documents
           SET status = 'pending', processing_started_at = NULL
           WHERE id = @documentId AND status = 'needs_review'
-            AND ((document_type IN ('good_moral', 'psa_birth_certificate'))
-              OR (document_type = 'report_card' AND is_legacy_archive = 0))`);
+          AND document_type IN ('good_moral', 'psa_birth_certificate', 'report_card')
+          AND (document_type <> 'report_card' OR is_legacy_archive = 0)`);
       if (!updateResult.affectedRows) {
         throw new DocumentServiceError('The submission state changed before the retry could be queued.', 409);
       }
@@ -1347,8 +1469,13 @@ function createDocumentService({
       const actor = await requireActor(transaction, actorInput, new Set(STAFF_ROLES));
       const documentResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
-        .query(`SELECT id, student_id, document_type, is_legacy_archive FROM documents
-          WHERE id = @documentId FOR UPDATE`);
+        .query(`SELECT d.id, d.student_id, d.document_type, d.requirement_assignment_id,
+            assignment.id AS linked_assignment_id, assignment.channel_snapshot, assignment.status AS assignment_status,
+            d.is_legacy_archive, d.created_at, student.status AS student_status
+          FROM documents AS d INNER JOIN students AS student ON student.id = d.student_id
+          LEFT JOIN requirement_assignments AS assignment ON assignment.id = d.requirement_assignment_id
+            AND assignment.student_id = d.student_id AND assignment.requirement_code = d.document_type
+          WHERE d.id = @documentId FOR UPDATE`);
       const document = documentResult.recordset?.[0];
       if (!document) throw new DocumentServiceError('Document not found.', 404);
       if (document.document_type === 'form_137') {
@@ -1358,6 +1485,13 @@ function createDocumentService({
         && (document.is_legacy_archive === true || document.is_legacy_archive === 1)) {
         throw new DocumentServiceError('Historical report cards are read-only archive records.', 409);
       }
+      if (document.requirement_assignment_id && (!document.linked_assignment_id || !['digital', 'both'].includes(document.channel_snapshot))) {
+        throw new DocumentServiceError('This custom submission is not linked to a valid digital requirement assignment.', 409);
+      }
+      if (document.requirement_assignment_id && document.assignment_status !== 'active') {
+        throw new DocumentServiceError('Withdrawn requirements are read-only; the existing submission history is retained.', 409);
+      }
+      await assertCustomAssignmentWritable(transaction, document);
       await transaction.request()
         .input('documentId', sql.Int, documentId)
         .input('reviewerId', sql.Int, actor.id)
@@ -1393,13 +1527,27 @@ function createDocumentService({
       const actor = await requireActor(transaction, actorInput, new Set(STAFF_ROLES));
       const documentResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
-        .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.status, d.original_filename, d.mime_type,
+        .query(`SELECT d.id, d.student_id, d.document_type, d.requirement_assignment_id,
+            assignment.id AS linked_assignment_id, assignment.status AS assignment_status, assignment.channel_snapshot,
+            d.is_legacy_archive, d.status, d.original_filename, d.mime_type, d.created_at,
+            student.status AS student_status,
             validation.result_status, validation.validation_json
           FROM documents AS d
           LEFT JOIN v_document_latest_validation AS validation ON validation.document_id = d.id
+          INNER JOIN students AS student ON student.id = d.student_id
+          LEFT JOIN requirement_assignments AS assignment ON assignment.id = d.requirement_assignment_id
+            AND assignment.student_id = d.student_id AND assignment.requirement_code = d.document_type
           WHERE d.id = @documentId FOR UPDATE`);
       const document = documentResult.recordset?.[0];
       if (!document) throw new DocumentServiceError('Document not found.', 404);
+      const customRequirement = Boolean(document.requirement_assignment_id);
+      if (customRequirement && (!document.linked_assignment_id || !['digital', 'both'].includes(document.channel_snapshot))) {
+        throw new DocumentServiceError('This custom submission is not linked to a valid digital requirement assignment.', 409);
+      }
+      if (customRequirement && document.assignment_status !== 'active') {
+        throw new DocumentServiceError('Withdrawn requirements are read-only; the existing submission history is retained.', 409);
+      }
+      await assertCustomAssignmentWritable(transaction, document);
       if (document.document_type === 'form_137') {
         throw new DocumentServiceError('Form 137 uses the physical status workflow.', 409);
       }
@@ -1413,7 +1561,7 @@ function createDocumentService({
           ? 'This report card is not waiting for a staff decision.'
           : 'The field precheck must finish before staff review.', 409);
       }
-      if ((activeReportCard || decision === 'verified') && !document.result_status) {
+      if (!customRequirement && (activeReportCard || decision === 'verified') && !document.result_status) {
         throw new DocumentServiceError('A precheck result must be recorded before staff review.', 409);
       }
       const checklistJson = decision === 'verified'
@@ -1437,7 +1585,7 @@ function createDocumentService({
       } catch {
         // A malformed advisory summary is not allowed to bypass the source inspection decision.
       }
-      const checkOutcome = automatedCheckOutcome(
+      const checkOutcome = customRequirement ? 'pass' : automatedCheckOutcome(
         document.document_type,
         document.result_status,
         summary,
@@ -1491,11 +1639,17 @@ function createDocumentService({
         const actor = await requireActor(transaction, actorInput, STAFF_ROLES);
         const documentResult = await transaction.request()
           .input('documentId', sql.Int, documentId)
-          .query(`SELECT d.id, d.student_id, d.document_type, d.is_legacy_archive, d.stored_filename
-            FROM documents AS d
+          .query(`SELECT d.id, d.student_id, d.document_type, d.requirement_assignment_id,
+              assignment.id AS linked_assignment_id, d.is_legacy_archive, d.stored_filename
+            FROM documents AS d LEFT JOIN requirement_assignments AS assignment ON assignment.id = d.requirement_assignment_id
+              AND assignment.student_id = d.student_id AND assignment.requirement_code = d.document_type
             WHERE d.id = @documentId FOR UPDATE`);
         const document = documentResult.recordset?.[0];
         if (!document) throw new DocumentServiceError('Document not found.', 404);
+        if (document.requirement_assignment_id && !document.linked_assignment_id) {
+          throw new DocumentServiceError('This custom submission is not linked to a valid requirement assignment.', 409);
+        }
+        if (document.requirement_assignment_id) throw new DocumentServiceError('Custom requirement submissions and their review history are retained with the assignment.', 409);
         const activeReportCard = document.document_type === 'report_card'
           && document.is_legacy_archive !== true && document.is_legacy_archive !== 1;
         if (!['good_moral', 'psa_birth_certificate'].includes(document.document_type) && !activeReportCard) {

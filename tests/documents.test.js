@@ -894,7 +894,7 @@ test('student decision history exposes own Good Moral rejection reasons and keep
     assert.equal(result.decisions[1].reason, 'Upload a clearer report card.');
     const studentDecisionSql = queries.find((statement) => statement.includes('FROM document_decision_events AS e'));
     assert.match(studentDecisionSql, /CASE WHEN e\.decision_type IN \('rejected', 'correction_requested'\)[\s\S]*@documentType NOT IN \('psa_birth_certificate', 'report_card'\) OR @uploadSource = 'student'[\s\S]*THEN e\.reason ELSE NULL END AS reason/);
-    assert.doesNotMatch(studentDecisionSql, /AND e\.decision_type = 'correction_requested'/);
+    assert.match(studentDecisionSql, /LEFT\(@documentType, 7\) = 'custom_' AND e\.decision_type = 'correction_requested'[\s\S]*@assignmentStatus = 'active'/);
     assert.doesNotMatch(studentDecisionSql, /JOIN staff_profiles/);
     assert.match(studentDecisionSql, /CAST\(NULL AS CHAR\(500\)\) AS verification_checklist_json/);
   }
@@ -1308,7 +1308,7 @@ test('active report cards use a bounded name/file-format precheck and staff-only
   const retry = transactionHarness({ actorRole: 'registrar', previousDocumentType: 'report_card', validationJson: retryablePrecheck });
   assert.deepEqual(await retry.service.requestPrecheckRetry(7, '12'), { id: 12, status: 'pending' });
   assert.match(retry.state.queries.find(({ statement }) => statement.includes("SET status = 'pending'")).statement,
-    /document_type = 'report_card' AND is_legacy_archive = 0/);
+    /document_type IN \('good_moral', 'psa_birth_certificate', 'report_card'\)[\s\S]*AND \(document_type <> 'report_card' OR is_legacy_archive = 0\)/);
 
   const missingPrecheck = transactionHarness({
     actorRole: 'registrar', previousDocumentType: 'report_card', ocrResultStatus: null, validationJson: null
@@ -2672,7 +2672,7 @@ test('document preview links open the same-origin file in a modal and clear it o
   assert.match(template, /data-preview-mime="<%= item\.mime_type \|\| '' %>"/);
   assert.match(template, /<a class="document-image-thumbnail" href="\/documents\/<%= document\.id %>\/preview" data-document-preview-trigger/);
   assert.match(template, /aria-label="Open full-size preview of <%= document\.original_filename %>"/);
-  assert.match(template, /alt="Uploaded <%= documentTypeLabel\(document\.document_type\) %> image: <%= document\.original_filename %>"/);
+  assert.match(template, /alt="Uploaded <%= documentLabel %> image: <%= document\.original_filename %>"/);
   assert.match(template, /Open full-size image/);
   assert.doesNotMatch(template, /Expand image|document-image-viewer--detail/);
   assert.doesNotMatch(template, /data-document-preview-trigger[^>]*target="_blank"/);
@@ -3213,7 +3213,7 @@ test('students can read active report-card sources only under the current correc
   assert.match(documentQuery.statement, /d\.status IN \('needs_review', 'failed'\)/);
   const historyQuery = calls.find(({ statement }) => statement.includes('FROM documents AS history_document'));
   assert.match(historyQuery.statement, /history_document\.is_legacy_archive = 0 AND history_document\.upload_source = 'student'/);
-  assert.match(historyQuery.statement, /CASE WHEN \(history_document\.document_type = 'report_card'/);
+  assert.match(historyQuery.statement, /OR \(history_document\.document_type = 'report_card'/);
   assert.match(historyQuery.statement, /THEN history_document\.original_filename ELSE NULL END AS original_filename/);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });

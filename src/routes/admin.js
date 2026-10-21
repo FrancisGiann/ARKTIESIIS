@@ -2,6 +2,7 @@ const express = require('express');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { AdminServiceError, createAdminService, normalizeUserId } = require('../services/adminService');
 const { isDuplicateKeyError } = require('../config/database');
+const { RequirementServiceError, createRequirementService } = require('../services/requirementService');
 
 const notices = {
   created: 'Account created. A setup invitation is being sent; the recipient chooses their password.',
@@ -81,9 +82,10 @@ function formatAuditDateTime(value) {
   };
 }
 
-function createAdminRouter({ getPool, sql, adminService, accountInvitationService } = {}) {
+function createAdminRouter({ getPool, sql, adminService, accountInvitationService, requirementService } = {}) {
   const router = express.Router();
   const service = adminService || createAdminService({ getPool, sql });
+  const requirements = requirementService || createRequirementService({ getPool, sql });
 
   const renderNewUser = (req, res, { error = null, status = 200, values = {} } = {}) => {
     const requestedRole = ['database_admin', 'registrar', 'front_desk', 'teacher', 'finance'].includes(req.query?.role)
@@ -107,6 +109,49 @@ function createAdminRouter({ getPool, sql, adminService, accountInvitationServic
       currentUser: req.authUser,
       notice: notices[req.query.notice] || null
     });
+  });
+
+  router.get('/requirements', async (req, res) => {
+    try {
+      const catalog = await requirements.listCatalog(req.authUser.id);
+      return res.set('Cache-Control', 'private, no-store').render('admin/requirements', {
+        title: 'Enrollment requirement catalog', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+        catalog, error: null, notice: req.query.notice === 'created' ? 'Custom requirement created.'
+          : req.query.notice === 'updated' ? 'Custom requirement updated.' : null
+      });
+    } catch {
+      return res.status(503).render('error', { title: 'Requirement catalog unavailable', message: 'The requirement catalog could not be loaded.' });
+    }
+  });
+
+  router.post('/requirements', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    try {
+      await requirements.createCatalogItem(req.authUser.id, req.body || {});
+      return res.redirect(303, '/admin/requirements?notice=created');
+    } catch (error) {
+      if (error instanceof RequirementServiceError) {
+        const catalog = await requirements.listCatalog(req.authUser.id).catch(() => []);
+        return res.status(error.status).render('admin/requirements', { title: 'Enrollment requirement catalog', currentUser: req.authUser,
+          csrfToken: ensureCsrfToken(req), catalog, error: error.message, notice: null });
+      }
+      return res.status(503).render('error', { title: 'Requirement catalog unavailable', message: 'The custom requirement could not be saved.' });
+    }
+  });
+
+  router.post('/requirements/:id', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    try {
+      await requirements.updateCatalogItem(req.authUser.id, req.params.id, req.body || {});
+      return res.redirect(303, '/admin/requirements?notice=updated');
+    } catch (error) {
+      if (error instanceof RequirementServiceError) {
+        const catalog = await requirements.listCatalog(req.authUser.id).catch(() => []);
+        return res.status(error.status).render('admin/requirements', { title: 'Enrollment requirement catalog', currentUser: req.authUser,
+          csrfToken: ensureCsrfToken(req), catalog, error: error.message, notice: null });
+      }
+      return res.status(503).render('error', { title: 'Requirement catalog unavailable', message: 'The custom requirement could not be saved.' });
+    }
   });
 
   router.get('/users', async (req, res) => {

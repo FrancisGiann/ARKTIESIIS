@@ -1114,6 +1114,98 @@ test('records mutations reject missing CSRF tokens before calling the service', 
   });
 });
 
+test('new enrollment export and requirement routes enforce role gates and CSRF', async () => {
+  let catalogCreates = 0;
+  let assignmentWrites = 0;
+  const requirementService = {
+    async listCatalog() { return []; },
+    async createCatalogItem() { catalogCreates += 1; return { id: 1 }; },
+    async getAssignmentWorkspace(_actorId, studentId) {
+      const archived = String(studentId) === '13';
+      return { student: { id: Number(studentId), student_no: archived ? 'S-13' : 'S-12', first_name: 'Jamie', last_name: 'Lee', status: archived ? 'archived' : 'active' },
+        schoolYears: ['2026-2027'], selectedSchoolYear: '2026-2027',
+        catalog: archived ? [{ id: 5, version_no: 1, display_name: 'Synthetic paper form', channel: 'paper' }] : [],
+        assignments: archived ? [{ id: 6, display_name: 'Synthetic paper form', status: 'withdrawn', channel: 'both', is_required: 1,
+          catalog_version_snapshot: 1, version_no: 2, student_instructions: 'Bring the signed form.', withdrawal_reason: 'Private reason',
+          latest_paper_status: 'received', paperToken: 'synthetic' }] : [] };
+    },
+    async getStudentProgress() { return studentProgress; },
+    async assign() { assignmentWrites += 1; }
+  };
+  const registrarMasterlistService = {
+    async getFilterOptions() {
+      return { schoolYears: ['2026-2027'], currentSchoolYear: '2026-2027', selectedSchoolYear: '2026-2027',
+        gradeLevels: ['Grade 11', 'Grade 12'], selectedGradeLevel: 'Grade 12', selectedTermNumber: null,
+        selectedSectionId: '', sections: [], terms: [1, 2, 3] };
+    },
+    async generateExport() { throw new Error('export should not run in this route check'); }
+  };
+  const studentProgress = { student: { firstName: 'Jamie', archived: false }, schoolYears: ['2026-2027'],
+    selectedSchoolYear: '2026-2027', enrollment: null, placements: [], paperRequirements: [], digitalRequirements: [], customRequirements: [] };
+
+  await withServer(createApp({ databasePool: makeAuthPool('database_admin'), environment,
+    requirementService, registrarMasterlistService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'database_admin');
+    const page = await fetch(`${baseUrl}/admin/requirements`, { headers: { cookie } });
+    assert.equal(page.status, 200);
+    const pageHtml = await page.text();
+    assert.match(pageHtml, /Enrollment requirement catalog/);
+    const missingCsrf = await postForm(baseUrl, '/admin/requirements', cookie, { displayName: 'Synthetic', channel: 'paper', instructions: 'Bring it.' });
+    assert.equal(missingCsrf.status, 403);
+    assert.equal(catalogCreates, 0, 'missing CSRF prevents catalog mutation');
+    const validCsrf = await postForm(baseUrl, '/admin/requirements', cookie, {
+      _csrf: csrfFromHtml(pageHtml), displayName: 'Synthetic', channel: 'paper', instructions: 'Bring it.'
+    });
+    assert.equal(validCsrf.status, 303);
+    assert.equal(catalogCreates, 1);
+    const authorizedExportOptions = await fetch(`${baseUrl}/registrar/records/masterlist`, { headers: { cookie } });
+    assert.equal(authorizedExportOptions.status, 200, 'database admins can access the authorized staff export options');
+  });
+
+  await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment,
+    requirementService, registrarMasterlistService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'registrar');
+    const options = await fetch(`${baseUrl}/registrar/records/masterlist`, { headers: { cookie } });
+    assert.equal(options.status, 200);
+    assert.match(await options.text(), /Download enrollment masterlist/);
+    const workspace = await fetch(`${baseUrl}/registrar/records/students/12/requirements`, { headers: { cookie } });
+    assert.equal(workspace.status, 200);
+    assert.match(await workspace.text(), /Custom enrollment requirements/);
+    const archivedWorkspace = await fetch(`${baseUrl}/registrar/records/students/13/requirements`, { headers: { cookie } });
+    assert.equal(archivedWorkspace.status, 200);
+    const archivedHtml = await archivedWorkspace.text();
+    assert.match(archivedHtml, /This student record is archived\. Assignments and evidence are read-only\./);
+    assert.match(archivedHtml, /Latest paper status:<\/strong> received/);
+    assert.doesNotMatch(archivedHtml, /Assign to student|Record paper evidence|Withdraw assignment/);
+    const missingCsrf = await postForm(baseUrl, '/registrar/records/students/12/requirements', cookie, {
+      schoolYear: '2026-2027', isRequired: '1', catalogItem: '1:1'
+    });
+    assert.equal(missingCsrf.status, 403);
+    assert.equal(assignmentWrites, 0, 'missing CSRF prevents assignment mutation');
+    const roleDenied = await fetch(`${baseUrl}/admin/requirements`, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(roleDenied.status, 403, 'registrar cannot enter the database-admin catalog route');
+  });
+
+  await withServer(createApp({ databasePool: makeAuthPool('student'), environment, requirementService,
+    registrarMasterlistService, studentRecordsService: { async getOwnStudentRecord() { return null; }, async listWorkspace() { return {}; } } }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'student');
+    const progress = await fetch(`${baseUrl}/student/enrollment`, { headers: { cookie } });
+    assert.equal(progress.status, 200);
+    const progressHtml = await progress.text();
+    assert.match(progressHtml, /Enrollment progress/);
+    assert.match(progressHtml, /href="\/documents">Open my documents/);
+    const roleDenied = await fetch(`${baseUrl}/registrar/records/masterlist`, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(roleDenied.status, 403, 'students cannot enter the registrar-only export route');
+  });
+
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, requirementService,
+    registrarMasterlistService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'finance');
+    const roleDenied = await fetch(`${baseUrl}/registrar/records/masterlist`, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(roleDenied.status, 403, 'finance users cannot enter registrar enrollment workflows');
+  });
+});
+
 test('registrar follow-up ledgers are linked from student records and protected by staff role and CSRF', async () => {
   const documentCalls = [];
   const overviewCalls = [];

@@ -9,6 +9,8 @@ const { createTermClearanceService } = require('../services/termClearanceService
 const { createStatementProjection, createStudentFinanceProjection } = require('../utils/financeStatementProjection');
 const { formatFinanceDateTime } = require('../utils/financeDateTime');
 const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
+const { ensureCsrfToken } = require('../middleware/auth');
+const { RequirementServiceError, createRequirementService } = require('../services/requirementService');
 
 const gradeLabelCollator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 const ordinalRanks = new Map([
@@ -93,7 +95,7 @@ function makeGradeSelection(grades, enrollments, requestedSemester, requestedPer
   };
 }
 
-function createStudentPortalRouter({ getPool, sql, studentRecordsService, academicRecordsService, financeService, annualFinanceService, classScheduleService, termClearanceService } = {}) {
+function createStudentPortalRouter({ getPool, sql, studentRecordsService, academicRecordsService, financeService, annualFinanceService, classScheduleService, termClearanceService, requirementService } = {}) {
   const router = express.Router();
   const records = studentRecordsService || createStudentRecordsService({ getPool, sql });
   const academics = academicRecordsService || createAcademicRecordsService({ getPool, sql });
@@ -101,6 +103,7 @@ function createStudentPortalRouter({ getPool, sql, studentRecordsService, academ
   const annualFinances = annualFinanceService || createAnnualFinanceService({ getPool, sql });
   const schedules = classScheduleService || createClassScheduleService({ getPool, sql });
   const termClearances = termClearanceService || createTermClearanceService({ getPool, sql });
+  const requirements = requirementService || createRequirementService({ getPool, sql });
 
   router.use(requireRole('student'));
 
@@ -122,6 +125,25 @@ function createStudentPortalRouter({ getPool, sql, studentRecordsService, academ
     ]);
     return { ownRecords, classSchedule };
   }));
+
+  router.get('/enrollment', async (req, res) => {
+    try {
+      const progress = await requirements.getStudentProgress(req.authUser.id, req.query.schoolYear || '');
+      return res.set('Cache-Control', 'private, no-store').render('student/enrollment', {
+        title: 'Enrollment progress', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), progress, error: null,
+        notice: req.query.notice === 'customUploaded' ? 'Your custom requirement file was submitted for staff review.' : null
+      });
+    } catch (error) {
+      if (error instanceof RequirementServiceError) {
+        return res.status(error.status).set('Cache-Control', 'private, no-store').render('student/enrollment', {
+          title: 'Enrollment progress', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
+          progress: { student: null, schoolYears: [], selectedSchoolYear: '', enrollment: null, placements: [], paperRequirements: [], digitalRequirements: [], customRequirements: [] },
+          error: error.message, notice: null
+        });
+      }
+      return res.status(503).render('error', { title: 'Enrollment progress unavailable', message: 'Your enrollment information could not be loaded.' });
+    }
+  });
 
   router.get('/schedule', (req, res) => renderOwnPage(req, res, 'student/schedule', 'My class schedule', async (userId) => {
     const [ownRecords, classSchedule] = await Promise.all([

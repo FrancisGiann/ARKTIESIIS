@@ -34,7 +34,8 @@ const REQUIRED_OBJECTS = Object.freeze([
   'student_term_clearance_items', 'student_term_clearance_events', 'annual_term_finalizations', 'account_setup_tokens',
   'finance_departure_cutoff_reviews', 'finance_departure_charge_reviews',
   'registrar_retake_referrals', 'registrar_retake_item_keys', 'registrar_retake_referral_items',
-  'finance_retake_item_decisions', 'registrar_retake_referral_events', 'finance_departure_application_events'
+  'finance_retake_item_decisions', 'registrar_retake_referral_events', 'finance_departure_application_events',
+  'requirement_catalog', 'requirement_assignments', 'requirement_assignment_events'
 ]);
 
 const REQUIRED_COLUMNS = Object.freeze({
@@ -45,7 +46,12 @@ const REQUIRED_COLUMNS = Object.freeze({
     'address_barangay', 'address_city', 'address_province', 'address_zip', 'emergency_contact_address_block_lot_street_purok',
     'emergency_contact_address_barangay', 'emergency_contact_address_city',
     'emergency_contact_address_province', 'emergency_contact_address_zip'],
-  documents: ['is_legacy_archive'],
+  documents: ['is_legacy_archive', 'requirement_assignment_id'],
+  student_physical_checklist_events: ['requirement_assignment_id', 'verification_checklist_json'],
+  requirement_catalog: ['requirement_code', 'display_name', 'student_instructions', 'channel', 'is_active', 'is_builtin', 'version_no'],
+  requirement_assignments: ['requirement_id', 'requirement_code', 'student_id', 'school_year', 'display_name_snapshot',
+    'student_instructions_snapshot', 'channel_snapshot', 'catalog_version_snapshot', 'is_required', 'status', 'withdrawal_reason', 'version_no'],
+  requirement_assignment_events: ['assignment_id', 'actor_id', 'event_type', 'version_no', 'details_json'],
   enrollments: ['finalized_at', 'annual_enrollment_id', 'term_scope_status'],
   annual_enrollments: ['esc_id', 'eform_status', 'finance_handbook_number', 'pre_enrollment_id', 'intake_kind',
     'readmission_evaluation_id', 'readmission_evaluation_version', 'continuity_source_annual_enrollment_id'],
@@ -129,7 +135,9 @@ const REQUIRED_CONSTRAINTS = Object.freeze([
   { tableName: 'finance_retake_item_decisions', constraintName: 'CK_finance_retake_item_decision_shape', type: 'CHECK', clauseIncludes: 'approved_amount' },
   { tableName: 'finance_retake_item_decisions', constraintName: 'CK_finance_retake_item_decision_supersession', type: 'CHECK', clauseIncludes: 'superseded_at' },
   { tableName: 'registrar_retake_referral_events', constraintName: 'CK_registrar_retake_referral_event_type', type: 'CHECK', clauseIncludes: 'reference_updated' },
-  { tableName: 'account_setup_tokens', constraintName: 'CK_account_setup_delivery_status', type: 'CHECK', clauseIncludes: 'delivery_status' }
+  { tableName: 'account_setup_tokens', constraintName: 'CK_account_setup_delivery_status', type: 'CHECK', clauseIncludes: 'delivery_status' },
+  { tableName: 'requirement_assignments', constraintName: 'CK_requirement_assignment_withdrawal_reason', type: 'CHECK', clauseIncludes: 'withdrawal_reason' },
+  { tableName: 'student_physical_checklist_events', constraintName: 'CK_physical_event_verification_checklist', type: 'CHECK', clauseIncludes: 'json_valid' },
 ]);
 const REQUIRED_INDEXES = Object.freeze([
   { tableName: 'students', indexName: 'UX_students_user_id_linked', columns: ['user_id'] },
@@ -162,7 +170,13 @@ const REQUIRED_INDEXES = Object.freeze([
   { tableName: 'finance_retake_item_decisions', indexName: 'UQ_finance_retake_item_decision_key', columns: ['idempotency_key'] },
   { tableName: 'account_setup_tokens', indexName: 'UX_account_setup_token_hash', columns: ['token_hash'] },
   { tableName: 'account_setup_tokens', indexName: 'UX_account_setup_active_user', columns: ['active_user_id'] },
-  { tableName: 'account_setup_tokens', indexName: 'IX_account_setup_user_history', columns: ['user_id', 'created_at', 'id'], unique: false }
+  { tableName: 'account_setup_tokens', indexName: 'IX_account_setup_user_history', columns: ['user_id', 'created_at', 'id'], unique: false },
+  { tableName: 'requirement_assignments', indexName: 'UQ_requirement_assignment_student_year', columns: ['student_id', 'school_year', 'requirement_code'] },
+  { tableName: 'requirement_assignments', indexName: 'IX_requirement_assignment_student_year', columns: ['student_id', 'school_year', 'status', 'id'], unique: false },
+  { tableName: 'requirement_assignment_events', indexName: 'UQ_requirement_assignment_event_version', columns: ['assignment_id', 'version_no'] },
+  { tableName: 'requirement_assignment_events', indexName: 'IX_requirement_assignment_event_history', columns: ['assignment_id', 'created_at', 'id'], unique: false },
+  { tableName: 'student_physical_checklist_events', indexName: 'IX_physical_event_requirement_assignment', columns: ['requirement_assignment_id', 'created_at', 'id'], unique: false },
+  { tableName: 'documents', indexName: 'IX_documents_requirement_assignment', columns: ['requirement_assignment_id', 'created_at', 'id'], unique: false },
 ]);
 const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'annual_finance_assessment_reviews', constraintName: 'FK_annual_finance_assessment_review_annual',
@@ -240,9 +254,25 @@ const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'account_setup_tokens', constraintName: 'FK_account_setup_user',
     columnName: 'user_id', referencedTable: 'users', referencedColumn: 'id' },
   { tableName: 'account_setup_tokens', constraintName: 'FK_account_setup_creator',
-    columnName: 'created_by', referencedTable: 'users', referencedColumn: 'id' }
+    columnName: 'created_by', referencedTable: 'users', referencedColumn: 'id' },
+  { tableName: 'requirement_catalog', constraintName: 'FK_requirement_catalog_creator', columnName: 'created_by', referencedTable: 'users', referencedColumn: 'id' },
+  { tableName: 'requirement_catalog', constraintName: 'FK_requirement_catalog_updater', columnName: 'updated_by', referencedTable: 'users', referencedColumn: 'id' },
+  { tableName: 'requirement_assignments', constraintName: 'FK_requirement_assignment_catalog', columnName: 'requirement_id', referencedTable: 'requirement_catalog', referencedColumn: 'id' },
+  { tableName: 'requirement_assignments', constraintName: 'FK_requirement_assignment_catalog', columnName: 'requirement_code', referencedTable: 'requirement_catalog', referencedColumn: 'requirement_code' },
+  { tableName: 'requirement_assignments', constraintName: 'FK_requirement_assignment_student', columnName: 'student_id', referencedTable: 'students', referencedColumn: 'id' },
+  { tableName: 'requirement_assignments', constraintName: 'FK_requirement_assignment_creator', columnName: 'assigned_by', referencedTable: 'users', referencedColumn: 'id' },
+  { tableName: 'requirement_assignments', constraintName: 'FK_requirement_assignment_updater', columnName: 'updated_by', referencedTable: 'users', referencedColumn: 'id' },
+  { tableName: 'requirement_assignment_events', constraintName: 'FK_requirement_assignment_event_assignment', columnName: 'assignment_id', referencedTable: 'requirement_assignments', referencedColumn: 'id' },
+  { tableName: 'requirement_assignment_events', constraintName: 'FK_requirement_assignment_event_actor', columnName: 'actor_id', referencedTable: 'users', referencedColumn: 'id' },
+  { tableName: 'student_physical_checklist_events', constraintName: 'FK_physical_event_requirement_assignment', columnName: 'requirement_assignment_id', referencedTable: 'requirement_assignments', referencedColumn: 'id' },
+  { tableName: 'student_physical_checklist_events', constraintName: 'FK_physical_event_requirement_assignment', columnName: 'student_id', referencedTable: 'requirement_assignments', referencedColumn: 'student_id' },
+  { tableName: 'student_physical_checklist_events', constraintName: 'FK_physical_event_requirement_assignment', columnName: 'requirement_code', referencedTable: 'requirement_assignments', referencedColumn: 'requirement_code' },
+  { tableName: 'documents', constraintName: 'FK_document_requirement_assignment', columnName: 'requirement_assignment_id', referencedTable: 'requirement_assignments', referencedColumn: 'id' },
+  { tableName: 'documents', constraintName: 'FK_document_requirement_assignment', columnName: 'student_id', referencedTable: 'requirement_assignments', referencedColumn: 'student_id' },
+  { tableName: 'documents', constraintName: 'FK_document_requirement_assignment', columnName: 'document_type', referencedTable: 'requirement_assignments', referencedColumn: 'requirement_code' },
+  { tableName: 'documents', constraintName: 'FK_documents_requirement_type', columnName: 'document_type', referencedTable: 'requirement_catalog', referencedColumn: 'requirement_code' },
 ]);
-const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 24 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 25 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 function bindInList(request, values, prefix) {
   return values.map((value, index) => {
@@ -363,7 +393,7 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
       process.exitCode = 1;
       return;
     }
-    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.024.`);
+    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.025.`);
   } catch {
     logger.error('MariaDB database check failed. Confirm DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD, then run npm run db:setup.');
     process.exitCode = 1;
