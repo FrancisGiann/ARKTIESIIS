@@ -33,7 +33,7 @@ const { createAnnualFinanceCasesService } = require('../services/annualFinanceCa
 const { createAnnualFinanceReportsService } = require('../services/annualFinanceReportsService');
 const { createTeacherGradeSubmissionService } = require('../services/teacherGradeSubmissionService');
 const { createGradeImportService } = require('../services/gradeImportService');
-const { createAccountService } = require('../services/accountService');
+const { createAccountService, normalizeEmail } = require('../services/accountService');
 const { createStudentSetupService } = require('../services/studentSetupService');
 const { createAnnualEnrollmentService } = require('../services/annualEnrollmentService');
 const { createTermClearanceService } = require('../services/termClearanceService');
@@ -144,7 +144,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     legacyHeaders: false,
     handler: (req, res) => res.status(200).render('auth/forgot-password', {
       title: 'Forgot Password', csrfToken: ensureCsrfToken(req),
-      notice: 'If the account is active, password reset instructions will be sent shortly.', error: null
+      notice: 'If the account is active, password reset instructions will be sent shortly.', error: null, email: ''
     })
   });
   const passwordResetLimiter = rateLimit({
@@ -259,14 +259,22 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   });
 
   authRouter.get('/password/forgot', (req, res) => res.render('auth/forgot-password', {
-    title: 'Forgot Password', csrfToken: ensureCsrfToken(req), notice: null, error: null
+    title: 'Forgot Password', csrfToken: ensureCsrfToken(req), notice: null, error: null, email: ''
   }));
 
   authRouter.post('/password/forgot', passwordResetRequestLimiter, async (req, res) => {
     if (!hasValidCsrfToken(req)) {
       return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     }
-    const email = typeof req.body?.email === 'string' ? req.body.email : '';
+    const submittedEmail = typeof req.body?.email === 'string' ? req.body.email : '';
+    const email = normalizeEmail(submittedEmail);
+    if (!email) {
+      const emailValue = submittedEmail.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 255);
+      return res.status(400).render('auth/forgot-password', {
+        title: 'Forgot Password', csrfToken: ensureCsrfToken(req), notice: null,
+        error: 'Enter a valid email address.', email: emailValue
+      });
+    }
     queueMicrotask(() => {
       void accountsService.requestPasswordReset(email).catch(() => {
         // Keep delivery and database failures out of the unauthenticated response.
@@ -274,7 +282,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     });
     return res.status(200).render('auth/forgot-password', {
       title: 'Forgot Password', csrfToken: ensureCsrfToken(req),
-      notice: 'If the account is active, password reset instructions will be sent shortly.', error: null
+      notice: 'If the account is active, password reset instructions will be sent shortly.', error: null, email: ''
     });
   });
 

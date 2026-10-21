@@ -162,6 +162,29 @@ function assignmentOptionsHarness() {
   return { service, calls };
 }
 
+test('blank workbook submissions fail before database or staging-file access', async () => {
+  let poolCalls = 0;
+  const storageDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'arktiesiis-empty-workbook-'));
+  const service = createTeacherGradeSubmissionService({
+    getPool: async () => { poolCalls += 1; throw new Error('empty workbook must stop before database access'); },
+    sql: fakeSql(),
+    storageDirectory
+  });
+  try {
+    await assert.rejects(service.stageWorkbook('7', '45', PREVIEW_ID, 'session-id', Buffer.alloc(0)),
+      (error) => error instanceof TeacherGradeSubmissionError && /valid XLSX workbook/.test(error.message));
+    await assert.rejects(service.submitPreview({
+      actorId: '7', assignmentId: '45', previousSubmissionId: null,
+      preview: { id: PREVIEW_ID, rows: [] }, sessionId: 'session-id', buffer: Buffer.alloc(0)
+    }), (error) => error instanceof TeacherGradeSubmissionError && /valid XLSX workbook/.test(error.message));
+    assert.equal(poolCalls, 0);
+    await assert.rejects(fs.access(path.join(storageDirectory, 'teacher-grade-staging')));
+    await assert.rejects(fs.access(path.join(storageDirectory, 'teacher-grade-submissions')));
+  } finally {
+    await fs.rm(storageDirectory, { recursive: true, force: true });
+  }
+});
+
 test('registrar assignment options default to is_current and bind sections and assignments to that term', async () => {
   const { service, calls } = assignmentOptionsHarness();
   const options = await service.listAssignmentOptions(7);

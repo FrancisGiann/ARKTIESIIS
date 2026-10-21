@@ -138,6 +138,24 @@ test('admin account input validation rejects invalid email, role, names, student
   assert.throws(() => validateUpdateUser({ email: 'a@example.edu', role: 'finance', isActive: '1', firstName: 'bad\nname', lastName: 'B' }), /First and last names/);
 });
 
+test('empty and whitespace account submissions cannot create staff or student accounts', () => {
+  const password = 'long-enough-account-password';
+  for (const input of [
+    {},
+    { email: 'new@example.edu', role: '', password, firstName: 'Alex', lastName: 'Lee' },
+    { email: 'new@example.edu', role: 'registrar', password, firstName: '  ', lastName: 'Lee' },
+    { email: 'new@example.edu', role: 'teacher', password, firstName: 'Alex', lastName: '\t' },
+    { email: 'new@example.edu', role: 'student', password, studentNo: '  ' }
+  ]) assert.throws(() => validateCreateUser(input), AdminServiceError);
+
+  for (const input of [
+    {},
+    { email: 'new@example.edu', role: 'finance', isActive: '1', firstName: ' ', lastName: 'Lee' },
+    { email: 'new@example.edu', role: 'student', isActive: '1', studentNo: '' },
+    { email: 'new@example.edu', role: '', isActive: '1', firstName: 'Alex', lastName: 'Lee' }
+  ]) assert.throws(() => validateUpdateUser(input), AdminServiceError);
+});
+
 test('teacher account creation and editing accept staff profile fields', () => {
   assert.deepEqual(validateCreateUser({
     email: 'teacher@example.edu', role: 'teacher', password: 'a-valid-teacher-password',

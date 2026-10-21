@@ -504,6 +504,23 @@ test('money parsing and financial transaction fields enforce DECIMAL(12,2) limit
   assert.throws(() => validateTransaction({ transactionType: 'charge', amount: '1.00', referenceNo: 'x'.repeat(101) }), /Reference number must be/);
 });
 
+test('blank and placeholder ledger transaction submissions stop before database access', async () => {
+  let poolCalls = 0;
+  const service = createFinanceService({
+    getPool: async () => { poolCalls += 1; throw new Error('invalid ledger transaction must stop before database access'); }
+  });
+  for (const input of [
+    {},
+    { transactionType: 'charge', amount: '' },
+    { transactionType: 'payment', amount: '  ' },
+    { transactionType: 'Select transaction', amount: '25.00' }
+  ]) {
+    assert.throws(() => validateTransaction(input), FinanceServiceError);
+    await assert.rejects(service.recordTransaction('7', '12', input), FinanceServiceError);
+  }
+  assert.equal(poolCalls, 0);
+});
+
 test('student ledger lookup is linked to the authenticated student and hides other accounts', async () => {
   const calls = [];
   const pool = {

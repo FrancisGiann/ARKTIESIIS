@@ -227,6 +227,21 @@ function workspaceService({ sectionId = 12, assignmentId = 44 } = {}) {
   return { service, calls };
 }
 
+test('empty, whitespace-only, and placeholder schedule submissions stop before database access', async () => {
+  let poolCalls = 0;
+  const service = createClassScheduleService({
+    getPool: async () => { poolCalls += 1; throw new Error('invalid schedule must stop before database access'); },
+    sql: fakeSql()
+  });
+  for (const input of [
+    {},
+    { assignmentId: ' ', dayOfWeek: '', startTime: '', endTime: '' },
+    { assignmentId: 'Select a class', dayOfWeek: '3', startTime: '09:00', endTime: '10:00' },
+    { assignmentId: '45', dayOfWeek: '0', startTime: '09:00', endTime: '10:00' }
+  ]) await assert.rejects(service.saveSchedule('7', null, input), ClassScheduleError);
+  assert.equal(poolCalls, 0);
+});
+
 test('schedule save is serializable and only checks active assignments in the selected term for overlap', async () => {
   const { service, state } = scheduleDatabase();
   const id = await service.saveSchedule(5, null, {

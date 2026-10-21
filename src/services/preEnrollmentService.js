@@ -47,6 +47,16 @@ const FIELD_SPEC = Object.freeze([
   ['prior_grade_level', 'priorGradeLevel', 80], ['prior_school', 'priorSchool', 200],
   ['student_signed_date', 'studentSignedDate', 10], ['received_by', 'receivedBy', 100], ['received_date', 'receivedDate', 10]
 ]);
+const APPLICANT_CONTENT_FIELDS = Object.freeze([
+  'firstName', 'middleName', 'lastName', 'suffix', 'lrn', 'studentContactNumber', 'voucherTypeText',
+  'preferredTrack', 'preferredCluster', 'targetGradeLevel', 'priorGradeLevel', 'priorSchool', 'email',
+  'birthDate', 'sex', 'address', 'addressBlockLotStreetPurok', 'addressBarangay', 'addressCity',
+  'addressProvince', 'addressZip', 'profilePhone', 'birthplace', 'facebookName', 'emergencyContactPerson',
+  'emergencyContactRelationship', 'emergencyContactPhone', 'emergencyContactAddress',
+  'emergencyContactAddressBlockLotStreetPurok', 'emergencyContactAddressBarangay',
+  'emergencyContactAddressCity', 'emergencyContactAddressProvince', 'emergencyContactAddressZip',
+  'motherName', 'motherPhone', 'fatherName', 'fatherPhone'
+]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const NAME_MAP = new Map(FIELD_SPEC.map(([column, name]) => [column, name]));
 
@@ -86,6 +96,11 @@ function printable(value, label, maxLength, { required = false } = {}) {
     throw new PreEnrollmentError(`${label} must be ${maxLength} printable characters or fewer.`);
   }
   return result || null;
+}
+
+function hasMeaningfulDraftContent(record, receipts) {
+  return APPLICANT_CONTENT_FIELDS.some((field) => Boolean(record[field]))
+    || receipts.some((receipt) => receipt.originalReceived || receipt.photocopyReceived);
 }
 
 function normalizeUuid(value, label) {
@@ -306,6 +321,9 @@ function normalizeRecord(input = {}, { actorName = '', current = null, currentRe
       originalPieces: received ? 3 : null, photocopyReceived: false, photocopyPieces: null };
   }
   receipts.push(envelopeReceipt);
+  if (result.status === 'draft' && !hasMeaningfulDraftContent(result, receipts)) {
+    throw new PreEnrollmentError('Add at least one applicant detail or mark a paper item received before saving a Draft.');
+  }
   const missing = [];
   const missingFields = [];
   const requireReadyField = (isComplete, field, label) => {

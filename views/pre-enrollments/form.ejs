@@ -87,7 +87,7 @@
       <label class="pre-enrollment-receipt-check"><input id="receipt-long_brown_envelopes-original-check" type="checkbox" name="receipt_long_brown_envelopes_received" value="1" data-envelope-receipt-checkbox <%= values.receipt_long_brown_envelopes_received === '1' || values.receipt_long_brown_envelopes_received === true || values.receipt_long_brown_envelopes_received === 1 ? 'checked' : '' %>><span>Three long brown envelopes received</span></label>
       <p class="muted-copy">Optional receipt note; it does not affect enrollment readiness. Saved state: <%= envelopeState %>. Checking records all three received; clearing records not received.</p>
     </fieldset></div></details></section>
-    <section class="form-section"><h2>Record status</h2><p>Save incomplete information as a draft. Submit as Ready only when the required paper details are complete and the record is eligible to proceed.</p></section>
+    <section class="form-section"><h2>Record status</h2><p>Save an incomplete Draft after entering at least one applicant detail or marking a paper item received; an empty form cannot be saved. Submit as Ready only when the required paper details are complete and the record is eligible to proceed.</p></section>
     <div class="form-actions" id="pre-form-actions">
       <% if (record?.status === 'ready_for_registrar') { %>
         <button class="button button--primary" type="submit" name="status" value="ready_for_registrar">Save corrections as Ready</button>

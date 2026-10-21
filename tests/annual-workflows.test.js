@@ -231,6 +231,31 @@ test('annual intake accepts explicit midyear entry with an optional future place
   }), /valid calendar date/);
 });
 
+test('empty annual intake and placeholder section submissions are rejected during normalization', () => {
+  assert.throws(() => normalizeAnnualInput({}), /valid contact email address/);
+  const newIntake = {
+    email: 'learner@example.edu', schoolYear: '2026-2027', gradeLevel: 'Grade 11', voucherCode: 'PUB',
+    entryTermNumber: '1', enrollmentStartDate: '2026-10-03', idempotencyKey: uuid
+  };
+  assert.throws(() => normalizeAnnualInput({ ...newIntake, email: '  ' }), /valid contact email address/);
+  assert.throws(() => normalizeAnnualInput({ ...newIntake, section1Id: 'Select a section' }), /valid term 1 section/);
+  assert.throws(() => normalizeAnnualInput({ ...newIntake, section1Id: '' }), /Choose a section for the entry term/);
+});
+
+test('blank annual payment and supplementary charge inputs fail before database access', async () => {
+  let poolCalls = 0;
+  const service = createAnnualFinanceService({
+    getPool: async () => { poolCalls += 1; throw new Error('blank financial input must stop before database access'); }
+  });
+  await assert.rejects(service.recordPayment('7', '12', {}), /Amount must be a valid decimal/);
+  await assert.rejects(service.recordPayment('7', '12', { amount: '  ' }), /Amount must be a valid decimal/);
+  await assert.rejects(service.addSupplementaryCharge('7', '12', '22', {}), AnnualFinanceError);
+  await assert.rejects(service.addSupplementaryCharge('7', '12', '22', {
+    feeCategory: 'other', lineName: ' ', installment: 'As incurred', amount: '20.00', reason: 'Approved fee'
+  }), AnnualFinanceError);
+  assert.equal(poolCalls, 0);
+});
+
 test('departure reason accepts normalized multiline text while other annual inputs stay single-line', () => {
   const details = normalizeDepartureDetails({ departureType: 'dropped', effectiveDate: '2026-10-20',
     reason: '  Family relocation\r\nRequested by guardian\t(confirmed)  ' });
@@ -350,6 +375,8 @@ test('annual creation cannot use an old or client-supplied idempotency key witho
     getPool: async () => { poolCalls += 1; throw new Error('source-less request must stop before database access'); },
     hashPassword: async () => { throw new Error('source-less request must not create credentials'); }
   });
+  await assert.rejects(service.createAnnualIntake(7, {}),
+    (error) => error instanceof AnnualEnrollmentError && error.status === 409);
   const payload = {
     studentNo: '', email: 'learner@example.edu', lrn: '123456789012', firstName: 'Alex', middleName: '',
     lastName: 'Learner', suffix: '', birthDate: '', sex: '', phone: '', address: '', schoolYear: '2026-2027',

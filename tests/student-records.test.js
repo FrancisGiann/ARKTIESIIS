@@ -6,7 +6,7 @@ const { createApp: createApplication } = require('../src/app');
 const { lastRecordedEnrollment } = require('../src/routes/studentRecords');
 const { StudentDocumentRequestError } = require('../src/services/studentDocumentRequestService');
 const { TermClearanceError, TermClearanceSummaryUnavailableError } = require('../src/services/termClearanceService');
-const { ReadmissionError, deriveReturnEligibility } = require('../src/services/readmissionService');
+const { ReadmissionError, deriveReturnEligibility, evaluationInput } = require('../src/services/readmissionService');
 const {
   StudentRecordsError,
   createStudentRecordsService,
@@ -325,6 +325,30 @@ test('student record, term, section, and enrollment inputs are bounded and valid
   }
   assert.throws(() => validateEnrollment({ studentId: '0', academicTermId: '4' }), /valid student/);
   assert.deepEqual(validateEnrollment({ studentId: '5', academicTermId: '4', sectionId: '' }), { studentId: 5, academicTermId: 4, sectionId: null });
+});
+
+test('empty, whitespace-only, and placeholder student and return-evaluation submissions are rejected', () => {
+  assert.throws(() => validateStudent({}), StudentRecordsError);
+  assert.throws(() => validateStudent({
+    studentNo: 'S-1', lrn: '123456789012', firstName: '  ', lastName: 'Lee'
+  }), /First name is required/);
+  assert.throws(() => validateStudent({
+    studentNo: 'S-1', lrn: 'Select an LRN', firstName: 'Alex', lastName: 'Lee'
+  }), /LRN must contain exactly 12 digits/);
+
+  assert.throws(() => validateTerm({}), StudentRecordsError);
+  assert.throws(() => validateTerm({ schoolYear: '2026-2027', term: '  ', isCurrent: false }), /Term is required/);
+  assert.throws(() => validateSection({}), StudentRecordsError);
+  assert.throws(() => validateSection({ name: 'Grade 11 A', academicTermId: 'Select a term' }), StudentRecordsError);
+  assert.throws(() => validateEnrollment({}), StudentRecordsError);
+  assert.throws(() => validateEnrollment({ studentId: 'Select a student', academicTermId: '4' }), StudentRecordsError);
+
+  assert.throws(() => evaluationInput({}), ReadmissionError);
+  assert.throws(() => evaluationInput({ applicantLrn: '  ' }), /Applicant LRN is required/);
+  assert.throws(() => evaluationInput({
+    applicantLrn: '123456789012', schoolYear: '2026-2027', targetGradeLevel: 'Select a grade',
+    firstName: 'Alex', lastName: 'Lee'
+  }), /Choose Grade 11 or Grade 12/);
 });
 
 test('LRN is required for new students, registrars can backfill blanks, and only administrators create profiles or change recorded LRNs', async () => {

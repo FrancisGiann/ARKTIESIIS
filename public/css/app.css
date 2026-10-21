@@ -1325,6 +1325,7 @@ label { font-size: 0.84rem; }
 .student-profile-grid dt { color: var(--muted); font-size: 0.82rem; }
 .student-profile-grid dd { min-width: 0; margin: 0; color: var(--ink); font-weight: 650; overflow-wrap: anywhere; }
 .records-profile-form-section { display: block; }
+.records-profile-form-section .admin-form-grid > .field { align-self: start; }
 .student-academic-info-grid > div { display: grid; grid-template-columns: minmax(7rem, 0.65fr) minmax(0, 1fr); align-items: start; gap: 0.35rem 0.75rem; min-width: 0; }
 .academic-grade-item__summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.75rem; }
 .record-document-status { display: inline-flex; padding: 0.2rem 0.5rem; color: var(--ink-soft); background: var(--surface-soft); border-radius: 0.35rem; font-size: 0.78rem; font-weight: 650; }

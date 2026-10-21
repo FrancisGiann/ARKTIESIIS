@@ -252,12 +252,32 @@ test('signing out other sessions rotates the account version and preserves the c
 
 test('password recovery uses the same response for found, missing, and unavailable accounts', async () => {
   let result = false;
-  const accountService = { async requestPasswordReset() { if (result === 'error') throw new Error('private database detail'); return result; } };
-  const app = createApp({
-    databasePool: createAuthDatabase([]), environment: testEnvironment(), accountService
-  });
+  let calls = 0;
+  const accountService = { async requestPasswordReset() { calls += 1; if (result === 'error') throw new Error('private database detail'); return result; } };
+  const app = createApp({ databasePool: createAuthDatabase([]), environment: testEnvironment(), accountService });
 
   await withServer(app, async (baseUrl) => {
+    const page = await fetch(`${baseUrl}/password/forgot`);
+    const cookie = cookieFrom(page);
+    const csrf = csrfFromHtml(await page.text());
+
+    for (const input of [undefined, '   ', 'not-an-email', '<bad@address>']) {
+      const values = { _csrf: csrf };
+      if (input !== undefined) values.email = input;
+      const response = await postForm(baseUrl, '/password/forgot', cookie, values);
+      const body = await response.text();
+      assert.equal(response.status, 400);
+      assert.match(body, /Enter a valid email address/);
+      assert.match(body, /aria-invalid="true"/);
+      assert.match(body, /autofocus/);
+      assert.equal(calls, 0, 'invalid email must not queue a reset request');
+      if (input === 'not-an-email') assert.match(body, /value="not-an-email"/);
+      if (input === '<bad@address>') assert.match(body, /value="&lt;bad@address&gt;"/);
+    }
+  });
+
+  const validApp = createApp({ databasePool: createAuthDatabase([]), environment: testEnvironment(), accountService });
+  await withServer(validApp, async (baseUrl) => {
     const page = await fetch(`${baseUrl}/password/forgot`);
     const cookie = cookieFrom(page);
     const csrf = csrfFromHtml(await page.text());
@@ -267,10 +287,12 @@ test('password recovery uses the same response for found, missing, and unavailab
       const response = await postForm(baseUrl, '/password/forgot', cookie, { _csrf: csrf, email: 'user@example.edu' });
       responses.push({ status: response.status, body: await response.text() });
     }
+    await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(responses.map(({ status }) => status), [200, 200, 200]);
     assert.equal(new Set(responses.map(({ body }) => body)).size, 1);
     assert.match(responses[0].body, /If the account is active, password reset instructions will be sent shortly/);
     assert.doesNotMatch(responses[2].body, /private database detail/);
+    assert.equal(calls, 3, 'all syntactically valid requests retain the same service path');
   });
 });
 

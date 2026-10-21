@@ -39,8 +39,7 @@ test('pre-enrollment validates supplied paper data, ready requirements, school y
     'esc_certificate', 'national_id', 'two_by_two_photos'
   ]);
 
-  const draft = normalizeRecord({ schoolYear: '2027-2028', status: 'draft' });
-  assert.ok(draft.missingRequired.includes('12-digit LRN'));
+  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft' }), /at least one applicant detail or mark a paper item received/);
   assert.throws(() => normalizeRecord(readyInput({ schoolYear: '2027-2029' })), /consecutive years/);
   assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'unknown' }), /Choose Draft or Ready/);
   assert.throws(() => normalizeRecord(readyInput({ studentContactNumber: '+63 (917' })), /valid phone format/);
@@ -69,6 +68,27 @@ test('drafts defer completion but validate every supplied field and Ready errors
   });
 });
 
+test('an empty or whitespace-only Draft is rejected while applicant details and explicit paper receipts qualify', () => {
+  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', applicantKind: 'new',
+    receivedBy: 'Front Desk', receivedDate: '2026-10-21', studentSignaturePresent: '1', studentSignedDate: '2026-10-21' }),
+  /at least one applicant detail or mark a paper item received/,
+  'default school year, actor/date metadata, applicant kind, and signature flags alone are not saved applicant content');
+  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', applicantKind: 'continuing',
+    preferredTrack: '', preferredCluster: '', targetGradeLevel: '' }),
+  /at least one applicant detail or mark a paper item received/,
+  'placeholder selections and applicant classification alone are not applicant details');
+  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', firstName: '   ', lastName: '   ',
+    lrn: '   ', studentContactNumber: '   ', receivedBy: 'Front Desk', receivedDate: '2026-10-21' }),
+  /at least one applicant detail or mark a paper item received/,
+  'whitespace-only applicant values normalize away before the content check');
+  assert.equal(normalizeRecord({ schoolYear: '2027-2028', status: 'draft', firstName: 'Ari' }).firstName, 'Ari');
+  const receiptOnly = normalizeRecord({ schoolYear: '2027-2028', status: 'draft',
+    receipt_report_card_original: '1', receipt_report_card_original_pieces: '1' });
+  assert.equal(receiptOnly.firstName, null);
+  assert.equal(receiptOnly.receipts.find(({ requirementCode }) => requirementCode === 'report_card').originalReceived, true,
+    'explicit receipt of a paper item is sufficient content for a partial Draft');
+});
+
 test('readmission Drafts may await a reference, while supplied bindings validate and Ready requires one', () => {
   const id = 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261';
   const partial = normalizeRecord({ schoolYear: '2027-2028', status: 'draft', applicantKind: 'readmission',
@@ -80,7 +100,7 @@ test('readmission Drafts may await a reference, while supplied bindings validate
   assert.equal(supplied.readmissionEvaluationId, id);
   assert.equal(supplied.readmissionEvaluationVersion, 4);
   assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', applicantKind: 'readmission',
-    readmissionEvaluationId: id }), /Reload the return evaluation/);
+    lrn: '012345', readmissionEvaluationId: id }), /Reload the return evaluation/);
   assert.throws(() => normalizeRecord(readyInput({ applicantKind: 'readmission' })), (error) => {
     assert.ok(error.fields.includes('readmissionEvaluationBinding'));
     return /accepted, current return evaluation/.test(error.message);
@@ -184,10 +204,10 @@ test('pre-enrollment optional birth date is blank or before the current Manila d
   nextDay.setUTCDate(nextDay.getUTCDate() + 1);
   const nextDate = nextDay.toISOString().slice(0, 10);
 
-  assert.equal(normalizeRecord({ schoolYear: '2027-2028', status: 'draft', birthDate: '' }).birthDate, null);
-  assert.equal(normalizeRecord({ schoolYear: '2027-2028', status: 'draft', birthDate: priorDate }).birthDate, priorDate);
-  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', birthDate: today }), /Birth date must be before today/);
-  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', birthDate: nextDate }), /Birth date must be before today/);
+  assert.equal(normalizeRecord({ schoolYear: '2027-2028', status: 'draft', firstName: 'Ari', birthDate: '' }).birthDate, null);
+  assert.equal(normalizeRecord({ schoolYear: '2027-2028', status: 'draft', firstName: 'Ari', birthDate: priorDate }).birthDate, priorDate);
+  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', firstName: 'Ari', birthDate: today }), /Birth date must be before today/);
+  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', firstName: 'Ari', birthDate: nextDate }), /Birth date must be before today/);
 });
 
 test('return evaluation is required only for readmission and its selection survives status changes', () => {
@@ -593,6 +613,8 @@ function detailRecord(id, status = 'ready_for_registrar') {
 
 function createPreEnrollmentTransactionHarness({ evaluation = null, students = [], duplicateAnnual = [], history = [], current = null } = {}) {
   const queries = [];
+  const createdSubmissions = new Map();
+  let poolCalls = 0;
   const sql = {
     ISOLATION_LEVEL: { SERIALIZABLE: 'serializable' }, MAX: 'MAX', Int: 'INT', Date: 'DATE', Bit: 'BIT', SmallInt: 'SMALLINT',
     Char: () => 'CHAR', VarChar: () => 'VARCHAR', NVarChar: () => 'NVARCHAR'
@@ -608,7 +630,8 @@ function createPreEnrollmentTransactionHarness({ evaluation = null, students = [
         return { recordset: [{ id: 1, role: 'front_desk', first_name: 'Synthetic', last_name: 'Desk' }] };
       }
       if (normalized.startsWith('SELECT id, request_fingerprint FROM pre_enrollments WHERE idempotency_key')) {
-        return { recordset: [] };
+        const prior = createdSubmissions.get(call.inputs.idempotencyKey);
+        return { recordset: prior ? [{ ...prior }] : [] };
       }
       if (normalized.includes('FROM readmission_evaluations WHERE id = @evaluationId FOR UPDATE')) {
         return { recordset: evaluation ? [evaluation] : [] };
@@ -625,6 +648,9 @@ function createPreEnrollmentTransactionHarness({ evaluation = null, students = [
       if (normalized.startsWith('SELECT annual.school_year, annual.intake_status')) return { recordset: history };
       if (normalized.startsWith('SELECT entry.*')) return { recordset: current ? [{ ...current }] : [] };
       if (normalized.startsWith('SELECT * FROM pre_enrollment_receipts')) return { recordset: [] };
+      if (normalized.startsWith('INSERT INTO pre_enrollments')) {
+        createdSubmissions.set(call.inputs.idempotencyKey, { id: call.inputs.recordId, request_fingerprint: call.inputs.fingerprint });
+      }
       if (normalized.startsWith('UPDATE pre_enrollments SET')) return { rowsAffected: [1] };
       return { recordset: [], rowsAffected: [1] };
     }
@@ -637,9 +663,29 @@ function createPreEnrollmentTransactionHarness({ evaluation = null, students = [
     async rollback() { this.started = false; }
   }
   const pool = { request: () => new Request() };
-  const service = createPreEnrollmentService({ getPool: async () => pool, sql, transactionFactory: () => new Transaction() });
-  return { service, queries };
+  const service = createPreEnrollmentService({ getPool: async () => { poolCalls += 1; return pool; }, sql, transactionFactory: () => new Transaction() });
+  return { service, queries, getPoolCalls: () => poolCalls };
 }
+
+test('empty direct Draft submissions stop before database access and valid Draft retries remain idempotent', async () => {
+  const empty = createPreEnrollmentTransactionHarness();
+  await assert.rejects(empty.service.create(1, { schoolYear: '2027-2028', status: 'draft', applicantKind: 'new',
+    receivedBy: 'Front Desk', receivedDate: '2026-10-21', studentSignaturePresent: '1', studentSignedDate: '2026-10-21',
+    idempotencyKey: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83260' }), /at least one applicant detail or mark a paper item received/);
+  assert.equal(empty.getPoolCalls(), 0, 'normalization rejects a default-only direct request before opening a database connection');
+  assert.equal(empty.queries.length, 0, 'an invalid empty Draft cannot write a row or audit event');
+
+  const serviceHarness = createPreEnrollmentTransactionHarness();
+  const partial = { schoolYear: '2027-2028', status: 'draft', firstName: 'Ari',
+    idempotencyKey: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261' };
+  const saved = await serviceHarness.service.create(1, partial);
+  const repeated = await serviceHarness.service.create(1, partial);
+  assert.equal(saved.alreadyCreated, false);
+  assert.equal(repeated.id, saved.id);
+  assert.equal(repeated.alreadyCreated, true, 'a repeated valid Draft submission returns its existing row');
+  assert.equal(serviceHarness.queries.filter(({ statement }) => statement.startsWith('INSERT INTO pre_enrollments')).length, 1,
+    'an idempotent retry does not insert a duplicate record');
+});
 
 test('pre-enrollment Draft transaction defers missing readmission evaluation without creating student or annual rows', async () => {
   const learner = { id: 44, lrn: '012345678901' };
@@ -704,6 +750,7 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
   const app = express();
   const csrfToken = 'c'.repeat(64);
   const calls = [];
+  const successfulCreates = [];
   const choicesCalls = [];
   const updateInputs = [];
   const roleIds = { registrar: 1, front_desk: 2, database_admin: 3, teacher: 4, finance: 5, student: 6 };
@@ -722,7 +769,12 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     preEnrollmentService: {
       async list(actorId) { calls.push(['list', actorId]); return { rows: [{ id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261', first_name: 'Ari', middle_name: '', last_name: 'Santos', suffix: '', lrn: '012345678901', school_year: '2027-2028', status: 'ready_for_registrar', recorder_first_name: 'Front', recorder_last_name: 'Desk', updated_at: '2026-10-03' }], filters: { search: '', schoolYear: '', status: '' }, pagination: { page: 1, pageSize: 20, totalRecords: 1, totalPages: 1, from: 1, to: 1 } }; },
       async getActorDisplayName(actorId) { calls.push(['display', actorId]); return 'Front Desk'; },
-      async create(actorId, input) { calls.push(['create', actorId]); normalizeRecord(input); return { id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261' }; },
+      async create(actorId, input) {
+        calls.push(['create', actorId]);
+        const record = normalizeRecord(input);
+        successfulCreates.push({ actorId, record });
+        return { id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261' };
+      },
       async update(actorId, id, version, input) {
         calls.push(['update', actorId]); updateInputs.push(input);
         if (input.lastName === 'stale-version') throw new PreEnrollmentError('This record changed after the form was opened. Reload and review the latest version.', 409);
@@ -810,6 +862,7 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.match(newFormHtml, /data-readmission-evaluation-field/);
     assert.match(newFormHtml, /data-pre-enrollment-form/);
     assert.match(newFormHtml, /novalidate/);
+    assert.match(newFormHtml, /Save an incomplete Draft after entering at least one applicant detail or marking a paper item received; an empty form cannot be saved/);
     assert.match(newFormHtml, /name="status" value="draft">Save draft/);
     assert.match(newFormHtml, /name="status" value="ready_for_registrar">Submit as Ready/);
     assert.doesNotMatch(newFormHtml, /<select[^>]+name="status"/);
@@ -848,7 +901,38 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey, schoolYear: '2027-2028', status: 'draft' }), redirect: 'manual'
     });
-    assert.equal(blankDraft.status, 303, 'an incomplete Draft saves through the HTTP route');
+    const blankDraftHtml = await blankDraft.text();
+    assert.equal(blankDraft.status, 400, 'a default-only Draft is rejected by the HTTP route');
+    assert.match(blankDraftHtml, /Add at least one applicant detail or mark a paper item received before saving a Draft/);
+    assert.match(blankDraftHtml, /id="pre-enrollment-error-summary" role="alert" tabindex="-1"/,
+      'the validation response exposes the focusable error summary even when no individual field is invalid');
+    assert.doesNotMatch(blankDraftHtml, /notice=saved|enrollment_started/i,
+      'an empty submission does not show a saved or enrolled outcome');
+    assert.equal(successfulCreates.length, 0, 'the route service does not persist an empty Draft');
+    const whitespaceDraft = await fetch(`${origin}/pre-enrollments`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey, schoolYear: '2027-2028', status: 'draft',
+        firstName: '   ', lrn: '  ', receivedBy: 'Front Desk', receivedDate: '2026-10-21' })
+    });
+    assert.equal(whitespaceDraft.status, 400, 'whitespace-only direct requests are not meaningful Drafts');
+    assert.equal(successfulCreates.length, 0, 'auto-filled receipt metadata does not cause an empty request to persist');
+    const partialDraft = await fetch(`${origin}/pre-enrollments`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey, schoolYear: '2027-2028', status: 'draft', firstName: 'Draft learner' }),
+      redirect: 'manual'
+    });
+    assert.equal(partialDraft.status, 303, 'a partial Draft with applicant content still saves through the HTTP route');
+    assert.match(partialDraft.headers.get('location'), /\?notice=saved$/);
+    assert.equal(successfulCreates.length, 1);
+    assert.equal(successfulCreates[0].record.status, 'draft');
+    const validReady = await fetch(`${origin}/pre-enrollments`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83270', ...readyInput() }),
+      redirect: 'manual'
+    });
+    assert.equal(validReady.status, 303, 'the new Draft content guard leaves a complete Ready submission valid');
+    assert.equal(successfulCreates.length, 2);
+    assert.equal(successfulCreates[1].record.status, 'ready_for_registrar');
     const readyFailure = await fetch(`${origin}/pre-enrollments`, {
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83262',
@@ -1072,8 +1156,8 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
       }, body: new URLSearchParams({ _csrf: csrfToken }) })).status, 403);
     }
     assert.deepEqual(calls.filter(([method]) => ['create', 'update'].includes(method)), [
-      ['create', roleIds.front_desk], ['create', roleIds.front_desk],
-      ['create', roleIds.front_desk], ['create', roleIds.front_desk],
+      ['create', roleIds.front_desk], ['create', roleIds.front_desk], ['create', roleIds.front_desk], ['create', roleIds.front_desk],
+      ['create', roleIds.front_desk], ['create', roleIds.front_desk], ['create', roleIds.front_desk],
       ['update', roleIds.registrar], ['update', roleIds.registrar]
     ], 'authorized front-desk attempts reach the validation service, while admin and unrelated roles stop before writes; only registrar can submit corrections');
   } finally {

@@ -12,6 +12,9 @@ test('document request input validation rejects malformed names, dates, reasons,
     getPool: async () => { connectionAttempts += 1; throw new Error('unexpected database access'); }
   });
   const valid = { documentType: 'Transcript of Records', documentName: 'Grade 11 Transcript', requestedOn: '2026-09-30', idempotencyKey: uuid };
+  await assert.rejects(service.createRequest('7', '12', {}), /Document type is required/);
+  await assert.rejects(service.createRequest('7', '12', { ...valid, documentType: '  ' }), /Document type is required/);
+  await assert.rejects(service.createRequest('7', '12', { ...valid, documentName: '\t' }), /Document name is required/);
   await assert.rejects(service.createRequest('7', '12', { ...valid, documentName: 'bad\nname' }), StudentDocumentRequestError);
   await assert.rejects(service.createRequest('7', '12', { ...valid, requestedOn: '2026-02-30' }), /valid request date/);
   await assert.rejects(service.createRequest('7', '12', { ...valid, idempotencyKey: 'bad' }), /valid idempotency key/);
