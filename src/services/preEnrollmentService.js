@@ -51,10 +51,27 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const NAME_MAP = new Map(FIELD_SPEC.map(([column, name]) => [column, name]));
 
 class PreEnrollmentError extends Error {
-  constructor(message, status = 400) {
+  constructor(message, status = 400, field = null, fields = []) {
     super(message);
     this.name = 'PreEnrollmentError';
     this.status = status;
+    this.field = field;
+    this.fields = Array.isArray(fields) ? fields : [];
+  }
+}
+
+function withField(field, normalize) {
+  try {
+    return normalize();
+  } catch (error) {
+    if (error instanceof PreEnrollmentError) {
+      error.field ||= field;
+      throw error;
+    }
+    if (error instanceof StudentRecordsError || error instanceof StudentAddressError) {
+      throw new PreEnrollmentError(error.message, error.status || 400, field);
+    }
+    throw error;
   }
 }
 
@@ -101,7 +118,7 @@ function normalizeEmail(value) {
 function normalizeProfileAddress(result, input, prefix, current) {
   const modeKey = `${prefix}Mode`;
   const mode = input[modeKey] || (current ? 'preserve' : 'replace');
-  if (!['preserve', 'replace'].includes(mode)) throw new PreEnrollmentError('Choose whether to keep or replace the saved address.');
+  if (!['preserve', 'replace'].includes(mode)) throw new PreEnrollmentError('Choose whether to keep or replace the saved address.', 400, modeKey);
   const fields = ADDRESS_DEFINITIONS[prefix];
   if (mode === 'preserve') {
     const source = current || input;
@@ -109,9 +126,9 @@ function normalizeProfileAddress(result, input, prefix, current) {
     const legacyAddress = source[legacyKey] ?? source[prefix];
     if (legacyAddress === undefined || legacyAddress === null || legacyAddress === '') result[prefix] = null;
     else if (typeof legacyAddress !== 'string' || legacyAddress.length > 500 || /[\u0000-\u001f\u007f]/.test(legacyAddress)) {
-      throw new PreEnrollmentError('Address must be 500 printable characters or fewer.');
+      throw new PreEnrollmentError('Address must be 500 printable characters or fewer.', 400, modeKey);
     } else result[prefix] = legacyAddress;
-    for (const [inputName, column] of fields) result[inputName] = printable(source[column] ?? source[inputName], 'Address component', inputName.endsWith('Zip') ? 4 : inputName.endsWith('StreetPurok') ? 200 : 100);
+    for (const [inputName, column] of fields) result[inputName] = withField(inputName, () => printable(source[column] ?? source[inputName], 'Address component', inputName.endsWith('Zip') ? 4 : inputName.endsWith('StreetPurok') ? 200 : 100));
     return;
   }
   try {
@@ -119,21 +136,24 @@ function normalizeProfileAddress(result, input, prefix, current) {
     result[prefix] = normalized.formatted;
     for (const [inputName, column] of fields) result[inputName] = normalized[column];
   } catch (error) {
-    if (error instanceof StudentAddressError) throw new PreEnrollmentError(error.message);
+    if (error instanceof StudentAddressError) {
+      const matchingField = fields.find(([, , label]) => error.message.toLowerCase().startsWith(label.toLowerCase()))?.[0];
+      throw new PreEnrollmentError(error.message, 400, matchingField || fields[0]?.[0] || modeKey);
+    }
     throw error;
   }
 }
 
-function normalizeReceiptFlag(value, label) {
+function normalizeReceiptFlag(value, label, field = null) {
   if (value === true || value === '1' || value === 'true' || value === 'on') return true;
   if (value === false || value === '0' || value === 'false' || value === undefined || value === null || value === '') return false;
-  throw new PreEnrollmentError(`Choose whether ${label} was received.`);
+  throw new PreEnrollmentError(`Choose whether ${label} was received.`, 400, field);
 }
 
 function normalizeSameAddressFlag(value) {
   if (value === true || value === '1' || value === 'true' || value === 'on') return true;
   if (value === false || value === '0' || value === 'false' || value === undefined || value === null || value === '') return false;
-  throw new PreEnrollmentError('Choose whether the emergency contact has the same address as the student.');
+  throw new PreEnrollmentError('Choose whether the emergency contact has the same address as the student.', 400, 'emergencyContactSameAsStudent');
 }
 
 function copyStudentAddressToEmergency(result) {
@@ -148,13 +168,13 @@ function copyStudentAddressToEmergency(result) {
   }
 }
 
-function normalizePieceCount(value, present, label) {
+function normalizePieceCount(value, present, label, field = null) {
   if (value === undefined || value === null || value === '') return null;
-  if (typeof value !== 'string' && typeof value !== 'number') throw new PreEnrollmentError(`${label} must be a whole number from 1 to 99.`);
+  if (typeof value !== 'string' && typeof value !== 'number') throw new PreEnrollmentError(`${label} must be a whole number from 1 to 99.`, 400, field);
   const text = String(value);
-  if (!/^\d{1,2}$/.test(text)) throw new PreEnrollmentError(`${label} must be a whole number from 1 to 99.`);
+  if (!/^\d{1,2}$/.test(text)) throw new PreEnrollmentError(`${label} must be a whole number from 1 to 99.`, 400, field);
   const count = Number(text);
-  if (count < 1 || count > 99 || !present) throw new PreEnrollmentError(`${label} can be recorded only when those papers were received.`);
+  if (count < 1 || count > 99 || !present) throw new PreEnrollmentError(`${label} can be recorded only when those papers were received.`, 400, field);
   return count;
 }
 
@@ -164,7 +184,7 @@ function manilaDate(now = new Date()) {
 
 function normalizeRecord(input = {}, { actorName = '', current = null, currentReceipts = [] } = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new PreEnrollmentError('Enter valid paper form details.');
-  const sameAddress = normalizeSameAddressFlag(input.emergencyContactSameAsStudent);
+  const sameAddress = withField('emergencyContactSameAsStudent', () => normalizeSameAddressFlag(input.emergencyContactSameAsStudent));
   const normalizedInput = sameAddress ? {
     ...input,
     emergencyContactAddressMode: 'replace',
@@ -177,104 +197,98 @@ function normalizeRecord(input = {}, { actorName = '', current = null, currentRe
       result[name] = current?.voucher_category_text ?? null;
       continue;
     }
-    result[name] = column.endsWith('_date')
+    result[name] = withField(name, () => column.endsWith('_date')
       ? normalizeDate(normalizedInput[name], name === 'studentSignedDate' ? 'Student signature date' : name === 'birthDate' ? 'Birth date' : 'Date received')
       : printable(normalizedInput[name], name.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`), length,
-        { required: column === 'school_year' });
+        { required: column === 'school_year' }));
   }
   const voucherRaw = input.voucherTypeText;
   if (voucherRaw === undefined && current) result.voucherTypeText = current.voucher_type_text ?? null;
   else if (result.voucherTypeText && !['PUB', 'ESC', 'NV'].includes(result.voucherTypeText)) {
     if (current && voucherRaw === current.voucher_type_text) result.voucherTypeText = current.voucher_type_text;
-    else throw new PreEnrollmentError('Choose PUB, ESC, NV, or leave voucher type blank.');
+    else throw new PreEnrollmentError('Choose PUB, ESC, NV, or leave voucher type blank.', 400, 'voucherTypeText');
   }
   const currentSchoolYear = result.schoolYear.match(/^(\d{4})-(\d{4})$/);
   if (!currentSchoolYear || Number(currentSchoolYear[2]) !== Number(currentSchoolYear[1]) + 1) {
-    throw new PreEnrollmentError('School year must use the format YYYY-YYYY with consecutive years.');
+    throw new PreEnrollmentError('School year must use the format YYYY-YYYY with consecutive years.', 400, 'schoolYear');
   }
-  try {
-    result.firstName = validateName(input.firstName, 'First name');
-    result.middleName = validateName(input.middleName, 'Middle name');
-    result.lastName = validateName(input.lastName, 'Last name');
-    result.suffix = validateName(input.suffix, 'Suffix', { maxLength: 20 });
-    result.studentContactNumber = normalizePhone(input.studentContactNumber, 'Student contact number');
-    result.profilePhone = normalizePhone(input.profilePhone, 'Phone');
-    result.emergencyContactPhone = normalizePhone(input.emergencyContactPhone, 'Emergency contact phone');
-    result.motherPhone = normalizePhone(input.motherPhone, 'Mother’s phone');
-    result.fatherPhone = normalizePhone(input.fatherPhone, 'Father’s phone');
-  } catch (error) {
-    if (error instanceof StudentRecordsError) throw new PreEnrollmentError(error.message, error.status);
-    throw error;
-  }
-  result.email = normalizeEmail(input.email);
+  result.firstName = withField('firstName', () => validateName(input.firstName, 'First name'));
+  result.middleName = withField('middleName', () => validateName(input.middleName, 'Middle name'));
+  result.lastName = withField('lastName', () => validateName(input.lastName, 'Last name'));
+  result.suffix = withField('suffix', () => validateName(input.suffix, 'Suffix', { maxLength: 20 }));
+  result.studentContactNumber = withField('studentContactNumber', () => normalizePhone(input.studentContactNumber, 'Student contact number'));
+  result.profilePhone = withField('profilePhone', () => normalizePhone(input.profilePhone, 'Phone'));
+  result.emergencyContactPhone = withField('emergencyContactPhone', () => normalizePhone(input.emergencyContactPhone, 'Emergency contact phone'));
+  result.motherPhone = withField('motherPhone', () => normalizePhone(input.motherPhone, 'Mother’s phone'));
+  result.fatherPhone = withField('fatherPhone', () => normalizePhone(input.fatherPhone, 'Father’s phone'));
+  result.email = withField('email', () => normalizeEmail(input.email));
   result.applicantKind = input.applicantKind === undefined || input.applicantKind === '' ? 'new' : input.applicantKind;
-  if (!['new', 'continuing', 'readmission'].includes(result.applicantKind)) throw new PreEnrollmentError('Choose New, Continuing, or Returning after a break.');
-  const sex = printable(input.sex || '', 'Gender', 20);
+  if (!['new', 'continuing', 'readmission'].includes(result.applicantKind)) throw new PreEnrollmentError('Choose New, Continuing, or Returning after a break.', 400, 'applicantKind');
+  const sex = withField('sex', () => printable(input.sex || '', 'Gender', 20));
   result.sex = sex ? ({ male: 'Male', female: 'Female', other: 'Other' }[sex.toLowerCase()] || null) : null;
-  if (sex && !result.sex) throw new PreEnrollmentError('Choose Male, Female, or Other for gender.');
-  result.birthDate = normalizeDate(input.birthDate, 'Birth date');
-  result.birthplace = printable(input.birthplace, 'Birthplace', 160);
-  try {
-    result.facebookName = validateTextWithLetter(input.facebookName, 'Facebook name', 120);
-    result.emergencyContactPerson = validateName(input.emergencyContactPerson, 'Emergency contact person', { maxLength: 160 });
-    result.emergencyContactRelationship = validateTextWithLetter(input.emergencyContactRelationship, 'Emergency contact relationship', 80);
-    result.motherName = validateName(input.motherName, 'Mother name', { maxLength: 160 });
-    result.fatherName = validateName(input.fatherName, 'Father name', { maxLength: 160 });
-  } catch (error) {
-    if (error instanceof StudentRecordsError) throw new PreEnrollmentError(error.message, error.status);
-    throw error;
-  }
-  normalizeProfileAddress(result, input, 'address', current);
-  normalizeProfileAddress(result, normalizedInput, 'emergencyContactAddress', current);
+  if (sex && !result.sex) throw new PreEnrollmentError('Choose Male, Female, or Other for gender.', 400, 'sex');
+  result.birthDate = withField('birthDate', () => normalizeDate(input.birthDate, 'Birth date'));
+  result.birthplace = withField('birthplace', () => printable(input.birthplace, 'Birthplace', 160));
+  result.facebookName = withField('facebookName', () => validateTextWithLetter(input.facebookName, 'Facebook name', 120));
+  result.emergencyContactPerson = withField('emergencyContactPerson', () => validateName(input.emergencyContactPerson, 'Emergency contact person', { maxLength: 160 }));
+  result.emergencyContactRelationship = withField('emergencyContactRelationship', () => validateTextWithLetter(input.emergencyContactRelationship, 'Emergency contact relationship', 80));
+  result.motherName = withField('motherName', () => validateName(input.motherName, 'Mother name', { maxLength: 160 }));
+  result.fatherName = withField('fatherName', () => validateName(input.fatherName, 'Father name', { maxLength: 160 }));
+  withField('addressBlockLotStreetPurok', () => normalizeProfileAddress(result, input, 'address', current));
+  withField('emergencyContactAddressBlockLotStreetPurok', () => normalizeProfileAddress(result, normalizedInput, 'emergencyContactAddress', current));
   if (sameAddress) copyStudentAddressToEmergency(result);
-  if (result.lrn && !/^\d{1,12}$/.test(result.lrn)) throw new PreEnrollmentError('LRN must contain digits only and be no longer than 12 digits.');
-  if (result.preferredTrack && !isCanonicalTrack(result.preferredTrack)) throw new PreEnrollmentError('Choose a listed preferred track.');
+  if (result.lrn && !/^\d{1,12}$/.test(result.lrn)) throw new PreEnrollmentError('LRN must contain digits only and be no longer than 12 digits.', 400, 'lrn');
+  if (result.preferredTrack && !isCanonicalTrack(result.preferredTrack)) throw new PreEnrollmentError('Choose a listed preferred track.', 400, 'preferredTrack');
   if (result.preferredCluster && !isCanonicalProgram(result.preferredTrack, result.preferredCluster)) {
-    throw new PreEnrollmentError('Choose a cluster that belongs to the selected preferred track.');
+    throw new PreEnrollmentError('Choose a cluster that belongs to the selected preferred track.', 400, 'preferredCluster');
   }
   if (result.targetGradeLevel && !['Grade 11', 'Grade 12'].includes(result.targetGradeLevel)) {
-    throw new PreEnrollmentError('Choose Grade 11 or Grade 12.');
+    throw new PreEnrollmentError('Choose Grade 11 or Grade 12.', 400, 'targetGradeLevel');
   }
   let evaluationId = input.readmissionEvaluationId;
   let evaluationVersion = input.readmissionEvaluationVersion;
   if (typeof input.readmissionEvaluationBinding === 'string' && input.readmissionEvaluationBinding) {
     const match = input.readmissionEvaluationBinding.match(/^([0-9a-f-]{36})@(\d{1,10})$/i);
-    if (!match) throw new PreEnrollmentError('Choose a valid accepted return evaluation.');
+    if (!match) throw new PreEnrollmentError('Choose a valid accepted return evaluation.', 400, 'readmissionEvaluationBinding');
     evaluationId = match[1];
     evaluationVersion = match[2];
   }
-  result.readmissionEvaluationId = evaluationId ? normalizeUuid(evaluationId, 'readmission evaluation') : null;
+  result.readmissionEvaluationId = evaluationId ? withField('readmissionEvaluationBinding', () => normalizeUuid(evaluationId, 'readmission evaluation')) : null;
   result.readmissionEvaluationVersion = evaluationVersion === '' || evaluationVersion == null ? null : Number(evaluationVersion);
   if (result.readmissionEvaluationVersion !== null && (!Number.isSafeInteger(result.readmissionEvaluationVersion) || result.readmissionEvaluationVersion < 1)) {
-    throw new PreEnrollmentError('Reload the return evaluation before saving this paper record.', 409);
+    throw new PreEnrollmentError('Reload the return evaluation before saving this paper record.', 409, 'readmissionEvaluationBinding');
   }
   result.receivedBy = result.receivedBy || null;
   result.receivedDate = result.receivedDate || null;
-  result.studentSignaturePresent = normalizeReceiptFlag(input.studentSignaturePresent, 'the student signature');
+  result.studentSignaturePresent = normalizeReceiptFlag(input.studentSignaturePresent, 'the student signature', 'studentSignaturePresent');
   result.status = input.status === undefined ? 'draft' : input.status;
   if (!['draft', 'ready_for_registrar'].includes(result.status)) {
-    throw new PreEnrollmentError('Choose Draft or Ready for registrar.');
+    throw new PreEnrollmentError('Choose Draft or Ready for registrar.', 400, 'status');
   }
   const receipts = RECEIPT_REQUIREMENTS.map(([code]) => {
-    const originalReceived = normalizeReceiptFlag(input[`receipt_${code}_original`], `${code} original`);
-    const photocopyReceived = normalizeReceiptFlag(input[`receipt_${code}_photocopy`], `${code} photocopy`);
+    const originalField = `receipt_${code}_original`;
+    const originalPiecesField = `receipt_${code}_original_pieces`;
+    const photocopyField = `receipt_${code}_photocopy`;
+    const photocopyPiecesField = `receipt_${code}_photocopy_pieces`;
+    const originalReceived = normalizeReceiptFlag(input[originalField], `${code} original`, originalField);
+    const photocopyReceived = normalizeReceiptFlag(input[photocopyField], `${code} photocopy`, photocopyField);
     return {
       requirementCode: code,
       originalReceived,
-      originalPieces: normalizePieceCount(input[`receipt_${code}_original_pieces`], originalReceived, `${code} original pieces`),
+      originalPieces: normalizePieceCount(input[originalPiecesField], originalReceived, `${code} original pieces`, originalPiecesField),
       photocopyReceived,
-      photocopyPieces: normalizePieceCount(input[`receipt_${code}_photocopy_pieces`], photocopyReceived, `${code} photocopy pieces`)
+      photocopyPieces: normalizePieceCount(input[photocopyPiecesField], photocopyReceived, `${code} photocopy pieces`, photocopyPiecesField)
     };
   });
   const legacyEnvelope = (currentReceipts || []).find((receipt) => receipt.requirement_code === LEGACY_ENVELOPE_CODE);
   const envelopeMode = input.envelopeReceiptMode === undefined
     ? current ? 'preserve' : 'replace'
     : input.envelopeReceiptMode;
-  if (!['preserve', 'replace'].includes(envelopeMode)) throw new PreEnrollmentError('Choose whether to keep or update the envelope receipt.');
+  if (!['preserve', 'replace'].includes(envelopeMode)) throw new PreEnrollmentError('Choose whether to keep or update the envelope receipt.', 400, 'envelopeReceiptMode');
   for (const legacyField of ['receipt_long_brown_envelopes_original_pieces', 'receipt_long_brown_envelopes_photocopy',
     'receipt_long_brown_envelopes_photocopy_pieces']) {
     if (input[legacyField] !== undefined && input[legacyField] !== null && input[legacyField] !== '') {
-      throw new PreEnrollmentError('Envelope history is recorded only as one received checkbox.');
+      throw new PreEnrollmentError('Envelope history is recorded only as one received checkbox.', 400, legacyField);
     }
   }
   let envelopeReceipt;
@@ -287,35 +301,43 @@ function normalizeRecord(input = {}, { actorName = '', current = null, currentRe
       photocopyPieces: legacyEnvelope?.photocopy_pieces == null ? null : Number(legacyEnvelope.photocopy_pieces)
     };
   } else {
-    const received = normalizeReceiptFlag(input.receipt_long_brown_envelopes_received, 'three long brown envelopes');
+    const received = normalizeReceiptFlag(input.receipt_long_brown_envelopes_received, 'three long brown envelopes', 'receipt_long_brown_envelopes_received');
     envelopeReceipt = { requirementCode: LEGACY_ENVELOPE_CODE, originalReceived: received,
       originalPieces: received ? 3 : null, photocopyReceived: false, photocopyPieces: null };
   }
   receipts.push(envelopeReceipt);
   const missing = [];
-  if (!result.firstName) missing.push('first name');
-  if (!result.lastName) missing.push('last name');
-  if (!/^\d{12}$/.test(result.lrn || '')) missing.push('12-digit LRN');
-  if (!result.studentContactNumber) missing.push('student contact number');
-  if (!result.email) missing.push('valid email address');
-  if (!result.preferredTrack || !result.preferredCluster) missing.push('preferred track and cluster');
-  if (!result.targetGradeLevel) missing.push('target grade level');
-  if (!result.priorGradeLevel) missing.push('last grade level');
-  if (!result.priorSchool) missing.push('school attended');
-  if (!result.studentSignaturePresent || !result.studentSignedDate) missing.push('student signature and date');
+  const missingFields = [];
+  const requireReadyField = (isComplete, field, label) => {
+    if (isComplete) return;
+    missing.push(label);
+    missingFields.push(field);
+  };
+  requireReadyField(Boolean(result.firstName), 'firstName', 'first name');
+  requireReadyField(Boolean(result.lastName), 'lastName', 'last name');
+  requireReadyField(/^\d{12}$/.test(result.lrn || ''), 'lrn', '12-digit LRN');
+  requireReadyField(Boolean(result.studentContactNumber), 'studentContactNumber', 'student contact number');
+  requireReadyField(Boolean(result.email), 'email', 'valid email address');
+  requireReadyField(Boolean(result.preferredTrack), 'preferredTrack', 'preferred track');
+  requireReadyField(Boolean(result.preferredCluster), 'preferredCluster', 'preferred cluster');
+  requireReadyField(Boolean(result.targetGradeLevel), 'targetGradeLevel', 'target grade level');
+  requireReadyField(Boolean(result.priorGradeLevel), 'priorGradeLevel', 'last grade level');
+  requireReadyField(Boolean(result.priorSchool), 'priorSchool', 'school attended');
+  requireReadyField(Boolean(result.studentSignaturePresent), 'studentSignaturePresent', 'student signature');
+  requireReadyField(Boolean(result.studentSignedDate), 'studentSignedDate', 'student signature date');
   if (result.status === 'ready_for_registrar' && missing.length) {
-    throw new PreEnrollmentError(`Complete the paper form before submitting: ${missing.join(', ')}.`);
+    throw new PreEnrollmentError(`Complete the paper form before submitting: ${missing.join(', ')}.`, 400, null, missingFields);
   }
   if (result.status === 'ready_for_registrar' && result.applicantKind === 'readmission'
-    && (!result.readmissionEvaluationId || !result.readmissionEvaluationVersion)) {
-    throw new PreEnrollmentError('An accepted, current return evaluation is required before this record can be ready.', 409);
+    && (!/^\d{12}$/.test(result.lrn || '') || !result.readmissionEvaluationId || !result.readmissionEvaluationVersion)) {
+    throw new PreEnrollmentError('A complete LRN and accepted, current return evaluation are required before this record can be ready.', 409,
+      null, [...(!/^\d{12}$/.test(result.lrn || '') ? ['lrn'] : []), ...(!result.readmissionEvaluationId || !result.readmissionEvaluationVersion ? ['readmissionEvaluationBinding'] : [])]);
+  }
+  if (Boolean(result.readmissionEvaluationId) !== Boolean(result.readmissionEvaluationVersion)) {
+    throw new PreEnrollmentError('Reload the return evaluation before saving this paper record.', 409, 'readmissionEvaluationBinding');
   }
   if (result.applicantKind !== 'readmission' && (result.readmissionEvaluationId || result.readmissionEvaluationVersion)) {
-    throw new PreEnrollmentError('Only an applicant returning after a break may be linked to a return evaluation.');
-  }
-  if (result.applicantKind === 'readmission' && (!/^\d{12}$/.test(result.lrn || '')
-    || !result.readmissionEvaluationId || !result.readmissionEvaluationVersion)) {
-    throw new PreEnrollmentError('A complete LRN and accepted, current return evaluation are required for this applicant.');
+    throw new PreEnrollmentError('Only an applicant returning after a break may be linked to a return evaluation.', 400, 'applicantKind');
   }
   result.missingRequired = missing;
   result.receipts = receipts;
@@ -381,22 +403,38 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
 
   async function lockReadmissionEvaluation(transaction, record) {
     if (record.applicantKind !== 'readmission') return;
+    if (!record.readmissionEvaluationId && !record.readmissionEvaluationVersion) return null;
     const result = await transaction.request()
       .input('evaluationId', sql.Char(36), record.readmissionEvaluationId)
       .query(`SELECT id, applicant_lrn, student_id, school_year, target_grade_level, status, version, curriculum_review_status
         FROM readmission_evaluations WHERE id = @evaluationId FOR UPDATE`);
     const evaluation = result.recordset?.[0];
     if (!evaluation || evaluation.status !== 'accepted' || evaluation.curriculum_review_status !== 'resolved'
-      || Number(evaluation.version) !== record.readmissionEvaluationVersion
-      || evaluation.applicant_lrn !== record.lrn || evaluation.school_year !== record.schoolYear
-      || evaluation.target_grade_level !== record.targetGradeLevel) {
-      throw new PreEnrollmentError('The linked return evaluation is not accepted for this LRN, school year, grade, and revision.', 409);
+      || Number(evaluation.version) !== record.readmissionEvaluationVersion) {
+      throw new PreEnrollmentError('The linked return evaluation is no longer accepted and current.', 409, 'readmissionEvaluationBinding');
+    }
+    const mismatch = record.lrn && !evaluation.applicant_lrn.startsWith(record.lrn) ? 'lrn'
+      : record.schoolYear !== evaluation.school_year ? 'schoolYear'
+        : record.targetGradeLevel && record.targetGradeLevel !== evaluation.target_grade_level ? 'targetGradeLevel'
+          : null;
+    if (mismatch) {
+      throw new PreEnrollmentError('The linked return evaluation does not match the supplied applicant details.', 409, mismatch);
     }
     return evaluation;
   }
 
   async function validateApplicantHistory(transaction, record, evaluation) {
-    if (!/^\d{12}$/.test(String(record.lrn || ''))) return;
+    if (!/^\d{12}$/.test(String(record.lrn || ''))) {
+      if (record.applicantKind === 'readmission' && Number(evaluation?.student_id || 0)) {
+        const owner = await transaction.request().input('evaluationStudentId', sql.Int, Number(evaluation.student_id))
+          .query('SELECT id, lrn FROM students WHERE id = @evaluationStudentId FOR UPDATE');
+        const linkedStudent = owner.recordset?.[0];
+        if (!linkedStudent || linkedStudent.lrn !== evaluation.applicant_lrn) {
+          throw new PreEnrollmentError('The accepted evaluation is linked to a different existing student record.', 409, 'readmissionEvaluationBinding');
+        }
+      }
+      return;
+    }
     const matches = await transaction.request().input('lrn', sql.Char(12), record.lrn)
       .query('SELECT id FROM students WHERE lrn = @lrn FOR UPDATE');
     const students = matches.recordset || [];
@@ -405,7 +443,7 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
     if (!studentId) {
       if (record.applicantKind === 'continuing') throw new PreEnrollmentError('An existing student record is required for continuous progression.', 409);
       if (record.applicantKind === 'readmission' && Number(evaluation?.student_id || 0)) {
-        throw new PreEnrollmentError('The accepted evaluation is linked to a different existing student record.', 409);
+        throw new PreEnrollmentError('The accepted evaluation is linked to a different existing student record.', 409, 'readmissionEvaluationBinding');
       }
       return;
     }
@@ -433,12 +471,18 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
       && !(latest.has_departure === true || latest.has_departure === 1));
     if (continuous) {
       if (record.applicantKind !== 'continuing' || record.readmissionEvaluationId) {
-        throw new PreEnrollmentError('Previous-year participation shows continuous progression. Use Continuing and remove any return evaluation.', 409);
+        throw new PreEnrollmentError('Previous-year participation shows continuous progression. Use Continuing and remove any return evaluation.', 409,
+          record.readmissionEvaluationId ? 'readmissionEvaluationBinding' : 'applicantKind');
       }
       return;
     }
-    if (record.applicantKind !== 'readmission' || !evaluation || Number(evaluation.student_id || 0) !== studentId) {
-      throw new PreEnrollmentError('This applicant needs an accepted return evaluation before a paper record can proceed.', 409);
+    if (record.applicantKind !== 'readmission') {
+      throw new PreEnrollmentError('This applicant needs Returning after a break and an accepted return evaluation.', 409, 'applicantKind');
+    }
+    if (!evaluation && record.status === 'draft') return;
+    if (!evaluation || Number(evaluation.student_id || 0) !== studentId) {
+      throw new PreEnrollmentError('This applicant needs an accepted return evaluation linked to this student before submitting as Ready.', 409,
+        'readmissionEvaluationBinding');
     }
   }
 
@@ -697,7 +741,10 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
       const beforeReceiptsResult = await transaction.request().input('recordId', sql.Char(36), recordId)
         .query('SELECT * FROM pre_enrollment_receipts WHERE pre_enrollment_id = @recordId ORDER BY requirement_code');
       const beforeReceipts = beforeReceiptsResult.recordset || [];
-      const record = normalizeRecord(input, { current, currentReceipts: beforeReceipts });
+      const recordInput = input && typeof input === 'object' && !Array.isArray(input)
+        ? { ...input, status: input.status === undefined ? current.status : input.status }
+        : input;
+      const record = normalizeRecord(recordInput, { current, currentReceipts: beforeReceipts });
       const evaluation = await lockReadmissionEvaluation(transaction, record);
       await validateApplicantHistory(transaction, record, evaluation);
       record.receivedBy ||= current.received_by || actor.displayName.slice(0, 100) || null;

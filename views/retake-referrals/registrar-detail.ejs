@@ -16,8 +16,8 @@
       <div><dt>Status</dt><dd><%= referral.status === 'finalized' ? `Finalized ${formatFinanceDateTime(referral.finalized_at)}` : 'Not visible to Finance' %></dd></div>
     </dl>
     <% if (referral.status === 'draft' && referral.is_current) { %>
-      <details class="retake-reference-edit"><summary>Correct evaluation reference</summary>
-        <form class="form-grid" method="post" action="/registrar/retake-referrals/<%= referral.id %>/reference">
+      <details class="retake-reference-edit"<%= recoveredForm === 'reference' ? ' open' : '' %>><summary>Correct evaluation reference</summary>
+        <form class="form-grid" method="post" action="/registrar/retake-referrals/<%= referral.id %>/reference"<% if (recoveredForm === 'reference') { %> data-unsaved-initially-dirty="true"<% } %>>
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <label class="field field--wide"><span>Registrar evaluation reference</span><input name="evaluationReference" value="<%= referenceValue == null ? referral.evaluation_reference : referenceValue %>" maxlength="160" required></label>
           <div class="form-actions"><button class="button button--secondary" type="submit">Save reference correction</button></div>
@@ -44,10 +44,10 @@
               </dl>
               <p class="muted-copy"><% if (item.finance_decision === 'no_charge') { %>This no-charge decision stays in history. The Registrar can finalize a correction to request a fresh Finance review.<% } else { %>This linked charge stays in history. Correct posted money through the existing Finance adjustment or reversal review.<% } %></p>
             <% } else if (referral.status === 'draft' && referral.is_current) { %>
-              <details class="retake-item__edit"><summary>Edit this draft item</summary>
+              <details class="retake-item__edit"<%= recoveredForm === `item-edit:${item.id}` ? ' open' : '' %>><summary>Edit this draft item</summary>
                 <% const editValue = editValues[String(item.id)] || item; %>
                 <% const editSubjectId = String(editValue.subject_id ?? editValue.subjectId ?? ''); const editSubjectTerm = String(editValue.target_term_number || editValue.targetTerm || ''); const editSubjectAvailable = subjects.some((subject) => String(subject.id) === editSubjectId && String(subject.term_number) === editSubjectTerm); %>
-                <form class="form-grid" method="post" action="/registrar/retake-referrals/<%= referral.id %>/items/<%= item.id %>/update" data-retake-item-form>
+                <form class="form-grid" method="post" action="/registrar/retake-referrals/<%= referral.id %>/items/<%= item.id %>/update" data-retake-item-form<% if (recoveredForm === `item-edit:${item.id}`) { %> data-unsaved-initially-dirty="true"<% } %>>
                   <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                   <label class="field"><span>Subject/module name</span><input name="subjectName" value="<%= editValue.subject_name || editValue.subjectName || '' %>" maxlength="120" required></label>
                   <label class="field"><span>Target term</span><select name="targetTerm" required><% const selectedEditTerm = String(editValue.target_term_number || editValue.targetTerm || ''); if (selectedEditTerm && !termOptions.map(String).includes(selectedEditTerm)) { %><option value="<%= selectedEditTerm %>" selected disabled>Invalid term · choose a valid term</option><% } %><% if (!termOptions.length && !selectedEditTerm) { %><option value="" selected disabled>No current applicable target terms</option><% } %><% for (const term of termOptions) { %><option value="<%= term %>" <%= Number(selectedEditTerm) === term ? 'selected' : '' %>>Term <%= term %></option><% } %></select><% if (selectedEditTerm && !termOptions.map(String).includes(selectedEditTerm)) { %><small class="form-field-error" role="status">That target term is unavailable. Choose one of the current applicable terms.</small><% } %></label>
@@ -58,8 +58,8 @@
                   <label class="field field--wide"><span>Finance-safe explanation</span><textarea name="financeExplanation" rows="3" maxlength="500" required><%= editValue.finance_explanation || editValue.financeExplanation || '' %></textarea></label>
                   <div class="form-actions"><button class="button button--secondary" type="submit">Save item correction</button></div>
                 </form>
-                <form method="post" action="/registrar/retake-referrals/<%= referral.id %>/items/<%= item.id %>/remove" onsubmit="return confirm('Remove this item from the draft referral? The previous finalized version remains in history.');">
-                  <input type="hidden" name="_csrf" value="<%= csrfToken %>"><button class="text-link" type="submit">Remove from this draft</button>
+                <form method="post" action="/registrar/retake-referrals/<%= referral.id %>/items/<%= item.id %>/remove" data-confirm data-confirm-title="Remove retake item?" data-confirm-message="Remove this item from the draft referral? The previous finalized version remains in history." data-confirm-accept-label="Remove item">
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>"><button class="button button--secondary" type="submit">Remove from this draft</button>
                 </form>
               </details>
             <% } %>
@@ -72,7 +72,7 @@
       <details class="retake-add-item" open>
         <summary>Add a retake item</summary>
         <% const selectedSubjectId = String(values.subjectId || ''); const selectedSubjectTerm = String(values.targetTerm || referral.entry_term_number || ''); const selectedSubjectAvailable = subjects.some((subject) => String(subject.id) === selectedSubjectId && String(subject.term_number) === selectedSubjectTerm); %>
-        <form class="form-grid" method="post" action="/registrar/retake-referrals/<%= referral.id %>/items" data-retake-item-form>
+        <form class="form-grid" method="post" action="/registrar/retake-referrals/<%= referral.id %>/items" data-retake-item-form<% if (recoveredForm === 'item-create') { %> data-unsaved-initially-dirty="true"<% } %>>
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <input type="hidden" name="itemKeyToken" value="<%= itemKeyToken %>">
           <label class="field"><span>Subject/module name</span><input name="subjectName" value="<%= values.subjectName || '' %>" maxlength="120" required></label>

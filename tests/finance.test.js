@@ -343,6 +343,12 @@ test('all 22 reviewed writers receive action-specific normalized raw form values
     { chargeId: '51', decision: 'reduce', reductionAmount: '10.00', reason: 'Future tuition not payable' },
     { chargeId: '52', decision: 'retain', reductionAmount: '0.00', reason: 'Fee remains payable' }
   ]);
+  const unansweredDeparture = normalizeActionInput('departure_review', {
+    departureChargeId: ['53'], departureDecision: [''], departureReductionAmount: ['']
+  });
+  assert.deepEqual(unansweredDeparture.chargeReviews, [
+    { chargeId: '53', decision: '', reductionAmount: '', reason: '' }
+  ], 'a new unanswered fee decision does not inherit a proposed amount or zero-review value');
   assert.equal(departure.cutoffInstallment, 'midterm');
   assert.equal(departure.reason, 'Checked', 'the initial Finance reason remains in the saved review input');
 });
@@ -923,6 +929,11 @@ test('annual finance correction routes stay student-bound, CSRF-protected, and r
     assert.match(accountHtml, /name="transmittalReference"/);
     assert.match(accountHtml, /name="privateRemarks"/);
     assert.match(accountHtml, /name="allocationTarget"/);
+    const schedulePage = await fetch(`${baseUrl}/finance/schedules`, { headers: { cookie } });
+    const schedulePageHtml = await schedulePage.text();
+    assert.equal(schedulePage.status, 200);
+    assert.doesNotMatch(schedulePageHtml, /data-unsaved-initially-dirty/,
+      'a normal Finance schedules GET starts clean');
     const post = async (path, fields) => fetch(`${baseUrl}${path}`, {
       method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ _csrf: csrfToken, ...fields })
@@ -979,6 +990,9 @@ test('annual finance correction routes stay student-bound, CSRF-protected, and r
     assert.match(paymentHtml, /value="TRANSMIT-KEEP"/);
     assert.match(paymentHtml, /Keep this staff note\./);
     assert.match(paymentHtml, /value="15\.00"/);
+    assert.match(paymentHtml, /action="\/finance\/students\/22\/annual\/payments"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.equal((paymentHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1,
+      'the failed payment POST marks its recovered payment form only');
 
     reviewProbe.startDraft = async () => { throw new FinanceReviewDraftError('Enter a positive payment amount with up to 10 whole digits and 2 decimal places.'); };
     const invalidPayment = await fetch(`${baseUrl}/finance/students/${studentId}/annual/payments`, {
@@ -1005,6 +1019,9 @@ test('annual finance correction routes stay student-bound, CSRF-protected, and r
     assert.match(scheduleHtml, /name="gradeLevel" value="Grade 11"/);
     assert.match(scheduleHtml, /name="voucherCode" value="ESC"/);
     assert.match(scheduleHtml, /name="lineAmount"[^>]*value="125\.50"/);
+    assert.match(scheduleHtml, /action="\/finance\/schedules"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.equal((scheduleHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1,
+      'only the schedule form with recovered fee lines starts dirty');
 
     reviewProbe.startDraft = async () => { throw new AnnualFinanceError('Enter a reversal reason.'); };
     const reversal = await fetch(`${baseUrl}/finance/students/${studentId}/annual/payments/104/reverse`, {
@@ -1038,6 +1055,8 @@ test('departure queue records the saved cutoff in a Finance draft and keeps CSRF
     const queue = await fetch(`${baseUrl}/finance/departures`, { headers: { cookie } });
     const html = await queue.text();
     assert.equal(queue.status, 200);
+    assert.doesNotMatch(html, /data-unsaved-initially-dirty/,
+      'a normal Finance departure queue GET starts clean');
     assert.match(html, /Departure placement: Term 2/);
     assert.match(html, /Current payable amount ₱125\.00/);
     assert.match(html, /signed remaining balance ₱2\.00 credit/);
@@ -1063,6 +1082,19 @@ test('departure queue records the saved cutoff in a Finance draft and keeps CSRF
     assert.equal(reviewProbe.starts[0].pathname, '/departure-cases/81/review');
     assert.equal(reviewProbe.starts[0].input.cutoffInstallment, 'none');
     assert.equal(reviewProbe.starts[0].input.reason, 'Synthetic Finance reason');
+
+    reviewProbe.startDraft = async () => { throw new FinanceReviewDraftError('Synthetic cutoff validation failed.'); };
+    const failedRecovery = await fetch(`${baseUrl}/finance/departure-cases/81/review`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, cutoffInstallment: 'midterm', reason: 'Retain this typed Finance reason.' })
+    });
+    const failedRecoveryHtml = await failedRecovery.text();
+    assert.equal(failedRecovery.status, 400);
+    assert.match(failedRecoveryHtml, /action="\/finance\/departure-cases\/81\/review"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.match(failedRecoveryHtml, /option value="midterm" selected/);
+    assert.match(failedRecoveryHtml, /Retain this typed Finance reason\./);
+    assert.equal((failedRecoveryHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1,
+      'the returned departure reason and cutoff belong to one recovered form');
   });
 
   await withServer(createApp({ databasePool: makeAuthPool('student'), environment, financeCasesService,
@@ -1079,14 +1111,16 @@ test('departure draft edits can save incomplete decisions without hidden browser
     id: draftId, actionType: 'departure_review', status: 'pending', revision: 1,
     dependencyFingerprint: 'a'.repeat(64), sessionBindingHmac: 'b'.repeat(64), entityContext: { studentId: 22 },
     input: { cutoffInstallment: '', reason: 'Synthetic overall review reason', chargeReviews: [{ chargeId: '701', termNumber: 2,
-      feeCategory: 'tuition', lineName: 'Tuition', installment: 'Finals', decision: '', reductionAmount: '0.00', reason: '' }] },
-    preview: { student: { name: 'Synthetic Student', studentNumber: 'CUTOFF-22' }, fields: [], departureTermNumber: 2,
+      feeCategory: 'tuition', lineName: 'Tuition', installment: 'Finals', decision: '', reductionAmount: '', reason: '' }] },
+    preview: { student: { name: 'Synthetic Student', studentNumber: 'CUTOFF-22' }, fields: [],
+      registrarDepartureReason: 'Registrar context & <review only>.', departureTermNumber: 2,
       departureReviewReady: false, departureChargeReviews: [{ chargeId: '701', termNumber: 2, feeCategory: 'tuition',
         lineName: 'Tuition', installment: 'Finals', fee: 'Tuition', categoryLabel: 'Recorded tuition installment',
-        payableBefore: '100.00', proposedReduction: '100.00', decision: '', reductionAmount: '0.00', payableAfter: null,
+        payableBefore: '100.00', proposedReduction: '100.00', decision: '', reductionAmount: '', payableAfter: null,
         reason: 'Overall Finance reason: Synthetic overall review reason' }] }
   };
   let savedInput = null;
+  let updateError = null;
   const reviewActions = {
     ...createReviewRouteProbe(),
     async freshReview() { return structuredClone(draft); },
@@ -1098,6 +1132,7 @@ test('departure draft edits can save incomplete decisions without hidden browser
     async updateDraft(actorId, _binding, requestedDraftId, input) {
       assert.equal(actorId, 7);
       assert.equal(requestedDraftId, draftId);
+      if (updateError) throw updateError;
       savedInput = structuredClone(input);
       draft = { ...draft, revision: draft.revision + 1, input: structuredClone(input) };
       return structuredClone(draft);
@@ -1109,6 +1144,8 @@ test('departure draft edits can save incomplete decisions without hidden browser
     const first = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
     const firstHtml = await first.text();
     assert.equal(first.status, 200);
+    assert.doesNotMatch(firstHtml, /data-unsaved-initially-dirty="true"/,
+      'a normal draft editor starts clean');
     assert.match(firstHtml, /Current payable amount before/);
     assert.match(firstHtml, /Recorded tuition installment/);
     assert.match(firstHtml, /Overall Finance reason: Synthetic overall review reason/,
@@ -1119,22 +1156,100 @@ test('departure draft edits can save incomplete decisions without hidden browser
       'incomplete departure previews keep fee terms collapsed');
     assert.match(firstHtml, /name="field_cutoffInstallment"\s*>/);
     assert.match(firstHtml, /name="field_reason" rows="3" maxlength="1000"/);
-    assert.match(firstHtml, /name="item_chargeReviews_0_decision"[^>]*>/);
-    assert.doesNotMatch(firstHtml, /name="item_chargeReviews_0_decision"[^>]*required/);
-    assert.match(firstHtml, /name="item_chargeReviews_0_reductionAmount"[^>]*>/);
-    assert.doesNotMatch(firstHtml, /name="item_chargeReviews_0_reductionAmount"[^>]*required/);
+    assert.match(firstHtml, /Registrar’s recorded reason · read-only/);
+    assert.match(firstHtml, /Registrar context &amp; &lt;review only&gt;\./,
+      'the Registrar context is escaped and shown read-only beside the Finance reason editor');
+    assert.match(firstHtml, /Use this as context; enter the required Finance review reason separately\./);
+    assert.match(firstHtml, /<textarea name="field_reason" rows="3" maxlength="1000">Synthetic overall review reason<\/textarea>/,
+      'the Registrar reason remains separate and does not prefill the Finance reason');
+    assert.match(firstHtml, /type="radio" name="item_chargeReviews_0_decision" value="retain"/,
+      'the fee decision is an explicit Keep or Reduce action');
+    assert.match(firstHtml, /type="radio" name="item_chargeReviews_0_decision" value="reduce"/);
+    assert.match(firstHtml, /name="item_chargeReviews_0_reductionAmount" value=""/,
+      'the proposed amount remains reference-only and does not prefill an unreviewed amount');
+    assert.match(firstHtml, /<details class="finance-review-specific-reason"/,
+      'the optional per-fee reason is progressively disclosed');
     assert.match(firstHtml, /<button[^>]*disabled[^>]*>Review complete · Save update<\/button>/);
 
     const update = await fetch(`${baseUrl}/finance/review-drafts/${draftId}/update`, {
       method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ _csrf: csrfFrom(firstHtml), field_cutoffInstallment: '', field_reason: '',
-        item_chargeReviews_0_decision: '', item_chargeReviews_0_reductionAmount: '0.00', item_chargeReviews_0_reason: '' })
+    body: new URLSearchParams({ _csrf: csrfFrom(firstHtml), field_cutoffInstallment: '', field_reason: '',
+        item_chargeReviews_0_reason: '' })
     });
     assert.equal(update.status, 303, 'an incomplete draft can be saved for later review');
     assert.equal(savedInput.cutoffInstallment, '');
     assert.equal(savedInput.reason, '');
     assert.deepEqual(savedInput.chargeReviews, [{ chargeId: '701', termNumber: 2, feeCategory: 'tuition',
-      lineName: 'Tuition', installment: 'Finals', decision: '', reductionAmount: '0.00', reason: '' }]);
+      lineName: 'Tuition', installment: 'Finals', decision: '', reductionAmount: '', reason: '' }]);
+
+    const keepWithoutAmount = await fetch(`${baseUrl}/finance/review-drafts/${draftId}/update`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfFrom(firstHtml), field_cutoffInstallment: '', field_reason: '',
+        item_chargeReviews_0_decision: 'retain', item_chargeReviews_0_reason: '' })
+    });
+    assert.equal(keepWithoutAmount.status, 303, 'an explicit Keep decision can save without entering zero');
+    assert.equal(savedInput.chargeReviews[0].decision, 'retain');
+    assert.equal(savedInput.chargeReviews[0].reductionAmount, '',
+      'the route leaves blank Keep amount for the service to normalize to zero');
+
+    updateError = new FinanceReviewDraftError('Synthetic update validation failed.', 400);
+    const failedUnchangedUpdate = await fetch(`${baseUrl}/finance/review-drafts/${draftId}/update`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfFrom(firstHtml), field_cutoffInstallment: '', field_reason: '',
+        item_chargeReviews_0_decision: 'retain', item_chargeReviews_0_reason: '' })
+    });
+    const failedUnchangedHtml = await failedUnchangedUpdate.text();
+    assert.equal(failedUnchangedUpdate.status, 400);
+    assert.doesNotMatch(failedUnchangedHtml, /data-unsaved-initially-dirty="true"/,
+      'a failed unchanged update does not create a false dirty state');
+
+    const failedChangedUpdate = await fetch(`${baseUrl}/finance/review-drafts/${draftId}/update`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfFrom(firstHtml), field_cutoffInstallment: '',
+        field_reason: 'Retain this recovered departure explanation.',
+        item_chargeReviews_0_decision: 'retain', item_chargeReviews_0_reason: '' })
+    });
+    const failedChangedHtml = await failedChangedUpdate.text();
+    assert.equal(failedChangedUpdate.status, 400);
+    assert.match(failedChangedHtml, new RegExp(`action="/finance/review-drafts/${draftId}/update" data-unsaved-initially-dirty="true"`),
+      'only the failed edit form is marked dirty when it retains changed submitted values');
+    assert.equal((failedChangedHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
+    assert.match(failedChangedHtml, /Retain this recovered departure explanation\./);
+    assert.equal(draft.input.reason, '', 'recovered failed values are not mistaken for values saved to the draft');
+    updateError = null;
+
+    const invalidKeepInput = { cutoffInstallment: '', reason: 'Synthetic overall review reason',
+      chargeReviews: [{ chargeId: '701', termNumber: 2, feeCategory: 'tuition', lineName: 'Tuition', installment: 'Finals',
+        decision: 'retain', reductionAmount: '5.00', reason: '' }] };
+    draft = { ...draft, input: invalidKeepInput, preview: { ...draft.preview,
+      departureChargeReviews: [{ ...draft.preview.departureChargeReviews[0], decision: 'retain', reductionAmount: '5.00',
+        keepAmountNeedsCorrection: true, reviewedReductionReady: false, payableAfter: null }] } };
+    const invalidKeepResponse = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
+    const invalidKeepHtml = await invalidKeepResponse.text();
+    assert.equal(invalidKeepResponse.status, 200);
+    assert.match(invalidKeepHtml, /name="item_chargeReviews_0_reductionAmount" value="5\.00"/,
+      'an invalid recovered Keep amount remains visible and unchanged');
+    assert.match(invalidKeepHtml, /data-keep-amount-needs-correction="true"/);
+    assert.match(invalidKeepHtml, /A Keep decision must have a blank amount or 0\.00/);
+
+    draft = { ...draft,
+      input: { ...invalidKeepInput, chargeReviews: [...invalidKeepInput.chargeReviews,
+        { chargeId: '702', termNumber: 3, feeCategory: 'miscellaneous', lineName: 'Synthetic fee', installment: 'As incurred',
+          decision: 'reduce', reductionAmount: '', reason: '' }] },
+      preview: { ...draft.preview, departureChargeReviews: [
+        ...draft.preview.departureChargeReviews,
+        { chargeId: '702', termNumber: 3, feeCategory: 'miscellaneous', lineName: 'Synthetic fee', installment: 'As incurred',
+          fee: 'Synthetic fee', categoryLabel: 'Individual fee · Finance review', payableBefore: '20.00', proposedReduction: '0.00',
+          decision: 'reduce', reductionAmount: '', payableAfter: null, reviewedReductionReady: false, reason: '' }
+      ] }
+    };
+    const invalidReduceResponse = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
+    const invalidReduceHtml = await invalidReduceResponse.text();
+    assert.equal(invalidReduceResponse.status, 200);
+    assert.match(invalidReduceHtml, /<details class="finance-review-departure-term" open>\s*<summary><strong>Term 3/,
+      'a recovered invalid Reduce amount opens its non-departure term so the amount is visible');
+    assert.match(invalidReduceHtml, /<details class="finance-review-term-editor" open><summary>Term 3/,
+      'the editable non-departure term opens too, so its recovered invalid amount can be corrected');
 
     const refreshed = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
     const refreshedHtml = await refreshed.text();

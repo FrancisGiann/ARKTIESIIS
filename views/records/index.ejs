@@ -5,7 +5,7 @@
   <section class="dashboard-heading records-heading">
     <div>
       <h1><%= view === 'setup' ? 'Academic setup' : 'Student records' %></h1>
-      <p><%= view === 'setup' ? 'Set up school years, terms, and sections used by student records.' : `${currentUser.role === 'database_admin' ? 'Database administrator' : 'Registrar'} workspace · Lucena Branch` %></p>
+      <p><%= view === 'setup' ? 'Set up school years, terms, and sections used by student records.' : `${currentUser.role === 'database_admin' ? 'Database administrator' : 'Registrar'} workspace · Main Branch` %></p>
     </div>
     <% if (view === 'setup') { %><div class="admin-heading-actions"><a class="button button--secondary" href="/registrar/records">Back to student records</a></div><% } %>
   </section>
@@ -125,7 +125,7 @@
       <div class="admin-section__heading"><div><h2 id="terms-title">Academic terms</h2><p>Create a term and choose which existing term is current.</p></div></div>
       <details class="records-create-disclosure" <%= openForm === 'term' ? 'open' : '' %>>
         <summary>Add academic term</summary>
-        <form class="form-stack records-compact-form" method="post" action="/registrar/records/terms">
+        <form class="form-stack records-compact-form" method="post" action="/registrar/records/terms"<% if (recoveredForm === 'term') { %> data-unsaved-initially-dirty="true"<% } %>>
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <div class="admin-form-grid">
             <div class="field"><label for="school-year">School year</label><input id="school-year" name="schoolYear" type="text" maxlength="20" required value="<%= createValues.schoolYear || '' %>"></div>
@@ -154,7 +154,7 @@
       <div class="admin-section__heading"><div><h2 id="sections-title">Sections</h2><p>Each section belongs to one academic term.</p></div></div>
       <details class="records-create-disclosure" <%= openForm === 'section' ? 'open' : '' %>>
         <summary>Add section</summary>
-        <form class="form-stack records-compact-form" method="post" action="/registrar/records/sections">
+        <form class="form-stack records-compact-form" method="post" action="/registrar/records/sections"<% if (recoveredForm === 'section') { %> data-unsaved-initially-dirty="true"<% } %>>
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <div class="field"><label for="section-name">Section name</label><input id="section-name" name="name" type="text" maxlength="100" required value="<%= createValues.name || '' %>"></div>
           <div class="admin-form-grid">

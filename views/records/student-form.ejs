@@ -15,7 +15,7 @@
     <h2 id="profile-title">Profile details</h2>
     <p>Student profiles and history remain stored when a login is deactivated or the profile is archived.</p>
     <% if (student?.status === 'archived') { %><p class="form-alert" role="status">This student record is archived. Profile edits and new enrollments are disabled. Existing academic and finance history remains available for review, but cannot be changed.</p><% } %>
-    <form class="form-stack admin-form" method="post" action="<%= student ? `/registrar/records/students/${student.id}` : '/registrar/records/students' %>" data-profile-validation <%= student ? 'data-allow-legacy-unspecified' : '' %> data-submitting-message="Saving the student profile. Please wait.">
+    <form class="form-stack admin-form" method="post" action="<%= student ? `/registrar/records/students/${student.id}` : '/registrar/records/students' %>" data-profile-validation <%= student ? 'data-allow-legacy-unspecified' : '' %> data-submitting-message="Saving the student profile. Please wait."<% if (recoveredProfile) { %> data-unsaved-initially-dirty="true"<% } %>>
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <fieldset <%= student?.status === 'archived' ? 'disabled' : '' %>>
       <div class="admin-form-grid">

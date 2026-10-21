@@ -13,7 +13,7 @@
 <section class="address-entry field--full" aria-labelledby="<%= idPrefix %>-heading"<% if (exposeStudentAddressForCopy) { %> data-student-address-source<% } %>>
   <h3 id="<%= idPrefix %>-heading"><%= isEmergencyAddress ? 'Emergency contact address' : 'Student address' %></h3>
   <% if (enableEmergencyAddressCopy) { %>
-    <label class="field field--check pre-enrollment-address-copy-toggle"><input type="checkbox" name="emergencyContactSameAsStudent" value="1" data-copy-student-address-checkbox <%= ['1', 'true', 'on'].includes(String(values.emergencyContactSameAsStudent || '').toLowerCase()) ? 'checked' : '' %>><span>Same address as student</span></label>
+    <label class="field field--check pre-enrollment-address-copy-toggle"><input id="emergency-address-same" type="checkbox" name="emergencyContactSameAsStudent" value="1" data-copy-student-address-checkbox <%= ['1', 'true', 'on'].includes(String(values.emergencyContactSameAsStudent || '').toLowerCase()) ? 'checked' : '' %>><span>Same address as student</span></label>
     <div class="notice-panel" data-student-address-copy-preview hidden role="status" aria-live="polite"><strong>Student address:</strong> <span data-student-address-copy-value></span></div>
     <noscript><p class="muted-copy">When checked, the emergency contact address is copied from the student address when you save.</p></noscript>
   <% } %>

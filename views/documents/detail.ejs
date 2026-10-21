@@ -12,7 +12,7 @@
     </div>
     <div class="admin-heading-actions">
       <% if (!isStaff) { %><a class="button button--secondary" href="/documents">My documents</a><% } %>
-      <% if (sourceAccessAllowed) { %><a class="button button--secondary" href="/documents/<%= document.id %>/download">Download file</a><% } %>
+      <% if (sourceAccessAllowed) { %><a class="button button--secondary" href="/documents/<%= document.id %>/download" download>Download file</a><% } %>
     </div>
   </section>
 
@@ -42,7 +42,7 @@
   <% } else { %>
       <p class="empty-state">Use the document link above to inspect this file in the browser.</p>
   <% } %>
-      <% if (sourceAccessAllowed) { %><p class="document-source-links"><a class="text-link" href="/documents/<%= document.id %>/preview" target="_blank" rel="noopener">Open source in a new tab</a><span aria-hidden="true">·</span><a class="text-link" href="/documents/<%= document.id %>/download">Download source</a></p><% } %>
+      <% if (sourceAccessAllowed) { %><p class="document-source-links"><a class="text-link" href="/documents/<%= document.id %>/preview" target="_blank" rel="noopener">Open source in a new tab</a><span aria-hidden="true">·</span><a class="text-link" href="/documents/<%= document.id %>/download" download>Download source</a></p><% } %>
     </section>
 
   <section class="admin-section document-detail-card document-submission-facts" aria-labelledby="submission-title">
@@ -62,7 +62,7 @@
     <section class="admin-section document-findings-pane"><p class="muted-copy">This historical report card can be read and downloaded by authorized staff. It does not enter current Gemini field-extraction or document-review workflows.</p></section>
   <% } else if (document.document_type === 'report_card') { %>
     <section class="admin-section document-detail-card document-findings-pane" aria-labelledby="report-card-review-title">
-      <div class="admin-section__heading"><div><h2 id="report-card-review-title"><%= isStaff ? 'Previous-school report-card scan review' : 'Staff review' %></h2><p>This review is for the digital enrollment submission. The limited precheck compares the visible student name with the linked record and checks PDF/JPEG/PNG format. It does not extract grades, establish authenticity, or make an acceptance decision. Staff must inspect the source; this workflow never writes grades.</p></div></div>
+      <div class="admin-section__heading"><div><h2 id="report-card-review-title"><%= isStaff ? 'Previous-school report-card scan review' : 'Staff review' %></h2><p>This enrollment scan receives a limited visible-name and file-format precheck. Staff inspect the source and decide; this workflow never writes grades.</p></div></div>
       <% if (isStaff) { %>
         <% if (document.validation) { %>
           <% const reportCardOutcome = document.validation.automatedCheckOutcome || 'unavailable'; %>
@@ -105,12 +105,12 @@
   <% } else if (isStaff && document.document_type !== 'form_137') { %>
     <% const automatedCheckOutcome = document.validation?.automatedCheckOutcome || 'unavailable'; %>
     <section class="admin-section document-detail-card document-findings-pane" aria-labelledby="precheck-result-title">
-      <div class="admin-section__heading"><div><h2 id="precheck-result-title">Automated precheck</h2><p>Gemini receives the uploaded file bytes and returns configured field suggestions: the linked student name; for PSA certificates, visible date-of-birth text as written; and for Good Moral Certificates, issuing-school text and visible certificate-context clues. The saved student profile is compared locally and is never sent to Gemini. Suggestions can be inaccurate.</p></div></div>
+      <div class="admin-section__heading"><div><h2 id="precheck-result-title">Automated precheck</h2><p>Gemini suggests configured document fields; the app checks supported file format. Staff inspect the source and make the final decision; suggestions can be inaccurate.</p></div></div>
       <div class="document-precheck-status document-precheck-status--<%= automatedCheckOutcome %>" role="status">
         <strong><%= automatedCheckOutcome === 'pass' ? 'Configured checks passed' : automatedCheckOutcome === 'attention' ? 'Needs attention' : 'Checks unavailable' %></strong>
-        <span><%= automatedCheckOutcome === 'pass' ? 'The configured Gemini fields, certificate context evidence, and supported file format were identified.' : automatedCheckOutcome === 'attention' ? 'One or more configured fields, certificate context clues, or file-format checks need source inspection.' : 'Gemini field extraction is unavailable or this is a legacy OCR-only result.' %></span>
+        <span><%= automatedCheckOutcome === 'pass' ? 'Configured Gemini fields, certificate context evidence, and the app’s supported file-format check passed.' : automatedCheckOutcome === 'attention' ? 'One or more configured fields, certificate context clues, or the app’s file-format check need source inspection.' : 'Gemini field extraction is unavailable or this is a legacy OCR-only result.' %></span>
       </div>
-      <p class="document-precheck-scope">A pass means the extracted student name matched the linked record and configured field/context and file-format checks found expected values. PSA birth-date and Good Moral school-name comparisons are separate advisory findings and never determine acceptance. They do not establish authenticity or acceptance, prove issuer identity, confirm every required field, or confirm page completeness. Inspect every page before recording a decision.</p>
+      <details class="document-precheck-help"><summary>Precheck scope and limits</summary><p class="document-precheck-scope">A pass means the extracted student name matched the linked record and configured field/context and file-format checks found expected values. PSA birth-date and Good Moral school-name comparisons are separate advisory findings and never determine acceptance. They do not establish authenticity or acceptance, prove issuer identity, confirm every required field, or confirm page completeness. Inspect every page before recording a decision.</p><p>Gemini receives the uploaded file bytes. It suggests the linked student name; for PSA certificates, visible date-of-birth text as written; and for Good Moral Certificates, issuing-school text and visible certificate-context clues. The saved student profile is compared locally and is never sent to Gemini.</p></details>
       <% if (document.validation) { %>
         <p class="muted-copy"><%= document.validation.message %></p>
         <dl class="student-profile-grid document-precheck-facts">
@@ -260,7 +260,7 @@
             <td data-label="File"><%= !isStaff && document.document_type === 'report_card' && !Number(item.student_can_view_source) ? 'Available after staff requests a correction' : item.original_filename %></td>
             <td data-label="Status"><%= documentStatusLabel(item.status, item.latest_decision_type, item.latest_review_action, document.document_type, item.is_legacy_archive) %></td>
             <td data-label="Date"><%= item.created_at ? new Date(item.created_at).toLocaleString() : '—' %></td>
-            <td data-label="Actions"><% if (isStaff || document.document_type !== 'report_card' || Number(item.student_can_view_source)) { %><a class="table-action" href="/documents/<%= item.id %>/preview" data-document-preview-trigger data-preview-title="<%= item.original_filename %>" data-preview-mime="<%= item.mime_type || '' %>" aria-haspopup="dialog" aria-controls="document-preview-dialog" aria-label="View <%= item.original_filename %>">View</a> · <a class="table-action" href="/documents/<%= item.id %>/download">Download</a><% } else { %><span class="muted-copy">Staff review in progress</span><% } %></td>
+            <td data-label="Actions"><% if (isStaff || document.document_type !== 'report_card' || Number(item.student_can_view_source)) { %><a class="table-action" href="/documents/<%= item.id %>/preview" data-document-preview-trigger data-preview-title="<%= item.original_filename %>" data-preview-mime="<%= item.mime_type || '' %>" aria-haspopup="dialog" aria-controls="document-preview-dialog" aria-label="View <%= item.original_filename %>">View</a> · <a class="table-action" href="/documents/<%= item.id %>/download" download>Download</a><% } else { %><span class="muted-copy">Staff review in progress</span><% } %></td>
           </tr><% } %></tbody>
         </table>
       </div>

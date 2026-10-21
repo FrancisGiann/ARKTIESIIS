@@ -138,8 +138,13 @@ test('Registrar item errors re-render submitted subject, term, and multiline exp
         evaluation_reference: 'Synthetic registrar file', entry_term_number: 1,
         readmission_evaluation_id: null, annual_evaluation_id: null, current_evaluation_version: null,
         annual_evaluation_version: null, evaluation_status: null, status: 'draft', is_current: 1,
-        finalized_at: null, items: [], events: []
+        finalized_at: null, items: [{ id: 31, subject_name: 'Existing module', subject_id: null, target_term_number: 1,
+          finance_explanation: 'Existing explanation', stable_charge_id: null, finance_decision: null }], events: []
       };
+    },
+    async editItem(...args) {
+      calls.push(['editItem', ...args]);
+      throw new RetakeReferralError('Review the edited item.', 409);
     },
     async listReferralHistory() { return []; },
     async listTargetSubjects() { return []; },
@@ -151,6 +156,10 @@ test('Registrar item errors re-render submitted subject, term, and multiline exp
     const detail = await fetch(`${baseUrl}/registrar/retake-referrals/91`, { headers: { cookie } });
     const detailHtml = await detail.text();
     assert.equal(detail.status, 200);
+    assert.doesNotMatch(detailHtml, /data-unsaved-initially-dirty/);
+    assert.match(detailHtml, /action="\/registrar\/retake-referrals\/91\/items\/31\/remove"[^>]*data-confirm[^>]*data-confirm-message=/);
+    assert.match(detailHtml, /<button class="button button--secondary" type="submit">Remove from this draft<\/button>/);
+    assert.doesNotMatch(detailHtml, /onsubmit="[^"]*confirm\(/);
     const response = await fetch(`${baseUrl}/registrar/retake-referrals/91/items`, {
       method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -165,9 +174,27 @@ test('Registrar item errors re-render submitted subject, term, and multiline exp
     assert.match(html, /name="subjectName" value="  Synthetic extended retake module  "/);
     assert.match(html, /<option value="3" selected>Term 3<\/option>/);
     assert.match(html, /Reviewed transfer mapping\.\nPlacement needs a Term 3 Finance decision\./);
+    assert.match(html, /action="\/registrar\/retake-referrals\/91\/items"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.doesNotMatch(html, /action="\/registrar\/retake-referrals\/91\/items\/31\/update"[^>]*data-unsaved-initially-dirty/);
+    assert.equal((html.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
+
+    const failedEdit = await fetch(`${baseUrl}/registrar/retake-referrals/91/items/31/update`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfFrom(detailHtml), subjectName: 'Retained edited module', subjectId: '', targetTerm: '3',
+        financeExplanation: 'Updated explanation for the reviewed placement.' })
+    });
+    const failedEditHtml = await failedEdit.text();
+    assert.equal(failedEdit.status, 409);
+    assert.match(failedEditHtml, /<details class="retake-item__edit" open>/);
+    assert.match(failedEditHtml, /action="\/registrar\/retake-referrals\/91\/items\/31\/update"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.match(failedEditHtml, /name="subjectName" value="Retained edited module"/);
+    assert.match(failedEditHtml, /Updated explanation for the reviewed placement\./);
+    assert.doesNotMatch(failedEditHtml, /action="\/registrar\/retake-referrals\/91\/items"[^>]*data-unsaved-initially-dirty/);
+    assert.equal((failedEditHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
   });
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   assert.equal(calls[0][0], 'addItem');
+  assert.equal(calls[1][0], 'editItem');
 });
 
 test('Finance retake decision route rejects missing CSRF before the reviewed writer', async () => {

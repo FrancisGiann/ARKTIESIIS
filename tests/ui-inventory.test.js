@@ -41,6 +41,10 @@ const compatibilityOnlyTargets = [
   'records/term-clearance-templates'
 ];
 
+const sharedPartialViews = new Map([
+  ['finance/_allocation-options', { includedBy: 'finance/annual-student' }]
+]);
+
 test('reachable EJS render targets compile and every active screen is present in the UI review inventory', () => {
   const inventory = fs.readFileSync(inventoryPath, 'utf8');
   const renderTargets = routeViewTargets();
@@ -66,7 +70,15 @@ test('reachable EJS render targets compile and every active screen is present in
   const nonPartialViews = sourceFiles(viewsRoot)
     .filter((file) => file.endsWith('.ejs') && !file.split(path.sep).includes('partials'))
     .map((file) => path.relative(viewsRoot, file).replace(/\.ejs$/, ''));
-  const orphanViews = nonPartialViews.filter((view) => !renderTargets.includes(view));
+  for (const [partial, { includedBy }] of sharedPartialViews) {
+    assert.ok(nonPartialViews.includes(partial), `shared EJS partial exists: ${partial}`);
+    assert.ok(renderTargets.includes(includedBy), `partial is included by an active template: ${includedBy}`);
+    assert.equal(renderTargets.includes(partial), false, `shared partial is not an independent route render target: ${partial}`);
+    const parentSource = fs.readFileSync(path.join(viewsRoot, `${includedBy}.ejs`), 'utf8');
+    assert.match(parentSource, /include\('_allocation-options'/,
+      `${partial} is included by its active parent template`);
+  }
+  const orphanViews = nonPartialViews.filter((view) => !renderTargets.includes(view) && !sharedPartialViews.has(view));
   assert.deepEqual(orphanViews.sort(), ['readmissions/form', 'readmissions/index', 'records/grade-import']);
   for (const orphan of orphanViews) assert.ok(inventory.includes(`views/${orphan}.ejs`), `orphan view is explicitly classified: ${orphan}`);
 });

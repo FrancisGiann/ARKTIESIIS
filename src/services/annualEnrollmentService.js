@@ -33,11 +33,12 @@ function safeClearanceGateError(error) {
   return safeError;
 }
 
-function printable(value, label, maxLength, { required = false } = {}) {
+function printable(value, label, maxLength, { required = false, multiline = false } = {}) {
   if (typeof value !== 'string') throw new AnnualEnrollmentError(`${label} must be ${maxLength} printable characters or fewer.`);
-  const normalized = value.trim();
+  const normalized = (multiline ? value.replace(/\r\n?/g, '\n') : value).trim();
   if (required && !normalized) throw new AnnualEnrollmentError(`${label} is required.`);
-  if (normalized.length > maxLength || /[\u0000-\u001f\u007f]/.test(normalized)) {
+  const invalidControlCharacters = multiline ? /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/ : /[\u0000-\u001f\u007f]/;
+  if (normalized.length > maxLength || invalidControlCharacters.test(normalized)) {
     throw new AnnualEnrollmentError(`${label} must be ${maxLength} printable characters or fewer.`);
   }
   return normalized || null;
@@ -80,7 +81,7 @@ function normalizeDepartureDetails(input = {}) {
   return {
     departureType: input.departureType,
     effectiveDate: normalizeDate(input.effectiveDate || '', 'Effective date'),
-    reason: printable(input.reason || '', 'Departure reason', 1000, { required: true })
+    reason: printable(input.reason || '', 'Departure reason', 1000, { required: true, multiline: true })
   };
 }
 
@@ -2208,6 +2209,7 @@ function createAnnualEnrollmentService({
 
 module.exports = {
   AnnualEnrollmentError,
+  normalizeDepartureDetails,
   safeClearanceGateError,
   createAnnualEnrollmentService,
   normalizeAnnualInput,

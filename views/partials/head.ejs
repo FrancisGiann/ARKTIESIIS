@@ -17,9 +17,9 @@
   <% const currentNavItem = navigationItems.find((item) => item.current); %>
   <div class="app-shell">
     <header class="app-header">
-      <a class="brand" href="<%= workspaceHomes[currentUser.role] || '/' %>" aria-label="ARKTIESIIS, Ark Technological Institute Education System Inc., Lucena Branch">
+      <a class="brand" href="<%= workspaceHomes[currentUser.role] || '/' %>" aria-label="ARKTIESIIS, Ark Technological Institute Education System Inc., Main Branch">
         <img class="brand__seal" src="/images/arktiesiis-school-seal.png" alt="Official school seal">
-        <span class="brand__copy"><strong class="brand__name">ARKTIESIIS</strong><span class="brand__institution">Ark Technological Institute Education System Inc.</span><span class="brand__branch">Lucena Branch</span></span>
+        <span class="brand__copy"><strong class="brand__name">ARKTIESIIS</strong><span class="brand__institution">Ark Technological Institute Education System Inc.</span><span class="brand__branch">Main Branch</span></span>
       </a>
       <details class="mobile-nav">
         <summary><span>Menu</span><span class="mobile-nav__current"><%= currentNavItem?.label || 'Workspace' %></span></summary>
@@ -71,7 +71,7 @@
     <header class="public-header">
       <a class="brand" href="/" aria-label="ARKTIESIIS home">
         <img class="brand__seal" src="/images/arktiesiis-school-seal.png" alt="Official school seal">
-        <span class="brand__copy"><strong class="brand__name">ARKTIESIIS</strong><span class="brand__institution">Ark Technological Institute Education System Inc.</span><span class="brand__branch">Lucena Branch</span></span>
+        <span class="brand__copy"><strong class="brand__name">ARKTIESIIS</strong><span class="brand__institution">Ark Technological Institute Education System Inc.</span><span class="brand__branch">Main Branch</span></span>
       </a>
     </header>
     <div class="public-content">

@@ -27,10 +27,11 @@ function validId(value, label, large = false) {
   return numeric;
 }
 
-function text(value, label, max, required = false) {
+function text(value, label, max, required = false, { multiline = false } = {}) {
   if (typeof value !== 'string') throw new FinanceCasesError(`${label} must be ${max} printable characters or fewer.`);
-  const cleaned = value.trim();
-  if ((required && !cleaned) || cleaned.length > max || /[\u0000-\u001f\u007f]/.test(cleaned)) throw new FinanceCasesError(`${label} is required and must be ${max} printable characters or fewer.`);
+  const cleaned = (multiline ? value.replace(/\r\n?/g, '\n') : value).trim();
+  const invalidControlCharacters = multiline ? /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/ : /[\u0000-\u001f\u007f]/;
+  if ((required && !cleaned) || cleaned.length > max || invalidControlCharacters.test(cleaned)) throw new FinanceCasesError(`${label} is required and must be ${max} printable characters or fewer.`);
   return cleaned || null;
 }
 
@@ -97,10 +98,13 @@ function normalizeDepartureChargeReviews(value, defaultReason = '') {
   return rows.map((row) => {
     const decision = typeof row?.decision === 'string' ? row.decision.trim().toLowerCase() : '';
     if (!['retain', 'reduce'].includes(decision)) throw new FinanceCasesError('Choose keep or reduce for every affected fee.');
+    const suppliedReduction = row?.reductionAmount ?? row?.amount;
+    const reductionText = decision === 'retain' && (suppliedReduction == null || String(suppliedReduction).trim() === '')
+      ? '0.00' : String(suppliedReduction ?? '');
     return {
       chargeId: validId(row.chargeId, 'charge', true),
       decision,
-      reductionCents: parseMoneyCents(String(row.reductionAmount ?? row.amount ?? '0.00'), { allowZero: true }),
+      reductionCents: parseMoneyCents(reductionText, { allowZero: true }),
       reason: text(row.reason || '', 'Per-charge Finance reason', 1000, false) || defaultReason
     };
   });
@@ -460,7 +464,7 @@ function createAnnualFinanceCasesService({
 
   async function reviewDepartureCase(actorInput, departureCaseInput, input = {}) {
     const departureCaseId = validId(departureCaseInput, 'departure case', true);
-    const reason = text(input.reason, 'Finance departure review reason', 1000, true);
+    const reason = text(input.reason, 'Finance departure review reason', 1000, true, { multiline: true });
     const idempotencyKey = token(input.idempotencyKey, 'departure review');
     const lastPayableInstallment = normalizeLastPayableInstallment(input.cutoffInstallment);
     if (!LAST_PAYABLE_OPTIONS.includes(lastPayableInstallment)) throw new FinanceCasesError('Choose the last tuition installment payable in the saved departure term.');

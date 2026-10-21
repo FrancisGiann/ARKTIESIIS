@@ -20,12 +20,12 @@
       <details class="subject-create-details" <%= showCreateForm ? 'open' : '' %>>
         <summary id="new-subject-title">Add subject</summary>
         <p>Subject codes are stored in uppercase. Units are optional.</p>
-        <form class="form-stack admin-form" method="post" action="/registrar/records/subjects">
+        <form class="form-stack admin-form" method="post" action="/registrar/records/subjects"<% if (recoveredForm === 'subject-create') { %> data-unsaved-initially-dirty="true"<% } %>>
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <div class="admin-form-grid">
-            <div class="field"><label for="subject-code">Subject code</label><input id="subject-code" name="subjectCode" type="text" maxlength="50" required value="<%= values.subjectCode %>"></div>
-            <div class="field"><label for="subject-name">Subject name</label><input id="subject-name" name="subjectName" type="text" maxlength="200" required value="<%= values.subjectName %>"></div>
-            <div class="field"><label for="subject-units">Units (optional)</label><input id="subject-units" name="units" type="number" min="0.01" max="999.99" step="0.01" value="<%= values.units %>"></div>
+            <div class="field"><label for="subject-code">Subject code</label><input id="subject-code" name="subjectCode" type="text" maxlength="50" required value="<%= createValues.subjectCode %>"></div>
+            <div class="field"><label for="subject-name">Subject name</label><input id="subject-name" name="subjectName" type="text" maxlength="200" required value="<%= createValues.subjectName %>"></div>
+            <div class="field"><label for="subject-units">Units (optional)</label><input id="subject-units" name="units" type="number" min="0.01" max="999.99" step="0.01" value="<%= createValues.units %>"></div>
           </div>
           <button class="button button--primary button--align-start" type="submit">Add subject</button>
         </form>
@@ -45,19 +45,20 @@
         <% for (const subject of subjects) { %>
           <li class="subject-catalog__item">
             <% if (canManageSubjects) { %>
-              <details class="subject-catalog__disclosure">
+              <% const editingSubject = String(editSubjectId || '') === String(subject.id); %>
+              <details class="subject-catalog__disclosure"<%= editingSubject ? ' open' : '' %>>
                 <summary class="subject-catalog__summary">
                   <span class="subject-catalog__code"><%= subject.subject_code %></span>
                   <span class="subject-catalog__name"><%= subject.subject_name %></span>
                   <span class="subject-catalog__units"><%= subject.units == null ? 'Units not set' : `${subject.units} units` %></span>
                   <span class="subject-catalog__edit">Edit</span>
                 </summary>
-                <form class="subject-catalog__form" method="post" action="/registrar/records/subjects/<%= subject.id %>">
+                <form class="subject-catalog__form" method="post" action="/registrar/records/subjects/<%= subject.id %>"<% if (recoveredForm === `subject-edit:${subject.id}`) { %> data-unsaved-initially-dirty="true"<% } %>>
                   <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                   <div class="admin-form-grid">
-                    <div class="field"><label for="subject-code-<%= subject.id %>">Subject code</label><input id="subject-code-<%= subject.id %>" name="subjectCode" type="text" maxlength="50" required value="<%= subject.subject_code %>"></div>
-                    <div class="field"><label for="subject-name-<%= subject.id %>">Subject name</label><input id="subject-name-<%= subject.id %>" name="subjectName" type="text" maxlength="200" required value="<%= subject.subject_name %>"></div>
-                    <div class="field"><label for="subject-units-<%= subject.id %>">Units (optional)</label><input id="subject-units-<%= subject.id %>" name="units" type="number" min="0.01" max="999.99" step="0.01" value="<%= subject.units ?? '' %>"></div>
+                    <div class="field"><label for="subject-code-<%= subject.id %>">Subject code</label><input id="subject-code-<%= subject.id %>" name="subjectCode" type="text" maxlength="50" required value="<%= editingSubject ? values.subjectCode : subject.subject_code %>"></div>
+                    <div class="field"><label for="subject-name-<%= subject.id %>">Subject name</label><input id="subject-name-<%= subject.id %>" name="subjectName" type="text" maxlength="200" required value="<%= editingSubject ? values.subjectName : subject.subject_name %>"></div>
+                    <div class="field"><label for="subject-units-<%= subject.id %>">Units (optional)</label><input id="subject-units-<%= subject.id %>" name="units" type="number" min="0.01" max="999.99" step="0.01" value="<%= editingSubject ? values.units : subject.units ?? '' %>"></div>
                   </div>
                   <button class="button button--secondary" type="submit">Save subject</button>
                 </form>

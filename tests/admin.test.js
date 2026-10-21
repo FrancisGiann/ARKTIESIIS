@@ -9,6 +9,19 @@ const {
   validateCreateUser,
   validateUpdateUser
 } = require('../src/services/adminService');
+const { buildMasterlistProjection } = require('../src/services/financeMasterlistService');
+
+function emptyFinanceMasterlist() {
+  return {
+    ...buildMasterlistProjection({}, {
+      schoolYear: '2026-2027', gradeLevel: '', voucherCode: '', search: '', section: '',
+      placementTerm: 1, page: 1
+    }),
+    options: { schoolYears: ['2026-2027'], grades: [], sections: [], placementTerms: [1, 2, 3] },
+    currentSchoolYear: '2026-2027', currentScopeConfigured: true,
+    defaultPlacementTerm: 1, needsScopeSelection: false
+  };
+}
 
 async function withServer(app, run) {
   const server = app.listen(0, '127.0.0.1');
@@ -516,6 +529,13 @@ test('database administrator read matrix permits staff workspaces and denies stu
       return {};
     }
   };
+  const financeMasterlistCalls = [];
+  const financeMasterlistService = {
+    async list(actorId, filters) {
+      financeMasterlistCalls.push({ actorId, filters: { ...filters } });
+      return emptyFinanceMasterlist();
+    }
+  };
   const adminService = {
     async listAccounts(filters) {
       calls.push(['listAccounts', { ...filters }]);
@@ -543,6 +563,7 @@ test('database administrator read matrix permits staff workspaces and denies stu
     adminService,
     studentRecordsService,
     financeService,
+    financeMasterlistService,
     annualFinanceService: {
       async listRoster() { calls.push(['annualFinanceRoster']); return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; }
     },
@@ -573,9 +594,10 @@ test('database administrator read matrix permits staff workspaces and denies stu
       ['listAccounts', { category: 'staff' }],
       ['listAuditLogs', {}],
       ['listWorkspace', '', ''],
-      ['listDocuments', 7],
-      ['annualFinanceRoster']
+      ['listDocuments', 7]
     ], 'only read services for database-admin workspaces run; student self-service stays denied');
+    assert.deepEqual(financeMasterlistCalls, [{ actorId: 7, filters: {} }],
+      'the Finance cross-read uses the injected empty projection and never falls through to the default pool');
   });
 });
 

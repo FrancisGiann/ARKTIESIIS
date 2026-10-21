@@ -9,7 +9,7 @@
   <section class="finance-panel retake-create" aria-labelledby="retake-create-title">
     <div class="finance-panel__heading"><div><h2 id="retake-create-title">Start a referral draft</h2><p>Choose the annual enrollment being reviewed. An existing return evaluation binding is captured by the server and must remain accepted at the same revision.</p></div></div>
     <% if (targets.length) { %>
-      <form class="form-grid" method="post" action="/registrar/retake-referrals">
+      <form class="form-grid" method="post" action="/registrar/retake-referrals"<% if (recoveredForm === 'referral-create') { %> data-unsaved-initially-dirty="true"<% } %>>
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <input type="hidden" name="idempotencyKey" value="<%= idempotencyKey %>">
         <label class="field field--wide" for="retake-annual"><span>Target annual enrollment</span>

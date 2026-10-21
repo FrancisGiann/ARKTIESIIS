@@ -85,7 +85,7 @@ async function withServer(app, run) {
 function scheduleViewData(overrides = {}) {
   return {
     title: 'Class schedules', csrfToken: 'test-token', notice: null, error: null, conflicts: [], conflictsTruncated: false, contextNotice: null,
-    values: {}, editScheduleId: null, focusScheduleId: null, showCreate: false, terms: [{ id: 6, school_year: '2026-2027', term: 'First', is_current: true }],
+    values: {}, editScheduleId: null, focusScheduleId: null, showCreate: false, recoveredForm: null, terms: [{ id: 6, school_year: '2026-2027', term: 'First', is_current: true }],
     sections: [{ id: 12, name: 'STEM A', grade_level: 'Grade 11' }], academicTermId: 6,
     selectedSectionId: null, selectedAssignmentId: null,
     assignments: [
@@ -480,7 +480,8 @@ test('preview endpoint is registrar-only, CSRF protected, private, and read-only
         sections: [{ id: 12, name: 'STEM A', grade_level: 'Grade 11' }], academicTermId: 6,
         selectedSectionId: null, selectedAssignmentId: null, contextNotice: null,
         assignments: [{ id: 44, grade_level: 'Grade 11', section_name: 'STEM A', subject_code: 'OCOM', teacher_name: 'Jamie Lee' }],
-        schedules: []
+        schedules: [{ id: 72, assignment_id: 44, section_id: 12, day_of_week: 2, start_time: '11:00', end_time: '12:00', room: 'A12', assignment_is_active: true,
+          grade_level: 'Grade 11', section_name: 'STEM A', school_year: '2026-2027', term: 'First', subject_code: 'OCOM', subject_name: 'Oral Communication', teacher_name: 'Jamie Lee' }]
       };
     },
     async previewScheduleConflicts(...args) {
@@ -505,7 +506,9 @@ test('preview endpoint is registrar-only, CSRF protected, private, and read-only
     const cookie = await signIn(baseUrl, 'registrar');
     const page = await fetch(`${baseUrl}/registrar/schedules`, { headers: { cookie } });
     assert.equal(page.status, 200);
-    const token = csrfFromHtml(await page.text());
+    const pageHtml = await page.text();
+    assert.doesNotMatch(pageHtml, /data-unsaved-initially-dirty="true"/, 'a clean schedule GET does not mark any form as recovered');
+    const token = csrfFromHtml(pageHtml);
 
     const noToken = await fetch(`${baseUrl}/registrar/schedules/conflicts/preview`, {
       method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: '{}'
@@ -539,6 +542,25 @@ test('preview endpoint is registrar-only, CSRF protected, private, and read-only
     assert.match(html, /name="startTime" type="time" required value="10:00"/);
     assert.match(html, /name="endTime" type="time" required value="11:00"/);
     assert.match(html, /name="room" maxlength="80" value="Room 12"/);
+    const createForm = html.match(/<form class="schedule-create-form"[\s\S]*?<\/form>/)?.[0] || '';
+    const editForm = html.match(/<form method="post" action="\/registrar\/schedules\/72"[\s\S]*?<\/form>/)?.[0] || '';
+    assert.match(createForm, /data-unsaved-initially-dirty="true"/);
+    assert.doesNotMatch(editForm, /data-unsaved-initially-dirty/, 'a failed create does not mark the neighboring edit form dirty');
+    assert.equal((html.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
+
+    const failedEdit = await postForm(baseUrl, '/registrar/schedules/72', cookie, {
+      _csrf: token, termId: '6', filterSectionId: '', filterAssignmentId: '',
+      assignmentId: '45', dayOfWeek: '3', startTime: '11:30', endTime: '12:30', room: 'Lab 8'
+    });
+    assert.equal(failedEdit.status, 409);
+    const failedEditHtml = await failedEdit.text();
+    const recoveredCreateForm = failedEditHtml.match(/<form class="schedule-create-form"[\s\S]*?<\/form>/)?.[0] || '';
+    const recoveredEditForm = failedEditHtml.match(/<form method="post" action="\/registrar\/schedules\/72"[\s\S]*?<\/form>/)?.[0] || '';
+    assert.doesNotMatch(recoveredCreateForm, /data-unsaved-initially-dirty/, 'a failed edit does not mark the create form dirty');
+    assert.match(recoveredEditForm, /data-unsaved-initially-dirty="true"/);
+    assert.match(recoveredEditForm, /name="startTime" required value="11:30"/);
+    assert.match(recoveredEditForm, /name="room" maxlength="80" value="Lab 8"/);
+    assert.equal((failedEditHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
     assert.deepEqual(saveCalls[0], [7, null, {
       _csrf: token, termId: '6', filterSectionId: '', filterAssignmentId: '',
       assignmentId: '44', dayOfWeek: '2', startTime: '10:00', endTime: '11:00', room: 'Room 12'

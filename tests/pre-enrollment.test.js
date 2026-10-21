@@ -45,8 +45,46 @@ test('pre-enrollment validates supplied paper data, ready requirements, school y
   assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'unknown' }), /Choose Draft or Ready/);
   assert.throws(() => normalizeRecord(readyInput({ studentContactNumber: '+63 (917' })), /valid phone format/);
   assert.throws(() => normalizeRecord(readyInput({ lrn: '1234' })), /12-digit LRN/);
-  assert.throws(() => normalizeRecord(readyInput({ studentSignedDate: '' })), /signature and date/);
+  assert.throws(() => normalizeRecord(readyInput({ studentSignedDate: '' })), /signature date/);
   assert.throws(() => normalizeRecord(readyInput({ status: 'enrollment_started' })), /Choose Draft or Ready/);
+});
+
+test('drafts defer completion but validate every supplied field and Ready errors identify missing controls', () => {
+  const draft = normalizeRecord({ schoolYear: '2027-2028', status: 'draft', firstName: '', lrn: '1234',
+    email: '', studentContactNumber: '' });
+  assert.equal(draft.firstName, null);
+  assert.equal(draft.lrn, '1234', 'a syntactically valid partial LRN may be saved for a Draft');
+  assert.ok(draft.missingRequired.includes('12-digit LRN'));
+  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', email: 'not-an-email' }), (error) => {
+    assert.equal(error.field, 'email');
+    return /valid email address/.test(error.message);
+  });
+  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', lrn: '12x4' }), (error) => {
+    assert.equal(error.field, 'lrn');
+    return /digits only/.test(error.message);
+  });
+  assert.throws(() => normalizeRecord(readyInput({ firstName: '', email: '' })), (error) => {
+    assert.deepEqual(error.fields, ['firstName', 'email']);
+    return /Complete the paper form/.test(error.message);
+  });
+});
+
+test('readmission Drafts may await a reference, while supplied bindings validate and Ready requires one', () => {
+  const id = 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261';
+  const partial = normalizeRecord({ schoolYear: '2027-2028', status: 'draft', applicantKind: 'readmission',
+    lrn: '012345', targetGradeLevel: 'Grade 11' });
+  assert.equal(partial.readmissionEvaluationId, null);
+  assert.equal(partial.lrn, '012345');
+  const supplied = normalizeRecord({ schoolYear: '2027-2028', status: 'draft', applicantKind: 'readmission',
+    lrn: '012345', readmissionEvaluationBinding: `${id}@4` });
+  assert.equal(supplied.readmissionEvaluationId, id);
+  assert.equal(supplied.readmissionEvaluationVersion, 4);
+  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', applicantKind: 'readmission',
+    readmissionEvaluationId: id }), /Reload the return evaluation/);
+  assert.throws(() => normalizeRecord(readyInput({ applicantKind: 'readmission' })), (error) => {
+    assert.ok(error.fields.includes('readmissionEvaluationBinding'));
+    return /accepted, current return evaluation/.test(error.message);
+  });
 });
 
 test('voucher type accepts only canonical new values and preserves unchanged historical values and category history', () => {
@@ -172,7 +210,7 @@ test('return evaluation is required only for readmission and its selection survi
   listeners.change();
   assert.equal(field.hidden, false);
   assert.equal(evaluation.disabled, false);
-  assert.equal(evaluation.required, true);
+  assert.equal(evaluation.required, false, 'the server validates the accepted reference only when submitting as Ready');
   evaluation.value = 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4';
 
   applicantKind.value = 'continuing';
@@ -186,7 +224,7 @@ test('return evaluation is required only for readmission and its selection survi
   listeners.change();
   assert.equal(field.hidden, false);
   assert.equal(evaluation.disabled, false);
-  assert.equal(evaluation.required, true);
+  assert.equal(evaluation.required, false);
   assert.equal(evaluation.value, 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4');
 });
 
@@ -553,6 +591,115 @@ function detailRecord(id, status = 'ready_for_registrar') {
   };
 }
 
+function createPreEnrollmentTransactionHarness({ evaluation = null, students = [], duplicateAnnual = [], history = [], current = null } = {}) {
+  const queries = [];
+  const sql = {
+    ISOLATION_LEVEL: { SERIALIZABLE: 'serializable' }, MAX: 'MAX', Int: 'INT', Date: 'DATE', Bit: 'BIT', SmallInt: 'SMALLINT',
+    Char: () => 'CHAR', VarChar: () => 'VARCHAR', NVarChar: () => 'NVARCHAR'
+  };
+  class Request {
+    constructor() { this.inputs = {}; }
+    input(name, _type, value) { this.inputs[name] = value; return this; }
+    async query(statement) {
+      const normalized = statement.replace(/\s+/g, ' ').trim();
+      const call = { statement: normalized, inputs: { ...this.inputs } };
+      queries.push(call);
+      if (normalized.startsWith('SELECT account.id, account.role')) {
+        return { recordset: [{ id: 1, role: 'front_desk', first_name: 'Synthetic', last_name: 'Desk' }] };
+      }
+      if (normalized.startsWith('SELECT id, request_fingerprint FROM pre_enrollments WHERE idempotency_key')) {
+        return { recordset: [] };
+      }
+      if (normalized.includes('FROM readmission_evaluations WHERE id = @evaluationId FOR UPDATE')) {
+        return { recordset: evaluation ? [evaluation] : [] };
+      }
+      if (normalized === 'SELECT id FROM students WHERE lrn = @lrn FOR UPDATE') {
+        return { recordset: students.filter((student) => student.lrn === call.inputs.lrn).map(({ id }) => ({ id })) };
+      }
+      if (normalized === 'SELECT id, lrn FROM students WHERE id = @evaluationStudentId FOR UPDATE') {
+        return { recordset: students.filter((student) => Number(student.id) === call.inputs.evaluationStudentId) };
+      }
+      if (normalized.startsWith('SELECT id FROM annual_enrollments WHERE student_id = @studentId')) {
+        return { recordset: duplicateAnnual };
+      }
+      if (normalized.startsWith('SELECT annual.school_year, annual.intake_status')) return { recordset: history };
+      if (normalized.startsWith('SELECT entry.*')) return { recordset: current ? [{ ...current }] : [] };
+      if (normalized.startsWith('SELECT * FROM pre_enrollment_receipts')) return { recordset: [] };
+      if (normalized.startsWith('UPDATE pre_enrollments SET')) return { rowsAffected: [1] };
+      return { recordset: [], rowsAffected: [1] };
+    }
+  }
+  class Transaction {
+    constructor() { this.started = false; }
+    async begin() { this.started = true; }
+    request() { return new Request(); }
+    async commit() { this.started = false; }
+    async rollback() { this.started = false; }
+  }
+  const pool = { request: () => new Request() };
+  const service = createPreEnrollmentService({ getPool: async () => pool, sql, transactionFactory: () => new Transaction() });
+  return { service, queries };
+}
+
+test('pre-enrollment Draft transaction defers missing readmission evaluation without creating student or annual rows', async () => {
+  const learner = { id: 44, lrn: '012345678901' };
+  const noEvaluation = createPreEnrollmentTransactionHarness({ students: [learner], history: [
+    { school_year: '2025-2026', intake_status: 'enrolled', has_departure: 0 }
+  ] });
+  const saved = await noEvaluation.service.create(1, { schoolYear: '2027-2028', status: 'draft', applicantKind: 'readmission',
+    lrn: learner.lrn, idempotencyKey: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83263' });
+  assert.equal(saved.alreadyCreated, false);
+  assert.ok(noEvaluation.queries.some(({ statement }) => statement.startsWith('INSERT INTO pre_enrollments')));
+  assert.ok(noEvaluation.queries.some(({ statement }) => statement.startsWith('SELECT annual.school_year')),
+    'existing enrollment history still informs readmission eligibility');
+  assert.equal(noEvaluation.queries.some(({ statement }) => /INSERT INTO (students|annual_enrollments)/.test(statement)), false,
+    'saving a Draft creates only the paper intake row and its audit/receipt history');
+
+  const currentReference = { id: 'c342bc01-2a68-4f19-a7fd-4d5bb1d83261', applicant_lrn: learner.lrn, student_id: learner.id,
+    school_year: '2027-2028', target_grade_level: 'Grade 11', status: 'accepted', version: 4, curriculum_review_status: 'resolved' };
+  const partialBinding = createPreEnrollmentTransactionHarness({ evaluation: currentReference, students: [learner] });
+  await partialBinding.service.create(1, { schoolYear: '2027-2028', status: 'draft', applicantKind: 'readmission',
+    lrn: '012345', readmissionEvaluationBinding: `${currentReference.id}@4`,
+    idempotencyKey: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83264' });
+  assert.ok(partialBinding.queries.some(({ statement }) => statement === 'SELECT id, lrn FROM students WHERE id = @evaluationStudentId FOR UPDATE'),
+    'a supplied reference still verifies ownership when the Draft LRN is incomplete');
+  assert.ok(partialBinding.queries.some(({ statement }) => statement.startsWith('INSERT INTO pre_enrollments')));
+
+  const staleBinding = createPreEnrollmentTransactionHarness({ evaluation: { ...currentReference, version: 3 } });
+  await assert.rejects(staleBinding.service.create(1, { schoolYear: '2027-2028', status: 'draft', applicantKind: 'readmission',
+    lrn: '012345', readmissionEvaluationBinding: `${currentReference.id}@4`,
+    idempotencyKey: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83265' }), /no longer accepted and current/);
+  assert.equal(staleBinding.queries.some(({ statement }) => statement.startsWith('INSERT INTO pre_enrollments')), false,
+    'stale supplied evaluation references cannot be stored in a Draft');
+
+  const duplicate = createPreEnrollmentTransactionHarness({ students: [learner], duplicateAnnual: [{ id: 92 }] });
+  await assert.rejects(duplicate.service.create(1, { schoolYear: '2027-2028', status: 'draft', applicantKind: 'readmission',
+    lrn: learner.lrn, idempotencyKey: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83266' }), /already has an annual record/);
+  assert.equal(duplicate.queries.some(({ statement }) => statement.startsWith('INSERT INTO pre_enrollments')), false,
+    'same-year duplicate guards remain active for Drafts');
+});
+
+test('Ready record updates preserve their status without an action and allow only an explicit Draft action to downgrade', async () => {
+  const current = Object.fromEntries([
+    ['id', 'a342bc01-2a68-4f19-a7fd-4d5bb1d83267'], ['status', 'ready_for_registrar'], ['version', 3],
+    ['school_year', '2027-2028'], ['applicant_kind', 'new'], ['student_signature_present', 0]
+  ]);
+  current.school_year = '2027-2028';
+  current.applicant_kind = 'new';
+  const noAction = createPreEnrollmentTransactionHarness({ current });
+  const input = readyInput({ status: undefined });
+  const updated = await noAction.service.update(1, current.id, 3, input);
+  assert.equal(updated.status, 'ready_for_registrar');
+  assert.equal(noAction.queries.find(({ statement }) => statement.startsWith('UPDATE pre_enrollments SET'))?.inputs.status,
+    'ready_for_registrar');
+
+  const explicitDraft = createPreEnrollmentTransactionHarness({ current });
+  const downgraded = await explicitDraft.service.update(1, current.id, 3, readyInput({ status: 'draft' }));
+  assert.equal(downgraded.status, 'draft');
+  assert.equal(explicitDraft.queries.find(({ statement }) => statement.startsWith('UPDATE pre_enrollments SET'))?.inputs.status,
+    'draft', 'a downgrade is possible only when the user explicitly chooses Save draft');
+});
+
 test('pre-enrollment routes keep database administrators read-only and deny unrelated staff roles', async () => {
   const app = express();
   const csrfToken = 'c'.repeat(64);
@@ -575,8 +722,12 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     preEnrollmentService: {
       async list(actorId) { calls.push(['list', actorId]); return { rows: [{ id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261', first_name: 'Ari', middle_name: '', last_name: 'Santos', suffix: '', lrn: '012345678901', school_year: '2027-2028', status: 'ready_for_registrar', recorder_first_name: 'Front', recorder_last_name: 'Desk', updated_at: '2026-10-03' }], filters: { search: '', schoolYear: '', status: '' }, pagination: { page: 1, pageSize: 20, totalRecords: 1, totalPages: 1, from: 1, to: 1 } }; },
       async getActorDisplayName(actorId) { calls.push(['display', actorId]); return 'Front Desk'; },
-      async create(actorId) { calls.push(['create', actorId]); return { id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261' }; },
-      async update(actorId, id, version, input) { calls.push(['update', actorId]); updateInputs.push(input); throw new PreEnrollmentError('The correction needs a current accepted evaluation.', 409); },
+      async create(actorId, input) { calls.push(['create', actorId]); normalizeRecord(input); return { id: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261' }; },
+      async update(actorId, id, version, input) {
+        calls.push(['update', actorId]); updateInputs.push(input);
+        if (input.lastName === 'stale-version') throw new PreEnrollmentError('This record changed after the form was opened. Reload and review the latest version.', 409);
+        throw new PreEnrollmentError('The correction needs a current accepted evaluation.', 409, 'readmissionEvaluationBinding');
+      },
       async listAcceptedReadmissionChoices(actorId, schoolYear) { choicesCalls.push([actorId, schoolYear]); return [acceptedChoice]; },
       async get(actorId, id) {
         calls.push(['get', actorId]);
@@ -636,10 +787,33 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.match(newFormHtml, /<label for="pre-email">Email<\/label>/);
     assert.match(newFormHtml, /aria-describedby="pre-email-help"/);
     assert.match(newFormHtml, /id="pre-email-help">This email will be used for the student’s account\./);
+    assert.ok(newFormHtml.indexOf('<label for="pre-email">Email</label>') < newFormHtml.indexOf('data-pre-enrollment-optional-profile'),
+      'required Email stays visible before the collapsed optional profile details');
+    assert.match(newFormHtml, /<details class="pre-enrollment-optional-details" data-pre-enrollment-optional-profile>/,
+      'optional profile, address, family, and emergency details are collapsed on a clean form');
+    assert.match(newFormHtml, /<details class="pre-enrollment-optional-details" data-pre-enrollment-receipts><summary>Optional receipt checklist/,
+      'the optional receipt checklist has a separate collapsed disclosure');
+    for (const [id, name] of [['pre-lrn', 'lrn'], ['pre-track', 'preferredTrack'], ['pre-grade', 'targetGradeLevel'],
+      ['pre-prior-grade', 'priorGradeLevel'], ['pre-prior-school', 'priorSchool'], ['pre-signature-check', 'studentSignaturePresent'],
+      ['pre-received-date', 'receivedDate']]) {
+      assert.match(newFormHtml, new RegExp(`id="${id}"[^>]*name="${name}"`), `${name} remains in the visible paper form`);
+    }
+    const optionalProfileBlock = newFormHtml.match(/<details class="pre-enrollment-optional-details" data-pre-enrollment-optional-profile>([\s\S]*?)<\/details>/)?.[1];
+    assert.ok(optionalProfileBlock);
+    assert.match(optionalProfileBlock, /name="birthDate"/);
+    assert.match(optionalProfileBlock, /name="addressBlockLotStreetPurok"/);
+    assert.match(optionalProfileBlock, /name="motherName"/);
+    assert.match(optionalProfileBlock, /name="emergencyContactPerson"/);
+    assert.match(newFormHtml, /name="receipt_report_card_original"/);
     assert.match(newFormHtml, /name="emergencyContactSameAsStudent" value="1"[^>]*><span>Same address as student<\/span>/);
     assert.match(newFormHtml, /src="\/js\/pre-enrollment-address-copy\.js" defer/);
     assert.match(newFormHtml, /data-readmission-evaluation-field/);
     assert.match(newFormHtml, /data-pre-enrollment-form/);
+    assert.match(newFormHtml, /novalidate/);
+    assert.match(newFormHtml, /name="status" value="draft">Save draft/);
+    assert.match(newFormHtml, /name="status" value="ready_for_registrar">Submit as Ready/);
+    assert.doesNotMatch(newFormHtml, /<select[^>]+name="status"/);
+    assert.match(newFormHtml, /src="\/js\/form-unsaved-changes\.js" defer/);
     assert.match(newFormHtml, /src="\/js\/pre-enrollment-readmission\.js" defer/);
     assert.match(fs.readFileSync(path.resolve(__dirname, '../public/css/app.css'), 'utf8'),
       /\.pre-enrollment-form \[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/);
@@ -648,6 +822,77 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.match(newFormHtml, /Copy these contact details from the paper form/);
     assert.doesNotMatch(newFormHtml, /name="emergencyContactSameAsStudent" value="1"[^>]*checked/,
       'fresh pre-enrollment forms start unchecked');
+    const idempotencyKey = newFormHtml.match(/name="idempotencyKey" value="([0-9a-f-]{36})"/)?.[1];
+    assert.ok(idempotencyKey);
+    const writesBeforeCsrfFailures = calls.filter(([method]) => ['create', 'update'].includes(method)).length;
+    for (const token of [undefined, 'invalid-csrf-token']) {
+      const headers = { 'x-test-role': 'front_desk', 'content-type': 'application/x-www-form-urlencoded' };
+      const fields = { idempotencyKey, schoolYear: '2027-2028', status: 'draft' };
+      if (token !== undefined) fields._csrf = token;
+      const rejected = await fetch(`${origin}/pre-enrollments`, { method: 'POST', headers,
+        body: new URLSearchParams(fields) });
+      assert.equal(rejected.status, 403, 'authorized front desk still needs a valid CSRF token to create a paper draft');
+    }
+    for (const token of [undefined, 'invalid-csrf-token']) {
+      const headers = { 'x-test-role': 'registrar', 'content-type': 'application/x-www-form-urlencoded' };
+      const fields = { version: '2', schoolYear: '2027-2028', status: 'draft' };
+      if (token !== undefined) fields._csrf = token;
+      const rejected = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261`, {
+        method: 'POST', headers, body: new URLSearchParams(fields)
+      });
+      assert.equal(rejected.status, 403, 'authorized registrar still needs a valid CSRF token to edit a paper record');
+    }
+    assert.equal(calls.filter(([method]) => ['create', 'update'].includes(method)).length, writesBeforeCsrfFailures,
+      'missing or invalid CSRF requests are rejected before create/update service writes');
+    const blankDraft = await fetch(`${origin}/pre-enrollments`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey, schoolYear: '2027-2028', status: 'draft' }), redirect: 'manual'
+    });
+    assert.equal(blankDraft.status, 303, 'an incomplete Draft saves through the HTTP route');
+    const readyFailure = await fetch(`${origin}/pre-enrollments`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83262',
+        schoolYear: '2027-2028', firstName: 'Recovered first name', status: 'ready_for_registrar' })
+    });
+    const readyFailureHtml = await readyFailure.text();
+    assert.equal(readyFailure.status, 400);
+    assert.match(readyFailureHtml, /Complete the paper form/);
+    assert.match(readyFailureHtml, /href="#pre-last" data-error-target="lastName">Last name/);
+    assert.match(readyFailureHtml, /href="#pre-lrn" data-error-target="lrn">LRN/);
+    assert.match(readyFailureHtml, /data-unsaved-initially-dirty="true"/);
+    assert.match(readyFailureHtml, /id="pre-first" name="firstName" maxlength="100" value="Recovered first name"/);
+    assert.match(readyFailureHtml, /<details class="pre-enrollment-optional-details" data-pre-enrollment-optional-profile>/,
+      'required-field Ready errors do not expand unrelated optional details');
+    assert.match(readyFailureHtml, /<details class="pre-enrollment-optional-details" data-pre-enrollment-receipts>/,
+      'required-field Ready errors leave the optional receipt checklist collapsed');
+    const invalidOptionalProfile = await fetch(`${origin}/pre-enrollments`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83263',
+        schoolYear: '2027-2028', status: 'draft', profilePhone: 'not a phone' })
+    });
+    const invalidOptionalProfileHtml = await invalidOptionalProfile.text();
+    assert.equal(invalidOptionalProfile.status, 400);
+    assert.match(invalidOptionalProfileHtml, /href="#pre-profile-phone" data-error-target="profilePhone">Phone/);
+    assert.match(invalidOptionalProfileHtml, /data-pre-enrollment-optional-profile open/,
+      'a format error in optional profile data expands the section containing the error');
+    assert.match(invalidOptionalProfileHtml, /id="pre-profile-phone" name="profilePhone" type="tel" maxlength="50" value="not a phone"/,
+      'failed optional profile input remains available for correction');
+    assert.match(invalidOptionalProfileHtml, /<details class="pre-enrollment-optional-details" data-pre-enrollment-receipts>/,
+      'a profile error does not expand the neighboring receipt checklist');
+    const invalidOptionalReceipt = await fetch(`${origin}/pre-enrollments`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, idempotencyKey: 'a342bc01-2a68-4f19-a7fd-4d5bb1d83264',
+        schoolYear: '2027-2028', status: 'draft', receipt_report_card_original: '1', receipt_report_card_original_pieces: '0' })
+    });
+    const invalidOptionalReceiptHtml = await invalidOptionalReceipt.text();
+    assert.equal(invalidOptionalReceipt.status, 400);
+    assert.match(invalidOptionalReceiptHtml, /href="#receipt-report_card-original" data-error-target="receipt_report_card_original_pieces/);
+    assert.match(invalidOptionalReceiptHtml, /data-pre-enrollment-receipts open/,
+      'a receipt error expands the receipt disclosure so the linked control is reachable');
+    assert.match(invalidOptionalReceiptHtml, /id="receipt-report_card-original" name="receipt_report_card_original_pieces" type="number" min="1" max="99" value="0"/,
+      'failed receipt quantity remains visible for correction');
+    assert.match(invalidOptionalReceiptHtml, /<details class="pre-enrollment-optional-details" data-pre-enrollment-optional-profile>/,
+      'a receipt error does not expand the neighboring optional profile details');
     const detail = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261`);
     assert.equal(detail.status, 200);
     const detailHtml = await detail.text();
@@ -691,8 +936,14 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.equal(registrarEdit.status, 200);
     assert.match(registrarEditHtml, /Historical value \(preserve\): ESC as written on original school form/,
       'an existing record alone receives a selected option for its unchanged historical voucher text');
+    assert.ok(registrarEditHtml.indexOf('name="status" value="ready_for_registrar">Save corrections as Ready')
+      < registrarEditHtml.indexOf('name="status" value="draft">Save draft'),
+    'the Ready action is the default keyboard submit on a Ready edit, while an explicit Save draft remains available');
     assert.match(registrarEditHtml, /name="receipt_long_brown_envelopes_received" value="1" data-envelope-receipt-checkbox checked/,
       'saved exact envelope receipt is shown checked before an edit');
+    const savedOptionalProfile = registrarEditHtml.match(/<details class="pre-enrollment-optional-details" data-pre-enrollment-optional-profile>([\s\S]*?)<\/details>/)?.[1];
+    assert.ok(savedOptionalProfile?.includes('value="2008-04-21"'),
+      'saved profile values remain in the collapsed editor and are discoverable by expanding it');
     assert.doesNotMatch(registrarEditHtml, /name="voucherCategoryText"/);
     assert.doesNotMatch(registrarEditHtml, /name="emergencyContactSameAsStudent" value="1"[^>]*checked/,
       'reopened corrections start unchecked because the control is not stored');
@@ -714,6 +965,9 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.equal(csrfCorrection.status, 409);
     assert.ok(correctionHtml.includes('value="c342bc01-2a68-4f19-a7fd-4d5bb1d83261@4" selected'),
       'a failed correction rerender retains the explicit evaluation binding and version');
+    assert.match(correctionHtml, /href="#pre-readmission-evaluation" data-error-target="readmissionEvaluationBinding">Accepted return evaluation/);
+    assert.match(correctionHtml, /data-unsaved-initially-dirty="true"/,
+      'a failed update rerender starts with recovered values still marked unsaved');
     assert.match(correctionHtml, /name="emergencyContactSameAsStudent" value="1"[^>]*checked/,
       'validation-error rerenders retain the transient checkbox');
     assert.match(correctionHtml, /value="Separate emergency draft"/);
@@ -728,6 +982,23 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.equal(updateInputs[0].emergencyContactPerson, 'Mae Santos');
     assert.equal(updateInputs[0].emergencyContactRelationship, 'Mother');
     assert.equal(updateInputs[0].emergencyContactPhone, '09181234567');
+    const staleCorrection = await fetch(`${origin}/pre-enrollments/a342bc01-2a68-4f19-a7fd-4d5bb1d83261`, {
+      method: 'POST', headers: { 'x-test-role': 'registrar', 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, version: '1', schoolYear: '2027-2028', lastName: 'stale-version' })
+    });
+    const staleCorrectionHtml = await staleCorrection.text();
+    assert.equal(staleCorrection.status, 409);
+    assert.match(staleCorrectionHtml, /Another staff member saved a newer version/);
+    assert.match(staleCorrectionHtml, /href="\/pre-enrollments\/a342bc01-2a68-4f19-a7fd-4d5bb1d83261\/edit">Reload latest record/);
+    assert.match(staleCorrectionHtml, /name="version" value="1"/,
+      'stale recovery retains the version that was submitted instead of silently rebasing to the latest record');
+    assert.match(staleCorrectionHtml, /id="pre-last" name="lastName" maxlength="100" value="stale-version"/,
+      'stale recovery retains the unsaved correction for staff review');
+    assert.match(staleCorrectionHtml, /data-unsaved-initially-dirty="true"/);
+    assert.match(staleCorrectionHtml, /data-pre-enrollment-optional-profile open/,
+      'a stale conflict without field links opens optional-profile details so recovered inputs are visible');
+    assert.match(staleCorrectionHtml, /data-pre-enrollment-receipts open/,
+      'a stale conflict without field links opens the receipt checklist so recovered inputs are visible');
     const startedDetail = await fetch(`${origin}/pre-enrollments/b342bc01-2a68-4f19-a7fd-4d5bb1d83261`);
     const startedHtml = await startedDetail.text();
     assert.match(startedHtml, /Student details can no longer be changed here after enrollment is prepared/);
@@ -800,8 +1071,11 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
         'x-test-role': role, 'content-type': 'application/x-www-form-urlencoded'
       }, body: new URLSearchParams({ _csrf: csrfToken }) })).status, 403);
     }
-    assert.deepEqual(calls.filter(([method]) => ['create', 'update'].includes(method)), [['update', roleIds.registrar]],
-      'only the explicit registrar correction reaches the write service; admin and unrelated roles stop first');
+    assert.deepEqual(calls.filter(([method]) => ['create', 'update'].includes(method)), [
+      ['create', roleIds.front_desk], ['create', roleIds.front_desk],
+      ['create', roleIds.front_desk], ['create', roleIds.front_desk],
+      ['update', roleIds.registrar], ['update', roleIds.registrar]
+    ], 'authorized front-desk attempts reach the validation service, while admin and unrelated roles stop before writes; only registrar can submit corrections');
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

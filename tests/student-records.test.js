@@ -720,6 +720,7 @@ test('student records workspace keeps create forms collapsed, opens failed forms
     assert.match(html, /<details class="records-create-disclosure"\s*>\s*<summary>Add section/);
     assert.match(html, /<details class="records-section-group" open>\s*<summary><strong>2026-2027 · First term/);
     assert.match(html, /<details class="records-section-group"\s*>\s*<summary><strong>2025-2026 · Third term/);
+    assert.doesNotMatch(html, /data-unsaved-initially-dirty="true"/, 'a normal workspace GET leaves both setup forms clean');
 
     currentTermHasSection = false;
     const emptyCurrentResponse = await fetch(`${baseUrl}/registrar/records?view=setup`, { headers: { cookie } });
@@ -741,6 +742,11 @@ test('student records workspace keeps create forms collapsed, opens failed forms
     assert.match(termErrorHtml, /<details class="records-create-disclosure" open>\s*<summary>Add academic term/);
     assert.match(termErrorHtml, /name="schoolYear"[^>]*value="bad-year"/);
     assert.match(termErrorHtml, /name="isCurrent" value="1" type="checkbox" checked/);
+    const recoveredTermForm = termErrorHtml.match(/<form[^>]*action="\/registrar\/records\/terms"[\s\S]*?<\/form>/)?.[0] || '';
+    const cleanSectionForm = termErrorHtml.match(/<form[^>]*action="\/registrar\/records\/sections"[\s\S]*?<\/form>/)?.[0] || '';
+    assert.match(recoveredTermForm, /data-unsaved-initially-dirty="true"/);
+    assert.doesNotMatch(cleanSectionForm, /data-unsaved-initially-dirty/, 'a failed term create does not dirty the neighboring section form');
+    assert.equal((termErrorHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
 
     const sectionError = await postForm(baseUrl, '/registrar/records/sections', cookie, {
       _csrf: token, name: 'STEM C', academicTermId: '2', gradeLevel: 'Grade 11', modality: 'hybrid'
@@ -751,6 +757,11 @@ test('student records workspace keeps create forms collapsed, opens failed forms
     assert.match(sectionErrorHtml, /name="name"[^>]*value="STEM C"/);
     assert.match(sectionErrorHtml, /option value="2" selected/);
     assert.match(sectionErrorHtml, /option value="hybrid" selected/);
+    const cleanTermForm = sectionErrorHtml.match(/<form[^>]*action="\/registrar\/records\/terms"[\s\S]*?<\/form>/)?.[0] || '';
+    const recoveredSectionForm = sectionErrorHtml.match(/<form[^>]*action="\/registrar\/records\/sections"[\s\S]*?<\/form>/)?.[0] || '';
+    assert.doesNotMatch(cleanTermForm, /data-unsaved-initially-dirty/, 'a failed section create does not dirty the neighboring term form');
+    assert.match(recoveredSectionForm, /data-unsaved-initially-dirty="true"/);
+    assert.equal((sectionErrorHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
 
     const termCreated = await postForm(baseUrl, '/registrar/records/terms', cookie, {
       _csrf: token, schoolYear: '2027-2028', term: 'First'
@@ -799,6 +810,7 @@ test('student overview and profile page resolve only the session-owned profile a
 
 test('database administrators can search the master list and open a unified profile, enrollment, academic, and document-status record', async () => {
   let staffListReads = 0;
+  let failProfileCreate = true;
   const studentRecordsService = {
     async listWorkspace() {
       staffListReads += 1;
@@ -809,6 +821,11 @@ test('database administrators can search the master list and open a unified prof
     },
     async getStudent(id) {
       return { student: { id, student_no: 'S-12', lrn: '123456789012', first_name: 'Jamie', last_name: 'Lee', status: 'active', good_moral_status: 'needs_review', psa_status: null, previous_report_card_status: 'needs_review', previous_school_report_card_physical_status: 'received', form137_status: 'received' }, terms: [], sections: [], enrollments: [] };
+    },
+    async saveStudent(_actorId, studentId) {
+      assert.equal(studentId, null);
+      if (failProfileCreate) throw new StudentRecordsError('Review the submitted profile values.', 400);
+      return 13;
     }
   };
   const academicRecordsService = {
@@ -845,6 +862,22 @@ test('database administrators can search the master list and open a unified prof
     assert.equal(newProfile.status, 200);
     assert.doesNotMatch(newProfileHtml, /name="studentNo"/);
     assert.match(newProfileHtml, /assigned automatically from the current academic year/);
+    assert.doesNotMatch(newProfileHtml, /data-unsaved-initially-dirty="true"/, 'a clean profile-create GET has no recovered marker');
+    const failedProfile = await postForm(baseUrl, '/registrar/records/students', cookie, {
+      _csrf: csrfFromHtml(newProfileHtml), lrn: '123456789012', firstName: 'Synthetic', lastName: 'Learner'
+    });
+    assert.equal(failedProfile.status, 400);
+    const failedProfileHtml = await failedProfile.text();
+    assert.match(failedProfileHtml, /Review the submitted profile values/);
+    assert.match(failedProfileHtml, /name="firstName"[^>]*value="Synthetic"/);
+    const recoveredProfileForm = failedProfileHtml.match(/<form[^>]*action="\/registrar\/records\/students"[\s\S]*?<\/form>/)?.[0] || '';
+    assert.match(recoveredProfileForm, /data-unsaved-initially-dirty="true"/);
+    assert.equal((failedProfileHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
+    failProfileCreate = false;
+    const createdProfile = await postForm(baseUrl, '/registrar/records/students', cookie, {
+      _csrf: csrfFromHtml(failedProfileHtml), lrn: '123456789012', firstName: 'Synthetic', lastName: 'Learner'
+    });
+    assert.equal(createdProfile.status, 303, 'a successful profile write redirects without rendering a dirty recovery form');
     const detail = await fetch(`${baseUrl}/registrar/records/students/12`, { headers: { cookie } });
     const detailHtml = await detail.text();
     assert.equal(detail.status, 200);
@@ -1103,6 +1136,7 @@ test('registrar follow-up ledgers are linked from student records and protected 
     const requestsPage = await fetch(`${baseUrl}/registrar/records/students/12?view=requests`, { headers: { cookie } });
     assert.equal(requestsPage.status, 200);
     const html = await requestsPage.text();
+    assert.doesNotMatch(html, /data-unsaved-initially-dirty="true"/, 'a clean document-request page keeps every form clean');
     const studentNavigation = html.match(/<nav class="student-record-navigation"[\s\S]*?<\/nav>/)?.[0];
     assert.match(studentNavigation || '', /href="\/documents\/students\/12" aria-current="page">Documents<\/a>/);
     assert.equal((studentNavigation?.match(/aria-current="page"/g) || []).length, 1);
@@ -1147,6 +1181,9 @@ test('registrar follow-up ledgers are linked from student records and protected 
     assert.match(failedHtml, /href="\/documents\/students\/12" aria-current="page">Documents<\/a>/);
     assert.match(failedHtml, /name="documentName" maxlength="150" value="Draft transcript"/);
     assert.match(failedHtml, new RegExp(`name="idempotencyKey" value="${key}"`));
+    const dirtyForms = failedHtml.match(/<form\b[^>]*data-unsaved-initially-dirty="true"[^>]*>/g) || [];
+    assert.equal(dirtyForms.length, 1, 'only the request form with recovered fields is initially dirty');
+    assert.match(dirtyForms[0], /action="\/registrar\/records\/students\/12\/document-requests"/);
     failCreateRequest = false;
     const created = await postForm(baseUrl, '/registrar/records/students/12/document-requests', cookie, {
       _csrf: csrfToken, documentType: 'Transcript', documentName: 'Grade 11 Transcript',

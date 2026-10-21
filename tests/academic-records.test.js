@@ -326,6 +326,7 @@ test('catalog reads follow role rules, mutations require CSRF, and rendered cata
     },
     async saveSubject(...args) {
       if (args[2]?.subjectCode === 'BAD') throw new AcademicRecordsError('Enter a valid subject code.', 400);
+      if (args[1] === 4 && args[2]?.subjectName === 'Retained edit') throw new AcademicRecordsError('Review the edited subject.', 409);
       writes.push(args);
       return 4;
     }
@@ -342,6 +343,7 @@ test('catalog reads follow role rules, mutations require CSRF, and rendered cata
     assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
     assert.match(html, /<details class="subject-create-details"\s*>/);
     assert.doesNotMatch(html, /<details class="subject-create-details" open>/);
+    assert.doesNotMatch(html, /data-unsaved-initially-dirty/);
     assert.match(html, /<details class="subject-catalog__disclosure">/);
     assert.match(html, /action="\/registrar\/records\/subjects\/4"/);
     assert.match(html, /name="subjectCode"/);
@@ -364,8 +366,24 @@ test('catalog reads follow role rules, mutations require CSRF, and rendered cata
     assert.equal(invalid.status, 400);
     const invalidHtml = await invalid.text();
     assert.match(invalidHtml, /<details class="subject-create-details" open>/);
+    assert.match(invalidHtml, /action="\/registrar\/records\/subjects"[^>]*data-unsaved-initially-dirty="true"/);
     assert.match(invalidHtml, /name="subjectCode"[^>]*value="BAD"/);
+    assert.doesNotMatch(invalidHtml, /action="\/registrar\/records\/subjects\/4"[^>]*data-unsaved-initially-dirty/);
     assert.equal(writes.length, 0);
+    const failedEdit = await postForm(baseUrl, '/registrar/records/subjects/4?search=no-matching-subject', cookie, {
+      _csrf: csrfFromHtml(html), subjectCode: 'CS1', subjectName: 'Retained edit', units: '3'
+    });
+    assert.equal(failedEdit.status, 409);
+    const failedEditHtml = await failedEdit.text();
+    assert.match(failedEditHtml, /<details class="subject-catalog__disclosure" open>/);
+    assert.match(failedEditHtml, /action="\/registrar\/records\/subjects\/4"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.match(failedEditHtml, /name="subjectName"[^>]*value="Retained edit"/);
+    assert.match(failedEditHtml, /name="subjectCode"[^>]*value="CS1"/);
+    assert.match(failedEditHtml, /id="subject-name" name="subjectName"[^>]*value=""/);
+    assert.match(failedEditHtml, /id="subject-name-4" name="subjectName"[^>]*value="Retained edit"/);
+    assert.match(failedEditHtml, /<details class="subject-create-details"\s*>/);
+    assert.match(failedEditHtml, /action="\/registrar\/records\/subjects\/4"/);
+    assert.equal((failedEditHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
     const denied = await postForm(baseUrl, '/registrar/records/subjects', cookie, { subjectCode: 'X1', subjectName: 'Test' });
     assert.equal(denied.status, 403);
     assert.equal(writes.length, 0);
@@ -484,6 +502,8 @@ test('teacher assignment list keeps concise context and working status and revok
     assert.match(createErrorHtml, /<option value="3" selected>Grade 11 · Section A<\/option>/);
     assert.match(createErrorHtml, /option value="6" selected/);
     assert.match(createErrorHtml, /option value="4" selected/);
+    assert.match(createErrorHtml, /action="\/registrar\/records\/teacher-assignments"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.equal((createErrorHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
     assert.deepEqual(assignmentContextCalls.at(-1), { termId: '2', sectionId: '3' });
     const response = await postForm(baseUrl, '/registrar/records/teacher-assignments/20/revoke', cookie, {
       _csrf: csrfFromHtml(html), filterTermId: '2', filterSectionId: '3'
@@ -512,8 +532,9 @@ test('schedule page honors a contextual assignment link and preserves selected v
     async listRegistrarWorkspace(actorId, filters) { assert.equal(Number(actorId), 7); filtersSeen.push(filters); return workspace; },
     async saveSchedule(actorId, scheduleId, values) {
       assert.equal(Number(actorId), 7);
-      assert.equal(scheduleId, null);
       assert.equal(values.assignmentId, '44');
+      if (scheduleId === null) assert.equal(values.assignmentId, '44');
+      else assert.equal(scheduleId, 72);
       throw new ClassScheduleError('This time conflicts with another class for the section, teacher, or room.', 409);
     }
   };
@@ -522,6 +543,7 @@ test('schedule page honors a contextual assignment link and preserves selected v
     const page = await fetch(`${baseUrl}/registrar/schedules?termId=6&sectionId=12&assignmentId=44`, { headers: { cookie } });
     assert.equal(page.status, 200);
     const html = await page.text();
+    assert.doesNotMatch(html, /data-unsaved-initially-dirty/);
     assert.deepEqual(filtersSeen[0], { termId: '6', sectionId: '12', assignmentId: '44' });
     assert.match(html, /name="assignmentId"/);
     assert.match(html, /value="44" selected/);
@@ -550,6 +572,19 @@ test('schedule page honors a contextual assignment link and preserves selected v
     assert.match(errorHtml, /name="startTime" type="time" required value="10:00"/);
     assert.match(errorHtml, /name="endTime" type="time" required value="11:00"/);
     assert.match(errorHtml, /name="room" maxlength="80" value="Room 204"/);
+    assert.match(errorHtml, /<form class="schedule-create-form"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.equal((errorHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
+
+    const editResponse = await postForm(baseUrl, '/registrar/schedules/72', cookie, {
+      _csrf: csrfFromHtml(html), termId: '6', filterSectionId: '12', filterAssignmentId: '44',
+      assignmentId: '44', dayOfWeek: '4', startTime: '13:00', endTime: '14:00', room: 'Retained room'
+    });
+    assert.equal(editResponse.status, 409);
+    const editErrorHtml = await editResponse.text();
+    assert.match(editErrorHtml, /action="\/registrar\/schedules\/72"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.match(editErrorHtml, /name="room" maxlength="80" value="Retained room"/);
+    assert.doesNotMatch(editErrorHtml, /<form class="schedule-create-form"[^>]*data-unsaved-initially-dirty/);
+    assert.equal((editErrorHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
   });
 });
 

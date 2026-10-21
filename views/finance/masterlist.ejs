@@ -21,7 +21,7 @@
   <% const paymentStatusLabels = selectedCounts ? [['Fully paid', selectedCounts.fullyPaid], ['Partially paid', selectedCounts.partiallyPaid], ['Unpaid', selectedCounts.unpaid], ['No payment required', selectedCounts.noPaymentRequired], ['Unavailable', selectedCounts.unavailable]] : []; %>
   <header class="dashboard-heading finance-masterlist-heading finance-accounts-heading">
     <div><h1>Student accounts</h1></div>
-    <a class="button button--secondary" href="<%= csvHref %>">Download full CSV</a>
+    <a class="button button--secondary" href="<%= csvHref %>" download>Download full CSV</a>
   </header>
 
   <section class="finance-panel finance-masterlist-filters" aria-labelledby="finance-accounts-filter-title">

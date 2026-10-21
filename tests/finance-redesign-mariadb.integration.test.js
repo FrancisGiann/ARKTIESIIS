@@ -129,7 +129,7 @@ test('Finance status links open real paginated MariaDB rosters and annual accoun
       const baseline = readSqlFile(path.join(repoRoot, 'database/mariadb/schema.sql'));
       await executeStatements(setupConnection, baseline);
       const forwardMigrations = readForwardMigrations();
-      for (const migration of forwardMigrations.filter(({ version }) => !['v2.013', 'v2.014', 'v2.015', 'v2.016'].includes(version))) {
+      for (const migration of forwardMigrations.filter(({ version }) => !['v2.013', 'v2.014'].includes(version))) {
         await executeStatements(setupConnection, migration.statements);
         await setupConnection.execute('INSERT INTO schema_migrations (version) VALUES (?)', [migration.version]);
       }

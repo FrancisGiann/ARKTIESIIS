@@ -19,7 +19,7 @@ const { AnnualEnrollmentError } = require('../src/services/annualEnrollmentServi
 const { AnnualFinanceError } = require('../src/services/annualFinanceService');
 const { latestBirthDate } = require('../src/services/studentRecordsService');
 const { validateTransaction, createFinanceService } = require('../src/services/financeService');
-const { TermClearanceSummaryUnavailableError } = require('../src/services/termClearanceService');
+const { TermClearanceError, TermClearanceSummaryUnavailableError } = require('../src/services/termClearanceService');
 const { requireRole } = require('../src/middleware/roles');
 
 function fakeSql() {
@@ -165,8 +165,12 @@ test('scheduled departure preview and recording retain Registrar role and CSRF p
     parent: { first_name: 'Synthetic', last_name: 'Learner', student_no: 'SYN-1', school_year: '2026-2027',
       grade_level: 'Grade 11', intake_kind: 'new', entry_term_number: 2, annual_enrollment_id: 71, student_id: 41,
       enrollment_start_date: '2026-08-01', registrar_confirmation_id: 'confirmed', intake_status: 'enrolled', student_status: 'active' },
-    terms: [{ enrollment_id: 102, annual_term_number: 2, term: 'Term 2', term_scope_status: 'applicable',
-      enrollment_status: 'enrolled', section_name: 'Synthetic Section', section_id: 5 }],
+    terms: [
+      { enrollment_id: 102, annual_term_number: 2, term: 'Term2', term_scope_status: 'applicable',
+        enrollment_status: 'enrolled', section_name: 'Synthetic Section', section_id: 5 },
+      { enrollment_id: 103, annual_term_number: 3, term: 'Second term', term_scope_status: 'applicable',
+        enrollment_status: 'enrolled', section_name: 'Synthetic Section', section_id: 5 }
+    ],
     administrationHistory: [], tags: [], subjects: [], departure: null
   };
   const annualEnrollmentService = {
@@ -175,20 +179,42 @@ test('scheduled departure preview and recording retain Registrar role and CSRF p
       if (input.effectiveDate < '2026-08-01') {
         throw new AnnualEnrollmentError('The departure date cannot precede the enrollment start date.', 409);
       }
-      return [{ enrollment_id: 102, annual_term_number: 2, term: 'Term 2', enrollment_status: 'enrolled', section_name: 'Synthetic Section', academic_activity_review_required: false }];
+      return [{ enrollment_id: 102, annual_term_number: 2, term: 'Term2', enrollment_status: 'enrolled', section_name: 'Synthetic Section', academic_activity_review_required: false }];
     },
     async getAnnualManagementRecord() { return record; },
     async createDepartureCase(actorId, annualId, enrollmentId, input) {
       calls.push(['create', actorId, annualId, enrollmentId, input.effectiveDate]);
+      if (input.reason === 'Synthetic failed departure') {
+        throw new AnnualEnrollmentError('Review the departure details and try again.', 409);
+      }
       record.departure = { departure_type: input.departureType, effective_date: input.effectiveDate,
         application_status: 'scheduled', finance_status: 'pending' };
       return { applicationStatus: 'scheduled' };
+    },
+    async updateAnnualAdministrationDetails(_actorId, _annualId, input) {
+      if (input.escId === 'RETAIN-ESC') throw new AnnualEnrollmentError('Review the annual details.', 409);
     }
   };
   app.use('/registrar/intake', requireRole('registrar'), createAnnualStudentIntakeRouter({ annualEnrollmentService }));
 
   await withServer(app, async (baseUrl) => {
     const url = `${baseUrl}/registrar/intake/71/departure-preview`;
+    const cleanManage = await fetch(`${baseUrl}/registrar/intake/71/manage`);
+    const cleanManageHtml = await cleanManage.text();
+    assert.equal(cleanManage.status, 200);
+    assert.doesNotMatch(cleanManageHtml, /data-unsaved-initially-dirty/);
+
+    const administrationFailure = await fetch(`${baseUrl}/registrar/intake/71/administration-details`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: 'scheduled-departure-csrf', escId: 'RETAIN-ESC' })
+    });
+    const administrationHtml = await administrationFailure.text();
+    assert.equal(administrationFailure.status, 409);
+    assert.match(administrationHtml, /action="\/registrar\/intake\/71\/administration-details"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.match(administrationHtml, /id="annual-esc-id" name="escId" maxlength="80" value="RETAIN-ESC"/);
+    assert.doesNotMatch(administrationHtml, /action="\/registrar\/intake\/71\/departure-preview"[^>]*data-unsaved-initially-dirty/);
+    assert.equal((administrationHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
+
     const withoutCsrf = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ effectiveEnrollmentId: '102' }) });
     assert.equal(withoutCsrf.status, 403);
@@ -207,6 +233,7 @@ test('scheduled departure preview and recording retain Registrar role and CSRF p
     assert.match(invalidHtml, /The departure date cannot precede the enrollment start date/);
     assert.match(invalidHtml, /name="effectiveDate" type="date" value="2026-07-01"/);
     assert.match(invalidHtml, /<textarea[^>]*id="departure-reason"[^>]*>[\s\S]*Synthetic future departure[\s\S]*<\/textarea>/);
+    assert.match(invalidHtml, /action="\/registrar\/intake\/71\/departure-preview"[^>]*data-unsaved-initially-dirty="true"/);
     assert.doesNotMatch(invalidHtml, /Placement review|Schedule future departure|Apply dated departure now/);
 
     const preview = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -214,11 +241,26 @@ test('scheduled departure preview and recording retain Registrar role and CSRF p
         effectiveDate: '2099-10-21', reason: 'Synthetic future departure' }) });
     const previewHtml = await preview.text();
     assert.equal(preview.status, 200);
+    assert.doesNotMatch(previewHtml, /data-unsaved-initially-dirty/,
+      'a successful calculation preview is not recovered form data');
     assert.deepEqual(calls[0], ['preview', registrar.id, '71', '102', '2026-07-01']);
     assert.deepEqual(calls[1], ['preview', registrar.id, '71', '102', '2099-10-21']);
     assert.match(previewHtml, /update automatically on that date/);
     assert.match(previewHtml, /name="effectiveDate" type="date" value="2099-10-21"/);
     assert.match(previewHtml, /<textarea[^>]*id="departure-reason"[^>]*>[\s\S]*Synthetic future departure[\s\S]*<\/textarea>/);
+    assert.match(previewHtml, /<option value="102"[^>]*>Term 2 · Synthetic Section<\/option>/,
+      'the departure selector suppresses a configured label that merely repeats its term number');
+    assert.doesNotMatch(previewHtml, /Term 2 · Term2/);
+
+    const failedDeparture = await fetch(`${baseUrl}/registrar/intake/71/departure`, { method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: 'scheduled-departure-csrf', effectiveEnrollmentId: '102', departureType: 'transferred',
+        effectiveDate: '2099-10-21', reason: 'Synthetic failed departure' }) });
+    const failedDepartureHtml = await failedDeparture.text();
+    assert.equal(failedDeparture.status, 409);
+    assert.match(failedDepartureHtml, /action="\/registrar\/intake\/71\/departure-preview"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.match(failedDepartureHtml, /<textarea[^>]*id="departure-reason"[^>]*>[\s\S]*Synthetic failed departure[\s\S]*<\/textarea>/);
+    assert.equal((failedDepartureHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
 
     const scheduled = await fetch(`${baseUrl}/registrar/intake/71/departure`, { method: 'POST',
       redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -226,11 +268,16 @@ test('scheduled departure preview and recording retain Registrar role and CSRF p
         effectiveDate: '2099-10-21', reason: 'Synthetic future departure' }) });
     assert.equal(scheduled.status, 303);
     assert.equal(scheduled.headers.get('location'), '/registrar/intake/71/manage?notice=departureScheduled');
-    assert.deepEqual(calls[2], ['create', registrar.id, '71', '102', '2099-10-21']);
+    assert.deepEqual(calls[3], ['create', registrar.id, '71', '102', '2099-10-21']);
 
     const read = await fetch(`${baseUrl}${scheduled.headers.get('location')}`);
     const readHtml = await read.text();
     assert.equal(read.status, 200);
+    assert.match(readHtml, /data-label="Term">Term 2<\/td>/,
+      'the term history uses one standard label when configured text repeats the same term');
+    assert.match(readHtml, /data-label="Term">Term 3 · Second term<\/td>/,
+      'a genuinely different configured term name remains visible');
+    assert.doesNotMatch(readHtml, /Term 2 · Term2/);
     assert.match(readHtml, /The departure was scheduled\. Affected placements remain unchanged until its effective date\./);
     assert.match(readHtml, /<h3>Departure scheduled<\/h3>/);
     assert.match(readHtml, /2099-10-21/);
@@ -651,6 +698,222 @@ test('registrar intake opens the guided annual form and links the roster to fee 
   });
 });
 
+test('continuity-source failures recover only the source form and reject a refreshed-away choice', async () => {
+  const app = express();
+  const csrfToken = 'continuity-source-csrf';
+  const calls = [];
+  let eligibleCandidates = [
+    { id: 410, schoolYear: '2025-2026', gradeLevel: 'Grade 11', selectable: true },
+    { id: 411, schoolYear: '2025-2026', gradeLevel: 'Grade 11', selectable: true }
+  ];
+  let boundSourceId = null;
+  let forceConflict = true;
+  let forceUnexpectedFailure = false;
+  let prerequisiteKind = 'continuing_source';
+  const record = {
+    parent: { annual_enrollment_id: 71, student_id: 41, student_no: 'SYN-71', lrn: '123456789012',
+      first_name: 'Synthetic', middle_name: '', last_name: 'Learner', suffix: '', birth_date: '2008-04-21',
+      sex: 'Female', address: 'Synthetic address', phone: '', student_email: 'learner@example.edu',
+      school_year: '2026-2027', grade_level: 'Grade 12', voucher_code: 'PUB', intake_kind: 'continuing',
+      entry_term_number: 1, enrollment_start_date: '2026-08-01', intake_status: 'pending',
+      registrar_confirmation_id: null },
+    terms: []
+  };
+  const annualEnrollmentService = {
+    async getAnnualManagementRecord(actorId, annualId) {
+      assert.equal(actorId, registrar.id);
+      assert.equal(String(annualId), '71');
+      return record;
+    }
+  };
+  app.set('views', path.join(__dirname, '..', 'views'));
+  app.set('view engine', 'ejs');
+  app.locals.formatStudentPlacement = require('../src/utils/formatStudentPlacement').formatStudentPlacement;
+  app.locals.formatMoney = require('../src/utils/formatMoney').formatMoney;
+  app.use(express.urlencoded({ extended: false }));
+  app.use((req, _res, next) => {
+    req.authUser = { ...registrar, role: req.get('x-role') || 'registrar' };
+    req.session = { csrfToken };
+    next();
+  });
+  app.use('/registrar/intake', requireRole('registrar'), createAnnualStudentIntakeRouter({
+    annualEnrollmentService,
+    annualFinanceService: { async getAnnualEntryFinanceReadinessForRegistrar() {
+      return { entryTermNumber: 1, status: 'ready_for_registrar' };
+    } },
+    physicalChecklistService: { async getStudentChecklist() {
+      return { summary: { completeCount: 0, requiredCount: 0 }, requirements: [], additionalItems: [], history: [] };
+    } },
+    termClearanceService: {
+      async getAnnualPrerequisiteReview() {
+        if (prerequisiteKind === 'null') return null;
+        return { ready: prerequisiteKind === 'already_confirmed', kind: prerequisiteKind, sourceAnnualId: boundSourceId,
+          sourceSchoolYear: boundSourceId ? '2025-2026' : null, terms: [], blockers: ['Choose the preceding source.'], fingerprint: 'synthetic-fingerprint' };
+      },
+      async getContinuitySourceOptions(actorId, annualId) {
+        assert.equal(actorId, registrar.id);
+        assert.equal(String(annualId), '71');
+        return { annualId: 71, schoolYear: '2026-2027', gradeLevel: 'Grade 12',
+          sourceAnnualId: boundSourceId, sourceLocked: boundSourceId !== null,
+          candidates: eligibleCandidates.map((candidate) => ({ ...candidate })) };
+      },
+      async bindContinuitySource(actorId, annualId, sourceId, input) {
+        calls.push({ actorId, annualId: String(annualId), sourceId: String(sourceId), ...input });
+        if (boundSourceId !== null) throw new TermClearanceError('This continuing intake already has a locked source.', 409);
+        const selected = eligibleCandidates.find((candidate) => candidate.selectable && String(candidate.id) === String(sourceId));
+        if (!selected) throw new TermClearanceError('The preceding-year source is no longer eligible.', 409);
+        if (forceUnexpectedFailure) throw new Error('Synthetic private service diagnostic');
+        if (forceConflict) throw new TermClearanceError('Synthetic source review conflict.', 409);
+        boundSourceId = Number(sourceId);
+        return { annualId: 71, sourceAnnualId: boundSourceId };
+      }
+    }
+  }));
+
+  await withServer(app, async (baseUrl) => {
+    const reviewUrl = `${baseUrl}/registrar/intake/71/review`;
+    const cleanResponse = await fetch(reviewUrl);
+    const cleanHtml = await cleanResponse.text();
+    assert.equal(cleanResponse.status, 200);
+    const cleanSourceForm = cleanHtml.match(/<form[^>]*action="\/registrar\/intake\/71\/continuity-source"[\s\S]*?<\/form>/)?.[0];
+    assert.ok(cleanSourceForm);
+    assert.doesNotMatch(cleanSourceForm, /data-unsaved-initially-dirty|Synthetic recovered reason/);
+    assert.match(cleanSourceForm, /<option value=""\s*>Choose the verified source<\/option>/);
+    const sourceKey = cleanSourceForm.match(/name="idempotencyKey" value="([0-9a-f-]{36})"/)?.[1];
+    assert.ok(sourceKey);
+
+    const missingCsrf = await fetch(`${baseUrl}/registrar/intake/71/continuity-source`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ sourceAnnualId: '410', reason: 'Synthetic recovered reason', idempotencyKey: sourceKey })
+    });
+    assert.equal(missingCsrf.status, 403);
+    assert.equal(calls.length, 0, 'CSRF rejection happens before the continuity service write');
+
+    const wrongRole = await fetch(`${baseUrl}/registrar/intake/71/continuity-source`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-role': 'finance' },
+      body: new URLSearchParams({ _csrf: csrfToken, sourceAnnualId: '410', reason: 'Synthetic recovered reason', idempotencyKey: sourceKey })
+    });
+    assert.equal(wrongRole.status, 403);
+    assert.equal(calls.length, 0, 'non-Registrar role is rejected before the continuity service write');
+
+    const reason = 'Reviewed <script>alert("source")</script> & confirmed';
+    const failed = await fetch(`${baseUrl}/registrar/intake/71/continuity-source`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, sourceAnnualId: '410', reason, idempotencyKey: sourceKey })
+    });
+    const failedHtml = await failed.text();
+    assert.equal(failed.status, 409);
+    assert.match(failedHtml, /Synthetic source review conflict\./);
+    const failedSourceForm = failedHtml.match(/<form[^>]*action="\/registrar\/intake\/71\/continuity-source"[\s\S]*?<\/form>/)?.[0];
+    assert.ok(failedSourceForm);
+    assert.match(failedSourceForm, /data-unsaved-initially-dirty="true"/);
+    assert.match(failedSourceForm, /<option value="410" selected>2025-2026 · Grade 11<\/option>/);
+    assert.match(failedSourceForm, /<textarea[^>]*id="continuity-source-reason"[^>]*>[\s\S]*Reviewed &lt;script&gt;alert\(&#34;source&#34;\)&lt;\/script&gt; &amp; confirmed[\s\S]*<\/textarea>/);
+    assert.doesNotMatch(failedSourceForm, /<script>alert\("source"\)<\/script>/);
+    assert.equal(failedSourceForm.match(/name="idempotencyKey" value="([0-9a-f-]{36})"/)?.[1], sourceKey);
+    assert.equal((failedHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
+    const siblingConfirmForm = failedHtml.match(/<form[^>]*action="\/registrar\/intake\/71\/confirm"[\s\S]*?<\/form>/)?.[0];
+    assert.ok(siblingConfirmForm);
+    assert.doesNotMatch(siblingConfirmForm, /data-unsaved-initially-dirty|Reviewed|sourceAnnualId/);
+    assert.notEqual(siblingConfirmForm.match(/name="idempotencyKey" value="([0-9a-f-]{36})"/)?.[1], sourceKey,
+      'the failed source-review token remains separate from the sibling confirmation token');
+    assert.equal(calls[0].actorId, registrar.id);
+    assert.equal(calls[0].sourceId, '410');
+    assert.equal(calls[0].reason, reason);
+    assert.equal(calls[0].idempotencyKey, sourceKey);
+
+    eligibleCandidates = [{ id: 411, schoolYear: '2025-2026', gradeLevel: 'Grade 11', selectable: true }];
+    const stale = await fetch(`${baseUrl}/registrar/intake/71/continuity-source`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, sourceAnnualId: '410', reason: 'Retained after source changed', idempotencyKey: sourceKey })
+    });
+    const staleHtml = await stale.text();
+    assert.equal(stale.status, 409);
+    const staleSourceForm = staleHtml.match(/<form[^>]*action="\/registrar\/intake\/71\/continuity-source"[\s\S]*?<\/form>/)?.[0];
+    assert.ok(staleSourceForm);
+    assert.match(staleSourceForm, /data-unsaved-initially-dirty="true"/);
+    assert.match(staleSourceForm, /<option value="" selected>Choose the verified source<\/option>/,
+      'the no-longer-eligible choice does not auto-select a different valid source');
+    assert.doesNotMatch(staleSourceForm, /<option value="410"/,
+      'an unavailable submitted ID is not fabricated into the eligible option list');
+    assert.match(staleSourceForm, /The source submitted earlier is no longer eligible/);
+    assert.match(staleSourceForm, /Retained after source changed/);
+    assert.equal((staleHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
+
+    forceUnexpectedFailure = true;
+    const unexpectedFailure = await fetch(`${baseUrl}/registrar/intake/71/continuity-source`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, sourceAnnualId: '411', reason: 'Retained after service failure', idempotencyKey: sourceKey })
+    });
+    const unexpectedHtml = await unexpectedFailure.text();
+    assert.equal(unexpectedFailure.status, 503);
+    assert.match(unexpectedHtml, /The save did not return confirmation\. Check the current enrollment state before retrying/);
+    assert.doesNotMatch(unexpectedHtml, /source was not bound|did not save|reason \(not saved\)/i,
+      'an unexpected service failure may occur after a committed write, so recovery does not claim the write failed');
+    assert.doesNotMatch(unexpectedHtml, /Synthetic private service diagnostic/);
+    const unexpectedSourceForm = unexpectedHtml.match(/<form[^>]*action="\/registrar\/intake\/71\/continuity-source"[\s\S]*?<\/form>/)?.[0];
+    assert.ok(unexpectedSourceForm);
+    assert.match(unexpectedSourceForm, /data-unsaved-initially-dirty="true"/);
+    assert.match(unexpectedSourceForm, /<option value="411" selected>2025-2026 · Grade 11<\/option>/);
+    assert.match(unexpectedSourceForm, /Retained after service failure/);
+    assert.equal(unexpectedSourceForm.match(/name="idempotencyKey" value="([0-9a-f-]{36})"/)?.[1], sourceKey);
+
+    forceUnexpectedFailure = false;
+    forceConflict = false;
+    const saved = await fetch(`${baseUrl}/registrar/intake/71/continuity-source`, {
+      method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, sourceAnnualId: '411', reason: 'Current verified source', idempotencyKey: sourceKey })
+    });
+    assert.equal(saved.status, 303);
+    assert.equal(saved.headers.get('location'), '/registrar/intake/71/review');
+    assert.equal(calls[1].sourceId, '410');
+    assert.equal(calls[2].sourceId, '411');
+    assert.equal(calls[3].sourceId, '411');
+
+    prerequisiteKind = 'already_confirmed';
+    record.parent.registrar_confirmation_id = 900;
+    record.parent.intake_status = 'confirmed';
+    const afterSave = await fetch(reviewUrl);
+    const afterSaveHtml = await afterSave.text();
+    assert.equal(afterSave.status, 200);
+    assert.doesNotMatch(afterSaveHtml, /data-unsaved-initially-dirty/);
+    assert.doesNotMatch(afterSaveHtml, /action="\/registrar\/intake\/71\/continuity-source"/,
+      'a now-locked source review does not retain an editable stale form');
+
+    const lockedFailure = await fetch(`${baseUrl}/registrar/intake/71/continuity-source`, {
+      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, sourceAnnualId: '410', reason: 'Retained after concurrent source lock', idempotencyKey: sourceKey })
+    });
+    const lockedHtml = await lockedFailure.text();
+    assert.equal(lockedFailure.status, 409);
+    assert.match(lockedHtml, /The source-review form is unavailable in the refreshed enrollment state/);
+    assert.match(lockedHtml, /<strong>Submitted reason from this attempt:<\/strong> Retained after concurrent source lock/);
+    assert.doesNotMatch(lockedHtml, /action="\/registrar\/intake\/71\/continuity-source"|data-unsaved-initially-dirty/,
+      'read-only recovery retains the reason without reopening or dirty-marking a locked form');
+    assert.equal(calls[4].sourceId, '410');
+
+    for (const hiddenPrerequisite of ['exempt', 'null']) {
+      record.parent.registrar_confirmation_id = null;
+      record.parent.intake_status = 'pending';
+      prerequisiteKind = hiddenPrerequisite;
+      boundSourceId = null;
+      forceConflict = true;
+      const reason = `Retained reason while ${hiddenPrerequisite} review hid the source editor <tag>`;
+      const hiddenEditorFailure = await fetch(`${baseUrl}/registrar/intake/71/continuity-source`, {
+        method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ _csrf: csrfToken, sourceAnnualId: '411', reason, idempotencyKey: sourceKey })
+      });
+      const hiddenEditorHtml = await hiddenEditorFailure.text();
+      assert.equal(hiddenEditorFailure.status, 409);
+      assert.match(hiddenEditorHtml, /<strong>Submitted reason from this attempt:<\/strong>/);
+      assert.match(hiddenEditorHtml, /Retained reason while .* review hid the source editor &lt;tag&gt;/);
+      assert.doesNotMatch(hiddenEditorHtml, /<tag>/, 'read-only recovery escapes submitted text');
+      assert.doesNotMatch(hiddenEditorHtml, /action="\/registrar\/intake\/71\/continuity-source"|data-unsaved-initially-dirty/,
+        `${hiddenPrerequisite} prerequisites keep the hidden editor closed and clean`);
+    }
+  });
+});
+
 test('credential-free confirmation GET uses the saved assessment, entry-term scope, and role-specific read-only access', async () => {
   const app = express();
   const reads = { record: 0, registrarSnapshot: 0, confirmationWrites: 0 };
@@ -1001,6 +1264,7 @@ test('unexpected annual intake failures log safe diagnostics and retain the subm
     const openingResponse = await fetch(`${baseUrl}/registrar/intake/new?preEnrollmentId=${source.id}`);
     const openingHtml = await openingResponse.text();
     assert.equal(openingResponse.status, 200);
+    assert.doesNotMatch(openingHtml, /data-unsaved-initially-dirty/);
     const csrfToken = openingHtml.match(/name="_csrf" value="([^"]+)"/)?.[1];
     const idempotencyKey = openingHtml.match(/name="idempotencyKey" value="([^"]+)"/)?.[1];
     assert.ok(csrfToken);
@@ -1020,6 +1284,8 @@ test('unexpected annual intake failures log safe diagnostics and retain the subm
     const html = await response.text();
     assert.equal(response.status, 503);
     assert.match(response.headers.get('cache-control'), /no-store/);
+    assert.match(html, /action="\/registrar\/intake"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.equal((html.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
     assert.match(html, /data-active-step="3"/);
     assert.match(html, /learner@example\.edu/);
     assert.match(html, /123456789012/);

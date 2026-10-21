@@ -8,7 +8,7 @@
   <% if (error) { %><p class="form-alert" role="alert" tabindex="-1"><%= error %></p><% } %>
   <% if (evaluation?.student_id) { %><p class="notice-panel" role="status">This applicant now has a linked student record. Open that record to continue the evaluation.</p><p><a class="button button--secondary" href="/registrar/records/students/<%= encodeURIComponent(evaluation.student_id) %>/return-evaluations/<%= encodeURIComponent(evaluation.id) %>">Open student record</a></p><% } else { %>
     <% if (evaluation?.status === 'accepted') { %><p class="notice-panel" role="status">The accepted applicant can continue through the fresh paper intake workflow.</p><% } %>
-    <%- include('../partials/return-evaluation-form', { student: null, evaluation, returnEvaluationValues: values, currentUser, csrfToken, expectedVersion }) %>
+    <%- include('../partials/return-evaluation-form', { student: null, evaluation, returnEvaluationValues: values, currentUser, csrfToken, expectedVersion, returnEvaluationDirty: recovered }) %>
   <% } %>
 </main>
 <%- include('../partials/foot') %>

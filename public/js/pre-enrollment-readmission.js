@@ -8,10 +8,10 @@
     if (!applicantKind || !evaluation || !field) return;
 
     function update() {
-      const required = applicantKind.value === 'readmission';
-      field.hidden = !required;
-      evaluation.disabled = !required;
-      evaluation.required = required;
+      const visible = applicantKind.value === 'readmission';
+      field.hidden = !visible;
+      evaluation.disabled = !visible;
+      evaluation.required = false;
     }
 
     applicantKind.addEventListener('change', update);

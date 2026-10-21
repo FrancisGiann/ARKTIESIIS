@@ -22,7 +22,7 @@
     <li data-step-indicator="4" aria-label="Step 4 of 5: Finance handoff"><span class="intake-step-label--full">Finance handoff</span><span class="intake-step-label--short">Finance</span></li>
     <li data-step-indicator="5" aria-label="Step 5 of 5: Review details"><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li>
   </ol>
-  <form class="form-stack admin-form annual-intake-form" method="post" action="/registrar/intake"
+  <form class="form-stack admin-form annual-intake-form" method="post" action="/registrar/intake"<% if (recovered) { %> data-unsaved-initially-dirty="true"<% } %>
     data-intake-wizard data-profile-validation data-active-step="<%= activeStep || 1 %>" data-submitting-message="Saving the student and paper updates. Please wait.">
     <input type="hidden" name="_csrf" value="<%= csrfToken %>">
     <input type="hidden" name="idempotencyKey" value="<%= values.idempotencyKey || idempotencyKey %>">

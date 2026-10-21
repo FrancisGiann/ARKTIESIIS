@@ -263,6 +263,18 @@ test('v2.017 to v2.019 migration rehearsal and paper-clearance SQL, roles, snaps
     await admin.execute(`INSERT INTO ${databaseQuote(freshName)}.schema_migrations (version) VALUES (?)`, ['v2.018']);
     await applyStatements(admin, migration019.statements);
     await admin.execute(`INSERT INTO ${databaseQuote(freshName)}.schema_migrations (version) VALUES (?)`, ['v2.019']);
+    const [freshFinanceEvidence] = await admin.execute(`SELECT
+      (SELECT COUNT(*) FROM annual_finance_assessment_reviews) AS reviews,
+      (SELECT COUNT(*) FROM annual_registrar_confirmations WHERE finance_review_id IS NOT NULL) AS retroactive_links`);
+    assert.equal(Number(freshFinanceEvidence[0].reviews), 0, 'fresh v2.019 schema starts without invented Finance reviewers');
+    assert.equal(Number(freshFinanceEvidence[0].retroactive_links), 0, 'fresh v2.019 schema adds no historical Finance evidence');
+
+    // Keep the v2.017–v2.019 migration rehearsal assertions above at their original checkpoints.
+    // The current service path below also reads the v2.022 departure application state.
+    for (const migration of readForwardMigrations().filter(({ version }) => ['v2.020', 'v2.021', 'v2.022'].includes(version))) {
+      await applyStatements(admin, migration.statements);
+      await admin.execute(`INSERT INTO ${databaseQuote(freshName)}.schema_migrations (version) VALUES (?)`, [migration.version]);
+    }
     pool = mysql.createPool({ socketPath, user: os.userInfo().username, database: freshName,
       waitForConnections: true, connectionLimit: 8, queueLimit: 0, supportBigNumbers: true, bigNumberStrings: true,
       dateStrings: ['DATE', 'DATETIME', 'TIMESTAMP'], multipleStatements: false });

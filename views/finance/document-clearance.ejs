@@ -53,7 +53,7 @@
               <details class="finance-clearance-actions" <%= failedForRow.decision ? 'open' : '' %>><summary>Record finance decision</summary>
                 <div class="admin-form-grid">
                   <% if (row.ledgerComplete) { %>
-                    <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision">
+                    <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision"<% if (failedForRow.decision === 'approve') { %> data-unsaved-initially-dirty="true"<% } %>>
                       <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= row.decisionKeys.approve %>">
                       <input type="hidden" name="decision" value="approve"><input type="hidden" name="expectedRevision" value="<%= row.currentRevision %>"><input type="hidden" name="expectedOutstanding" value="<%= row.outstanding %>">
                       <input type="hidden" name="search" value="<%= queue.filters.search %>"><input type="hidden" name="status" value="<%= queue.filters.status %>"><input type="hidden" name="page" value="<%= queue.filters.page %>">
@@ -66,14 +66,14 @@
                       <button class="button button--primary" type="submit">Approve document fee review</button>
                     </form>
                   <% } %>
-                  <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision">
+                  <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision"<% if (failedForRow.decision === 'hold') { %> data-unsaved-initially-dirty="true"<% } %>>
                     <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= row.decisionKeys.hold %>"><input type="hidden" name="decision" value="hold">
                     <input type="hidden" name="search" value="<%= queue.filters.search %>"><input type="hidden" name="status" value="<%= queue.filters.status %>"><input type="hidden" name="page" value="<%= queue.filters.page %>">
                     <div class="field"><label for="hold-reason-<%= row.id %>">Reason to place on hold</label><textarea id="hold-reason-<%= row.id %>" name="reason" maxlength="1000" minlength="5" required><%= failedForRow.decision === 'hold' ? failedForRow.reason || '' : '' %></textarea></div>
                     <div class="field"><label for="hold-note-<%= row.id %>">Private finance note (optional)</label><textarea id="hold-note-<%= row.id %>" name="financeNote" maxlength="1000"><%= failedForRow.decision === 'hold' ? failedForRow.financeNote || '' : '' %></textarea></div>
                     <button class="button button--secondary" type="submit">Place on hold</button>
                   </form>
-                  <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision">
+                  <form class="form-stack records-compact-form" method="post" action="/finance/document-clearance/<%= row.id %>/decision"<% if (failedForRow.decision === 'withdraw') { %> data-unsaved-initially-dirty="true"<% } %>>
                     <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= row.decisionKeys.withdraw %>"><input type="hidden" name="decision" value="withdraw">
                     <input type="hidden" name="search" value="<%= queue.filters.search %>"><input type="hidden" name="status" value="<%= queue.filters.status %>"><input type="hidden" name="page" value="<%= queue.filters.page %>">
                     <div class="field"><label for="withdraw-reason-<%= row.id %>">Reason to withdraw fee approval</label><textarea id="withdraw-reason-<%= row.id %>" name="reason" maxlength="1000" minlength="5" required><%= failedForRow.decision === 'withdraw' ? failedForRow.reason || '' : '' %></textarea></div>

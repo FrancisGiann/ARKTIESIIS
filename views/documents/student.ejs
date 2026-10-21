@@ -24,7 +24,7 @@
           <% if (requirement.note) { %><p class="form-alert" role="status"><%= requirement.note %></p><% } %>
           <details class="physical-checklist-update"<% if (error && Object.keys(checklistValues).length) { %> open<% } %>>
             <summary>Update this item<% if (requirement.created_at) { %> · <%= paperStatusLabels[requirement.status] || 'Status recorded' %><% } %></summary>
-          <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/physical-checklist">
+          <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/physical-checklist"<% if (recoveredForm === 'physical-checklist' && documentFormValues.requirementCode === requirement.requirement_code) { %> data-unsaved-initially-dirty="true"<% } %>>
             <input type="hidden" name="_csrf" value="<%= csrfToken %>">
             <input type="hidden" name="requirementCode" value="<%= requirement.requirement_code %>">
             <input type="hidden" name="idempotencyKey" value="<%= physicalChecklist.idempotencyKeys[requirement.requirement_code] %>">
@@ -56,7 +56,7 @@
           <% if (item.note) { %><p class="form-alert" role="status"><%= item.note %></p><% } %>
           <details class="physical-checklist-update"<% if (error && Object.keys(additionalValues).length) { %> open<% } %>>
             <summary>Update this item · <%= paperStatusLabels[item.status] || 'Not recorded' %></summary>
-          <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/physical-checklist">
+          <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/physical-checklist"<% if (recoveredForm === 'physical-checklist' && documentFormValues.requirementCode === 'additional' && documentFormValues.requirementName === item.requirement_name) { %> data-unsaved-initially-dirty="true"<% } %>>
             <input type="hidden" name="_csrf" value="<%= csrfToken %>">
             <input type="hidden" name="requirementCode" value="additional">
             <input type="hidden" name="requirementName" value="<%= item.requirement_name %>">
@@ -80,7 +80,7 @@
       <% } %>
       <details class="physical-checklist-update physical-checklist-new-item"<% if (error && documentFormValues.workflow === 'physicalChecklist' && documentFormValues.requirementCode === 'additional' && !physicalChecklist.additionalItems.some((item) => item.requirement_name === documentFormValues.requirementName)) { %> open<% } %>>
         <summary>Add a paper requirement</summary>
-      <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/physical-checklist">
+      <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/physical-checklist"<% if (recoveredForm === 'physical-checklist' && documentFormValues.requirementCode === 'additional' && !physicalChecklist.additionalItems.some((item) => item.requirement_name === documentFormValues.requirementName)) { %> data-unsaved-initially-dirty="true"<% } %>>
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <input type="hidden" name="requirementCode" value="additional">
         <input type="hidden" name="idempotencyKey" value="<%= physicalChecklist.additionalIdempotencyKey %>">
@@ -115,7 +115,7 @@
         <% if (item.instruction) { %><p><%= item.instruction %></p><% } %>
       </li><% } %></ul>
     <% } %>
-    <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/previous-school-report-card-status" data-submitting-message="Saving the paper-copy status. Please wait.">
+    <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/previous-school-report-card-status" data-submitting-message="Saving the paper-copy status. Please wait."<% if (recoveredForm === 'report-card-physical') { %> data-unsaved-initially-dirty="true"<% } %>>
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="admin-form-grid">
         <div class="field"><label for="previous-school-report-card-status">Record paper-copy status</label><select id="previous-school-report-card-status" name="status" required>
@@ -144,7 +144,7 @@
         </li><% } %>
       </ul>
     <% } %>
-    <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/form137-status" data-submitting-message="Saving the recorded physical status. Please wait.">
+    <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>/form137-status" data-submitting-message="Saving the recorded physical status. Please wait."<% if (recoveredForm === 'form137-status') { %> data-unsaved-initially-dirty="true"<% } %>>
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="admin-form-grid">
         <div class="field"><label for="form137-status">Record a physical status</label><select id="form137-status" name="status" required>
@@ -177,11 +177,11 @@
 
   <div class="student-documents-panel" data-section-panel="digital">
   <section class="admin-section" aria-labelledby="digital-submissions-title">
-        <div class="admin-section__heading"><div><h2 id="digital-submissions-title" tabindex="-1">Digital submissions</h2><p id="upload-format-help">Upload a Good Moral Certificate, PSA birth certificate, or previous-school report-card scan. The app checks file size and configured PDF, JPEG, or PNG format on the server; maximum size is <%= uploadMaxMb %> MB. Google Gemini receives Good Moral and PSA file bytes and suggests the visible student name; for PSA it also copies visible birth-date text as written, and for Good Moral it suggests issuing-school text and certificate-context clues. PSA birth dates and Good Moral school names are compared locally with saved records; profile data is not sent to Gemini. For a report-card scan, Gemini suggests only the visible student name; it does not read grades or other academic results. The birth-date and school-name comparisons are advisory; staff review each submission.</p></div></div>
+        <div class="admin-section__heading"><div><h2 id="digital-submissions-title" tabindex="-1">Digital submissions</h2><p id="upload-format-help">Upload a Good Moral, PSA, or previous-school report-card scan. PDF, JPEG, or PNG; up to <%= uploadMaxMb %> MB. Files go to Gemini for field suggestions: student name; PSA birth-date text; Good Moral issuer/context; report-card name only. Comparisons with saved records are local. Staff decide; report-card checks never read grades.</p><details class="document-precheck-help"><summary>Precheck details and limits</summary><p>For Good Moral and PSA, Gemini suggests the visible student name. PSA birth-date text and Good Moral issuing-school text and certificate-context clues are also suggested; comparisons with saved records happen locally, and profile data is not sent to Gemini. For a report-card scan, Gemini suggests only the visible student name; it does not read grades or other academic results. Birth-date and school-name comparisons are advisory. These suggestions do not verify authenticity, signatures, or seals.</p></details></div></div>
         <p class="muted-copy">If staff rejects the latest submission, you can start a new original submission; earlier submissions stay in the student’s history.</p>
         <h3 id="upload-title">Upload a digital document</h3>
     <% if (availableDocumentTypes.length) { %>
-    <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>" enctype="multipart/form-data" data-submitting-message="Uploading the document. Please wait.">
+    <form class="form-stack document-upload-form" method="post" action="/documents/students/<%= student.id %>" enctype="multipart/form-data" data-submitting-message="Uploading the document. Please wait."<% if (recoveredForm === 'digital-upload' && availableDocumentTypes.some(({ value }) => value === documentFormValues.documentType)) { %> data-unsaved-initially-dirty="true"<% } %>>
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="admin-form-grid">
         <div class="field">

@@ -17,7 +17,7 @@ async function renderFinanceView(name, locals) {
   const accountProjection = name === 'annual-student' && locals.ledger
     ? createStatementProjection(locals.ledger, { includeStaffFeeApplications: true }) : null;
   return ejs.renderFile(path.join(viewsDirectory, name + '.ejs'), {
-    title: 'Finance test', formatMoney, failedAction: null, preservedValues: [], paymentValues: null,
+    title: 'Finance test', formatMoney, failedAction: null, recovered: false, preservedValues: [], paymentValues: null,
     clearanceValues: {}, transactionValues: {}, formValues: {}, paymentStatusPresentation,
     ...(accountProjection ? {
       feeBreakdownYears: accountProjection.feeBreakdownYears,
@@ -638,6 +638,13 @@ test('finance annual roster separates page data, classification, and balances in
   assert.match(accountHtml, /Student number: S-22 · LRN: 001234567890/);
   assert.match(accountHtml, /href="\/finance\/students\/22\/annual\?view=payments&amp;backSchoolYear=2026-2027&amp;backTermId=1">Record a payment<\/a>/);
   assert.match(accountHtml, /class="button button--secondary finance-statement-action" href="\/finance\/students\/22\/statement">Statement of Account<\/a>/);
+  const assessedAccountLocals = structuredClone(accountLocals);
+  assessedAccountLocals.ledger.terms[0].assessment_id = 202;
+  assessedAccountLocals.ledger.terms[0].paymentClassification.assessment_id = 202;
+  const assessedAccountHtml = await renderFinanceView('annual-student', assessedAccountLocals);
+  const placementLinks = assessedAccountHtml.match(/<p class="finance-placement-links">([\s\S]*?)<\/p>/)?.[1] || '';
+  assert.match(placementLinks, /<a class="button button--secondary finance-placement-link" href="\/finance\/students\/22\/annual\?view=clearance&amp;backSchoolYear=2026-2027&amp;backTermId=1">Review Term account clearance<\/a>/);
+  assert.match(placementLinks, /<a class="button button--secondary finance-placement-link" href="\/finance\/students\/22\/annual\?view=charges&amp;backSchoolYear=2026-2027&amp;backTermId=1">Review charges, coverage, or supplementary fees<\/a>/);
   assert.match(accountHtml, /aria-current="page">Overview<\/a>[\s\S]*?>Payments<\/a>[\s\S]*?>Fees<\/a>[\s\S]*?>Term account clearance<\/a>[\s\S]*?>History<\/a>/);
   assert.doesNotMatch(accountHtml, /aria-current=(?:&#34;|&quot;)page(?:&#34;|&quot;)/);
   assert.match(accountHtml, /Grade 11 · Voucher type ESC/);
@@ -778,6 +785,11 @@ test('finance annual roster separates page data, classification, and balances in
     'an adjustment reversal failure opens the matching school-year details');
   assert.match(reversalRecoveryHtml, /<details class="finance-fee-term-group" open>[\s\S]*?<details class="finance-fee-staff-details" open>[\s\S]*?test-reversal-token[\s\S]*?Reversal reason/,
     'an adjustment reversal failure opens Finance fee details and preserves the reversal form');
+  assert.match(reversalRecoveryHtml, /action="\/finance\/students\/22\/annual\/adjustments\/90\/reverse"[^>]*data-unsaved-initially-dirty="true"/);
+  assert.doesNotMatch(reversalRecoveryHtml, /action="\/finance\/students\/22\/annual\/charges\/83\/adjustments"[^>]*data-unsaved-initially-dirty/,
+    'a neighboring fee form with its own reason field stays clean');
+  assert.equal((reversalRecoveryHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1,
+    'only the exact failed reversal form is marked dirty');
 
   const archivedLocals = structuredClone(accountLocals);
   archivedLocals.ledger.student.status = 'archived';

@@ -1657,13 +1657,20 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
       };
     },
     async recordPreviousSchoolReportCardPhysicalStatus(actorId, studentId, status, instruction) {
+      if (status === 'correction' && !instruction) throw new DocumentServiceError('Enter a paper-copy note.', 400);
       calls.push(['previous-school-paper-status', actorId, studentId, status, instruction]);
       return { studentId: Number(studentId), status };
     },
     async upload(actorId, body, file) {
+      if (body.documentType === 'good_moral' && file?.originalname === 'synthetic-error.pdf') {
+        throw new DocumentServiceError('Review the selected digital document.', 400);
+      }
       if (body.documentType === 'form_137') throw new DocumentServiceError('Form 137 is tracked as a physical status only.');
       if (body.documentType === 'report_card' && actorId !== 1) {
         throw new DocumentServiceError('Only students may upload report cards through their own linked account.', 403);
+      }
+      if (actorId !== 1 && !['good_moral', 'psa_birth_certificate'].includes(body.documentType)) {
+        throw new DocumentServiceError('Staff uploads are limited to Good Moral and PSA documents.', 403);
       }
       if (actorId === 1 && !['good_moral', 'psa_birth_certificate', 'report_card'].includes(body.documentType)) {
         throw new DocumentServiceError('Students may upload Good Moral Certificates, PSA birth certificates, and report cards for their own record.', 403);
@@ -1757,6 +1764,7 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
       };
     },
     async recordForm137Status(actorId, studentId, status, instruction) {
+      if (status === 'correction' && !instruction) throw new DocumentServiceError('Enter a Form 137 instruction.', 400);
       calls.push(['form137', actorId, studentId, status, instruction]);
       return { studentId, status };
     }
@@ -1835,8 +1843,8 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     assert.doesNotMatch(studentHtml, /Staff-only paper note/);
     assert.doesNotMatch(studentHtml, /Form 137|form137_status|Gemini suggestions/i, 'Form 137 workflow details remain staff-only');
     assert.match(studentHtml, /id="document-file"[^>]*aria-describedby="upload-format-help"/);
-    assert.match(studentHtml, /id="upload-format-help">The app checks file size and configured PDF, JPEG, or PNG format on the server; maximum size is 10 MB\. Google Gemini receives Good Moral and PSA file bytes/);
-    assert.match(studentHtml, /PSA birth dates and Good Moral school names are compared locally with saved records; profile data is not sent to Gemini/);
+    assert.match(studentHtml, /id="upload-format-help">PDF, JPEG, or PNG; up to 10 MB\. Gemini receives Good Moral, PSA, and report-card files\. It suggests student name; PSA birth-date text; Good Moral issuer\/context; and report-card name only\. Comparisons with saved records are local\. Staff decide; report-card checks never read grades\./);
+    assert.match(studentHtml, /<details class="document-precheck-help"><summary>Precheck details and limits<\/summary>[\s\S]*?profile data is not sent to Gemini/);
     assert.match(studentHtml, /For a report-card scan, Gemini suggests only the visible student name; it does not read grades or other academic results/);
     assert.match(studentHtml, /If staff rejects the latest submission, you can start a new original submission; earlier submissions stay in your history/);
     assert.doesNotMatch(studentHtml, /No file is uploaded or processed/);
@@ -2135,14 +2143,15 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     const staffPage = await fetch(`${baseUrl}/documents/students/44`, { headers: { cookie: registrarCookie } });
     assert.equal(staffPage.status, 200);
     const staffPageHtml = await staffPage.text();
+    assert.doesNotMatch(staffPageHtml, /data-unsaved-initially-dirty/);
     assert.match(staffPageHtml, /aria-label="Student document workflows"[\s\S]*Digital submissions[\s\S]*Paper requirements[\s\S]*Form 137[\s\S]*Requests/);
     for (const anchor of ['digital-submissions-title', 'physical-checklist-title', 'previous-school-report-card-status-title', 'form137-status-title']) {
       assert.match(staffPageHtml, new RegExp(`id="${anchor}" tabindex="-1"`));
     }
     assert.match(staffPageHtml, /<script src="\/js\/student-documents\.js" defer><\/script>/);
     assert.doesNotMatch(staffPageHtml, /data-section-panel="(?:digital|paper|form137)" hidden/);
-    assert.match(staffPageHtml, /Google Gemini receives Good Moral and PSA file bytes and suggests the visible student name/);
-    assert.match(staffPageHtml, /PSA birth dates and Good Moral school names are compared locally with saved records; profile data is not sent to Gemini/);
+    assert.match(staffPageHtml, /Files go to Gemini for field suggestions: student name; PSA birth-date text; Good Moral issuer\/context; report-card name only/);
+    assert.match(staffPageHtml, /<details class="document-precheck-help"><summary>Precheck details and limits<\/summary>[\s\S]*?profile data is not sent to Gemini/);
     const paperError = await fetch(`${baseUrl}/documents/students/44/physical-checklist`, {
       method: 'POST', headers: { cookie: registrarCookie, 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ _csrf: csrfFromHtml(staffPageHtml), idempotencyKey: 'paper-checklist-token', requirementCode: 'birth_certificate', status: 'correction', isApplicable: '1', originalsReceived: '2', copiesReceived: '0', piecesReceived: '0', note: '' }),
@@ -2152,10 +2161,12 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     const paperErrorHtml = await paperError.text();
     assert.match(paperErrorHtml, /Enter a note when requesting a correction/);
     assert.match(paperErrorHtml, /<details class="physical-checklist-update" open>/);
+    assert.match(paperErrorHtml, /action="\/documents\/students\/44\/physical-checklist"[^>]*data-unsaved-initially-dirty="true"/);
     assert.match(paperErrorHtml, /id="paper-status-birth_certificate" name="status" required><option value="pending" >Pending<\/option><option value="received" >Received<\/option><option value="verified" >Verified<\/option><option value="correction" selected>Correction needed/);
     assert.match(paperErrorHtml, /id="paper-copies-birth_certificate" name="copiesReceived" type="number" min="0" max="50" value="0"/);
     assert.doesNotMatch(paperErrorHtml, /paper-originals-birth_certificate|paper-pieces-birth_certificate/);
     assert.match(paperErrorHtml, /name="idempotencyKey" value="paper-checklist-token"/);
+    assert.equal((paperErrorHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
 
     const additionalPaperError = await fetch(`${baseUrl}/documents/students/44/physical-checklist`, {
       method: 'POST', headers: { cookie: registrarCookie, 'content-type': 'application/x-www-form-urlencoded' },
@@ -2167,6 +2178,8 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     assert.match(additionalPaperErrorHtml, /<details class="physical-checklist-update physical-checklist-new-item" open>/);
     assert.match(additionalPaperErrorHtml, /id="additional-requirement-name" name="requirementName" maxlength="120" value="Custom form"/);
     assert.match(additionalPaperErrorHtml, /name="idempotencyKey" value="additional-paper-token"/);
+    assert.match(additionalPaperErrorHtml, /action="\/documents\/students\/44\/physical-checklist"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.equal((additionalPaperErrorHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
     assert.match(staffPageHtml, /PSA birth certificate/);
     assert.match(staffPageHtml, /Previous-school report-card paper copy/);
     assert.match(staffPageHtml, /Place submitted papers in a long brown envelope; envelopes are storage containers, not checklist items/);
@@ -2256,7 +2269,57 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     assert.match(failedScanResponse.headers.get('cache-control'), /no-store/);
     assert.match(failedScanHtml, /Gemini field extraction timed out/);
     assert.match(failedScanHtml, /Save Form 137 status/);
+    assert.doesNotMatch(failedScanHtml, /data-unsaved-initially-dirty/,
+      'a transient scan failure does not claim the cleared file input was recovered');
     assert.deepEqual(scanCalls[1], ['scan', 2, 44, 'physical.pdf']);
+
+    const form137StatusFailure = await fetch(`${baseUrl}/documents/students/44/form137-status`, {
+      method: 'POST', headers: { cookie: registrarCookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfFromHtml(failedScanHtml), status: 'correction', instruction: '' }), redirect: 'manual'
+    });
+    const form137StatusFailureHtml = await form137StatusFailure.text();
+    assert.equal(form137StatusFailure.status, 400);
+    assert.match(form137StatusFailureHtml, /action="\/documents\/students\/44\/form137-status"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.doesNotMatch(form137StatusFailureHtml, /action="\/documents\/students\/44\/form137-scan"[^>]*data-unsaved-initially-dirty/);
+    assert.equal((form137StatusFailureHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
+
+    const reportCardStatusFailure = await fetch(`${baseUrl}/documents/students/44/previous-school-report-card-status`, {
+      method: 'POST', headers: { cookie: registrarCookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfFromHtml(failedScanHtml), status: 'correction', instruction: '' }), redirect: 'manual'
+    });
+    const reportCardStatusFailureHtml = await reportCardStatusFailure.text();
+    assert.equal(reportCardStatusFailure.status, 400);
+    assert.match(reportCardStatusFailureHtml, /action="\/documents\/students\/44\/previous-school-report-card-status"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.doesNotMatch(reportCardStatusFailureHtml, /action="\/documents\/students\/44\/form137-status"[^>]*data-unsaved-initially-dirty/);
+    assert.equal((reportCardStatusFailureHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
+
+    const digitalUploadFailure = new FormData();
+    digitalUploadFailure.set('_csrf', csrfFromHtml(failedScanHtml));
+    digitalUploadFailure.set('documentType', 'good_moral');
+    digitalUploadFailure.set('document', new Blob([Buffer.from('%PDF-1.7\nsynthetic invalid upload')], { type: 'application/pdf' }), 'synthetic-error.pdf');
+    const digitalUploadErrorResponse = await fetch(`${baseUrl}/documents/students/44`, {
+      method: 'POST', headers: { cookie: registrarCookie }, body: digitalUploadFailure, redirect: 'manual'
+    });
+    const digitalUploadErrorHtml = await digitalUploadErrorResponse.text();
+    assert.equal(digitalUploadErrorResponse.status, 400);
+    assert.match(digitalUploadErrorHtml, /action="\/documents\/students\/44"[^>]*data-unsaved-initially-dirty="true"/);
+    assert.match(digitalUploadErrorHtml, /option value="good_moral" selected/);
+    assert.doesNotMatch(digitalUploadErrorHtml, /action="\/documents\/students\/44\/form137-scan"[^>]*data-unsaved-initially-dirty/);
+    assert.equal((digitalUploadErrorHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
+
+    const unavailableTypeUpload = new FormData();
+    unavailableTypeUpload.set('_csrf', csrfFromHtml(staffPageHtml));
+    unavailableTypeUpload.set('documentType', 'not-rendered');
+    unavailableTypeUpload.set('document', new Blob([Buffer.from('%PDF-1.7\nsynthetic unavailable type')], { type: 'application/pdf' }), 'unavailable-type.pdf');
+    const unavailableTypeResponse = await fetch(`${baseUrl}/documents/students/44`, {
+      method: 'POST', headers: { cookie: registrarCookie }, body: unavailableTypeUpload, redirect: 'manual'
+    });
+    const unavailableTypeHtml = await unavailableTypeResponse.text();
+    assert.equal(unavailableTypeResponse.status, 403);
+    assert.match(unavailableTypeHtml, /Staff uploads are limited to Good Moral and PSA documents/);
+    assert.doesNotMatch(unavailableTypeHtml, /data-unsaved-initially-dirty/,
+      'an unavailable document type is not represented by a selected control, so the cleared file selection is not considered recovered');
+    assert.doesNotMatch(unavailableTypeHtml, /option value="not-rendered" selected/);
 
     const processingCallsBeforeStatus = processingCalls.length;
     const statusWrite = await fetch(`${baseUrl}/documents/students/44/form137-status`, {

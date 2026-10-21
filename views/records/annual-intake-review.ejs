@@ -11,6 +11,12 @@
     <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Paper document review</span><span class="intake-step-label--short">Papers</span></li><li><span class="intake-step-label--full">Finance assessment</span><span class="intake-step-label--short">Finance</span></li><li aria-current="step"><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li></ol>
   </nav>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <% if (sourceReviewRecovery?.formUnavailable) { %>
+    <section class="admin-section" aria-label="Source review recovery">
+      <p class="form-alert" role="alert">The source-review form is unavailable in the refreshed enrollment state. The save did not return confirmation; check the current state before retrying.</p>
+      <% if (sourceReviewRecovery.reason) { %><p><strong>Submitted reason from this attempt:</strong> <%= sourceReviewRecovery.reason %></p><% } %>
+    </section>
+  <% } %>
   <% if (!record || !checklist || !financeReadiness) { %>
     <section class="admin-section"><p>The final review could not be loaded. Return to enrollments to try again.</p><a class="button button--secondary" href="/registrar/intake">Return to enrollments</a></section>
   <% } else { %>
@@ -85,13 +91,14 @@
         <% if (prerequisiteReview.blockers?.length) { %><ul class="form-alert" aria-label="Paper form items to resolve"><% for (const blocker of prerequisiteReview.blockers) { %><li><%= blocker %></li><% } %></ul><% } else { %><p class="form-success" role="status">All required earlier-term paper forms are complete.</p><% } %>
         <p><a class="table-action" href="/registrar/records/students/<%= parent.student_id %>/clearance">Open this student’s Clearance workspace</a></p>
         <% if (sourceOptions && !sourceOptions.sourceLocked) { %>
-          <form class="form-stack admin-form" method="post" action="/registrar/intake/<%= annualId %>/continuity-source">
+          <form class="form-stack admin-form" method="post" action="/registrar/intake/<%= annualId %>/continuity-source" <% if (sourceReviewRecovery?.hasRetainedValues) { %>data-unsaved-initially-dirty="true"<% } %>>
             <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= values.sourceBindingIdempotencyKey %>">
             <fieldset class="admin-fieldset"><legend>Bind the audited preceding school year</legend>
               <p>Choose the matching preceding school year and grade from the student’s school records. This review is retained with the enrollment.</p>
-              <div class="field"><label for="continuity-source-id">Preceding school year and grade</label><select id="continuity-source-id" name="sourceAnnualId" required><option value="">Choose the verified source</option><% for (const source of sourceOptions.candidates.filter((candidate) => candidate.selectable)) { %><option value="<%= source.id %>"><%= source.schoolYear %> · <%= source.gradeLevel %></option><% } %></select></div>
+              <div class="field"><label for="continuity-source-id">Preceding school year and grade</label><select id="continuity-source-id" name="sourceAnnualId" required><option value="" <%= sourceReviewRecovery && !sourceReviewRecovery.selectedSourceAnnualId ? 'selected' : '' %>>Choose the verified source</option><% for (const source of sourceOptions.candidates.filter((candidate) => candidate.selectable)) { const sourceId = String(source.id); %><option value="<%= sourceId %>" <%= sourceReviewRecovery?.selectedSourceAnnualId === sourceId ? 'selected' : '' %>><%= source.schoolYear %> · <%= source.gradeLevel %></option><% } %></select></div>
+              <% if (sourceReviewRecovery?.sourceUnavailable) { %><p class="form-alert" role="alert">The source submitted earlier is no longer eligible. Choose an available school record before saving.</p><% } %>
               <% if (!sourceOptions.candidates.some((candidate) => candidate.selectable)) { %><p>No eligible source is available in the exact prior school year. Resolve the registrar record instead of selecting another year.</p><% } %>
-              <div class="field"><label for="continuity-source-reason">School-record review reason</label><textarea id="continuity-source-reason" name="reason" rows="2" maxlength="1000" required></textarea></div>
+              <div class="field"><label for="continuity-source-reason">School-record review reason</label><textarea id="continuity-source-reason" name="reason" rows="2" maxlength="1000" required><%= sourceReviewRecovery?.reason || '' %></textarea></div>
               <button class="button button--secondary" type="submit" <%= sourceOptions.candidates.some((candidate) => candidate.selectable) ? '' : 'disabled' %>>Save source review</button>
             </fieldset>
           </form>

@@ -44,7 +44,7 @@
       <details class="assignment-create-details" <%= error ? 'open' : '' %>>
         <summary id="create-teacher-assignment-title">Assign a teacher</summary>
         <p>Only active teacher accounts can receive assignments. Revoke an active assignment before transferring a class.</p>
-      <form class="form-stack records-compact-form" method="post" action="/registrar/records/teacher-assignments">
+      <form class="form-stack records-compact-form" method="post" action="/registrar/records/teacher-assignments"<% if (recoveredForm === 'teacher-assignment-create') { %> data-unsaved-initially-dirty="true"<% } %>>
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <input type="hidden" name="academicTermId" value="<%= selectedTermId %>">
         <input type="hidden" name="filterTermId" value="<%= selectedTermId %>">

@@ -114,7 +114,7 @@ test('printable payment confirmation renders allocation purpose and current bala
 test('Finance review renders a split payment with distinct saved school-year and term purposes', async () => {
   const template = path.join(__dirname, '..', 'views', 'finance', 'review-draft.ejs');
   const html = await ejs.renderFile(template, {
-    title: 'Review payment', actionLabel: 'Review payment', error: null, status: 200, previewUnavailable: false,
+    title: 'Review payment', actionLabel: 'Review payment', error: null, status: 200, previewUnavailable: false, recoveredForm: null,
     previewFields: [], editorFields: [], csrfToken: 'test-token',
     draft: { id: 'draft-1', revision: 1, dependencyFingerprint: 'fingerprint', requiresReview: false, preview: {
       student: { name: 'Rae Student', studentNumber: 'S-55' }, cashAmount: '5000.00', appliedAmount: '5000.00', unallocatedCredit: '0.00',

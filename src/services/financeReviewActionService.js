@@ -196,7 +196,7 @@ function departureChargeReviews(body) {
   const decisions = Array.isArray(body.departureDecision) ? body.departureDecision : body.departureDecision == null ? [] : [body.departureDecision];
   const amounts = Array.isArray(body.departureReductionAmount) ? body.departureReductionAmount : body.departureReductionAmount == null ? [] : [body.departureReductionAmount];
   const reasons = Array.isArray(body.departureChargeReason) ? body.departureChargeReason : body.departureChargeReason == null ? [] : [body.departureChargeReason];
-  return ids.map((chargeId, index) => ({ chargeId, decision: decisions[index] || '', reductionAmount: amounts[index] || '0.00', reason: reasons[index] || '' }));
+  return ids.map((chargeId, index) => ({ chargeId, decision: decisions[index] || '', reductionAmount: amounts[index] ?? '', reason: reasons[index] || '' }));
 }
 
 function normalizeActionInput(actionType, body) {
@@ -1056,7 +1056,8 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     if (action.type === 'departure_review' && context.caseId) {
       const caseResult = await tx.request().input('caseId', sql.BigInt, context.caseId)
         .query(`SELECT departure.id, departure.annual_enrollment_id, departure.effective_enrollment_id,
-            effective.annual_term_number AS departure_term_number, annual.school_year, annual.grade_level
+          effective.annual_term_number AS departure_term_number, annual.school_year, annual.grade_level,
+          departure.reason AS registrar_departure_reason
           FROM finance_departure_cases AS departure
           INNER JOIN annual_enrollments AS annual ON annual.id = departure.annual_enrollment_id
           INNER JOIN enrollments AS effective ON effective.id = departure.effective_enrollment_id
@@ -1089,6 +1090,10 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           termNumber: Number(charge.annual_term_number), departureTermNumber,
           lastPayableInstallment: cutoffInstallment, payableBasisCents: basisCents });
         const supplied = submittedById.get(chargeId);
+        const submittedDecision = allTargetsCovered ? String(supplied?.decision || '').toLowerCase() : '';
+        const submittedReduction = supplied?.reductionAmount == null ? '' : String(supplied.reductionAmount);
+        const reductionAmount = submittedDecision === 'retain' && submittedReduction.trim() === ''
+          ? '0.00' : submittedReduction;
         return {
           chargeId,
           termNumber: Number(charge.annual_term_number),
@@ -1098,10 +1103,12 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           reviewCategory,
           payableBefore: formatMoneyCents(basisCents),
           proposedReduction: formatMoneyCents(proposedCents),
-          decision: allTargetsCovered && ['retain', 'reduce'].includes(String(supplied?.decision || '').toLowerCase())
-            ? String(supplied.decision).toLowerCase() : '',
-          reductionAmount: !allTargetsCovered || supplied?.reductionAmount == null || supplied.reductionAmount === ''
-            ? formatMoneyCents(proposedCents) : String(supplied.reductionAmount),
+          decision: ['retain', 'reduce'].includes(submittedDecision) ? submittedDecision : '',
+          reductionAmount,
+          keepAmountNeedsCorrection: submittedDecision === 'retain' && reductionAmount !== '' && (() => {
+            try { return parseMoneyCents(reductionAmount, { allowZero: true }) !== 0n; }
+            catch { return true; }
+          })(),
           reason: allTargetsCovered && typeof supplied?.reason === 'string' ? supplied.reason : ''
         };
       });
@@ -1119,6 +1126,8 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       const decisionsReady = chargeReviews.every(reviewDecisionReady);
       preview.departureTermNumber = departureTermNumber || null;
       preview.departureLastPayableInstallment = cutoffInstallment || null;
+      preview.registrarDepartureReason = typeof departureCase?.registrar_departure_reason === 'string'
+        ? departureCase.registrar_departure_reason : '';
       preview.departureChargeReviews = chargeReviews.map((row) => ({
         ...row,
         fee: [row.feeCategory, row.lineName].filter(Boolean).join(' · '),

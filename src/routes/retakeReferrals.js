@@ -21,12 +21,12 @@ function createRegistrarRetakeReferralRouter({ retakeReferralService } = {}) {
   const service = retakeReferralService;
   if (!service) throw new TypeError('A retake referral service is required.');
 
-  async function renderIndex(req, res, { status = 200, error = null, values = {} } = {}) {
+  async function renderIndex(req, res, { status = 200, error = null, values = {}, recoveredForm = null } = {}) {
     try {
       const targets = await service.listTargets(req.authUser.id);
       return privateResponse(res).status(status).render('retake-referrals/registrar-index', {
         title: 'Retake referrals', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), targets,
-        error, values, idempotencyKey: crypto.randomUUID()
+        error, values, recoveredForm, idempotencyKey: crypto.randomUUID()
       });
     } catch (loadError) {
       if (loadError instanceof RetakeReferralError) return res.status(loadError.status).render('error', { title: 'Retake referrals', message: loadError.message });
@@ -34,7 +34,7 @@ function createRegistrarRetakeReferralRouter({ retakeReferralService } = {}) {
     }
   }
 
-  async function renderReferral(req, res, referralId, { status = 200, error = null, values = {}, editValues = {}, referenceValue = null } = {}) {
+  async function renderReferral(req, res, referralId, { status = 200, error = null, values = {}, editValues = {}, referenceValue = null, recoveredForm = null } = {}) {
     try {
       const referral = await service.getReferral(req.authUser.id, referralId);
       const history = await service.listReferralHistory(req.authUser.id, referral.annual_enrollment_id);
@@ -44,7 +44,7 @@ function createRegistrarRetakeReferralRouter({ retakeReferralService } = {}) {
       ]);
       return privateResponse(res).status(status).render('retake-referrals/registrar-detail', {
         title: `Retake referral · ${referral.student_name}`, currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
-        referral, history, subjects, termOptions, values, editValues, referenceValue, error, formatFinanceDateTime,
+        referral, history, subjects, termOptions, values, editValues, referenceValue, error, recoveredForm, formatFinanceDateTime,
         itemKeyToken: crypto.randomUUID(),
         correctionToken: crypto.randomUUID()
       });
@@ -64,7 +64,7 @@ function createRegistrarRetakeReferralRouter({ retakeReferralService } = {}) {
       });
       return privateResponse(res).redirect(303, `/registrar/retake-referrals/${result.referralId}`);
     } catch (error) {
-      if (error instanceof RetakeReferralError) return renderIndex(req, res, { status: error.status, error: error.message, values: {
+      if (error instanceof RetakeReferralError) return renderIndex(req, res, { status: error.status, error: error.message, recoveredForm: 'referral-create', values: {
         annualEnrollmentId: cleanValue(req.body?.annualEnrollmentId, 12),
         evaluationReference: cleanValue(req.body?.evaluationReference, 160)
       } });
@@ -81,7 +81,7 @@ function createRegistrarRetakeReferralRouter({ retakeReferralService } = {}) {
       return privateResponse(res).redirect(303, `/registrar/retake-referrals/${encodeURIComponent(req.params.referralId)}`);
     } catch (error) {
       if (error instanceof RetakeReferralError) return renderReferral(req, res, req.params.referralId, {
-        status: error.status, error: error.message, referenceValue: cleanValue(req.body?.evaluationReference, 160)
+        status: error.status, error: error.message, referenceValue: cleanValue(req.body?.evaluationReference, 160), recoveredForm: 'reference'
       });
       return res.status(503).render('error', { title: 'Update evaluation reference', message: 'The reference could not be updated.' });
     }
@@ -93,7 +93,7 @@ function createRegistrarRetakeReferralRouter({ retakeReferralService } = {}) {
       await service.addItem(req.authUser.id, req.params.referralId, req.body || {});
       return privateResponse(res).redirect(303, `/registrar/retake-referrals/${encodeURIComponent(req.params.referralId)}`);
     } catch (error) {
-      if (error instanceof RetakeReferralError) return renderReferral(req, res, req.params.referralId, { status: error.status, error: error.message, values: {
+      if (error instanceof RetakeReferralError) return renderReferral(req, res, req.params.referralId, { status: error.status, error: error.message, recoveredForm: 'item-create', values: {
         subjectName: cleanValue(req.body?.subjectName, 120), subjectId: cleanValue(req.body?.subjectId, 12),
         targetTerm: cleanValue(req.body?.targetTerm, 2), financeExplanation: cleanValue(req.body?.financeExplanation, 500, true)
       } });
@@ -107,7 +107,7 @@ function createRegistrarRetakeReferralRouter({ retakeReferralService } = {}) {
       await service.editItem(req.authUser.id, req.params.referralId, req.params.itemId, req.body || {});
       return privateResponse(res).redirect(303, `/registrar/retake-referrals/${encodeURIComponent(req.params.referralId)}`);
     } catch (error) {
-      if (error instanceof RetakeReferralError) return renderReferral(req, res, req.params.referralId, { status: error.status, error: error.message, editValues: {
+      if (error instanceof RetakeReferralError) return renderReferral(req, res, req.params.referralId, { status: error.status, error: error.message, recoveredForm: `item-edit:${req.params.itemId}`, editValues: {
         [String(req.params.itemId)]: {
           subjectName: cleanValue(req.body?.subjectName, 120), subjectId: cleanValue(req.body?.subjectId, 12),
           targetTerm: cleanValue(req.body?.targetTerm, 2), financeExplanation: cleanValue(req.body?.financeExplanation, 500, true)

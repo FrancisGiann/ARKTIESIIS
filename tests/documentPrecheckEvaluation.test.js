@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { performance } = require('node:perf_hooks');
 const {
   evaluateSamples,
   loadValidatedSamples,
@@ -197,6 +198,21 @@ test('default evaluation CLI performs a validated dry run without provider calls
 test('deadline results separate timeout abstentions from samples skipped before a request', async () => {
   const validated = await loadValidatedSamples();
   let calls = 0;
+  const originalNow = performance.now;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let elapsedMs = 0;
+  let nextTimerId = 0;
+  performance.now = () => elapsedMs;
+  globalThis.setTimeout = (callback, delay = 0) => {
+    const timerId = ++nextTimerId;
+    queueMicrotask(() => {
+      elapsedMs += Number(delay) || 0;
+      callback();
+    });
+    return timerId;
+  };
+  globalThis.clearTimeout = () => {};
   try {
     const report = await evaluateSamples(validated.samples, {
       extractDocument() {
@@ -218,6 +234,9 @@ test('deadline results separate timeout abstentions from samples skipped before 
     assert.equal(report.linkedNameComparison.expectedMatchSamples, 4);
     assert.equal(report.linkedNameComparison.expectedNonMatchSamples, 2);
   } finally {
+    performance.now = originalNow;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
     for (const sample of validated.samples) sample.buffer.fill(0);
   }
 });

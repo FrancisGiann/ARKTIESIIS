@@ -40,7 +40,7 @@
     <% if (!assignments.length) { %><p class="empty-state">No active teacher assignments match this context. <a class="table-action" href="/registrar/records/teacher-assignments?termId=<%= academicTermId || '' %><% if (selectedSectionId) { %>&amp;sectionId=<%= selectedSectionId %><% } %>#create-teacher-assignment-title">Create a teacher assignment</a> before setting class times.</p><% } %>
     <details class="schedule-create-disclosure" <%= showCreate || error ? 'open' : '' %>>
       <summary class="schedule-create-summary" id="schedule-create-title">Add a class time</summary>
-        <form class="schedule-create-form" method="post" action="/registrar/schedules" aria-labelledby="schedule-create-title" id="schedule-create-form" data-schedule-conflict-form data-conflict-preview-url="/registrar/schedules/conflicts/preview">
+        <form class="schedule-create-form" method="post" action="/registrar/schedules" aria-labelledby="schedule-create-title" id="schedule-create-form" data-schedule-conflict-form data-conflict-preview-url="/registrar/schedules/conflicts/preview"<% if (recoveredForm === 'schedule-create') { %> data-unsaved-initially-dirty="true"<% } %>>
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <input type="hidden" name="scheduleId" value="">
         <input type="hidden" name="termId" value="<%= academicTermId || '' %>">
@@ -130,7 +130,7 @@
                         <% if (isActiveAssignment) { %>
                           <details class="schedule-edit" <%= isEditing ? 'open' : '' %>>
                             <summary>Edit class time</summary>
-                            <form method="post" action="/registrar/schedules/<%= schedule.id %>" data-schedule-conflict-form data-conflict-preview-url="/registrar/schedules/conflicts/preview">
+                            <form method="post" action="/registrar/schedules/<%= schedule.id %>" data-schedule-conflict-form data-conflict-preview-url="/registrar/schedules/conflicts/preview"<% if (recoveredForm === `schedule-edit:${schedule.id}`) { %> data-unsaved-initially-dirty="true"<% } %>>
                               <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                               <input type="hidden" name="scheduleId" value="<%= schedule.id %>">
                               <input type="hidden" name="termId" value="<%= academicTermId || '' %>">

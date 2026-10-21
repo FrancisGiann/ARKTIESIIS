@@ -216,7 +216,7 @@ test('home page renders with Helmet default content security policy', async () =
     for (const section of ['home-overview', 'home-school-day', 'home-documents', 'home-access']) {
       assert.match(html, new RegExp(`id="${section}"`));
     }
-    assert.match(html, /Welcome to ARKTIESIIS, Lucena Branch\./);
+    assert.match(html, /Welcome to ARKTIESIIS, Main Branch\./);
     assert.match(html, /Keep the school day in view\./);
     assert.match(html, /Schedules.*Enrollment.*Approved grades/);
     assert.match(html, /Keep school requirements moving with clear next steps\./);

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const bcrypt = require('bcrypt');
 const { createApp } = require('../src/app');
+const { buildMasterlistProjection } = require('../src/services/financeMasterlistService');
 
 const password = 'Correct-Horse-Battery-12';
 const passwordHash = bcrypt.hashSync(password, 4);
@@ -11,6 +12,18 @@ const environment = {
   devPasswordOnlyLogin: true,
   sessionSecret: 'phase-eleven-dashboard-test-session-secret'
 };
+
+function emptyFinanceMasterlist() {
+  return {
+    ...buildMasterlistProjection({}, {
+      schoolYear: '2026-2027', gradeLevel: '', voucherCode: '', search: '', section: '',
+      placementTerm: 1, page: 1
+    }),
+    options: { schoolYears: ['2026-2027'], grades: [], sections: [], placementTerms: [1, 2, 3] },
+    currentSchoolYear: '2026-2027', currentScopeConfigured: true,
+    defaultPlacementTerm: 1, needsScopeSelection: false
+  };
+}
 
 function createAuthPool(role) {
   const user = {
@@ -83,7 +96,7 @@ test('role dashboards lead with useful work and omit decorative summary strips',
       summary: { active_student_count: 8, archived_student_count: 1, current_enrollment_count: 6, documents_awaiting_review_count: 2, documents_processing_count: 1 }
     },
     {
-      role: 'finance', path: '/finance', label: /<h2 id="annual-roster-filter-title">Find student accounts<\/h2>/,
+      role: 'finance', path: '/finance', label: /<h2 id="finance-accounts-filter-title"[^>]*>Find student accounts<\/h2>/,
       summary: { account_count: 10, accounts_due_count: 4, accounts_settled_count: 5, accounts_credit_count: 1, charge_count: 12, payment_count: 8 }
     },
     {
@@ -94,6 +107,7 @@ test('role dashboards lead with useful work and omit decorative summary strips',
 
   for (const scenario of scenarios) {
     const summaryCalls = [];
+    const masterlistCalls = [];
     const services = {
       adminService: {
         async getDashboardSummary(actorId) { summaryCalls.push(['admin', actorId]); return scenario.summary; }
@@ -118,6 +132,12 @@ test('role dashboards lead with useful work and omit decorative summary strips',
         async searchStudents(searchTerm) { return { students: [], searchTerm }; },
         async getOwnStudentAccount(actorId) { return { account: null, transactions: [] }; },
         async getDashboardSummary(actorId) { summaryCalls.push(['finance', actorId]); return scenario.summary; }
+      },
+      financeMasterlistService: {
+        async list(actorId, filters) {
+          masterlistCalls.push({ actorId, filters: { ...filters } });
+          return emptyFinanceMasterlist();
+        }
       }
     };
     await withServer(createApp({ databasePool: createAuthPool(scenario.role), environment, ...services,
@@ -130,6 +150,8 @@ test('role dashboards lead with useful work and omit decorative summary strips',
       assert.match(html, scenario.label, scenario.role);
       assert.doesNotMatch(html, /dashboard-summary|Finance at a glance|System summary|Current enrollments/);
       assert.deepEqual(summaryCalls, [], `${scenario.role} does not fetch dashboard summaries that are not shown`);
+      assert.deepEqual(masterlistCalls, scenario.role === 'finance' ? [{ actorId: 7, filters: {} }] : [],
+        `${scenario.role} only reads the Finance masterlist when authorized route access requires it`);
     });
   }
 });

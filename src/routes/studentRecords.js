@@ -243,7 +243,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     return service.listWorkspace(search, termId, page);
   }
 
-  async function renderDashboard(req, res, { status = 200, error = null, notice = null, search = '', termId = '', page = 1, openForm = null, formValues = {}, view = 'records', returnStatus = '' } = {}) {
+  async function renderDashboard(req, res, { status = 200, error = null, notice = null, search = '', termId = '', page = 1, openForm = null, formValues = {}, view = 'records', returnStatus = '', recoveredForm = null } = {}) {
     try {
       if (view === 'setup') {
         const navigation = buildNavigation(req.authUser.role, '/registrar/records?view=setup');
@@ -275,6 +275,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         returnStatus,
         openForm: openForm || requestedOpenForm || (view === 'setup' ? defaultOpenForm : null),
         formValues: { ...formValues, ...(formSectionTermId ? { academicTermId: formSectionTermId } : {}) },
+        recoveredForm,
         ...workspace,
         students: workspace.students || [],
         terms: workspace.terms || [],
@@ -295,12 +296,12 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         title: 'Student Records', csrfToken: ensureCsrfToken(req), currentUser: req.authUser,
         students: [], terms: [], sections: [], searchTerm: '', academicTermId: null,
         totalStudents: 0, page: 1, pageSize: 25, totalPages: 1,
-        notice: null, error: loadError.message, openForm: null, formValues: {}, view
+        notice: null, error: loadError.message, openForm: null, formValues: {}, view, recoveredForm: null
       });
     }
   }
 
-  async function renderStudentForm(req, res, { studentId = null, values = {}, error = null, status = 200, notice = null } = {}) {
+  async function renderStudentForm(req, res, { studentId = null, values = {}, error = null, status = 200, notice = null, recoveredProfile = false } = {}) {
     try {
       const record = studentId === null ? null : await service.getStudent(studentId);
       if (studentId !== null && !record) {
@@ -326,6 +327,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         enrollments: record?.enrollments || [],
         annualEnrollments: record?.annualEnrollments || [],
         values: formValues,
+        recoveredProfile,
         maxBirthDate: latestBirthDate(),
         error,
         notice
@@ -341,7 +343,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
   async function renderStudentOverview(req, res, {
     status = 200, error = null, view = 'overview', requestForm = null, requestId = null,
     requestValues = {}, requestIdempotencyKey = null, returnEvaluation = null, returnEvaluationValues = {},
-    returnEvaluationError = null, returnEvaluationExpectedVersion = null
+    returnEvaluationError = null, returnEvaluationExpectedVersion = null, requestRecovery = null, returnEvaluationDirty = false
   } = {}) {
     const studentId = normalizeRecordId(req.params.id);
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
@@ -376,7 +378,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         title: 'Student record overview', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
         studentView: view, notice: notices[req.query.notice] || null, requestError: error,
         returnEvaluationError, returnEvaluation, returnEvaluationValues, returnEvaluationExpectedVersion, returnEvaluations, returnEligibility,
-        requestForm, requestFormId: requestId, requestFormValues: requestValues,
+        requestForm, requestFormId: requestId, requestFormValues: requestValues, requestRecovery, returnEvaluationDirty,
         student: record.student, enrollments: academicRecord.enrollments,
         annualEnrollments: record.annualEnrollments || [], lastEnrollment,
         documentRequests: documentRequestRows, profileRevisions: revisions,
@@ -477,14 +479,14 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     notice: notices[req.query.notice] || null
   }));
 
-  function renderUnlinkedEvaluation(req, res, { evaluation = null, values = {}, error = null, status = 200, expectedVersion = null } = {}) {
+  function renderUnlinkedEvaluation(req, res, { evaluation = null, values = {}, error = null, status = 200, expectedVersion = null, recovered = false } = {}) {
     return res.status(status).set('Cache-Control', 'private, no-store').render('records/unlinked-return-evaluation', {
       title: evaluation ? 'Return evaluation' : 'New return evaluation', currentUser: req.authUser,
-      csrfToken: ensureCsrfToken(req), evaluation, values, error, expectedVersion
+      csrfToken: ensureCsrfToken(req), evaluation, values, error, expectedVersion, recovered
     });
   }
 
-  async function renderStudentEvaluation(req, res, { status = 200, evaluationId = null, values = {}, error = null, expectedVersion = null } = {}) {
+  async function renderStudentEvaluation(req, res, { status = 200, evaluationId = null, values = {}, error = null, expectedVersion = null, recovered = false } = {}) {
     const studentId = normalizeRecordId(req.params.id);
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
     let returnEvaluation = null;
@@ -498,7 +500,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     }
     return renderStudentOverview(req, res, {
       status, view: 'return-evaluation', returnEvaluation, returnEvaluationValues: values,
-      returnEvaluationError: error, returnEvaluationExpectedVersion: expectedVersion
+      returnEvaluationError: error, returnEvaluationExpectedVersion: expectedVersion, returnEvaluationDirty: recovered
     });
   }
 
@@ -543,7 +545,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
           if (evaluation.student_id) return res.redirect(303, `/registrar/records/students/${encodeURIComponent(evaluation.student_id)}/return-evaluations/${encodeURIComponent(evaluation.id)}`);
           return renderUnlinkedEvaluation(req, res, {
             evaluation, values: error.status === 409 ? {} : req.body || {}, expectedVersion: req.body?.version,
-            error: error.message, status: error.status
+            error: error.message, status: error.status, recovered: error.status !== 409
           });
         } catch { return res.status(error.status).render('error', { title: 'Return evaluation unavailable', message: error.message }); }
       }
@@ -605,7 +607,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
         status: error.status, view: 'overview', error: error.message
       });
       if (error instanceof ReadmissionError) return renderStudentEvaluation(req, res, {
-        status: error.status, values: error.status === 409 ? {} : req.body || {}, expectedVersion: req.body?.version, error: error.message
+        status: error.status, values: error.status === 409 ? {} : req.body || {}, expectedVersion: req.body?.version, error: error.message, recovered: error.status !== 409
       });
       return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The evaluation could not be saved.' });
     }
@@ -623,7 +625,7 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
     } catch (error) {
       if (error instanceof ReadmissionError) return renderStudentEvaluation(req, res, {
         status: error.status, evaluationId: req.params.evaluationId, values: error.status === 409 ? {} : req.body || {},
-        expectedVersion: req.body?.version, error: error.message
+        expectedVersion: req.body?.version, error: error.message, recovered: error.status !== 409
       });
       return res.status(503).render('error', { title: 'Return evaluation unavailable', message: 'The evaluation could not be saved.' });
     }
@@ -762,8 +764,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       await documentRequests.createRequest(req.authUser.id, studentId, req.body);
       return res.redirect(303, `/registrar/records/students/${studentId}?view=requests&notice=documentRequestCreated`);
     } catch (error) {
-      if (error instanceof StudentDocumentRequestError) return renderStudentOverview(req, res, { status: error.status, error: error.message, view: 'requests', requestForm: 'create', requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey });
-      return renderStudentOverview(req, res, { status: 503, error: 'The document request could not be recorded.', view: 'requests', requestForm: 'create', requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey });
+      if (error instanceof StudentDocumentRequestError) return renderStudentOverview(req, res, { status: error.status, error: error.message, view: 'requests', requestForm: 'create', requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey, requestRecovery: 'create' });
+      return renderStudentOverview(req, res, { status: 503, error: 'The document request could not be recorded.', view: 'requests', requestForm: 'create', requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey, requestRecovery: 'create' });
     }
   });
 
@@ -775,8 +777,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       await documentRequests.transitionRequest(req.authUser.id, studentId, req.params.requestId, req.body);
       return res.redirect(303, `/registrar/records/students/${studentId}?view=requests&notice=documentRequestUpdated`);
     } catch (error) {
-      if (error instanceof StudentDocumentRequestError) return renderStudentOverview(req, res, { status: error.status, error: error.message, view: 'requests', requestForm: 'status', requestId: req.params.requestId, requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey });
-      return renderStudentOverview(req, res, { status: 503, error: 'The document request could not be updated.', view: 'requests', requestForm: 'status', requestId: req.params.requestId, requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey });
+      if (error instanceof StudentDocumentRequestError) return renderStudentOverview(req, res, { status: error.status, error: error.message, view: 'requests', requestForm: 'status', requestId: req.params.requestId, requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey, requestRecovery: `status:${req.params.requestId}` });
+      return renderStudentOverview(req, res, { status: 503, error: 'The document request could not be updated.', view: 'requests', requestForm: 'status', requestId: req.params.requestId, requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey, requestRecovery: `status:${req.params.requestId}` });
     }
   });
 
@@ -788,8 +790,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       await documentRequests.correctRequest(req.authUser.id, studentId, req.params.requestId, req.body);
       return res.redirect(303, `/registrar/records/students/${studentId}?view=requests&notice=documentRequestCorrected`);
     } catch (error) {
-      if (error instanceof StudentDocumentRequestError) return renderStudentOverview(req, res, { status: error.status, error: error.message, view: 'requests', requestForm: 'correct', requestId: req.params.requestId, requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey });
-      return renderStudentOverview(req, res, { status: 503, error: 'The document request could not be corrected.', view: 'requests', requestForm: 'correct', requestId: req.params.requestId, requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey });
+      if (error instanceof StudentDocumentRequestError) return renderStudentOverview(req, res, { status: error.status, error: error.message, view: 'requests', requestForm: 'correct', requestId: req.params.requestId, requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey, requestRecovery: `correct:${req.params.requestId}` });
+      return renderStudentOverview(req, res, { status: 503, error: 'The document request could not be corrected.', view: 'requests', requestForm: 'correct', requestId: req.params.requestId, requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey, requestRecovery: `correct:${req.params.requestId}` });
     }
   });
 
@@ -801,8 +803,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       await documentClearance.issueClaimSlip(req.authUser.id, req.params.requestId, { ...req.body, studentId });
       return res.redirect(303, `/registrar/records/students/${studentId}?view=requests&notice=documentRequestUpdated`);
     } catch (error) {
-      if (error instanceof StudentDocumentFinanceClearanceError) return renderStudentOverview(req, res, { status: error.status, error: error.message, view: 'requests', requestForm: 'claim-slip', requestId: req.params.requestId, requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey });
-      return renderStudentOverview(req, res, { status: 503, error: 'The claim slip could not be issued.', view: 'requests', requestForm: 'claim-slip', requestId: req.params.requestId, requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey });
+      if (error instanceof StudentDocumentFinanceClearanceError) return renderStudentOverview(req, res, { status: error.status, error: error.message, view: 'requests', requestForm: 'claim-slip', requestId: req.params.requestId, requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey, requestRecovery: `claim-slip:${req.params.requestId}` });
+      return renderStudentOverview(req, res, { status: 503, error: 'The claim slip could not be issued.', view: 'requests', requestForm: 'claim-slip', requestId: req.params.requestId, requestValues: req.body || {}, requestIdempotencyKey: req.body?.idempotencyKey, requestRecovery: `claim-slip:${req.params.requestId}` });
     }
   });
 
@@ -833,8 +835,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       const studentId = await service.saveStudent(req.authUser.id, null, req.body);
       return res.redirect(303, `/registrar/records/students/${studentId}/edit?notice=studentCreated`);
     } catch (error) {
-      if (error instanceof StudentRecordsError) return renderStudentForm(req, res, { values, error: error.message, status: error.status });
-      if (isUniqueStudentConflict(error)) return renderStudentForm(req, res, { values, error: 'A record conflict occurred. Check the LRN and retry the profile creation.', status: 409 });
+      if (error instanceof StudentRecordsError) return renderStudentForm(req, res, { values, error: error.message, status: error.status, recoveredProfile: true });
+      if (isUniqueStudentConflict(error)) return renderStudentForm(req, res, { values, error: 'A record conflict occurred. Check the LRN and retry the profile creation.', status: 409, recoveredProfile: true });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The student profile could not be created.' });
     }
   });
@@ -856,8 +858,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       await service.saveStudent(req.authUser.id, studentId, req.body);
       return res.redirect(303, `/registrar/records/students/${studentId}/edit?notice=studentUpdated`);
     } catch (error) {
-      if (error instanceof StudentRecordsError) return renderStudentForm(req, res, { studentId, values, error: error.message, status: error.status });
-      if (isUniqueStudentConflict(error)) return renderStudentForm(req, res, { studentId, values, error: 'That student number or LRN is already in use.', status: 409 });
+      if (error instanceof StudentRecordsError) return renderStudentForm(req, res, { studentId, values, error: error.message, status: error.status, recoveredProfile: true });
+      if (isUniqueStudentConflict(error)) return renderStudentForm(req, res, { studentId, values, error: 'That student number or LRN is already in use.', status: 409, recoveredProfile: true });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The student profile could not be updated.' });
     }
   });
@@ -900,8 +902,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       await service.createTerm(req.authUser.id, req.body);
       return res.redirect(303, '/registrar/records?view=setup&notice=termCreated');
     } catch (error) {
-      if (error instanceof StudentRecordsError) return renderDashboard(req, res, { view: 'setup', error: error.message, status: error.status, openForm: 'term', formValues: req.body || {} });
-      if (isUniqueStudentConflict(error)) return renderDashboard(req, res, { view: 'setup', error: 'That academic term already exists.', status: 409, openForm: 'term', formValues: req.body || {} });
+      if (error instanceof StudentRecordsError) return renderDashboard(req, res, { view: 'setup', error: error.message, status: error.status, openForm: 'term', formValues: req.body || {}, recoveredForm: 'term' });
+      if (isUniqueStudentConflict(error)) return renderDashboard(req, res, { view: 'setup', error: 'That academic term already exists.', status: 409, openForm: 'term', formValues: req.body || {}, recoveredForm: 'term' });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The academic term could not be created.' });
     }
   });
@@ -927,8 +929,8 @@ function createStudentRecordsRouter({ getPool, sql, studentRecordsService, acade
       await service.createSection(req.authUser.id, req.body);
       return res.redirect(303, '/registrar/records?view=setup&notice=sectionCreated');
     } catch (error) {
-      if (error instanceof StudentRecordsError) return renderDashboard(req, res, { view: 'setup', error: error.message, status: error.status, openForm: 'section', formValues: req.body || {} });
-      if (isUniqueStudentConflict(error)) return renderDashboard(req, res, { view: 'setup', error: 'That section already exists for the selected term.', status: 409, openForm: 'section', formValues: req.body || {} });
+      if (error instanceof StudentRecordsError) return renderDashboard(req, res, { view: 'setup', error: error.message, status: error.status, openForm: 'section', formValues: req.body || {}, recoveredForm: 'section' });
+      if (isUniqueStudentConflict(error)) return renderDashboard(req, res, { view: 'setup', error: 'That section already exists for the selected term.', status: 409, openForm: 'section', formValues: req.body || {}, recoveredForm: 'section' });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The section could not be created.' });
     }
   });

@@ -239,7 +239,8 @@ test('retake referrals preserve revisions and decisions, validate Finance depend
     assert.equal(Number(corrected.items[0].linked_charge_id), Number(posted[0].charge_id));
     const correctedMarkup = await ejs.renderFile(path.join(__dirname, '../views/retake-referrals/registrar-detail.ejs'), {
       title: 'Retake correction', csrfToken: 'synthetic-csrf', referral: corrected, history: [], subjects: [], termOptions: [1],
-      values: {}, editValues: {}, referenceValue: null, error: null, itemKeyToken: uuid(), correctionToken: uuid(), formatFinanceDateTime
+      values: {}, editValues: {}, referenceValue: null, error: null, recoveredForm: null,
+      itemKeyToken: uuid(), correctionToken: uuid(), formatFinanceDateTime
     });
     assert.match(correctedMarkup, /This linked charge stays in history/);
     assert.doesNotMatch(correctedMarkup, /Edit this draft item/, 'the corrected draft does not offer an editor for its posted-charge item');

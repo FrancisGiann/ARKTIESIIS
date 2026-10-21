@@ -226,7 +226,9 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
             if (name === 'chargeReviews') {
               row.chargeId = value[index]?.chargeId || '';
               row.decision = body[`item_${name}_${index}_decision`] ?? row.decision ?? '';
-              row.reductionAmount = body[`item_${name}_${index}_reductionAmount`] ?? row.reductionAmount ?? '0.00';
+              const submittedReduction = body[`item_${name}_${index}_reductionAmount`];
+              row.reductionAmount = submittedReduction !== undefined ? submittedReduction
+                : String(row.decision).toLowerCase() === 'retain' ? '' : row.reductionAmount ?? '';
               row.reason = body[`item_${name}_${index}_reason`] ?? row.reason ?? '';
             } else if ((name === 'allocations' || name === 'adjustments') && typeof row.target === 'string') {
               const match = /^(charge|opening):(\d{1,18})$/.exec(row.target);
@@ -268,10 +270,10 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     return input;
   }
 
-  function renderReview(req, res, draft, { status = 200, error = null, editorInput = draft.input, previewUnavailable = false } = {}) {
+  function renderReview(req, res, draft, { status = 200, error = null, editorInput = draft.input, previewUnavailable = false, recoveredForm = false } = {}) {
     return res.status(status).set('Cache-Control', 'private, no-store').render('finance/review-draft', {
       title: 'Review finance update', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), draft, status,
-      actionLabel: reviewActions.actionLabel(draft.actionType), error, previewUnavailable, editorFields: reviewEditor(editorInput, draft),
+      actionLabel: reviewActions.actionLabel(draft.actionType), error, previewUnavailable, recoveredForm, editorFields: reviewEditor(editorInput, draft),
       previewFields: reviewPreviewFields(draft.preview)
     });
   }
@@ -408,9 +410,10 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         const input = rebuildReviewInput(draft.input, req.body || {}, draft.actionType);
         if (isRecoverableFinanceValidation(error)) {
           if (draft.status === 'pending') {
+            const recoveredForm = JSON.stringify(input) !== JSON.stringify(draft.input);
             try { draft = await reviewActions.freshReview(req.authUser.id, sessionBinding(req), req.params.draftId); } catch { /* Keep the saved review visible for correction. */ }
             return renderReview(req, res, { ...draft, requiresReview: true }, {
-              status: error.status, error: error.message, editorInput: input, previewUnavailable: true
+              status: error.status, error: error.message, editorInput: input, previewUnavailable: true, recoveredForm
             });
           }
         }
@@ -598,7 +601,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     const amounts = repeated(body.departureReductionAmount);
     const reasons = repeated(body.departureChargeReason);
     return charges.map((chargeId, index) => ({ chargeId, decision: decisions[index] || '',
-      reductionAmount: amounts[index] || '0.00', reason: reasons[index] || '' }));
+      reductionAmount: amounts[index] ?? '', reason: reasons[index] || '' }));
   }
 
   async function renderAnnualRoster(req, res, { status = 200, error = null } = {}) {
@@ -706,7 +709,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         ? Number(req.query.savedVersion) : null;
       return res.status(status).render('finance/schedules', {
         title: 'Finance schedules', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), schedules,
-        scheduleForm, idempotencyKey: scheduleForm.idempotencyKey, error,
+        scheduleForm, idempotencyKey: scheduleForm.idempotencyKey, error, recovered: formValues !== null,
         notice: req.query.notice === 'scheduleCreated'
           ? (savedVersion ? `New active schedule version ${savedVersion} was saved.` : 'A new versioned schedule was saved.')
           : null,

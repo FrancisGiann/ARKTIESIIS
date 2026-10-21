@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 
-const { AnnualEnrollmentError, createAnnualEnrollmentService, normalizeAnnualInput, normalizeAnnualAdministrationDetails, applySameSectionDefaults, validatePreEnrollmentStudentProfile } = require('../src/services/annualEnrollmentService');
+const { AnnualEnrollmentError, createAnnualEnrollmentService, normalizeAnnualInput, normalizeAnnualAdministrationDetails, normalizeDepartureDetails, applySameSectionDefaults, validatePreEnrollmentStudentProfile } = require('../src/services/annualEnrollmentService');
 const {
   AnnualFinanceError, createAnnualFinanceService, normalizeLineRows, normalizeAllocations, parsePaymentDate, applyExemptionPreview, canonicalAssessmentSnapshot,
   tuitionInstallmentBreakdown, nonTuitionTermTotals, classifyEntryDownPaymentBalances
@@ -229,6 +229,19 @@ test('annual intake accepts explicit midyear entry with an optional future place
     studentNo: 'STU-2026-1', schoolYear: '2026-2027', gradeLevel: 'Grade 12', voucherCode: 'PUB',
     entryTermNumber: '2', enrollmentStartDate: '2026-02-30', section2Id: '12', idempotencyKey: uuid
   }), /valid calendar date/);
+});
+
+test('departure reason accepts normalized multiline text while other annual inputs stay single-line', () => {
+  const details = normalizeDepartureDetails({ departureType: 'dropped', effectiveDate: '2026-10-20',
+    reason: '  Family relocation\r\nRequested by guardian\t(confirmed)  ' });
+  assert.equal(details.reason, 'Family relocation\nRequested by guardian\t(confirmed)');
+  for (const control of ['\u0000', '\u000b', '\u001f', '\u007f', '\u0085', '\u009f']) {
+    assert.throws(() => normalizeDepartureDetails({ departureType: 'dropped', effectiveDate: '2026-10-20',
+      reason: `Reason${control}text` }), AnnualEnrollmentError);
+  }
+  assert.throws(() => normalizeAnnualInput({ studentNo: 'STU\n-1', schoolYear: '2026-2027', gradeLevel: 'Grade 11',
+    voucherCode: 'PUB', entryTermNumber: '1', enrollmentStartDate: '2026-10-01', annualSectionId: '8', idempotencyKey: uuid }),
+  AnnualEnrollmentError, 'single-line student identifiers remain strict');
 });
 
 test('profile validation stays strict while annual creation requires a saved front-desk source', async () => {

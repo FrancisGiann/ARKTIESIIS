@@ -24,6 +24,23 @@ const MAX_XLSX_TOTAL_BYTES = 16 * 1024 * 1024;
 const PREVIEW_TTL_MS = 10 * 60 * 1000;
 const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const INTAKE_IDEMPOTENCY_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function buildSourceReviewRecovery(sourceReviewValues, sourceOptions = null, prerequisiteReview = null) {
+  if (!sourceReviewValues) return null;
+  const submittedSourceAnnualId = typeof sourceReviewValues.sourceAnnualId === 'string'
+    ? sourceReviewValues.sourceAnnualId : '';
+  const reason = typeof sourceReviewValues.reason === 'string' ? sourceReviewValues.reason : '';
+  const selectedSourceIsAvailable = Boolean(submittedSourceAnnualId && sourceOptions?.candidates?.some((candidate) =>
+    candidate.selectable && String(candidate.id) === submittedSourceAnnualId));
+  return {
+    reason,
+    selectedSourceAnnualId: selectedSourceIsAvailable ? submittedSourceAnnualId : '',
+    sourceUnavailable: Boolean(submittedSourceAnnualId && !selectedSourceIsAvailable),
+    hasRetainedValues: selectedSourceIsAvailable || reason.length > 0,
+    formUnavailable: !prerequisiteReview || ['exempt', 'already_confirmed'].includes(prerequisiteReview.kind)
+      || !sourceOptions || sourceOptions.sourceLocked
+  };
+}
 const CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE = 'Paper-clearance prerequisite data is unavailable in the installed schema. Enrollment confirmation and term activation remain blocked until a database administrator verifies the clearance migration.';
 const readSheet = require('read-excel-file/node').readSheet;
 
@@ -605,7 +622,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
     }
   }
 
-  async function renderForm(req, res, { status = 200, error = null, values = {}, activeStep = 1, fallbackMessage = null, preEnrollmentSource = null } = {}) {
+  async function renderForm(req, res, { status = 200, error = null, values = {}, activeStep = 1, fallbackMessage = null, preEnrollmentSource = null, recovered = false } = {}) {
     try {
       const [options, paperRequirements] = await Promise.all([
         service.loadIntakeOptions(req.authUser.id),
@@ -615,7 +632,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         title: 'New Annual Enrollment', csrfToken: ensureCsrfToken(req),
         idempotencyKey: values.idempotencyKey || values.preEnrollmentId || preEnrollmentSource?.id || crypto.randomUUID(),
         ...options, maxBirthDate: latestBirthDate(), values: { ...values, enrollmentStartDate: values.enrollmentStartDate || schoolLocalDate() }, error, activeStep,
-        paperRequirements, preEnrollmentSource, preEnrollmentReceiptRequirements: RECEIPT_REQUIREMENTS,
+        paperRequirements, preEnrollmentSource, preEnrollmentReceiptRequirements: RECEIPT_REQUIREMENTS, recovered,
         profileReviewFields: preEnrollmentSource?.existingStudent?.profile
           ? comparePreEnrollmentProfile(preEnrollmentSource, preEnrollmentSource.existingStudent.profile).filter((item) => item.differs) : [],
         paperTokens: Object.fromEntries((paperRequirements || []).map((item) => [item.requirement_code,
@@ -653,14 +670,14 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
     }
   }
 
-  async function renderManagement(req, res, annualId, { status = 200, error = null, preview = null, values = {} } = {}) {
+  async function renderManagement(req, res, annualId, { status = 200, error = null, preview = null, values = {}, recoveredForm = null } = {}) {
     try {
       const record = await service.getAnnualManagementRecord(req.authUser.id, annualId);
       const subjectTokens = Object.fromEntries(record.subjects.filter((item) => !item.special_subject_id)
         .map((item) => [item.student_subject_id, crypto.randomUUID()]));
       return setPrivateHeaders(res).status(status).render('records/annual-management', {
         title: 'Annual enrollment details', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), record,
-        preview, values, todayManila: schoolLocalDate(), subjectTokens, tagToken: crypto.randomUUID(), departureToken: crypto.randomUUID(),
+        preview, values, recoveredForm, todayManila: schoolLocalDate(), subjectTokens, tagToken: crypto.randomUUID(), departureToken: crypto.randomUUID(),
         error, notice: ['saved', 'administrationSaved', 'departureScheduled', 'departureRecorded', 'departureNeedsReview']
           .includes(req.query.notice) ? req.query.notice : null
       });
@@ -670,7 +687,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
     }
   }
 
-  async function renderFinalReview(req, res, annualId, { status = 200, error = null, values = {} } = {}) {
+  async function renderFinalReview(req, res, annualId, { status = 200, error = null, values = {}, sourceReviewValues = null } = {}) {
     try {
       if (!feeService?.getAnnualEntryFinanceReadinessForRegistrar || !checklistService?.getStudentChecklist) {
         throw new AnnualEnrollmentError('The final review is unavailable until student and checklist records can be loaded.', 503);
@@ -686,15 +703,18 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
           ? Promise.resolve({ ready: true, kind: 'already_confirmed', terms: [], blockers: [], fingerprint: null })
           : clearanceService.getAnnualPrerequisiteReview(req.authUser.id, annualId)
       ]);
-      const sourceOptions = prerequisiteReview.kind === 'continuing_source' && !prerequisiteReview.sourceAnnualId
+      const sourceOptions = prerequisiteReview?.kind === 'continuing_source' && !prerequisiteReview.sourceAnnualId
         ? await clearanceService.getContinuitySourceOptions(req.authUser.id, annualId) : null;
       const submittedKey = values.idempotencyKey || req.query?.idempotencyKey;
       const idempotencyKey = typeof submittedKey === 'string' && INTAKE_IDEMPOTENCY_KEY.test(submittedKey)
         ? submittedKey : crypto.randomUUID();
+      const submittedSourceKey = sourceReviewValues?.idempotencyKey;
       return setPrivateHeaders(res).status(status).render('records/annual-intake-review', {
         title: 'Review enrollment details', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
         annualId, record, checklist, financeReadiness, prerequisiteReview, sourceOptions, error,
-        values: { idempotencyKey, sourceBindingIdempotencyKey: crypto.randomUUID() },
+        values: { idempotencyKey, sourceBindingIdempotencyKey: typeof submittedSourceKey === 'string'
+          && INTAKE_IDEMPOTENCY_KEY.test(submittedSourceKey) ? submittedSourceKey : crypto.randomUUID() },
+        sourceReviewRecovery: buildSourceReviewRecovery(sourceReviewValues, sourceOptions, prerequisiteReview),
         confirmationComplete: Boolean(record.parent.registrar_confirmation_id)
       });
     } catch (loadError) {
@@ -704,6 +724,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
           annualId, record: null, checklist: null, financeReadiness: null, error: CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE,
           prerequisiteReview: null, sourceOptions: null,
           values: { idempotencyKey: crypto.randomUUID(), sourceBindingIdempotencyKey: crypto.randomUUID() },
+          sourceReviewRecovery: buildSourceReviewRecovery(sourceReviewValues),
           confirmationComplete: false
         });
       }
@@ -713,6 +734,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
           annualId, record: null, checklist: null, financeReadiness: null, error: loadError.message,
           prerequisiteReview: null, sourceOptions: null,
           values: { idempotencyKey: crypto.randomUUID(), sourceBindingIdempotencyKey: crypto.randomUUID() },
+          sourceReviewRecovery: buildSourceReviewRecovery(sourceReviewValues),
           confirmationComplete: false
         });
       }
@@ -813,7 +835,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       return res.redirect(303, `/registrar/intake/${encodeURIComponent(req.params.annualId)}/manage?notice=administrationSaved`);
     } catch (error) {
       if (error instanceof AnnualEnrollmentError) return renderManagement(req, res, req.params.annualId, {
-        status: error.status, error: error.message, values: req.body || {}
+        status: error.status, error: error.message, values: req.body || {}, recoveredForm: 'administration-details'
       });
       return res.status(503).render('error', { title: 'Annual enrollment details', message: 'The annual administration details could not be saved.' });
     }
@@ -824,14 +846,26 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
   router.get('/:enrollmentId/activation-review', (req, res) => renderActivationReview(req, res, req.params.enrollmentId));
   router.post('/:annualId/continuity-source', async (req, res) => {
     if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    const sourceReviewValues = {
+      sourceAnnualId: typeof req.body?.sourceAnnualId === 'string' ? req.body.sourceAnnualId : '',
+      reason: typeof req.body?.reason === 'string' ? req.body.reason : '',
+      idempotencyKey: typeof req.body?.idempotencyKey === 'string' ? req.body.idempotencyKey : ''
+    };
     try {
       if (!clearanceService?.bindContinuitySource) throw new TermClearanceError('Continuing source review is unavailable. Enrollment confirmation is blocked.', 503);
       await clearanceService.bindContinuitySource(req.authUser.id, req.params.annualId, req.body?.sourceAnnualId,
         { reason: req.body?.reason, idempotencyKey: req.body?.idempotencyKey });
       return res.redirect(303, `/registrar/intake/${encodeURIComponent(req.params.annualId)}/review`);
     } catch (error) {
-      if (error instanceof TermClearanceError) return renderFinalReview(req, res, req.params.annualId, { status: error.status, error: error.message });
-      return res.status(503).render('error', { title: 'Source review unavailable', message: 'The preceding-year source was not bound.' });
+      if (error instanceof TermClearanceError) return renderFinalReview(req, res, req.params.annualId, {
+        status: error.status,
+        error: error.message,
+        sourceReviewValues
+      });
+      return renderFinalReview(req, res, req.params.annualId, {
+        status: 503, error: 'The save did not return confirmation. Check the current enrollment state before retrying.',
+        sourceReviewValues
+      });
     }
   });
   router.post('/:annualId/confirm', async (req, res) => {
@@ -895,7 +929,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         req.body?.effectiveEnrollmentId, req.body || {});
       return renderManagement(req, res, req.params.annualId, { preview, values: req.body || {} });
     } catch (error) {
-      if (error instanceof AnnualEnrollmentError) return renderManagement(req, res, req.params.annualId, { status: error.status, error: error.message, values: req.body || {} });
+      if (error instanceof AnnualEnrollmentError) return renderManagement(req, res, req.params.annualId, { status: error.status, error: error.message, values: req.body || {}, recoveredForm: 'departure-editor' });
       return res.status(503).render('error', { title: 'Annual enrollment details', message: 'The departure preview could not be loaded.' });
     }
   });
@@ -907,7 +941,7 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         : result.applicationStatus === 'needs_review' ? 'departureNeedsReview' : 'departureRecorded';
       return res.redirect(303, `/registrar/intake/${encodeURIComponent(req.params.annualId)}/manage?notice=${notice}`);
     } catch (error) {
-      if (error instanceof AnnualEnrollmentError) return renderManagement(req, res, req.params.annualId, { status: error.status, error: error.message, values: req.body || {} });
+      if (error instanceof AnnualEnrollmentError) return renderManagement(req, res, req.params.annualId, { status: error.status, error: error.message, values: req.body || {}, recoveredForm: 'departure-editor' });
       return res.status(503).render('error', { title: 'Annual enrollment details', message: 'The dated departure could not be saved.' });
     }
   });
@@ -938,9 +972,9 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
       return res.redirect(303, '/registrar/intake?notice=annualCreated');
     } catch (error) {
       const preEnrollmentSource = await loadSourceForRerender(req, values);
-      if (error instanceof PhysicalChecklistError) return renderForm(req, res, { status: error.status, error: error.message, values, activeStep: 3, preEnrollmentSource });
-      if (error instanceof AnnualEnrollmentError) return renderForm(req, res, { status: error.status, error: error.message, values, activeStep: annualIntakeErrorStep(error), preEnrollmentSource });
-      if (isDuplicateKeyError(error)) return renderForm(req, res, { status: 409, error: 'This student already has an annual enrollment for the selected school year.', values, activeStep: 2, preEnrollmentSource });
+      if (error instanceof PhysicalChecklistError) return renderForm(req, res, { status: error.status, error: error.message, values, activeStep: 3, preEnrollmentSource, recovered: true });
+      if (error instanceof AnnualEnrollmentError) return renderForm(req, res, { status: error.status, error: error.message, values, activeStep: annualIntakeErrorStep(error), preEnrollmentSource, recovered: true });
+      if (isDuplicateKeyError(error)) return renderForm(req, res, { status: 409, error: 'This student already has an annual enrollment for the selected school year.', values, activeStep: 2, preEnrollmentSource, recovered: true });
       const incidentId = crypto.randomUUID();
       try {
         logger.error('Annual intake save failed', {
@@ -955,7 +989,8 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         fallbackMessage: `The save did not return a confirmation. Check the enrollments list before starting a new submission. Support reference: ${incidentId}.`,
         values,
         activeStep: 3,
-        preEnrollmentSource
+        preEnrollmentSource,
+        recovered: true
       });
     }
   });

@@ -36,7 +36,7 @@
         <% if (!scheduleContext.schoolYear || !scheduleContext.gradeLevel) { %>
           <p class="empty-state">Choose a school year and grade above to load this fee schedule.</p>
         <% } else { %>
-    <form class="form-stack" method="post" action="/finance/schedules" data-finance-schedule-form>
+    <form class="form-stack" method="post" action="/finance/schedules" data-finance-schedule-form<% if (recovered) { %> data-unsaved-initially-dirty="true"<% } %>>
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <input type="hidden" name="idempotencyKey" value="<%= idempotencyKey %>">
       <input type="hidden" name="schoolYear" value="<%= scheduleContext.schoolYear %>">

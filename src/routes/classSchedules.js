@@ -37,7 +37,7 @@ function createClassSchedulesRouter({ getPool, sql, classScheduleService } = {})
 
   async function renderWorkspace(req, res, {
     status = 200, error = null, values = {}, filters = null, editScheduleId = null,
-    conflicts = [], conflictsTruncated = false
+    conflicts = [], conflictsTruncated = false, recoveredForm = null
   } = {}) {
     try {
       const context = filters || scheduleContext(req);
@@ -52,6 +52,7 @@ function createClassSchedulesRouter({ getPool, sql, classScheduleService } = {})
         conflictsTruncated,
         values,
         editScheduleId,
+        recoveredForm,
         focusScheduleId: positiveId(req.query?.focusScheduleId),
         showCreate: req.query?.showCreate === '1' || Boolean(error),
         ...workspace
@@ -62,6 +63,7 @@ function createClassSchedulesRouter({ getPool, sql, classScheduleService } = {})
           title: 'Class schedules', currentUser: req.authUser, csrfToken: ensureCsrfToken(req),
           notice: null, error: loadError.message, conflicts: loadError.conflicts,
           conflictsTruncated: loadError.conflictsTruncated, values, editScheduleId, focusScheduleId: null, showCreate: true,
+          recoveredForm,
           terms: [], sections: [], academicTermId: null, selectedSectionId: null,
           selectedAssignmentId: null, contextNotice: null, assignments: [], schedules: []
         });
@@ -109,7 +111,7 @@ function createClassSchedulesRouter({ getPool, sql, classScheduleService } = {})
         status, error: message,
         conflicts: error instanceof ClassScheduleError ? error.conflicts : [],
         conflictsTruncated: error instanceof ClassScheduleError && error.conflictsTruncated,
-        values: req.body || {}, filters: scheduleContext(req)
+        values: req.body || {}, filters: scheduleContext(req), recoveredForm: 'schedule-create'
       });
     }
   });
@@ -130,7 +132,7 @@ function createClassSchedulesRouter({ getPool, sql, classScheduleService } = {})
         status, error: message,
         conflicts: error instanceof ClassScheduleError ? error.conflicts : [],
         conflictsTruncated: error instanceof ClassScheduleError && error.conflictsTruncated,
-        values: req.body || {}, filters: scheduleContext(req), editScheduleId: id
+        values: req.body || {}, filters: scheduleContext(req), editScheduleId: id, recoveredForm: `schedule-edit:${id}`
       });
     }
   });

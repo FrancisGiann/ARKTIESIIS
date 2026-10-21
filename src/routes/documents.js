@@ -206,7 +206,7 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
     }
   }
 
-  async function renderStudentDocuments(req, res, studentId, { status = 200, error = null, form137Scan = null, activeSection = null, formValues = {} } = {}) {
+  async function renderStudentDocuments(req, res, studentId, { status = 200, error = null, form137Scan = null, activeSection = null, formValues = {}, recoveredForm = null } = {}) {
     try {
       const [workspace, physicalChecklist] = await Promise.all([
         service.getStudentDocuments(req.authUser.id, studentId),
@@ -238,6 +238,7 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
         previousSchoolReportCardPhysicalStatusHistory: workspace.previousSchoolReportCardPhysicalStatusHistory || [],
         physicalChecklist,
         form137Scan,
+        recoveredForm,
         activeDocumentSection: ['digital', 'paper', 'form137'].includes(activeSection)
           ? activeSection
           : ['digital', 'paper', 'form137'].includes(req.query.section) ? req.query.section : 'digital',
@@ -287,7 +288,7 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       await checklistService.recordRequirement(req.authUser.id, studentId, req.body || {});
       return res.redirect(303, `/documents/students/${studentId}?notice=physicalChecklistRecorded&section=paper#physical-checklist-title`);
     } catch (error) {
-      if (error instanceof PhysicalChecklistError && error.status < 500) return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'paper', formValues: { ...req.body, workflow: 'physicalChecklist' } });
+      if (error instanceof PhysicalChecklistError && error.status < 500) return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'paper', formValues: { ...req.body, workflow: 'physicalChecklist' }, recoveredForm: 'physical-checklist' });
       return renderError(res, error, 'The paper requirement status could not be saved.');
     }
   });
@@ -332,7 +333,8 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       return res.redirect(303, `/documents/students/${studentId}?notice=uploaded&section=digital#digital-submissions-title`);
     } catch (error) {
       if (error instanceof DocumentServiceError && error.status < 500) {
-        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'digital', formValues: req.body || {} });
+        const hasRecoveredDocumentType = typeof req.body?.documentType === 'string' && req.body.documentType.trim().length > 0;
+        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'digital', formValues: req.body || {}, recoveredForm: hasRecoveredDocumentType ? 'digital-upload' : null });
       }
       return renderError(res, error, 'The document could not be uploaded.');
     } finally {
@@ -351,7 +353,7 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       return res.redirect(303, `/documents/students/${studentId}?notice=form137StatusRecorded&section=form137#form137-status-title`);
     } catch (error) {
       if (error instanceof DocumentServiceError && error.status < 500) {
-        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'form137', formValues: { ...req.body, workflow: 'form137' } });
+        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'form137', formValues: { ...req.body, workflow: 'form137' }, recoveredForm: 'form137-status' });
       }
       return renderError(res, error, 'The Form 137 status could not be saved.');
     }
@@ -368,7 +370,7 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       return res.redirect(303, `/documents/students/${studentId}?notice=previousSchoolReportCardStatusRecorded&section=paper#previous-school-report-card-status-title`);
     } catch (error) {
       if (error instanceof DocumentServiceError && error.status < 500) {
-        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'paper', formValues: { ...req.body, workflow: 'reportCardPhysical' } });
+        return renderStudentDocuments(req, res, studentId, { status: error.status, error: error.message, activeSection: 'paper', formValues: { ...req.body, workflow: 'reportCardPhysical' }, recoveredForm: 'report-card-physical' });
       }
       return renderError(res, error, 'The previous-school report-card paper status could not be saved.');
     }

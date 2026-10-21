@@ -8,6 +8,53 @@ const { latestBirthDate } = require('../services/studentRecordsService');
 const { PROGRAM_CATALOG, TRACKS } = require('../utils/paperProgramCatalog');
 
 const DEFAULT_SCHOOL_YEAR = '2027-2028';
+const FORM_ERROR_FIELDS = Object.freeze({
+  schoolYear: ['pre-school-year', 'School year'], applicantKind: ['pre-applicant-kind', 'Applicant status'],
+  firstName: ['pre-first', 'First name'], middleName: ['pre-middle', 'Middle name'], lastName: ['pre-last', 'Last name'],
+  suffix: ['pre-suffix', 'Suffix'], lrn: ['pre-lrn', 'LRN'], studentContactNumber: ['pre-contact', 'Student contact number'],
+  readmissionEvaluationBinding: ['pre-readmission-evaluation', 'Accepted return evaluation'],
+  voucherTypeText: ['pre-voucher-type', 'Voucher type'], preferredTrack: ['pre-track', 'Preferred track'],
+  preferredCluster: ['pre-cluster', 'Preferred cluster'], targetGradeLevel: ['pre-grade', 'Grade to enroll'],
+  priorGradeLevel: ['pre-prior-grade', 'Last grade level'], priorSchool: ['pre-prior-school', 'School attended'],
+  studentSignaturePresent: ['pre-signature-check', 'Student signature'], studentSignedDate: ['pre-signed-date', 'Student signature date'],
+  receivedBy: ['pre-received-by', 'Paper received by'], receivedDate: ['pre-received-date', 'Paper received date'],
+  email: ['pre-email', 'Email'], birthDate: ['pre-birth-date', 'Birth date'], sex: ['pre-sex', 'Gender'],
+  profilePhone: ['pre-profile-phone', 'Phone'], birthplace: ['pre-birthplace', 'Birthplace'], facebookName: ['pre-facebook-name', 'Facebook name'],
+  addressBlockLotStreetPurok: ['student-address-addressBlockLotStreetPurok', 'Student address: Block and lot, street/Purok'],
+  addressBarangay: ['student-address-addressBarangay', 'Student address: Barangay'],
+  addressCity: ['student-address-addressCity', 'Student address: City'],
+  addressProvince: ['student-address-addressProvince', 'Student address: Province'],
+  addressZip: ['student-address-addressZip', 'Student address: ZIP code'],
+  emergencyContactSameAsStudent: ['emergency-address-same', 'Same address as student'],
+  emergencyContactAddressBlockLotStreetPurok: ['emergency-address-emergencyContactAddressBlockLotStreetPurok', 'Emergency address: Block and lot, street/Purok'],
+  emergencyContactAddressBarangay: ['emergency-address-emergencyContactAddressBarangay', 'Emergency address: Barangay'],
+  emergencyContactAddressCity: ['emergency-address-emergencyContactAddressCity', 'Emergency address: City'],
+  emergencyContactAddressProvince: ['emergency-address-emergencyContactAddressProvince', 'Emergency address: Province'],
+  emergencyContactAddressZip: ['emergency-address-emergencyContactAddressZip', 'Emergency address: ZIP code'],
+  emergencyContactPerson: ['pre-emergency-person', 'Emergency contact person'],
+  emergencyContactRelationship: ['pre-emergency-relationship', 'Emergency contact relationship'],
+  emergencyContactPhone: ['pre-emergency-phone', 'Emergency contact number'], motherName: ['pre-mother-name', 'Mother’s name'],
+  motherPhone: ['pre-mother-phone', 'Mother’s phone'], fatherName: ['pre-father-name', 'Father’s name'],
+  fatherPhone: ['pre-father-phone', 'Father’s phone'],
+  receipt_long_brown_envelopes_received: ['receipt-long_brown_envelopes-original-check', 'Three long brown envelopes received'],
+  envelopeReceiptMode: ['pre-envelope-receipt', 'Envelope receipt'],
+  status: ['pre-form-actions', 'Submit action'], addressMode: ['student-address-heading', 'Student address'],
+  emergencyContactAddressMode: ['emergency-address-heading', 'Emergency contact address']
+});
+const RECEIPT_CODES = new Set([...RECEIPT_REQUIREMENTS.map(([code]) => code), 'long_brown_envelopes']);
+
+function errorFieldLinks(error) {
+  const fields = [...(Array.isArray(error?.fields) ? error.fields : []), error?.field].filter((field) => typeof field === 'string');
+  return [...new Set(fields)].flatMap((name) => {
+    const direct = FORM_ERROR_FIELDS[name];
+    if (direct) return [{ name, id: direct[0], label: direct[1] }];
+    const receipt = name.match(/^receipt_([a-z_]+)_(original|photocopy)(_pieces)?$/);
+    if (!receipt || !RECEIPT_CODES.has(receipt[1])) return [];
+    const [, code, side, pieces] = receipt;
+    return [{ name, id: pieces ? `receipt-${code}-${side}` : `receipt-${code}-${side}-check`,
+      label: `${RECEIPT_REQUIREMENTS.find(([item]) => item === code)?.[1] || 'Three long brown envelopes'}: ${side}${pieces ? ' pieces' : ' received'}` }];
+  });
+}
 
 function recordFormValues(record) {
   if (!record) return {};
@@ -43,7 +90,7 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
   const service = preEnrollmentService || createPreEnrollmentService({ getPool, sql });
   const privateHeaders = (res) => res.set('Cache-Control', 'private, no-store');
 
-  async function renderForm(req, res, { record = null, values = {}, error = null, status = 200 } = {}) {
+  async function renderForm(req, res, { record = null, values = {}, error = null, errorFields = [], staleVersion = false, status = 200 } = {}) {
     const receipts = new Map((record?.receipts || []).map((receipt) => [receipt.requirement_code, receipt]));
     const receiptValues = {};
     for (const [code] of RECEIPT_REQUIREMENTS) {
@@ -85,7 +132,8 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
         envelopeReceiptMode: record ? 'preserve' : 'replace', ...values
       },
       requirements: RECEIPT_REQUIREMENTS, acceptedReadmissionChoices, latestBirthDate: latestBirthDate(),
-      programCatalog: PROGRAM_CATALOG, programTracks: TRACKS, envelopeState, error
+      programCatalog: PROGRAM_CATALOG, programTracks: TRACKS, envelopeState, error,
+      errorFieldLinks: errorFieldLinks({ fields: errorFields }), hasRecoveredValues: Boolean(error && values && Object.keys(values).length), staleVersion
     });
   }
 
@@ -119,8 +167,8 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
       const created = await service.create(req.authUser.id, { ...(req.body || {}), actorName: req.authUser.email });
       return res.redirect(303, `/pre-enrollments/${encodeURIComponent(created.id)}?notice=${created.alreadyCreated ? 'alreadySaved' : 'saved'}`);
     } catch (error) {
-      if (error instanceof PreEnrollmentError) return renderForm(req, res, { status: error.status, error: error.message, values: req.body || {} });
-      if (error?.code === 'ER_DUP_ENTRY') return renderForm(req, res, { status: 409, error: 'A record with this school year and complete LRN already exists.', values: req.body || {} });
+      if (error instanceof PreEnrollmentError) return renderForm(req, res, { status: error.status, error: error.message, errorFields: [...error.fields, error.field].filter(Boolean), values: req.body || {} });
+      if (error?.code === 'ER_DUP_ENTRY') return renderForm(req, res, { status: 409, error: 'A record with this school year and complete LRN already exists.', errorFields: ['lrn'], values: req.body || {} });
       return res.status(503).render('error', { title: 'Pre-enrollment unavailable', message: 'The paper pre-enrollment record could not be saved.' });
     }
   });
@@ -140,7 +188,8 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
       return res.redirect(303, `/pre-enrollments/${encodeURIComponent(updated.id)}?notice=saved`);
     } catch (error) {
       if (error instanceof PreEnrollmentError) {
-        try { return renderForm(req, res, { status: error.status, record: await service.get(req.authUser.id, req.params.id), error: error.message, values: req.body || {} }); }
+        try { return renderForm(req, res, { status: error.status, record: await service.get(req.authUser.id, req.params.id), error: error.message,
+          errorFields: [...error.fields, error.field].filter(Boolean), staleVersion: error.status === 409 && /This record changed after the form was opened/.test(error.message), values: req.body || {} }); }
         catch { return res.status(error.status).render('error', { title: 'Pre-enrollment record', message: error.message }); }
       }
       return res.status(503).render('error', { title: 'Pre-enrollment unavailable', message: 'The paper pre-enrollment record could not be updated.' });

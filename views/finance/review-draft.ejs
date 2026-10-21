@@ -125,7 +125,8 @@
       <% if (draft.preview.departureChargeReviews?.length) { %>
         <div class="finance-review-departure-preview" aria-label="Reviewed fees and proposed departure reductions">
           <% for (const termNumber of [1, 2, 3]) { const termItems = draft.preview.departureChargeReviews.filter((item) => Number(item.termNumber) === termNumber); if (!termItems.length) continue; const pendingDecisions = termItems.filter((item) => !['retain', 'reduce'].includes(item.decision)).length; %>
-            <details class="finance-review-departure-term" <%= draft.preview.departureReviewReady === true && termNumber === Number(draft.preview.departureTermNumber) ? 'open' : '' %>>
+            <% const termNeedsCorrection = termItems.some((item) => item.keepAmountNeedsCorrection || (item.decision === 'reduce' && !item.reviewedReductionReady)); %>
+            <details class="finance-review-departure-term" <%= (termNeedsCorrection || (draft.preview.departureReviewReady === true && termNumber === Number(draft.preview.departureTermNumber))) ? 'open' : '' %>>
               <summary><strong>Term <%= termNumber %> · <%= termItems.length %> fee<%= termItems.length === 1 ? '' : 's' %></strong><span><%= pendingDecisions ? `${pendingDecisions} decision${pendingDecisions === 1 ? '' : 's'} pending` : 'All decisions recorded' %></span></summary>
               <div class="finance-review-departure-term__fees">
                 <% for (const item of termItems) { %>
@@ -135,7 +136,7 @@
                       <div><dt>Classification</dt><dd><%= item.categoryLabel %></dd></div>
                       <div><dt>Current payable amount before</dt><dd>₱<%= item.payableBefore %></dd></div>
                       <div><dt>Proposed reduction</dt><dd>₱<%= item.proposedReduction %></dd></div>
-                      <div><dt>Finance decision</dt><dd><%= item.decision || 'Pending' %></dd></div>
+                      <div><dt>Finance decision</dt><dd><%= item.decision === 'retain' ? 'Keep fee' : item.decision === 'reduce' ? 'Reduce fee' : 'Pending' %></dd></div>
                       <div><dt>Reviewed reduction</dt><dd><%= item.reviewedReductionReady ? `₱${item.reductionAmount}` : 'Pending' %></dd></div>
                       <div><dt>Current payable amount after</dt><dd><%= !item.reviewedReductionReady || item.payableAfter == null ? 'Review required' : `₱${item.payableAfter}` %></dd></div>
                       <div><dt>Finance reason</dt><dd><%= item.reason || 'Overall reason required' %></dd></div>
@@ -158,7 +159,7 @@
     <summary>Edit saved details</summary>
     <div class="finance-review-edit__body">
       <p>Changing a value saves an updated draft. Review the summary again before saving.</p>
-      <form class="form-stack" method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/update">
+      <form class="form-stack" method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/update"<% if (recoveredForm) { %> data-unsaved-initially-dirty="true"<% } %>>
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <% for (const field of editorFields) { %>
           <% if (field.kind === 'select') { %>
@@ -167,6 +168,13 @@
               <% for (const option of field.options || []) { %><option value="<%= option.value %>" <%= String(option.value) === String(field.value) ? 'selected' : '' %>><%= option.label %></option><% } %>
             </select></label>
           <% } else if (field.kind === 'scalar') { %>
+            <% if (draft.actionType === 'departure_review' && field.name === 'reason' && draft.preview.registrarDepartureReason) { %>
+              <div class="finance-review-context finance-review-registrar-context" role="note">
+                <strong>Registrar’s recorded reason · read-only</strong>
+                <p><%= draft.preview.registrarDepartureReason %></p>
+                <p>Use this as context; enter the required Finance review reason separately.</p>
+              </div>
+            <% } %>
             <label class="field"><span><%= field.label %></span>
               <% if (field.boolean) { %>
                 <select name="field_<%= field.name %>"><option value="1" <%= field.value ? 'selected' : '' %>>Yes</option><option value="0" <%= field.value ? '' : 'selected' %>>No</option></select>
@@ -207,15 +215,30 @@
             </fieldset>
           <% } else if (field.kind === 'departure-charges') { %>
             <fieldset class="finance-review-row-editor finance-review-departure-editor"><legend><%= field.label %></legend>
-              <p>Choose keep or reduce for every fee. Recorded tuition-installment proposals use the current payable amount after existing adjustments and exemptions. Whole-term tuition has no automatic split; miscellaneous and named fees are reviewed individually.</p>
+              <p>Choose keep or reduce for every fee. Keep records no reduction; Reduce requires a reviewed amount. Suggested amounts are for reference only. Recorded tuition-installment proposals use current payable amounts after existing adjustments and exemptions. Whole-term tuition has no automatic split; miscellaneous and named fees are reviewed individually.</p>
               <% for (const termNumber of [1, 2, 3]) { const termRows = field.rows.filter((row) => Number(row.termNumber) === termNumber); if (!termRows.length) continue; %>
-                <details class="finance-review-term-editor" <%= termNumber === Number(draft.preview.departureTermNumber) ? 'open' : '' %>><summary>Term <%= termNumber %> · <%= termRows.length %> fee<%= termRows.length === 1 ? '' : 's' %></summary>
+                <% const termNeedsCorrection = termRows.some((row) => row.keepAmountNeedsCorrection
+                  || (row.decision === 'reduce' && !row.reviewedReductionReady)
+                  || (typeof row.reason === 'string' && (row.reason.length > 1000 || /[\u0000-\u001f\u007f]/.test(row.reason)))); %>
+                <details class="finance-review-term-editor" <%= termNumber === Number(draft.preview.departureTermNumber) || termNeedsCorrection ? 'open' : '' %>><summary>Term <%= termNumber %> · <%= termRows.length %> fee<%= termRows.length === 1 ? '' : 's' %></summary>
                   <% for (const row of termRows) { %>
-                    <div class="finance-review-fee-line"><h3><%= row.feeCategory %> · <%= row.lineName %><%= row.installment ? ` · ${row.installment}` : '' %></h3>
-                      <p><%= row.categoryLabel %> · current payable amount ₱<%= row.payableBefore %> · proposed reduction ₱<%= row.proposedReduction %></p>
-                      <label class="field"><span>Finance decision</span><select name="item_chargeReviews_<%= row.index %>_decision"><option value="">Choose keep or reduce</option><option value="retain" <%= row.decision === 'retain' ? 'selected' : '' %>>Keep full payable amount</option><option value="reduce" <%= row.decision === 'reduce' ? 'selected' : '' %>>Reduce manually/review proposal</option></select></label>
-                      <label class="field"><span>Reviewed reduction (PHP; enter 0.00 when keeping)</span><input name="item_chargeReviews_<%= row.index %>_reductionAmount" value="<%= row.reductionAmount ?? '0.00' %>" inputmode="decimal" maxlength="14"></label>
-                      <label class="field"><span>Specific Finance reason (optional; blank uses the overall reason)</span><textarea name="item_chargeReviews_<%= row.index %>_reason" rows="2" maxlength="1000"><%= row.reason ?? '' %></textarea></label>
+                    <div class="finance-review-fee-line" data-departure-charge-review data-keep-amount-needs-correction="<%= row.keepAmountNeedsCorrection ? 'true' : 'false' %>">
+                      <h3><%= row.feeCategory %> · <%= row.lineName %><%= row.installment ? ` · ${row.installment}` : '' %></h3>
+                      <p><%= row.categoryLabel %> · current payable ₱<%= row.payableBefore %> · proposal ₱<%= row.proposedReduction %></p>
+                      <fieldset class="finance-review-decision"><legend>Finance decision</legend>
+                        <label><input type="radio" name="item_chargeReviews_<%= row.index %>_decision" value="retain" <%= row.decision === 'retain' ? 'checked' : '' %>> Keep fee</label>
+                        <label><input type="radio" name="item_chargeReviews_<%= row.index %>_decision" value="reduce" <%= row.decision === 'reduce' ? 'checked' : '' %>> Reduce fee</label>
+                      </fieldset>
+                      <div class="finance-review-reduction" data-departure-reduction-field>
+                        <label class="field"><span>Reduction amount (PHP)</span><input name="item_chargeReviews_<%= row.index %>_reductionAmount" value="<%= row.reductionAmount ?? '' %>" inputmode="decimal" maxlength="14" aria-describedby="departure-reduction-help-<%= row.index %> departure-reduction-error-<%= row.index %>"></label>
+                        <p id="departure-reduction-help-<%= row.index %>" class="finance-review-reduction-help">Required for Reduce. Keep uses 0.00; clear any entered amount or enter 0.00.</p>
+                        <p id="departure-reduction-error-<%= row.index %>" class="finance-review-reduction-error" data-keep-amount-error <%= row.keepAmountNeedsCorrection ? '' : 'hidden' %>>A Keep decision must have a blank amount or 0.00.</p>
+                      </div>
+                      <details class="finance-review-specific-reason" <%= row.reason ? 'open' : '' %>>
+                        <summary><%= row.reason ? 'Specific reason' : 'Add a specific reason' %></summary>
+                        <p>When blank, the overall Finance reason applies.</p>
+                        <label class="field"><span>Reason for this fee</span><textarea name="item_chargeReviews_<%= row.index %>_reason" rows="2" maxlength="1000"><%= row.reason ?? '' %></textarea></label>
+                      </details>
                     </div>
                   <% } %>
                 </details>
@@ -277,4 +300,5 @@
     </form>
   </div>
 </main>
+<script src="/js/finance-departure-decisions.js" defer></script>
 <%- include('../partials/foot') %>

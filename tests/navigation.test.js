@@ -316,7 +316,7 @@ test('authenticated navigation only exposes destinations available to each role'
         assert.match(match[0], new RegExp(`>${scenario.labels[index]}</a>`));
       }
       const expectedHome = { database_admin: '/admin', registrar: '/registrar', front_desk: '/front-desk', teacher: '/teacher', finance: '/finance/overview', student: '/student' }[scenario.role];
-      assert.match(html, new RegExp(`<a class="brand" href="${expectedHome}" aria-label="ARKTIESIIS, Ark Technological Institute Education System Inc\\., Lucena Branch">`));
+      assert.match(html, new RegExp(`<a class="brand" href="${expectedHome}" aria-label="ARKTIESIIS, Ark Technological Institute Education System Inc\\., Main Branch">`));
       assert.match(navigation, /<a class="app-nav__link[^\"]*" href="[^\"]+" aria-current="page"/);
       assert.match(html, /<details class="mobile-nav">\s*<summary>/, 'mobile navigation uses a keyboard-operable native disclosure');
       assert.match(html, /<a class="account-shortcut[^\"]*" href="\/account"/);

@@ -60,7 +60,7 @@
 <% if (evaluation?.enrollment_started) { %><p class="notice-panel" role="status">This evaluation is read-only because annual enrollment has started.</p><% } %>
 <% if (!canEdit && !evaluation) { %><p class="notice-panel" role="status">Database administrators can review return evaluations but cannot create them.</p><% } %>
 
-<form class="form-stack admin-form" method="post" action="<%= formAction %>">
+<form class="form-stack admin-form" method="post" action="<%= formAction %>"<% if (returnEvaluationDirty) { %> data-unsaved-initially-dirty="true"<% } %>>
   <input type="hidden" name="_csrf" value="<%= csrfToken %>"><% if (evaluation) { %><input type="hidden" name="version" value="<%= formVersion %>"><% } %>
   <section class="form-section"><h3>Applicant and prior progress</h3><div class="admin-form-grid">
     <div class="field"><label for="eval-lrn">LRN</label><input id="eval-lrn" name="applicantLrn" inputmode="numeric" pattern="[0-9]{12}" maxlength="12" required <%= !canEdit || identityLocked ? 'readonly' : '' %> value="<%= identityValue('applicantLrn','applicant_lrn','lrn') %>"></div>

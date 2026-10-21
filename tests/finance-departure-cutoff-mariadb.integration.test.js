@@ -22,7 +22,7 @@ function makeReviews(charges, { reduce = () => false, reasons = {} } = {}) {
   return charges.map((charge) => ({
     chargeId: String(charge.id),
     decision: reduce(charge) ? 'reduce' : 'retain',
-    reductionAmount: reduce(charge) ? String(charge.reductionAmount || charge.amount) : '0.00',
+    reductionAmount: reduce(charge) ? String(charge.reductionAmount || charge.amount) : '',
     reason: reasons[charge.installment] || ''
   }));
 }
@@ -229,6 +229,12 @@ test('Finance departure cutoff migration and reviewed writes preserve payable ba
       return { chargeId: String(charge.id), decision: reduce ? 'reduce' : 'retain', reductionAmount: reduce ? amount : '0.00', reason: '' };
     });
     const mainInput = { cutoffInstallment: 'midterm', reason: 'Approved synthetic departure review', idempotencyKey: uuid(), chargeReviews: mainReviews };
+    const retainedMidterm = mainCase.charges.find((charge) => charge.term === 2 && charge.installment === 'Midterm');
+    const nonzeroKeepInput = { ...mainInput, idempotencyKey: uuid(), chargeReviews: mainReviews.map((row) =>
+      row.chargeId === String(retainedMidterm.id) ? { ...row, reductionAmount: '1.00' } : row) };
+    await assert.rejects(cases.reviewDepartureCase(financeId, mainCase.caseId, nonzeroKeepInput),
+      (error) => error instanceof FinanceCasesError && error.status === 400 && /full payable amount/.test(error.message),
+      'a Keep amount cannot become an unreviewed reduction');
     await assert.rejects(cases.reviewDepartureCase(registrarId, mainCase.caseId, mainInput),
       (error) => error instanceof FinanceCasesError && error.status === 403,
       'Registrar cannot submit Finance cutoff decisions');

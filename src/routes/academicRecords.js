@@ -28,13 +28,14 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, tea
   const service = academicRecordsService || createAcademicRecordsService({ getPool, sql });
   const teacherService = teacherGradeSubmissionService || createTeacherGradeSubmissionService({ getPool, sql });
 
-  async function renderSubjects(req, res, { status = 200, error = null, values = {} } = {}) {
+  async function renderSubjects(req, res, { status = 200, error = null, values = {}, editSubjectId = null, recoveredForm = null } = {}) {
     try {
       const allSubjects = await service.listSubjects();
       const search = typeof req.query?.search === 'string' ? req.query.search.slice(0, 100).trim() : '';
       const searchNeedle = search.toLocaleLowerCase();
       const subjects = searchNeedle ? allSubjects.filter((subject) =>
-        `${subject.subject_code} ${subject.subject_name}`.toLocaleLowerCase().includes(searchNeedle)) : allSubjects;
+        String(subject.id) === String(editSubjectId || '')
+        || `${subject.subject_code} ${subject.subject_name}`.toLocaleLowerCase().includes(searchNeedle)) : allSubjects;
       return res.status(status).render('records/subjects', {
         title: 'Subjects',
         csrfToken: ensureCsrfToken(req),
@@ -42,8 +43,11 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, tea
         subjects,
         subjectCount: allSubjects.length,
         search,
-        showCreateForm: req.query?.openForm === '1' || Boolean(error),
+        showCreateForm: req.query?.openForm === '1' || (Boolean(error) && editSubjectId === null),
         values: subjectValues(values),
+        createValues: editSubjectId === null ? subjectValues(values) : subjectValues({}),
+        editSubjectId,
+        recoveredForm,
         error,
         notice: notices[req.query.notice] || null
       });
@@ -69,13 +73,13 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, tea
     return `/registrar/records/teacher-assignments${serialized ? `?${serialized}` : ''}`;
   }
 
-  async function renderTeacherAssignments(req, res, { status = 200, error = null, values = {}, filters = null } = {}) {
+  async function renderTeacherAssignments(req, res, { status = 200, error = null, values = {}, filters = null, recoveredForm = null } = {}) {
     try {
       const context = filters || teacherAssignmentContext(req, values);
       const options = await teacherService.listAssignmentOptions(req.authUser.id, context);
       return res.status(status).render('records/teacher-assignments', {
         title: 'Teacher Assignments', csrfToken: ensureCsrfToken(req), currentUser: req.authUser,
-        ...options, values, error,
+        ...options, values, error, recoveredForm,
         notice: req.query.notice === 'assignmentCreated' ? 'Teacher assignment created.'
           : req.query.notice === 'assignmentRevoked' ? 'Teacher assignment revoked.' : null
       });
@@ -104,8 +108,8 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, tea
       await teacherService.createAssignment(req.authUser.id, values);
       return res.redirect(303, teacherAssignmentUrl(context, 'assignmentCreated'));
     } catch (error) {
-      if (error instanceof TeacherGradeSubmissionError) return renderTeacherAssignments(req, res, { status: error.status, error: error.message, values, filters: context });
-      if (isUniqueConflict(error)) return renderTeacherAssignments(req, res, { status: 409, error: 'That class context already has an active teacher assignment.', values, filters: context });
+      if (error instanceof TeacherGradeSubmissionError) return renderTeacherAssignments(req, res, { status: error.status, error: error.message, values, filters: context, recoveredForm: 'teacher-assignment-create' });
+      if (isUniqueConflict(error)) return renderTeacherAssignments(req, res, { status: 409, error: 'That class context already has an active teacher assignment.', values, filters: context, recoveredForm: 'teacher-assignment-create' });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The teacher assignment could not be created.' });
     }
   });
@@ -157,8 +161,8 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, tea
       await service.saveSubject(req.authUser.id, null, req.body);
       return res.redirect(303, '/registrar/records/subjects?notice=subjectCreated');
     } catch (error) {
-      if (error instanceof AcademicRecordsError) return renderSubjects(req, res, { status: error.status, error: error.message, values });
-      if (isUniqueConflict(error)) return renderSubjects(req, res, { status: 409, error: 'That subject code is already in use.', values });
+      if (error instanceof AcademicRecordsError) return renderSubjects(req, res, { status: error.status, error: error.message, values, recoveredForm: 'subject-create' });
+      if (isUniqueConflict(error)) return renderSubjects(req, res, { status: 409, error: 'That subject code is already in use.', values, recoveredForm: 'subject-create' });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The subject could not be created.' });
     }
   });
@@ -173,8 +177,8 @@ function createAcademicRecordsRouter({ getPool, sql, academicRecordsService, tea
       await service.saveSubject(req.authUser.id, subjectId, req.body);
       return res.redirect(303, '/registrar/records/subjects?notice=subjectUpdated');
     } catch (error) {
-      if (error instanceof AcademicRecordsError) return renderSubjects(req, res, { status: error.status, error: error.message, values: req.body });
-      if (isUniqueConflict(error)) return renderSubjects(req, res, { status: 409, error: 'That subject code is already in use.', values: req.body });
+      if (error instanceof AcademicRecordsError) return renderSubjects(req, res, { status: error.status, error: error.message, values: req.body, editSubjectId: subjectId, recoveredForm: `subject-edit:${subjectId}` });
+      if (isUniqueConflict(error)) return renderSubjects(req, res, { status: 409, error: 'That subject code is already in use.', values: req.body, editSubjectId: subjectId, recoveredForm: `subject-edit:${subjectId}` });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The subject could not be updated.' });
     }
   });

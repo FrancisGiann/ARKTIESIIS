@@ -4,7 +4,7 @@
   <section class="dashboard-heading"><div><h1>Review teacher grade workbook</h1><p><%= submission.school_year %> · <%= submission.term %> · <%= formatStudentPlacement(submission.grade_level, submission.section_name) %> · <%= submission.subject_name %></p></div></section>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <p>Submitted by <%= [submission.teacher_first_name, submission.teacher_last_name].filter(Boolean).join(' ') || 'Teacher' %> on <%= new Date(submission.submitted_at).toLocaleString() %> · Revision <%= submission.revision_number %> · <%= submission.counts.eligible %> eligible · <%= submission.counts.unresolved %> unresolved · <%= submission.counts.conflicts %> conflicts</p>
-  <p><a class="button button--secondary" href="/registrar/grade-submissions/<%= submission.id %>/workbook">Download original workbook</a></p>
+  <p><a class="button button--secondary" href="/registrar/grade-submissions/<%= submission.id %>/workbook" download>Download original workbook</a></p>
   <% if (submission.contextMismatch) { %><p class="form-alert" role="alert">Workbook context is different from the assigned class. Approval is disabled; request a corrected workbook or reject this submission.</p><% } %>
   <section class="admin-section" aria-labelledby="parsed-grades-title"><div class="admin-section__heading"><div><h2 id="parsed-grades-title">Grades read from the workbook</h2><p>Rows with validation issues cannot be imported. Name mismatches and conflicting grades require separate registrar review and reasons.</p></div></div>
     <form class="form-stack" method="post" action="/registrar/grade-submissions/<%= submission.id %>/decision" data-submitting-message="Recording the review decision. Please wait.">
