@@ -44,6 +44,22 @@ test('paper roster reconciliation requires reasoned manual teacher rows and reje
     paperTeacherRows: [{ subjectCode: 'MATH', subjectName: 'Math' }, { subjectCode: 'math', subjectName: 'MATH' }] }), /more than once/i);
 });
 
+test('blank and whitespace term-applicability reasons reject before database access', async () => {
+  let poolAcquisitions = 0;
+  const service = createTermClearanceService({ async getPool() {
+    poolAcquisitions += 1;
+    throw new Error('invalid applicability input reached the database');
+  } });
+
+  for (const scopeReason of ['', '   ', 'Nope']) {
+    await assert.rejects(service.recordTermNotAttended('17', '10', {
+      expectedVersion: '0', idempotencyKey: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', scopeReason
+    }), (error) => error instanceof TermClearanceError && error.status === 400
+      && /Reason the entire term was not attended/i.test(error.message));
+  }
+  assert.equal(poolAcquisitions, 0);
+});
+
 test('signature updates require explicit applicability and preserve optional paper dates', () => {
   const [update] = cleanItemUpdates({ items: [{ itemId: '5', applicabilityStatus: 'required', signaturePresent: '1',
     signerName: 'Paper teacher', paperSignedOn: '', signerContextReason: 'Teacher name recorded on prior paper form' }] });
@@ -607,6 +623,12 @@ test('simple clearance write recovery restores checkbox and reason but stale sub
     next();
   }, requireRole('registrar', 'database_admin'), router);
   await withServer(app, async (url) => {
+    const originalResponse = await fetch(`${url}/records/students/42/clearance`);
+    const originalHtml = await originalResponse.text();
+    assert.equal(originalResponse.status, 200);
+    assert.match(originalHtml, /<details class="clearance-corrections"\s*>\s*<summary>Change saved completion<\/summary>/,
+      'the reason prompt stays collapsed until a failed correction needs it');
+
     const body = new URLSearchParams({ _csrf: csrfToken, idempotencyKey: submittedToken, expectedVersion: '2',
       correctionReason: 'Please reopen this saved paper status.' });
     const response = await fetch(`${url}/records/students/42/clearance/terms/10`, { method: 'POST',
@@ -618,6 +640,8 @@ test('simple clearance write recovery restores checkbox and reason but stale sub
     assert.match(validationHtml, /name="paperCompleted" value="1" aria-describedby="clearance-inspection-help-10"\s*>/,
       'a failed reopen keeps the attempted unchecked completion value');
     assert.match(validationHtml, /Please reopen this saved paper status\./);
+    assert.match(validationHtml, /<details class="clearance-corrections" open>\s*<summary>Change saved completion<\/summary>/,
+      'a failed correction exposes its retained reason field');
     assert.match(validationHtml, new RegExp(`name="idempotencyKey" value="${submittedToken}"`));
 
     failureStatus = 409;
@@ -630,6 +654,52 @@ test('simple clearance write recovery restores checkbox and reason but stale sub
     assert.match(staleHtml, /href="\/registrar\/records\/students\/42\/clearance#clearance-term-10">Reload term/);
     assert.doesNotMatch(staleHtml, new RegExp(`name="idempotencyKey" value="${submittedToken}"`));
     assert.doesNotMatch(staleHtml, /method="post" action="\/registrar\/records\/students\/42\/clearance\/terms\/10"/);
+  });
+});
+
+test('failed correction of a saved term exclusion reveals its required reason field', async () => {
+  const csrfToken = 'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210';
+  const saved = { clearance_id: 77, version: 3, state: 'not_attended', scope_status: 'not_attended',
+    scope_reason: 'School records confirm no attendance.', enrollment_id: 10,
+    school_year: '2025-2026', grade_level: 'Grade 11', term_label: 'Second', annual_term_number: 2,
+    section_name: 'STEM A', recording_mode: 'paper_confirmation', inspected_on: null, history: [],
+    completionToken: '88888888-8888-4888-8888-888888888888', scopeToken: '99999999-9999-4999-8999-999999999999' };
+  const clearance = {
+    async getStudentClearance(_actorId, studentId) {
+      return { student: { id: Number(studentId), first_name: 'Ari', last_name: 'Santos', status: 'active' }, terms: [{ ...saved }] };
+    },
+    async recordTermCompletion() {
+      throw new TermClearanceError('Enter a correction reason when changing a saved term exclusion.');
+    }
+  };
+  const router = createStudentRecordsRouter({ studentRecordsService: {}, academicRecordsService: {}, documentRequestService: {},
+    documentClearanceService: {}, gradeOverviewService: {}, readmissionService: {}, termClearanceService: clearance });
+  const app = express();
+  app.set('view engine', 'ejs');
+  app.set('views', require('node:path').resolve(__dirname, '../views'));
+  app.use(express.urlencoded({ extended: false }));
+  app.use('/records', (req, _res, next) => {
+    req.authUser = { id: 17, role: 'registrar' };
+    req.session = { csrfToken };
+    next();
+  }, requireRole('registrar', 'database_admin'), router);
+
+  await withServer(app, async (url) => {
+    const original = await fetch(`${url}/records/students/42/clearance`);
+    const originalHtml = await original.text();
+    assert.equal(original.status, 200);
+    assert.match(originalHtml, /<details class="clearance-corrections"\s*>\s*<summary>Change saved term exclusion<\/summary>/);
+
+    const body = new URLSearchParams({ _csrf: csrfToken, idempotencyKey: saved.completionToken,
+      expectedVersion: '3', paperCompleted: '1' });
+    const response = await fetch(`${url}/records/students/42/clearance/terms/10`, { method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: body.toString() });
+    const html = await response.text();
+    assert.equal(response.status, 400);
+    assert.match(html, /<details class="clearance-corrections" open>\s*<summary>Change saved term exclusion<\/summary>/);
+    assert.match(html, /name="paperCompleted" value="1"[^>]*checked/);
+    assert.match(html, /name="correctionReason"/);
+    assert.match(html, new RegExp(`name="idempotencyKey" value="${saved.completionToken}"`));
   });
 });
 

@@ -106,6 +106,62 @@ test('account input validation normalizes emails and applies UTF-8 password limi
   assert.notEqual(hashActionToken('random-secret'), 'random-secret');
 });
 
+test('account settings reject blank direct POSTs before database or email work', async () => {
+  const csrfToken = 'account-blank-form-csrf-token';
+  let poolAcquisitions = 0;
+  let emailDeliveries = 0;
+  const accountService = createAccountService({
+    async getPool() { poolAcquisitions += 1; throw new Error('blank account request reached the database'); },
+    smtp: { host: 'smtp.invalid', from: 'no-reply@example.invalid' },
+    async deliverEmail() { emailDeliveries += 1; }
+  });
+  accountService.getAccountDetails = async () => ({ email: 'registrar@example.invalid', role: 'registrar',
+    display_name: 'Synthetic Registrar', pending_email: null, must_change_password: 0 });
+
+  const app = express();
+  app.set('view engine', 'ejs');
+  app.set('views', require('node:path').resolve(__dirname, '../views'));
+  app.use(express.urlencoded({ extended: false }));
+  app.use((req, res, next) => {
+    req.authUser = { id: 19, mustChangePassword: false };
+    req.session = { csrfToken };
+    res.locals.currentUser = { ...req.authUser, email: 'registrar@example.invalid', role: 'registrar' };
+    res.locals.navigationItems = [];
+    res.locals.navigationGroups = [];
+    next();
+  });
+  app.use('/account', createAccountRouter({ accountService, environment: testEnvironment() }));
+
+  await withServer(app, async (baseUrl) => {
+    const post = (path, values) => fetch(`${baseUrl}${path}`, { method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: csrfToken, ...values }) });
+
+    const passwordResponse = await post('/account/password', { currentPassword: '', password: '', confirmPassword: '' });
+    const passwordHtml = await passwordResponse.text();
+    assert.equal(passwordResponse.status, 400);
+    assert.match(passwordHtml, /Use at least 12 characters/);
+    const passwordInputs = [...passwordHtml.matchAll(/<input\b[^>]*>/gi)]
+      .map(([tag]) => tag)
+      .filter((tag) => /\btype="password"/i.test(tag));
+    assert.ok(passwordInputs.length > 0, 'the validation page still renders password inputs');
+    assert.ok(passwordInputs.every((tag) => !/\svalue=/i.test(tag)),
+      'password values are never echoed during recovery');
+
+    const emailResponse = await post('/account/email/request', { currentPassword: '' });
+    assert.equal(emailResponse.status, 400);
+    assert.match(await emailResponse.text(), /Enter a valid email address/);
+
+    const sessionsResponse = await post('/account/sessions/revoke-others', { currentPassword: '' });
+    assert.equal(sessionsResponse.status, 401);
+    assert.match(await sessionsResponse.text(), /Enter your current password/);
+  });
+
+  assert.equal(await accountService.requestEmailChange(19, '', 'new@example.invalid'), 'invalid_current_password');
+  assert.equal(poolAcquisitions, 0, 'missing fields fail before opening a database connection');
+  assert.equal(emailDeliveries, 0, 'invalid or incomplete requests never send email');
+});
+
 test('all five roles share the same account page and cannot edit school profile details there', async () => {
   const roles = ['database_admin', 'registrar', 'teacher', 'finance', 'student'];
   const users = roles.map((role, index) => ({

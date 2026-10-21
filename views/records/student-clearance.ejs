@@ -41,12 +41,12 @@
                 <label class="checkbox-field clearance-completion-checkbox"><input type="checkbox" name="paperCompleted" value="1" aria-describedby="clearance-inspection-help-<%= term.enrollment_id %>" <%= (term.completionAttempt ? term.completionAttempt.values.paperCompleted : complete) ? 'checked' : '' %>><span>Paper clearance completed</span></label>
                 <p class="muted-copy clearance-completion-help" id="clearance-inspection-help-<%= term.enrollment_id %>">Inspect the returned paper form before checking this box. The saved record includes the registrar and date automatically.</p>
                 <% if (complete) { %>
-                  <details class="clearance-corrections">
+                  <details class="clearance-corrections" <%= term.completionAttempt ? 'open' : '' %>>
                     <summary>Change saved completion</summary>
                     <div class="field"><label for="clearance-correction-reason-<%= term.enrollment_id %>">Correction reason</label><textarea id="clearance-correction-reason-<%= term.enrollment_id %>" name="correctionReason" rows="2" maxlength="1000"><%= term.completionAttempt?.values?.correctionReason || '' %></textarea><p class="muted-copy">Required only when clearing the saved completion.</p></div>
                   </details>
                 <% } else if (excludedTerm) { %>
-                  <details class="clearance-corrections">
+                  <details class="clearance-corrections" <%= term.completionAttempt ? 'open' : '' %>>
                     <summary>Change saved term exclusion</summary>
                     <div class="field"><label for="clearance-exclusion-reason-<%= term.enrollment_id %>">Correction reason</label><textarea id="clearance-exclusion-reason-<%= term.enrollment_id %>" name="correctionReason" rows="2" maxlength="1000"><%= term.completionAttempt?.values?.correctionReason || '' %></textarea><p class="muted-copy">Required only when changing the saved exclusion.</p></div>
                   </details>
