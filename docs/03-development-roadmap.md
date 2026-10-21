@@ -39,7 +39,7 @@
 - [x] Database-admin-only audit activity viewer with actor/action search, record categories, stable 25-event pagination, Manila timestamps, and no raw event details.
 - [x] Student logins link to existing unlinked student records; Phase 4 does not create or edit student master records.
 - [x] Database administrators may archive student records; linked login access and pending OTPs are disabled while academic and finance history remains.
-- [x] Database administrators may set up logins in bulk for existing unlinked students from a bounded Excel roster; profiles and enrollments are not changed, and the one-time temporary credentials are never persisted in plaintext.
+- [x] (Local auth candidate; not deployed.) Database administrators may set up logins in bulk for existing unlinked students from a bounded Excel roster; profiles and enrollments are not changed, and each recipient chooses a password through a single-use email setup link. Migration 023 and the separate release gate remain pending.
 
 ## Phase 5 - Student Records
 - [x] Registrar/database administrator student master list with bounded name/student-number search and term filter.

@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const bcrypt = require('bcrypt');
-const nodemailer = require('nodemailer');
 const { sql: databaseTypes, Transaction } = require('../config/database');
+const { buildOtpEmail, deliverTransactionalEmail } = require('./transactionalEmail');
 
 const OTP_TTL_MINUTES = 5;
 const VERIFY_WINDOW_MINUTES = 15;
@@ -88,30 +88,7 @@ async function issueOtpChallenge({
 }
 
 async function sendOtpEmail(smtp, to, code) {
-  if (!smtp?.host || !smtp?.from) throw new Error('SMTP is not configured.');
-
-  const transportOptions = {
-    host: smtp.host,
-    port: smtp.port,
-    secure: smtp.secure,
-    requireTLS: !smtp.secure,
-    tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 15_000
-  };
-  if (smtp.user || smtp.pass) {
-    if (!smtp.user || !smtp.pass) throw new Error('SMTP credentials are incomplete.');
-    transportOptions.auth = { user: smtp.user, pass: smtp.pass };
-  }
-
-  const transporter = nodemailer.createTransport(transportOptions);
-  await transporter.sendMail({
-    from: smtp.from,
-    to,
-    subject: 'Your ARKTIESIIS sign-in code',
-    text: `Your sign-in verification code is ${code}. It expires in ${OTP_TTL_MINUTES} minutes. If you did not request this code, you can ignore this message.`
-  });
+  await deliverTransactionalEmail(smtp, { to, ...buildOtpEmail(code, OTP_TTL_MINUTES) });
 }
 
 async function invalidateOtpChallenge({ getPool, sql, userId, codeId }) {
@@ -130,7 +107,7 @@ async function getActiveUser({ getPool, sql, userId }) {
   const pool = await getPool();
   const result = await pool.request()
     .input('userId', sql.Int, userId)
-    .query("SELECT id, email, role, password_hash, is_active, must_change_password, auth_session_version, DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%s.%f') AS updated_at_fingerprint FROM users WHERE id = @userId");
+    .query("SELECT id, email, role, password_hash, is_active, invitation_required, must_change_password, auth_session_version, DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%s.%f') AS updated_at_fingerprint FROM users WHERE id = @userId AND invitation_required = 0");
   return result.recordset?.[0] || null;
 }
 
@@ -188,7 +165,8 @@ async function consumeOtpChallenge({ getPool, sql = databaseTypes, userId, codeI
         INNER JOIN users AS account ON account.id = otp.user_id
         SET otp.consumed_at = UTC_TIMESTAMP()
         WHERE otp.id = @codeId AND otp.user_id = @userId AND otp.code_hash = @codeHash
-          AND otp.consumed_at IS NULL AND otp.expires_at > UTC_TIMESTAMP() AND account.is_active = 1`);
+          AND otp.consumed_at IS NULL AND otp.expires_at > UTC_TIMESTAMP()
+          AND account.is_active = 1 AND account.invitation_required = 0`);
     const didConsume = consumed.rowsAffected?.[0] === 1;
     if (didConsume) {
       await transaction.request().input('userId', sql.Int, userId)

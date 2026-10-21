@@ -31,14 +31,16 @@ const REQUIRED_OBJECTS = Object.freeze([
   'pre_enrollments', 'pre_enrollment_receipts', 'pre_enrollment_events', 'pre_enrollment_revisions',
   'readmission_evaluations', 'readmission_evaluation_events', 'annual_continuity_source_events',
   'term_clearance_templates', 'term_clearance_template_items', 'student_term_clearances',
-  'student_term_clearance_items', 'student_term_clearance_events', 'annual_term_finalizations',
+  'student_term_clearance_items', 'student_term_clearance_events', 'annual_term_finalizations', 'account_setup_tokens',
   'finance_departure_cutoff_reviews', 'finance_departure_charge_reviews',
   'registrar_retake_referrals', 'registrar_retake_item_keys', 'registrar_retake_referral_items',
   'finance_retake_item_decisions', 'registrar_retake_referral_events', 'finance_departure_application_events'
 ]);
 
 const REQUIRED_COLUMNS = Object.freeze({
-  users: ['auth_session_version', 'must_change_password'],
+  users: ['auth_session_version', 'must_change_password', 'invitation_required'],
+  account_setup_tokens: ['id', 'user_id', 'created_by', 'token_hash', 'email_snapshot', 'expires_at',
+    'delivery_status', 'consumed_at', 'revoked_at', 'active_user_id', 'created_at'],
   students: ['birthplace', 'emergency_contact_person', 'debt_increase_revision', 'address_block_lot_street_purok',
     'address_barangay', 'address_city', 'address_province', 'address_zip', 'emergency_contact_address_block_lot_street_purok',
     'emergency_contact_address_barangay', 'emergency_contact_address_city',
@@ -126,7 +128,8 @@ const REQUIRED_CONSTRAINTS = Object.freeze([
   { tableName: 'finance_retake_item_decisions', constraintName: 'CK_finance_retake_item_decision_type', type: 'CHECK', clauseIncludes: 'no_charge' },
   { tableName: 'finance_retake_item_decisions', constraintName: 'CK_finance_retake_item_decision_shape', type: 'CHECK', clauseIncludes: 'approved_amount' },
   { tableName: 'finance_retake_item_decisions', constraintName: 'CK_finance_retake_item_decision_supersession', type: 'CHECK', clauseIncludes: 'superseded_at' },
-  { tableName: 'registrar_retake_referral_events', constraintName: 'CK_registrar_retake_referral_event_type', type: 'CHECK', clauseIncludes: 'reference_updated' }
+  { tableName: 'registrar_retake_referral_events', constraintName: 'CK_registrar_retake_referral_event_type', type: 'CHECK', clauseIncludes: 'reference_updated' },
+  { tableName: 'account_setup_tokens', constraintName: 'CK_account_setup_delivery_status', type: 'CHECK', clauseIncludes: 'delivery_status' }
 ]);
 const REQUIRED_INDEXES = Object.freeze([
   { tableName: 'students', indexName: 'UX_students_user_id_linked', columns: ['user_id'] },
@@ -156,7 +159,10 @@ const REQUIRED_INDEXES = Object.freeze([
   { tableName: 'registrar_retake_referral_items', indexName: 'UQ_registrar_retake_item_revision', columns: ['referral_id', 'item_key_id'] },
   { tableName: 'finance_retake_item_decisions', indexName: 'UQ_finance_retake_item_decision_current', columns: ['current_item_key_id'] },
   { tableName: 'finance_retake_item_decisions', indexName: 'UQ_finance_retake_item_decision_charge_item', columns: ['charge_item_key_id'] },
-  { tableName: 'finance_retake_item_decisions', indexName: 'UQ_finance_retake_item_decision_key', columns: ['idempotency_key'] }
+  { tableName: 'finance_retake_item_decisions', indexName: 'UQ_finance_retake_item_decision_key', columns: ['idempotency_key'] },
+  { tableName: 'account_setup_tokens', indexName: 'UX_account_setup_token_hash', columns: ['token_hash'] },
+  { tableName: 'account_setup_tokens', indexName: 'UX_account_setup_active_user', columns: ['active_user_id'] },
+  { tableName: 'account_setup_tokens', indexName: 'IX_account_setup_user_history', columns: ['user_id', 'created_at', 'id'], unique: false }
 ]);
 const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'annual_finance_assessment_reviews', constraintName: 'FK_annual_finance_assessment_review_annual',
@@ -230,9 +236,13 @@ const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'finance_retake_item_decisions', constraintName: 'FK_finance_retake_item_decision_charge',
     columnName: 'charge_id', referencedTable: 'assessed_charges', referencedColumn: 'id' },
   { tableName: 'registrar_retake_referral_events', constraintName: 'FK_registrar_retake_referral_event_referral',
-    columnName: 'referral_id', referencedTable: 'registrar_retake_referrals', referencedColumn: 'id' }
+    columnName: 'referral_id', referencedTable: 'registrar_retake_referrals', referencedColumn: 'id' },
+  { tableName: 'account_setup_tokens', constraintName: 'FK_account_setup_user',
+    columnName: 'user_id', referencedTable: 'users', referencedColumn: 'id' },
+  { tableName: 'account_setup_tokens', constraintName: 'FK_account_setup_creator',
+    columnName: 'created_by', referencedTable: 'users', referencedColumn: 'id' }
 ]);
-const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 22 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 23 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 function bindInList(request, values, prefix) {
   return values.map((value, index) => {
@@ -353,7 +363,7 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
       process.exitCode = 1;
       return;
     }
-    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.022.`);
+    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.023.`);
   } catch {
     logger.error('MariaDB database check failed. Confirm DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD, then run npm run db:setup.');
     process.exitCode = 1;

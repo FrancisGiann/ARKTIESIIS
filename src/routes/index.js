@@ -34,6 +34,8 @@ const { createAnnualFinanceReportsService } = require('../services/annualFinance
 const { createTeacherGradeSubmissionService } = require('../services/teacherGradeSubmissionService');
 const { createGradeImportService } = require('../services/gradeImportService');
 const { createAccountService, normalizeEmail } = require('../services/accountService');
+const { createAccountInvitationService, maskEmail: maskInvitationEmail } = require('../services/accountInvitationService');
+const { createAccountInvitationRouter } = require('./accountInvitations');
 const { createStudentSetupService } = require('../services/studentSetupService');
 const { createAnnualEnrollmentService } = require('../services/annualEnrollmentService');
 const { createTermClearanceService } = require('../services/termClearanceService');
@@ -78,12 +80,13 @@ function normalizeCredentials(body) {
 
 async function verifyPassword(user, password, comparePassword = bcrypt.compare) {
   const active = user && (user.is_active === true || user.is_active === 1);
-  const candidateHash = active ? user.password_hash : DUMMY_PASSWORD_HASH;
+  const invited = user && (user.invitation_required === true || user.invitation_required === 1);
+  const candidateHash = active && !invited ? user.password_hash : DUMMY_PASSWORD_HASH;
   const passwordMatches = await comparePassword(password, candidateHash);
-  return Boolean(active && passwordMatches);
+  return Boolean(active && !invited && passwordMatches);
 }
 
-function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment = defaultEnvironment, twoFactorService = twoFactor, accountService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, financeReviewActionService, registrarDashboardService, annualEnrollmentService, preEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService, termClearanceService, retakeReferralService } = {}) {
+function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment = defaultEnvironment, twoFactorService = twoFactor, accountService, accountInvitationService, adminService, studentRecordsService, academicRecordsService, gradeImportService, teacherGradeSubmissionService, financeService, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, financeReviewActionService, registrarDashboardService, annualEnrollmentService, preEnrollmentService, studentSetupService, classScheduleService, documentService, documentProcessingService, form137ScanService, physicalChecklistService, documentRequestService, documentClearanceService, gradeOverviewService, readmissionService, termClearanceService, retakeReferralService } = {}) {
   const router = express.Router();
   const authRouter = express.Router();
   const requireAuth = createRequireAuth({ getPool, sql, environment });
@@ -116,6 +119,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   const studentSetup = studentSetupService || createStudentSetupService({ getPool, sql });
   const schedulesService = classScheduleService || createClassScheduleService({ getPool, sql });
   const accountsService = accountService || createAccountService({ getPool, sql, smtp: environment.smtp, appBaseUrl: environment.appBaseUrl });
+  const invitationsService = accountInvitationService || createAccountInvitationService({ getPool, sql, smtp: environment.smtp, appBaseUrl: environment.appBaseUrl });
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 10,
@@ -161,7 +165,8 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   const loginNotices = {
     passwordChanged: 'Your password was changed. Sign in with the new password.',
     passwordReset: 'Your password was reset. Sign in with the new password.',
-    emailChanged: 'Your sign-in and verification email was changed. Sign in with the new address.'
+    emailChanged: 'Your sign-in and verification email was changed. Sign in with the new address.',
+    accountSetup: 'Your password is set. Sign in with your new account.'
   };
   const renderLogin = (req, res, error, status = 200) => res.status(status).render('auth/login', {
     title: 'Login',
@@ -172,10 +177,13 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     notice: loginNotices[req.query.notice] || null,
     error
   });
-  const renderVerification = (req, res, error = null, status = 200) => res.status(status).render('auth/verify', {
+  const renderVerification = (req, res, { error = null, notice = null, status = 200, codeInvalid = false } = {}) => res.status(status).render('auth/verify', {
     title: 'Verify Sign In',
     csrfToken: ensureCsrfToken(req),
-    error
+    emailHint: req.session?.pendingEmailHint || '',
+    error,
+    notice,
+    codeInvalid
   });
   const regenerateSession = (req) => new Promise((resolve, reject) => {
     req.session.regenerate((error) => error ? reject(error) : resolve());
@@ -205,7 +213,9 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     return { allowed: true, codeId: challenge.codeId };
   };
 
-  router.use('/admin/student-accounts', requireAuth, requireRole('database_admin'), createStudentBulkAccountsRouter({ getPool, sql, studentSetupService: studentSetup }));
+  router.use('/admin/student-accounts', requireAuth, requireRole('database_admin'), createStudentBulkAccountsRouter({
+    getPool, sql, studentSetupService: studentSetup, accountInvitationService: invitationsService
+  }));
   router.use('/registrar/intake', requireAuth, requireRole('registrar', 'database_admin'), createAnnualConfirmationRouter({
     getPool, sql, annualEnrollmentService: annualEnrollmentsService, annualFinanceService: annualFinancesService,
     termClearanceService: termClearancesService
@@ -228,7 +238,9 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     financeReportsService: annualFinanceReports, financeDashboardService: financeDashboard, financeMasterlistService: financeMasterlist, financeReviewActionService,
     documentClearanceService: studentDocumentClearance, sessionSecret: environment.sessionSecret,
     retakeReferralService: retakeReferralsService }));
-  router.use('/admin', requireAuth, requireRole('database_admin'), createAdminRouter({ getPool, sql, adminService }));
+  router.use('/admin', requireAuth, requireRole('database_admin'), createAdminRouter({
+    getPool, sql, adminService, accountInvitationService: invitationsService
+  }));
   router.use('/registrar/records', requireAuth, requireRole('registrar', 'database_admin'), createStudentRecordsRouter({ getPool, sql, studentRecordsService: recordsService, academicRecordsService: academicsService, documentRequestService: studentDocumentRequests, documentClearanceService: studentDocumentClearance, gradeOverviewService: registrarGradeOverview, readmissionService: readmissionsService, termClearanceService: termClearancesService }));
   router.use('/registrar/records', requireAuth, requireRole('registrar', 'database_admin'), createAcademicRecordsRouter({ getPool, sql, academicRecordsService: academicsService, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
   router.use('/registrar/schedules', requireAuth, requireRole('registrar'), createClassSchedulesRouter({ getPool, sql, classScheduleService: schedulesService }));
@@ -236,6 +248,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   router.use('/teacher/grades', requireAuth, requireRole('teacher'), createTeacherGradeSubmissionRouter({ getPool, sql, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
   router.use('/registrar/grade-submissions', requireAuth, requireRole('registrar'), createRegistrarGradeSubmissionRouter({ getPool, sql, gradeImportService: gradeImports, teacherGradeSubmissionService: teacherSubmissions }));
   router.use('/documents', requireAuth, requireRole('database_admin', 'registrar', 'teacher', 'finance', 'student'), createDocumentsRouter({ getPool, sql, environment, documentService: documentsService, documentProcessingService, form137ScanService, physicalChecklistService: physicalChecklistsService }));
+  router.use('/account/setup', createAccountInvitationRouter({ accountInvitationService: invitationsService }));
   router.use('/account/email/confirm', createEmailConfirmationRouter({ accountService: accountsService }));
   router.use(authRouter);
   router.use('/account', requireAuth, createAccountRouter({ accountService: accountsService, environment }));
@@ -349,7 +362,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       const pool = await getPool();
       const result = await pool.request()
         .input('email', sql.NVarChar(255), credentials.email)
-        .query("SELECT id, email, password_hash, role, is_active, must_change_password, auth_session_version, DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%s.%f') AS updated_at_fingerprint FROM users WHERE email = @email");
+        .query("SELECT id, email, password_hash, role, is_active, invitation_required, must_change_password, auth_session_version, DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%s.%f') AS updated_at_fingerprint FROM users WHERE email = @email");
       const user = result.recordset?.[0];
       const passwordMatches = await verifyPassword(user, credentials.password);
 
@@ -385,6 +398,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       await regenerateSession(req);
       req.session.pendingUserId = user.id;
       req.session.pendingOtpId = challenge.codeId;
+        req.session.pendingEmailHint = maskInvitationEmail(user.email);
       req.session.authLevel = 'pending_2fa';
       req.session.pendingAuthFingerprint = createAuthFingerprint(user, environment);
       req.session.pendingAuthSessionVersion = user.auth_session_version || '';
@@ -431,7 +445,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       return res.redirect('/login');
     }
     const code = typeof req.body?.code === 'string' && /^\d{6}$/.test(req.body.code) ? req.body.code : null;
-    if (!code) return renderVerification(req, res, 'Enter the six-digit code from your email.', 401);
+    if (!code) return renderVerification(req, res, { error: 'Enter the six-digit code from your email.', status: 401, codeInvalid: true });
 
     try {
       const user = await twoFactorService.getActiveUser({ getPool, sql, userId });
@@ -446,13 +460,13 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       }
 
       const challenge = await twoFactorService.getOtpChallenge({ getPool, sql, userId, codeId });
-      if (!challenge) return renderVerification(req, res, 'This code is invalid or has expired. Request a new code.', 401);
+      if (!challenge) return renderVerification(req, res, { error: 'This code is invalid or has expired. Request a new code.', status: 401, codeInvalid: true });
 
       const allowed = await twoFactorService.reserveOtpAttempt({ getPool, sql, userId });
-      if (!allowed) return renderVerification(req, res, 'Too many code attempts. Request a new code later.', 429);
+      if (!allowed) return renderVerification(req, res, { error: 'Too many code attempts. Request a new code later.', status: 429, codeInvalid: true });
 
       if (!await twoFactorService.compareOtp(code, challenge.code_hash)) {
-        return renderVerification(req, res, 'This code is invalid or has expired. Try again.', 401);
+        return renderVerification(req, res, { error: 'This code is invalid or has expired. Try again.', status: 401, codeInvalid: true });
       }
 
       const consumed = await twoFactorService.consumeOtpChallenge({ getPool, sql, userId, codeId, codeHash: challenge.code_hash });
@@ -497,11 +511,13 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
           message: 'A sign-in code could not be sent. Sign in again later.'
         }));
       }
-      if (!challenge.allowed) return renderVerification(req, res, 'Please wait before requesting another code.', 429);
+      if (!challenge.allowed) return renderVerification(req, res, {
+        error: 'Wait 30 seconds between requests. A maximum of three codes can be sent in 15 minutes.', status: 429
+      });
       req.session.pendingOtpId = challenge.codeId;
       req.session.cookie.maxAge = twoFactorService.OTP_TTL_MINUTES * 60 * 1000;
       await saveSession(req);
-      return renderVerification(req, res, 'A new code was sent to your email.');
+      return renderVerification(req, res, { notice: 'A new code was sent to your email.' });
     } catch {
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'Authentication is temporarily unavailable.' });
     }

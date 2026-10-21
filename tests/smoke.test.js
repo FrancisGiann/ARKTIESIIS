@@ -545,6 +545,30 @@ test('development login regenerates the session and redirects to the database-ba
   });
 });
 
+test('a pending administrator-created account cannot use the development password-only login bypass', async () => {
+  const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
+  const user = {
+    id: 22, email: 'pending@example.edu', password_hash: passwordHash, role: 'registrar',
+    is_active: true, invitation_required: true
+  };
+  const database = createAuthDatabase([user]);
+  const twoFactorService = createTestTwoFactorService(user);
+  await withServer(createApp({
+    databasePool: database.getPool,
+    environment: developmentEnvironment(),
+    twoFactorService
+  }), async (baseUrl) => {
+    const page = await fetch(`${baseUrl}/login`);
+    const cookie = getSessionCookie(page);
+    const response = await postForm(baseUrl, '/login', cookie, {
+      _csrf: csrfFromHtml(await page.text()), email: user.email, password: 'Correct-Horse-Battery-12'
+    });
+    assert.equal(response.status, 401);
+    assert.match(await response.text(), /Invalid email or password/);
+    assert.equal(twoFactorService.state.sends, 0);
+  });
+});
+
 test('non-development login requires OTP even when the development bypass flag is set', async () => {
   const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
   const user = { id: 31, email: 'staff@example.edu', password_hash: passwordHash, role: 'registrar', is_active: true };

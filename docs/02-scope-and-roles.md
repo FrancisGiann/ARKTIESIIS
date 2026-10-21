@@ -21,7 +21,7 @@ New applicants and continuing students use the school's required paper form. A l
 - Search and maintain student profiles, review enrollment and academic history, manage finance accounts and transactions, and oversee document status.
 - Grade entries are written only when the registrar approves a teacher's corrected class workbook submission; administrators do not directly upload report cards or write grades through a manual form.
 - Archive student records while retaining linked academic and finance history; archiving disables the linked student login.
-- Upload a bounded Excel roster to create missing login accounts only for existing, unlinked student records. The preview must be entirely valid before confirmation; temporary passwords are returned once through the private credential export and are never stored in plaintext.
+- Create staff accounts directly and upload a bounded Excel roster to link logins only to existing, unlinked student records. The roster preview must be entirely valid before confirmation. New administrator-created accounts remain unable to sign in until the recipient accepts a single-use email invitation and chooses a password; no password is returned to the administrator.
 - Review activity through the audit log.
 - Document oversight and validation result monitoring.
 - Audit/activity monitoring.

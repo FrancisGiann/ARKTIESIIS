@@ -4,7 +4,14 @@ const { AdminServiceError, createAdminService, normalizeUserId } = require('../s
 const { isDuplicateKeyError } = require('../config/database');
 
 const notices = {
-  created: 'Account created.',
+  created: 'Account created. A setup invitation is being sent; the recipient chooses their password.',
+  invitationSent: 'Account created and setup invitation sent.',
+  invitationFailed: 'Account created, but the setup email could not be delivered. Check email delivery settings before resending.',
+  invitationUnknown: 'Account created. Delivery could not be confirmed; check the invitation status before resending.',
+  invitationResent: 'A new setup invitation was sent.',
+  invitationRevoked: 'The current setup invitation was revoked. This account remains unable to sign in until a new invitation is accepted.',
+  invitationCooldown: 'Wait 30 seconds before sending another setup invitation.',
+  invitationRateLimit: 'No more than 100 setup invitations can be sent in 15 minutes. Try again later.',
   updated: 'Account updated.',
   password: 'Password reset completed. Any pending email sign-in codes were invalidated.'
 };
@@ -74,7 +81,7 @@ function formatAuditDateTime(value) {
   };
 }
 
-function createAdminRouter({ getPool, sql, adminService } = {}) {
+function createAdminRouter({ getPool, sql, adminService, accountInvitationService } = {}) {
   const router = express.Router();
   const service = adminService || createAdminService({ getPool, sql });
 
@@ -157,15 +164,20 @@ function createAdminRouter({ getPool, sql, adminService } = {}) {
       return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
     }
     const values = formValues(req.body);
-    const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    const confirmation = typeof req.body?.confirmPassword === 'string' ? req.body.confirmPassword : '';
-    if (password !== confirmation) {
-      return renderNewUser(req, res, { error: 'Passwords do not match.', status: 400, values });
-    }
-
     try {
       const userId = await service.createUser(req.authUser.id, req.body);
-      return res.redirect(303, `/admin/users/${userId}/edit?notice=created`);
+      let notice = 'invitationUnknown';
+      if (accountInvitationService) {
+        try {
+          const result = await accountInvitationService.issueInvitation(req.authUser.id, userId);
+          notice = result.status === 'sent' ? 'invitationSent'
+            : result.status === 'delivery_failed' ? 'invitationFailed' : 'invitationUnknown';
+        } catch (error) {
+          notice = error?.code === 'cooldown' ? 'invitationCooldown'
+            : error?.code === 'send_window' ? 'invitationRateLimit' : 'invitationUnknown';
+        }
+      }
+      return res.redirect(303, `/admin/users/${userId}/edit?notice=${notice}`);
     } catch (error) {
       if (error instanceof AdminServiceError) return renderNewUser(req, res, { error: error.message, status: error.status, values });
       if (isUniqueConflict(error)) return renderNewUser(req, res, { error: 'An account with that email already exists.', status: 409, values });
@@ -257,6 +269,38 @@ function createAdminRouter({ getPool, sql, adminService } = {}) {
         });
       }
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The password could not be reset.' });
+    }
+  });
+
+  router.post('/users/:id/invitation/resend', async (req, res) => {
+    if (!hasValidCsrfToken(req)) {
+      return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    }
+    const userId = normalizeUserId(req.params.id);
+    if (!userId || !accountInvitationService) return res.status(404).render('error', { title: 'Not Found', message: 'Account invitation not found.' });
+    try {
+      const result = await accountInvitationService.issueInvitation(req.authUser.id, userId);
+      const notice = result.status === 'sent' ? 'invitationResent'
+        : result.status === 'delivery_failed' ? 'invitationFailed' : 'invitationUnknown';
+      return res.redirect(303, `/admin/users/${userId}/edit?notice=${notice}`);
+    } catch (error) {
+      const notice = error?.code === 'cooldown' ? 'invitationCooldown'
+        : error?.code === 'send_window' ? 'invitationRateLimit' : 'invitationUnknown';
+      return res.redirect(303, `/admin/users/${userId}/edit?notice=${notice}`);
+    }
+  });
+
+  router.post('/users/:id/invitation/revoke', async (req, res) => {
+    if (!hasValidCsrfToken(req)) {
+      return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+    }
+    const userId = normalizeUserId(req.params.id);
+    if (!userId || !accountInvitationService) return res.status(404).render('error', { title: 'Not Found', message: 'Account invitation not found.' });
+    try {
+      const result = await accountInvitationService.revokeInvitation(req.authUser.id, userId);
+      return res.redirect(303, `/admin/users/${userId}/edit?notice=${result === 'revoked' ? 'invitationRevoked' : 'invitationUnknown'}`);
+    } catch {
+      return res.redirect(303, `/admin/users/${userId}/edit?notice=invitationUnknown`);
     }
   });
 

@@ -108,7 +108,7 @@ function createStudentSetupService({
       .input('actorId', sql.Int, actorId)
       .input('requiredRole', sql.NVarChar(30), role)
       .query(`SELECT id, role FROM users
-        WHERE id = @actorId AND is_active = 1 AND role = @requiredRole FOR UPDATE`);
+        WHERE id = @actorId AND is_active = 1 AND invitation_required = 0 AND role = @requiredRole FOR UPDATE`);
     const actor = result.recordset?.[0];
     if (!actor) throw new StudentSetupError('Your access is no longer active. Sign in again.', 403);
     return actor;
@@ -197,20 +197,24 @@ function createStudentSetupService({
         if (attempts > 10) throw new Error('A distinct temporary password could not be generated.');
       } while (usedPasswords.has(password));
       usedPasswords.add(password);
-      credentials.push({ ...row, password });
+      credentials.push({ ...row, setupSecret: password });
     }
     let nextCredential = 0;
     const hashWorkers = Array.from({ length: Math.min(4, credentials.length) }, async () => {
       while (nextCredential < credentials.length) {
         const credential = credentials[nextCredential];
         nextCredential += 1;
-        credential.passwordHash = await hashPassword(credential.password, BCRYPT_ROUNDS);
+        credential.passwordHash = await hashPassword(credential.setupSecret, BCRYPT_ROUNDS);
+        credential.setupSecret = null;
       }
     });
     await Promise.all(hashWorkers);
 
     return runTransaction(async (transaction) => {
       const actor = await requireActor(transaction.request(), actorInput, 'database_admin');
+      await transaction.request().query(`SELECT id, user_id, created_by, token_hash, email_snapshot, expires_at,
+        delivery_status, consumed_at, revoked_at, active_user_id, created_at
+        FROM account_setup_tokens LIMIT 0`);
       const matches = await lookupBulkRows(transaction.request(), valid);
       const currentRows = attachDatabaseErrors(rows, matches.recordset);
       const invalidRows = currentRows.filter((row) => row.errors.length);
@@ -222,9 +226,10 @@ function createStudentSetupService({
         const inserted = await transaction.request()
           .input('email', sql.NVarChar(255), credential.email)
           .input('passwordHash', sql.NVarChar(255), credential.passwordHash)
-          .input('mustChangePassword', sql.Bit, true)
-          .query(`INSERT INTO users (email, password_hash, role, is_active, must_change_password)
-            VALUES (@email, @passwordHash, 'student', 1, @mustChangePassword)`);
+          .input('invitationRequired', sql.Bit, true)
+          .input('mustChangePassword', sql.Bit, false)
+          .query(`INSERT INTO users (email, password_hash, role, is_active, invitation_required, must_change_password)
+            VALUES (@email, @passwordHash, 'student', 1, @invitationRequired, @mustChangePassword)`);
         const userId = inserted.insertId;
         if (!Number.isSafeInteger(userId) || userId < 1) throw new Error('Student account insert returned no identifier.');
         const linked = await transaction.request()
@@ -235,12 +240,13 @@ function createStudentSetupService({
         if (linked.affectedRows !== 1) {
           throw new StudentSetupError('A student account changed while the roster was being confirmed. No accounts were created.', 409);
         }
+        credential.userId = userId;
       }
       await writeAudit(transaction, actor, 'student_accounts_bulk_created', 'student_account_setup', actor.id, {
         accountCount: credentials.length,
         existingStudentRecordsOnly: true
       });
-      return credentials.map(({ rowNumber, studentNo, email, password }) => ({ rowNumber, studentNo, email, password }));
+      return credentials.map(({ userId, rowNumber, studentNo, email }) => ({ userId, rowNumber, studentNo, email }));
     });
   }
 
@@ -450,7 +456,7 @@ function createStudentSetupService({
         .query(`SELECT enrollment.id AS enrollment_id, enrollment.enrollment_status,
           enrollment.finalized_at, student.id AS student_id, student.student_no, student.status AS student_status, student.user_id,
           student.first_name, student.middle_name, student.last_name, student.suffix,
-          account.email, account.is_active, term.school_year, term.term, section.name AS section_name,
+          account.email, account.is_active, account.invitation_required, term.school_year, term.term, section.name AS section_name,
           clearance.clearance_status, clearance.created_for_intake, clearance.account_activation_pending
         FROM enrollments AS enrollment
         INNER JOIN students AS student ON student.id = enrollment.student_id
@@ -479,7 +485,8 @@ function createStudentSetupService({
       let temporaryPassword = null;
       let activated = false;
       if ((row.account_activation_pending === true || row.account_activation_pending === 1)
-        && !(row.is_active === true || row.is_active === 1)) {
+        && !(row.is_active === true || row.is_active === 1)
+        && !(row.invitation_required === true || row.invitation_required === 1)) {
         temporaryPassword = createPassword();
         const passwordHash = await hashPassword(temporaryPassword, BCRYPT_ROUNDS);
         const activation = await transaction.request()
@@ -487,7 +494,7 @@ function createStudentSetupService({
           .input('passwordHash', sql.NVarChar(255), passwordHash)
           .query(`UPDATE users SET is_active = 1, must_change_password = 1,
               password_hash = @passwordHash, auth_session_version = UUID(), updated_at = UTC_TIMESTAMP(6)
-            WHERE id = @userId AND role = 'student' AND is_active = 0`);
+            WHERE id = @userId AND role = 'student' AND is_active = 0 AND invitation_required = 0`);
         activated = activation.affectedRows === 1;
         if (!activated) throw new StudentSetupError('The new student login changed before finalization. No credentials were issued.', 409);
       }

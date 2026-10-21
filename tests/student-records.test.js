@@ -697,6 +697,23 @@ test('registrar deactivates only an active linked student login and preserves th
   assert.equal(log.committed, true);
 });
 
+test('registrar deactivation revokes a pending setup invitation before disabling its linked login', async () => {
+  const { service, log } = transactionalService(({ statement }) => {
+    if (statement.includes('FROM users') && statement.includes('actorId')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM students WHERE id = @studentId')) return { recordset: [{ id: 12, user_id: 44, status: 'active' }] };
+    if (statement.includes('FROM users WHERE id = @userId')) return { recordset: [{ id: 44, is_active: true, invitation_required: true }] };
+    return { recordset: [] };
+  });
+  assert.equal(await service.deactivateStudentLogin(7, '12', 'DEACTIVATE'), 12);
+  const revoke = log.queries.find(({ statement }) => statement.includes('UPDATE account_setup_tokens SET revoked_at'));
+  const deactivate = log.queries.find(({ statement }) => statement.includes('UPDATE users SET is_active = 0'));
+  assert.ok(revoke);
+  assert.equal(revoke.values.userId, 44);
+  assert.ok(deactivate);
+  assert.ok(log.queries.indexOf(revoke) < log.queries.indexOf(deactivate));
+  assert.equal(log.committed, true);
+});
+
 test('finance cannot access the student master list and denied requests do not load academic data', async () => {
   let listReads = 0;
   const studentRecordsService = {

@@ -130,11 +130,13 @@ function transactionalService(onQuery, { hashPassword = async () => 'bcrypt-test
   return { service, log };
 }
 
-test('admin account input validation rejects invalid email, role, names, student link, and password length', () => {
+test('admin account input validation rejects invalid email, role, names, and student link while ignoring password input', () => {
   assert.throws(() => validateCreateUser({ email: 'bad', role: 'finance', password: 'long-enough-password', firstName: 'A', lastName: 'B' }), AdminServiceError);
   assert.throws(() => validateCreateUser({ email: 'a@example.edu', role: 'owner', password: 'long-enough-password', firstName: 'A', lastName: 'B' }), AdminServiceError);
   assert.throws(() => validateCreateUser({ email: 'a@example.edu', role: 'student', password: 'long-enough-password' }), /student number/);
-  assert.throws(() => validateCreateUser({ email: 'a@example.edu', role: 'registrar', password: 'short', firstName: 'A', lastName: 'B' }), /12 characters/);
+  assert.deepEqual(validateCreateUser({ email: 'a@example.edu', role: 'registrar', password: 'short', firstName: 'A', lastName: 'B' }), {
+    email: 'a@example.edu', role: 'registrar', firstName: 'A', lastName: 'B', department: null
+  });
   assert.throws(() => validateUpdateUser({ email: 'a@example.edu', role: 'finance', isActive: '1', firstName: 'bad\nname', lastName: 'B' }), /First and last names/);
 });
 
@@ -158,11 +160,9 @@ test('empty and whitespace account submissions cannot create staff or student ac
 
 test('teacher account creation and editing accept staff profile fields', () => {
   assert.deepEqual(validateCreateUser({
-    email: 'teacher@example.edu', role: 'teacher', password: 'a-valid-teacher-password',
-    firstName: 'Taylor', lastName: 'Teacher', department: 'English'
+    email: 'teacher@example.edu', role: 'teacher', firstName: 'Taylor', lastName: 'Teacher', department: 'English'
   }), {
-    email: 'teacher@example.edu', role: 'teacher', password: 'a-valid-teacher-password',
-    firstName: 'Taylor', lastName: 'Teacher', department: 'English'
+    email: 'teacher@example.edu', role: 'teacher', firstName: 'Taylor', lastName: 'Teacher', department: 'English'
   });
   assert.deepEqual(validateUpdateUser({
     email: 'teacher@example.edu', role: 'teacher', isActive: '1',
@@ -178,7 +178,10 @@ test('front-desk accounts use normal staff account creation and edit fields', ()
     email: 'frontdesk@example.edu', role: 'front_desk', password: 'a-valid-frontdesk-password',
     firstName: 'Casey', lastName: 'Frontdesk', department: 'Admissions'
   };
-  assert.deepEqual(validateCreateUser(account), account);
+  assert.deepEqual(validateCreateUser(account), {
+    email: account.email, role: account.role, firstName: account.firstName,
+    lastName: account.lastName, department: account.department
+  });
   assert.deepEqual(validateUpdateUser({ ...account, isActive: '1', password: undefined }), {
     email: account.email, role: account.role, isActive: true,
     firstName: account.firstName, lastName: account.lastName, department: account.department
@@ -188,13 +191,14 @@ test('front-desk accounts use normal staff account creation and edit fields', ()
 test('creating a front-desk account stores a regular staff profile and audits only its role', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
+    if (statement.includes('FROM account_setup_tokens LIMIT 0')) return { recordset: [] };
     if (statement.includes('INSERT INTO users')) return { insertId: 19 };
     if (statement.includes('FROM staff_profiles')) return { recordset: [] };
     if (statement.includes('INSERT INTO staff_profiles') || statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   });
   const id = await service.createUser(7, {
-    email: 'frontdesk@example.edu', role: 'front_desk', password: 'new-frontdesk-password',
+    email: 'frontdesk@example.edu', role: 'front_desk',
     firstName: 'Casey', lastName: 'Frontdesk', department: 'Admissions'
   });
   assert.equal(id, 19);
@@ -202,6 +206,9 @@ test('creating a front-desk account stores a regular staff profile and audits on
   const profileInsert = log.queries.find(({ statement }) => statement.includes('INSERT INTO staff_profiles'));
   const auditInsert = log.queries.find(({ statement }) => statement.includes('INSERT INTO audit_logs'));
   assert.equal(accountInsert.values.role, 'front_desk');
+  assert.equal(accountInsert.values.invitationRequired, true);
+  assert.equal(accountInsert.values.mustChangePassword, false);
+  assert.ok(accountInsert.values.passwordHash);
   assert.deepEqual([profileInsert.values.firstName, profileInsert.values.lastName, profileInsert.values.department],
     ['Casey', 'Frontdesk', 'Admissions']);
   assert.equal(auditInsert.values.detailsJson, JSON.stringify({ role: 'front_desk' }));
@@ -211,11 +218,11 @@ test('creating a front-desk account stores a regular staff profile and audits on
 test('editing a front-desk account keeps normal staff-profile management and audit history', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
-    if (statement.includes('SELECT id, email, role, is_active FROM users')) {
-      return { recordset: [{ id: 19, email: 'frontdesk@example.edu', role: 'front_desk', is_active: true }] };
+    if (statement.includes('SELECT id, email, role, is_active, invitation_required FROM users')) {
+      return { recordset: [{ id: 19, email: 'frontdesk@example.edu', role: 'front_desk', is_active: true, invitation_required: false }] };
     }
     if (statement.includes('SELECT id FROM staff_profiles')) return { recordset: [{ id: 27 }] };
-    if (statement.startsWith('UPDATE users') || statement.startsWith('UPDATE staff_profiles')
+    if (statement.startsWith('UPDATE users') || statement.startsWith('UPDATE account_setup_tokens') || statement.startsWith('UPDATE staff_profiles')
       || statement.startsWith('UPDATE two_factor_codes') || statement.startsWith('UPDATE password_reset_tokens')
       || statement.startsWith('UPDATE pending_email_changes') || statement.startsWith('UPDATE students')
       || statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
@@ -232,7 +239,7 @@ test('editing a front-desk account keeps normal staff-profile management and aud
   assert.deepEqual([profileUpdate.values.firstName, profileUpdate.values.lastName, profileUpdate.values.department],
     ['Casey', 'Frontdesk', 'Admissions']);
   assert.equal(auditInsert.values.detailsJson, JSON.stringify({ previousRole: 'front_desk', role: 'front_desk',
-    wasActive: true, isActive: true, emailChanged: true }));
+    wasActive: true, isActive: true, emailChanged: true, invitationRevoked: true }));
 });
 
 test('administrator create and edit forms expose the front-desk role', async () => {
@@ -257,11 +264,11 @@ test('administrator create and edit forms expose the front-desk role', async () 
 test('editing a user to teacher updates the account and staff profile in one transaction', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
-    if (statement.includes('SELECT id, email, role, is_active FROM users')) {
-      return { recordset: [{ id: 11, email: 'staff@example.edu', role: 'registrar', is_active: true }] };
+    if (statement.includes('SELECT id, email, role, is_active, invitation_required FROM users')) {
+      return { recordset: [{ id: 11, email: 'staff@example.edu', role: 'registrar', is_active: true, invitation_required: false }] };
     }
     if (statement.includes('SELECT id FROM staff_profiles')) return { recordset: [{ id: 33 }] };
-    if (statement.startsWith('UPDATE users') || statement.startsWith('UPDATE two_factor_codes')
+    if (statement.startsWith('UPDATE users') || statement.startsWith('UPDATE account_setup_tokens') || statement.startsWith('UPDATE two_factor_codes')
       || statement.startsWith('UPDATE password_reset_tokens') || statement.startsWith('UPDATE pending_email_changes')
       || statement.startsWith('UPDATE students')
       || statement.startsWith('UPDATE staff_profiles') || statement.includes('INSERT INTO audit_logs')) {
@@ -397,8 +404,8 @@ test('audit directory searches actor/action, filters known categories, omits det
 test('the final active database administrator cannot be demoted or deactivated', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
-    if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 8, email: 'admin@example.edu', role: 'database_admin', is_active: true }] };
-    if (statement.includes('role = @adminRole AND is_active = 1 FOR UPDATE')) return { recordset: [{ id: 8 }] };
+    if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 8, email: 'admin@example.edu', role: 'database_admin', is_active: true, invitation_required: false }] };
+    if (statement.includes('role = @adminRole AND is_active = 1 AND invitation_required = 0 FOR UPDATE')) return { recordset: [{ id: 8 }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
 
@@ -414,9 +421,9 @@ test('the final active database administrator cannot be demoted or deactivated',
 test('student-to-staff role changes unlink the student login and preserve the student record', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
-    if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 8, email: 'learner@example.edu', role: 'student', is_active: true }] };
+    if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 8, email: 'learner@example.edu', role: 'student', is_active: true, invitation_required: false }] };
     if (statement.includes('UPDATE users SET email')) return { recordset: [] };
-    if (statement.startsWith('UPDATE two_factor_codes') || statement.startsWith('UPDATE password_reset_tokens') || statement.startsWith('UPDATE pending_email_changes')) return { recordset: [] };
+    if (statement.startsWith('UPDATE account_setup_tokens') || statement.startsWith('UPDATE two_factor_codes') || statement.startsWith('UPDATE password_reset_tokens') || statement.startsWith('UPDATE pending_email_changes')) return { recordset: [] };
     if (statement.includes('UPDATE students SET user_id = NULL')) return { recordset: [] };
     if (statement.includes('FROM staff_profiles')) return { recordset: [] };
     if (statement.includes('INSERT INTO staff_profiles')) return { recordset: [] };
@@ -436,9 +443,9 @@ test('student-to-staff role changes unlink the student login and preserve the st
 test('staff-to-student role changes link an existing student and retain the staff profile', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
-    if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 8, email: 'staff@example.edu', role: 'registrar', is_active: true }] };
+    if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 8, email: 'staff@example.edu', role: 'registrar', is_active: true, invitation_required: false }] };
     if (statement.includes('UPDATE users SET email')) return { recordset: [] };
-    if (statement.startsWith('UPDATE two_factor_codes') || statement.startsWith('UPDATE password_reset_tokens') || statement.startsWith('UPDATE pending_email_changes')) return { recordset: [] };
+    if (statement.startsWith('UPDATE account_setup_tokens') || statement.startsWith('UPDATE two_factor_codes') || statement.startsWith('UPDATE password_reset_tokens') || statement.startsWith('UPDATE pending_email_changes')) return { recordset: [] };
     if (statement.includes('FROM students WHERE student_no = @studentNo FOR UPDATE')) return { recordset: [{ id: 51, user_id: null, status: 'active' }] };
     if (statement.includes('UPDATE students SET user_id = NULL')) return { recordset: [] };
     if (statement.includes('UPDATE students SET user_id = @userId')) return { recordset: [] };
@@ -458,9 +465,9 @@ test('staff-to-student role changes link an existing student and retain the staf
 test('administrator cannot link a login to an archived student record', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
-    if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 8, email: 'staff@example.edu', role: 'registrar', is_active: true }] };
+    if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 8, email: 'staff@example.edu', role: 'registrar', is_active: true, invitation_required: false }] };
     if (statement.includes('UPDATE users SET email')) return { recordset: [] };
-    if (statement.startsWith('UPDATE two_factor_codes') || statement.startsWith('UPDATE password_reset_tokens') || statement.startsWith('UPDATE pending_email_changes')) return { recordset: [] };
+    if (statement.startsWith('UPDATE account_setup_tokens') || statement.startsWith('UPDATE two_factor_codes') || statement.startsWith('UPDATE password_reset_tokens') || statement.startsWith('UPDATE pending_email_changes')) return { recordset: [] };
     if (statement.includes('FROM students WHERE student_no = @studentNo FOR UPDATE')) return { recordset: [{ id: 51, user_id: null, status: 'archived' }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
@@ -476,7 +483,7 @@ test('administrator cannot link a login to an archived student record', async ()
 test('an administrator cannot demote or deactivate their own account', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
-    if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 7, email: 'admin@example.edu', role: 'database_admin', is_active: true }] };
+    if (statement.includes('WHERE id = @userId')) return { recordset: [{ id: 7, email: 'admin@example.edu', role: 'database_admin', is_active: true, invitation_required: false }] };
     throw new Error(`Unexpected query: ${statement}`);
   });
 
@@ -491,13 +498,15 @@ test('an administrator cannot demote or deactivate their own account', async () 
 test('account creation writes profile and audit event in one transaction without logging password data', async () => {
   const { service, log } = transactionalService(({ statement }) => {
     if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
+    if (statement.includes('FROM account_setup_tokens LIMIT 0')) return { recordset: [] };
     if (statement.includes('INSERT INTO users')) return { insertId: 11 };
     if (statement.includes('FROM staff_profiles')) return { recordset: [] };
     if (statement.includes('INSERT INTO staff_profiles')) return { recordset: [] };
     if (statement.includes('INSERT INTO audit_logs')) return { recordset: [] };
     throw new Error(`Unexpected query: ${statement}`);
   }, { hashPassword: async (password, rounds) => {
-    assert.equal(password, 'new-password-is-secret');
+    assert.match(password, /^[A-Za-z0-9_-]{43}$/);
+    assert.notEqual(password, 'new-password-is-secret');
     assert.equal(rounds, 12);
     return 'bcrypt-hash-value';
   } });
@@ -507,12 +516,31 @@ test('account creation writes profile and audit event in one transaction without
     firstName: 'Riley', lastName: 'Registrar', department: 'Records'
   });
   const auditCall = log.queries.find(({ statement }) => statement.includes('INSERT INTO audit_logs'));
+  const userInsert = log.queries.find(({ statement }) => statement.includes('INSERT INTO users'));
   assert.equal(userId, 11);
   assert.equal(log.committed, true);
   assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO staff_profiles')), true);
+  assert.equal(userInsert.values.invitationRequired, true);
+  assert.equal(userInsert.values.mustChangePassword, false);
+  assert.equal(userInsert.values.passwordHash, 'bcrypt-hash-value');
   assert.equal(auditCall.values.detailsJson, JSON.stringify({ role: 'registrar' }));
   assert.equal(JSON.stringify(auditCall.values).includes('new-password-is-secret'), false);
   assert.equal(JSON.stringify(auditCall.values).includes('bcrypt-hash-value'), false);
+});
+
+test('direct account creation fails closed before inserting when invitation schema is incomplete', async () => {
+  const fixture = transactionalService(({ statement }) => {
+    if (statement.includes('WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
+    if (statement.includes('FROM account_setup_tokens LIMIT 0')) throw new Error('Table does not exist');
+    throw new Error(`Creation must stop at invitation schema preflight: ${statement}`);
+  }, { hashPassword: async () => 'synthetic-bcrypt-hash' });
+
+  await assert.rejects(fixture.service.createUser(7, {
+    email: 'new@example.edu', role: 'registrar', firstName: 'New', lastName: 'Registrar', department: 'Records'
+  }), /Table does not exist/);
+  assert.equal(fixture.log.rolledBack, true);
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO users')), false);
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO staff_profiles')), false);
 });
 
 test('database administrator read matrix permits staff workspaces and denies student self-service in a mocked HTTP app', async () => {
@@ -713,9 +741,10 @@ test('admin account creation maps a MariaDB duplicate-key error to a conflict re
   });
 });
 
-test('create and reset forms reject mismatched passwords without returning submitted values', async () => {
+test('new-account setup invites password selection while password reset still rejects mismatches', async () => {
   let createCalls = 0;
   let resetCalls = 0;
+  const invitationCalls = [];
   const adminService = {
     async createUser() { createCalls += 1; return 44; },
     async getUser() {
@@ -723,13 +752,19 @@ test('create and reset forms reject mismatched passwords without returning submi
     },
     async resetPassword() { resetCalls += 1; }
   };
+  const accountInvitationService = {
+    async issueInvitation(actorId, userId) {
+      invitationCalls.push({ actorId, userId });
+      return { status: 'sent' };
+    }
+  };
 
-  await withServer(createApp({ databasePool: createAuthPool('database_admin'), environment: testEnvironment, adminService }), async (baseUrl) => {
+  await withServer(createApp({ databasePool: createAuthPool('database_admin'), environment: testEnvironment, adminService, accountInvitationService }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'database_admin@example.edu');
     const createPage = await fetch(`${baseUrl}/admin/users/new`, { headers: { cookie } });
     const createPageHtml = await createPage.text();
-    assert.match(createPageHtml, /data-password-match-form/);
-    assert.match(createPageHtml, /id="confirm-password-mismatch"[^>]*data-password-mismatch-message/);
+    assert.match(createPageHtml, /recipient to choose a password/);
+    assert.doesNotMatch(createPageHtml, /name="(?:password|confirmPassword)"/);
 
     const newPassword = 'New-Password-Is-Secret-1';
     const differentConfirmation = 'Different-Secret-Password-2';
@@ -738,16 +773,12 @@ test('create and reset forms reject mismatched passwords without returning submi
       email: 'new@example.edu',
       role: 'registrar',
       firstName: 'Casey',
-      lastName: 'Staff',
-      password: newPassword,
-      confirmPassword: differentConfirmation
+      lastName: 'Staff'
     });
-    const createHtml = await createResponse.text();
-    assert.equal(createResponse.status, 400);
-    assert.match(createHtml, /Passwords do not match\./);
-    assert.equal(createHtml.includes(newPassword), false);
-    assert.equal(createHtml.includes(differentConfirmation), false);
-    assert.equal(createCalls, 0);
+    assert.equal(createResponse.status, 303);
+    assert.equal(createResponse.headers.get('location'), '/admin/users/44/edit?notice=invitationSent');
+    assert.deepEqual(invitationCalls, [{ actorId: 7, userId: 44 }]);
+    assert.equal(createCalls, 1);
 
     const editPage = await fetch(`${baseUrl}/admin/users/44/edit`, { headers: { cookie } });
     const editPageHtml = await editPage.text();
@@ -765,6 +796,30 @@ test('create and reset forms reject mismatched passwords without returning submi
     assert.equal(resetHtml.includes(newPassword), false);
     assert.equal(resetHtml.includes(differentConfirmation), false);
     assert.equal(resetCalls, 0);
+  });
+});
+
+test('administrator invitation errors distinguish recipient cooldown from the administrator send-window cap', async () => {
+  let nextUserId = 50;
+  const adminService = { async createUser() { nextUserId += 1; return nextUserId; } };
+  const accountInvitationService = {
+    async issueInvitation(_actorId, userId) {
+      const error = userId === 51
+        ? Object.assign(new Error('private cooldown detail'), { status: 429, code: 'cooldown' })
+        : Object.assign(new Error('private send-window detail'), { status: 429, code: 'send_window' });
+      throw error;
+    }
+  };
+  await withServer(createApp({ databasePool: createAuthPool('database_admin'), environment: testEnvironment, adminService, accountInvitationService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'database_admin@example.edu');
+    const page = await fetch(`${baseUrl}/admin/users/new`, { headers: { cookie } });
+    const token = csrfFromHtml(await page.text());
+    const common = { _csrf: token, role: 'registrar', firstName: 'Test', lastName: 'User' };
+    const cooldown = await postForm(baseUrl, '/admin/users', cookie, { ...common, email: 'first@example.edu' });
+    const rateLimit = await postForm(baseUrl, '/admin/users', cookie, { ...common, email: 'second@example.edu' });
+    assert.equal(cooldown.headers.get('location'), '/admin/users/51/edit?notice=invitationCooldown');
+    assert.equal(rateLimit.headers.get('location'), '/admin/users/52/edit?notice=invitationRateLimit');
+    assert.doesNotMatch(cooldown.headers.get('location') + rateLimit.headers.get('location'), /private/i);
   });
 });
 

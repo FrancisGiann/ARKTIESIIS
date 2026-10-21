@@ -24,7 +24,7 @@
     <section class="admin-section" aria-labelledby="student-list-preview-title">
       <div class="admin-section__heading"><div><h2 id="student-list-preview-title">Student list preview</h2><p>Every row must match one existing, unlinked student record and use an available email.</p></div></div>
       <% const errorRows = rows.filter((row) => row.errors.length); %>
-      <% if (errorRows.length) { %><p class="form-alert" role="status"><%= errorRows.length %> of <%= rows.length %> rows need correction. No accounts will be created.</p><% } else { %><p class="form-success" role="status">All <%= rows.length %> rows are ready. Confirm to create the accounts and download their temporary credentials once.</p><% } %>
+      <% if (errorRows.length) { %><p class="form-alert" role="status"><%= errorRows.length %> of <%= rows.length %> rows need correction. No accounts will be created.</p><% } else { %><p class="form-success" role="status">All <%= rows.length %> rows are ready. Confirm to create the accounts and email each recipient a one-time password setup link.</p><% } %>
       <div class="table-scroll" tabindex="0" aria-label="Student login list preview">
         <table class="admin-table">
           <thead><tr><th scope="col">Workbook row</th><th scope="col">Student number</th><th scope="col">Email</th><th scope="col">Result</th></tr></thead>
@@ -37,13 +37,29 @@
         </table>
       </div>
       <% if (canConfirm) { %>
-        <form class="form-stack records-compact-form" method="post" action="/admin/student-accounts/confirm" data-submitting-message="Creating the student accounts and preparing the one-time credential download. Please wait.">
+        <form class="form-stack records-compact-form" method="post" action="/admin/student-accounts/confirm" data-submitting-message="Creating the student accounts and sending setup invitations. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <input type="hidden" name="previewId" value="<%= previewId %>">
-          <p>The temporary passwords appear only in the download response. Save it securely; a lost password can be recovered through the account password reset flow.</p>
-          <button class="button button--primary button--align-start" type="submit">Confirm and download credentials</button>
+          <p>Each recipient chooses a password from their email invitation. The administrator does not receive account passwords.</p>
+          <button class="button button--primary button--align-start" type="submit">Create accounts and send invitations</button>
         </form>
       <% } %>
+    </section>
+  <% } %>
+  <% if (resultMessage) { const invitationProblems = results.some((result) => result.status !== 'sent'); %>
+    <section class="admin-section" aria-labelledby="invitation-results-title">
+      <h2 id="invitation-results-title">Invitation results</h2>
+      <p class="<%= invitationProblems ? 'form-alert' : 'form-success' %>" role="<%= invitationProblems ? 'alert' : 'status' %>"><%= resultMessage %></p>
+      <% if (results.length) { %><div class="table-scroll" tabindex="0" aria-label="Student invitation results">
+        <table class="admin-table"><thead><tr><th scope="col">Student number</th><th scope="col">Email</th><th scope="col">Invitation</th><th scope="col">Account</th></tr></thead>
+          <tbody><% for (const result of results) { %><tr>
+            <td data-label="Student number"><%= result.studentNo || '—' %></td>
+            <td data-label="Email"><%= result.email || '—' %></td>
+            <td data-label="Invitation"><%= result.status === 'sent' ? 'Sent' : result.status === 'delivery_failed' ? 'Delivery failed; resend from account management' : result.status === 'delivery_pending' ? 'Delivery is still in progress or unconfirmed; check status before resending' : result.status === 'delivery_not_current' ? 'Invitation is no longer current; review account status' : 'Delivery is not confirmed; check account status before resending' %></td>
+            <td data-label="Account"><a class="table-action" href="/admin/users/<%= result.userId %>/edit"><%= ['delivery_pending', 'delivery_status_unknown', 'delivery_not_current'].includes(result.status) ? 'Check status' : 'Manage' %></a></td>
+          </tr><% } %></tbody>
+        </table>
+      </div><% } %>
     </section>
   <% } %>
 </main>

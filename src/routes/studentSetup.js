@@ -192,28 +192,15 @@ function setPrivateHeaders(res) {
     .set('X-Content-Type-Options', 'nosniff');
 }
 
-function csvEscape(value) {
-  let text = String(value ?? '');
-  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
-  return `"${text.replaceAll('"', '""')}"`;
-}
-
-function credentialsCsv(credentials) {
-  const lines = [['Row', 'Student number', 'Email', 'Temporary password'].map(csvEscape).join(',')];
-  for (const entry of credentials) {
-    lines.push([entry.rowNumber, entry.studentNo, entry.email, entry.password].map(csvEscape).join(','));
-  }
-  return `\uFEFF${lines.join('\r\n')}\r\n`;
-}
-
-function createStudentBulkAccountsRouter({ getPool, sql, studentSetupService } = {}) {
+function createStudentBulkAccountsRouter({ getPool, sql, studentSetupService, accountInvitationService } = {}) {
   const router = express.Router();
   const service = studentSetupService || createStudentSetupService({ getPool, sql });
   const upload = createUploadMiddleware();
 
-  function renderBulkPage(req, res, { status = 200, error = null, rows = [], canConfirm = false, previewId = '' } = {}) {
+  function renderBulkPage(req, res, { status = 200, error = null, rows = [], canConfirm = false, previewId = '', results = [], resultMessage = null } = {}) {
     return setPrivateHeaders(res).status(status).render('admin/student-account-bulk', {
-      title: 'Student Login Setup', csrfToken: ensureCsrfToken(req), error, rows, canConfirm, previewId
+      title: 'Student Login Setup', csrfToken: ensureCsrfToken(req), error, rows, canConfirm, previewId,
+      results, resultMessage
     });
   }
 
@@ -286,12 +273,38 @@ function createStudentBulkAccountsRouter({ getPool, sql, studentSetupService } =
       return renderBulkPage(req, res, { status: 409, error: 'Correct every student row before confirming. No accounts were created.', rows: preview.rows, previewId: preview.id });
     }
     try {
-      const credentials = await service.createBulkStudentAccounts(req.authUser.id, preview.validRows);
+      const accounts = await service.createBulkStudentAccounts(req.authUser.id, preview.validRows);
       delete req.session.studentBulkPreview;
-      return setPrivateHeaders(res)
-        .type('text/csv; charset=utf-8')
-        .set('Content-Disposition', 'attachment; filename="student-temporary-credentials.csv"')
-        .send(credentialsCsv(credentials));
+      let results = accounts.map((account) => ({ ...account, status: 'delivery_status_unknown' }));
+      let resultMessage = 'Accounts were created and linked to the existing student records. Check each invitation status below; no password is included or sent to the administrator.';
+      if (accountInvitationService) {
+        try {
+          results = await accountInvitationService.issueBulkInvitations(req.authUser.id, accounts.map((account) => ({
+            ...account, requiredRole: 'student'
+          })));
+          const pending = results.filter((entry) => entry.status === 'delivery_pending').length;
+          const needsReview = results.filter((entry) => !['sent', 'delivery_pending'].includes(entry.status)).length;
+          if (pending || needsReview) {
+            const pendingSummary = pending
+              ? `${pending} invitation${pending === 1 ? ' delivery is' : ' deliveries are'} still in progress or not confirmed`
+              : '';
+            const reviewSummary = needsReview
+              ? `${needsReview} invitation${needsReview === 1 ? ' needs' : 's need'} status review`
+              : '';
+            const summary = [pendingSummary, reviewSummary].filter(Boolean).join('; ');
+            resultMessage = `Accounts were created. ${summary}. Check each account status before resending; no passwords were included or sent to the administrator.`;
+          }
+        } catch (error) {
+          resultMessage = error?.code === 'cooldown'
+            ? 'Accounts were created, but a setup invitation was sent too recently. Wait 30 seconds before resending the affected invitations.'
+            : error?.code === 'send_window'
+              ? 'Accounts were created, but the administrator invitation limit was reached. Wait 15 minutes before sending more invitations.'
+              : 'Accounts were created, but invitation delivery could not be confirmed. Open each account to review the setup status or resend its invitation. No passwords were included or sent to the administrator.';
+        }
+      } else {
+        resultMessage = 'Accounts were created, but invitation delivery is unavailable. Ask a database administrator to check setup status. No passwords were included or sent to the administrator.';
+      }
+      return renderBulkPage(req, res, { results, resultMessage });
     } catch (error) {
       delete req.session.studentBulkPreview;
       if (error instanceof StudentSetupError) {
@@ -1050,7 +1063,6 @@ module.exports = {
   WorkbookError,
   inspectZip,
   parseStudentRoster,
-  credentialsCsv,
   createStudentBulkAccountsRouter,
   createStudentIntakeRouter,
   createAnnualStudentIntakeRouter,

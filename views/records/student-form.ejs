@@ -53,7 +53,7 @@
   <% if (student) { %>
     <details class="student-profile-control">
       <summary><strong>Student login</strong><span>Linked account state and access controls</span></summary>
-      <p>Linked account: <%= student.user_id ? (student.linked_account_is_active ? 'Active' : 'Inactive') : 'No login account linked' %></p>
+      <p>Linked account: <%= !student.user_id ? 'No login account linked' : (student.linked_account_invitation_required ? 'Password setup pending' : (student.linked_account_is_active ? 'Active' : 'Inactive')) %></p>
       <% if (currentUser.role === 'registrar' && student.status !== 'archived' && student.user_id && student.linked_account_is_active) { %>
         <form class="form-stack records-compact-form" method="post" action="/registrar/records/students/<%= student.id %>/login/deactivate" data-submitting-message="Deactivating the linked student login. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">

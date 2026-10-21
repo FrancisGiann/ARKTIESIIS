@@ -1,0 +1,32 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell auth-page auth-page--focused account-setup-page" id="main-content">
+  <section class="auth-form-section auth-form-section--focused" aria-labelledby="setup-title">
+    <% if (linkUnavailable) { %>
+      <h1 id="setup-title">Setup link unavailable</h1>
+      <p class="form-alert" role="alert"><%= error || 'This setup link is invalid or has expired.' %></p>
+      <a class="button button--secondary" href="/login">Return to sign in</a>
+    <% } else { %>
+      <h1 id="setup-title">Choose your password</h1>
+      <p>This account was created by a school administrator. Set a password for the sign-in address <strong><%= emailHint %></strong>.</p>
+      <p class="auth-note">This one-time link expires 30 minutes after it was sent<% if (expiresAt) { %>, at <time datetime="<%= new Date(expiresAt).toISOString() %>"><%= new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(expiresAt)) %> (Asia/Manila)</time><% } %>. If it has expired, contact the school administrator for a new invitation.</p>
+      <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+      <form class="form-stack" method="post" action="/account/setup" data-password-match-form data-submitting-message="Setting up your account. Please wait.">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <input type="hidden" name="requestId" value="<%= requestId %>">
+        <input type="hidden" name="token" value="<%= token %>">
+        <div class="field">
+          <label for="setup-password">New password</label>
+          <input id="setup-password" name="password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required aria-describedby="setup-password-help" data-password-source data-password-toggle>
+          <span class="field-help" id="setup-password-help">Use at least 12 characters. Very long or symbol-heavy passwords may exceed the 72-byte limit.</span>
+        </div>
+        <div class="field">
+          <label for="setup-confirm-password">Confirm new password</label>
+          <input id="setup-confirm-password" name="confirmPassword" type="password" minlength="12" maxlength="72" autocomplete="new-password" required aria-describedby="setup-password-mismatch" data-password-confirm data-password-toggle>
+          <span id="setup-password-mismatch" class="password-match-error" data-password-mismatch-message aria-live="polite" aria-atomic="true"></span>
+        </div>
+        <button class="button button--primary" type="submit">Set password and continue</button>
+      </form>
+    <% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

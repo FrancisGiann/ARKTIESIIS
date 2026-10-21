@@ -48,7 +48,7 @@ Read-only inventory generated from current views/**/*.ejs markup. EJS conditiona
 - "_csrf" (hidden); "password" (password; required, minlength=12, maxlength=72); "confirmPassword" (password; required, minlength=12, maxlength=72)
 
 ## admin/user-new.ejs:16 — POST /admin/users
-- "_csrf" (hidden); "email" (email; required, maxlength=255); "role" (select; required); "firstName" (text; maxlength=100); "lastName" (text; maxlength=100); "department" (text; maxlength=100); "studentNo" (text; maxlength=50); "password" (password; required, minlength=12, maxlength=72); "confirmPassword" (password; required, minlength=12, maxlength=72)
+- "_csrf" (hidden); "email" (email; required, maxlength=255); "role" (select; required); "firstName" (text; maxlength=100); "lastName" (text; maxlength=100); "department" (text; maxlength=100); "studentNo" (text; maxlength=50). The recipient chooses a password through an emailed single-use setup link.
 
 ## auth/forgot-password.ejs:12 — POST /password/forgot
 - "_csrf" (hidden); "email" (email; required, maxlength=255)
@@ -63,6 +63,10 @@ Read-only inventory generated from current views/**/*.ejs markup. EJS conditiona
 - "_csrf" (hidden); "code" (text; required, pattern=[0-9]{6}, maxlength=6)
 
 ## auth/verify.ejs:19 — POST /login/verify/resend
+- "_csrf" (hidden); resend latest six-digit code; policy is five-minute expiry, 30-second cooldown, and three sends per 15 minutes.
+
+## auth/account-setup.ejs — GET/POST /account/setup
+- Setup-link request ID/token (hidden); "password" and "confirmPassword" (password; required, minimum 12 UTF-8 bytes, maximum 72 UTF-8 bytes).
 - "_csrf" (hidden)
 
 ## auth/verify.ejs:23 — POST /login/verify/cancel

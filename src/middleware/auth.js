@@ -95,10 +95,11 @@ function createRequireAuth({ getPool = defaultGetPool, sql = defaultSql, environ
       const pool = await getPool();
       const result = await pool.request()
         .input('userId', sql.Int, userId)
-        .query("SELECT id, email, role, is_active, password_hash, must_change_password, auth_session_version, DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%s.%f') AS updated_at_fingerprint FROM users WHERE id = @userId");
+        .query("SELECT id, email, role, is_active, invitation_required, password_hash, must_change_password, auth_session_version, DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%s.%f') AS updated_at_fingerprint FROM users WHERE id = @userId");
       const user = result.recordset?.[0];
 
-      if (!user || !(user.is_active === true || user.is_active === 1)) {
+      if (!user || !(user.is_active === true || user.is_active === 1)
+        || user.invitation_required === true || user.invitation_required === 1) {
         return destroySession(req, res, environment, () => res.redirect('/login'));
       }
       if (demoPasswordLogin && !isDemoPasswordOnlyEmailAllowed(environment, user.email)) {

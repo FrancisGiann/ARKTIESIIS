@@ -1756,7 +1756,7 @@ function createAnnualEnrollmentService({
           parent.id AS annual_enrollment_id, parent.account_activation_pending, parent.intake_status,
           student.id AS student_id, student.student_no, student.status AS student_status, student.user_id,
           student.first_name, student.middle_name, student.last_name, student.suffix, student.birth_date,
-          account.email, account.is_active, parent.grade_level, term.school_year, term.term, section.name AS section_name,
+          account.email, account.is_active, account.invitation_required, parent.grade_level, term.school_year, term.term, section.name AS section_name,
           confirmation.id AS registrar_confirmation_id
         FROM enrollments AS enrollment
         INNER JOIN annual_enrollments AS parent ON parent.id = enrollment.annual_enrollment_id
@@ -1780,7 +1780,8 @@ function createAnnualEnrollmentService({
     let temporaryPassword = null;
     let activated = false;
     if ((row.account_activation_pending === true || row.account_activation_pending === 1) && row.user_id
-      && !(row.is_active === true || row.is_active === 1)) {
+      && !(row.is_active === true || row.is_active === 1)
+      && !(row.invitation_required === true || row.invitation_required === 1)) {
       const generatedPassword = createStudentActivationPassword(row.last_name, row.birth_date);
       if (!generatedPassword) {
         throw new AnnualEnrollmentError('The student’s saved surname and valid past birth date are required for first login activation. Update the student record and retry.', 409);
@@ -1791,7 +1792,7 @@ function createAnnualEnrollmentService({
         .input('passwordHash', sql.NVarChar(255), passwordHash)
         .query(`UPDATE users SET is_active = 1, must_change_password = 1,
             password_hash = @passwordHash, auth_session_version = UUID(), updated_at = UTC_TIMESTAMP(6)
-          WHERE id = @userId AND role = 'student' AND is_active = 0`);
+          WHERE id = @userId AND role = 'student' AND is_active = 0 AND invitation_required = 0`);
       activated = activation.affectedRows === 1;
       if (!activated) throw new AnnualEnrollmentError('The new student login changed before enrollment confirmation. No credentials were issued.', 409);
       temporaryPassword = generatedPassword;

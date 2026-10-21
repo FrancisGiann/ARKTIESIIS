@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const bcrypt = require('bcrypt');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 
@@ -112,11 +113,10 @@ function validateCreateUser(input = {}) {
   const role = typeof input.role === 'string' ? input.role : '';
   if (!ROLES.has(role)) throw new AdminServiceError('Choose an approved account role.');
 
-  const password = validatePassword(input.password);
   if (role === 'student') {
     const studentNo = textValue(input.studentNo, 50);
     if (!studentNo) throw new AdminServiceError('Enter a valid student number to link an existing student record.');
-    return { email, role, password, studentNo };
+    return { email, role, studentNo };
   }
 
   const firstName = textValue(input.firstName, 100);
@@ -125,7 +125,7 @@ function validateCreateUser(input = {}) {
   if (!firstName || !lastName || department === null) {
     throw new AdminServiceError('First and last names are required. Department must be 100 characters or fewer.');
   }
-  return { email, role, password, firstName, lastName, department: department || null };
+  return { email, role, firstName, lastName, department: department || null };
 }
 
 function normalizeActive(value) {
@@ -191,7 +191,7 @@ function createAdminService({
     const actor = await transaction.request()
       .input('actorId', sql.Int, actorId)
       .input('adminRole', sql.NVarChar(30), 'database_admin')
-      .query('SELECT id FROM users WHERE id = @actorId AND role = @adminRole AND is_active = 1 FOR UPDATE');
+      .query('SELECT id FROM users WHERE id = @actorId AND role = @adminRole AND is_active = 1 AND invitation_required = 0 FOR UPDATE');
     if (!actor.recordset?.length) throw new AdminServiceError('Your administrator access is no longer active. Sign in again.', 403);
   }
 
@@ -208,7 +208,7 @@ function createAdminService({
   async function loadTarget(transaction, userId) {
     const result = await transaction.request()
       .input('userId', sql.Int, userId)
-      .query('SELECT id, email, role, is_active FROM users WHERE id = @userId FOR UPDATE');
+      .query('SELECT id, email, role, is_active, invitation_required FROM users WHERE id = @userId FOR UPDATE');
     const user = result.recordset?.[0];
     if (!user) throw new AdminServiceError('Account not found.', 404);
     return user;
@@ -218,12 +218,14 @@ function createAdminService({
     if (userId === actorId && (current.role !== role || !isActive)) {
       throw new AdminServiceError('You cannot change your own role or deactivate your own account.');
     }
-    const losesActiveAdmin = current.role === 'database_admin' && Boolean(current.is_active) && (role !== 'database_admin' || !isActive);
+    const currentIsUsableAdmin = current.role === 'database_admin' && Boolean(current.is_active)
+      && !(current.invitation_required === true || current.invitation_required === 1);
+    const losesActiveAdmin = currentIsUsableAdmin && (role !== 'database_admin' || !isActive);
     if (!losesActiveAdmin) return;
 
     const result = await transaction.request()
       .input('adminRole', sql.NVarChar(30), 'database_admin')
-      .query('SELECT id FROM users WHERE role = @adminRole AND is_active = 1 FOR UPDATE');
+      .query('SELECT id FROM users WHERE role = @adminRole AND is_active = 1 AND invitation_required = 0 FOR UPDATE');
     if ((result.recordset || []).length <= 1) {
       throw new AdminServiceError('At least one active database administrator must remain.');
     }
@@ -297,7 +299,21 @@ function createAdminService({
       .input('pageSize', sql.Int, ACCOUNT_PAGE_SIZE)
       .input('offset', sql.Int, (pagination.page - 1) * ACCOUNT_PAGE_SIZE)
       .query(`
-      SELECT u.id, u.email, u.role, u.is_active, u.created_at,
+      SELECT u.id, u.email, u.role, u.is_active, u.invitation_required, u.created_at,
+        (SELECT token.delivery_status FROM account_setup_tokens AS token
+          WHERE token.user_id = u.id ORDER BY token.created_at DESC, token.id DESC LIMIT 1) AS invitation_delivery_status,
+        (SELECT CASE WHEN token.consumed_at IS NOT NULL THEN 'accepted'
+            WHEN token.revoked_at IS NOT NULL THEN 'revoked'
+            WHEN token.expires_at <= UTC_TIMESTAMP(3) THEN 'expired'
+            ELSE token.delivery_status END
+          FROM account_setup_tokens AS token
+          WHERE token.user_id = u.id ORDER BY token.created_at DESC, token.id DESC LIMIT 1) AS invitation_status,
+        (SELECT token.consumed_at FROM account_setup_tokens AS token
+          WHERE token.user_id = u.id ORDER BY token.created_at DESC, token.id DESC LIMIT 1) AS latest_invitation_consumed_at,
+        (SELECT token.revoked_at FROM account_setup_tokens AS token
+          WHERE token.user_id = u.id ORDER BY token.created_at DESC, token.id DESC LIMIT 1) AS latest_invitation_revoked_at,
+        (SELECT token.expires_at FROM account_setup_tokens AS token
+          WHERE token.user_id = u.id ORDER BY token.created_at DESC, token.id DESC LIMIT 1) AS invitation_expires_at,
         CASE WHEN u.role = 'student'
           THEN COALESCE(NULLIF(${studentName}, ''), CONCAT('User ', u.id))
           ELSE COALESCE(NULLIF(${staffName}, ''), CONCAT('User ', u.id))
@@ -375,7 +391,21 @@ function createAdminService({
     const result = await pool.request()
       .input('userId', sql.Int, id)
       .query(`
-        SELECT u.id, u.email, u.role, u.is_active, u.created_at,
+        SELECT u.id, u.email, u.role, u.is_active, u.invitation_required, u.created_at,
+          (SELECT token.delivery_status FROM account_setup_tokens AS token
+            WHERE token.user_id = u.id ORDER BY token.created_at DESC, token.id DESC LIMIT 1) AS invitation_delivery_status,
+          (SELECT CASE WHEN token.consumed_at IS NOT NULL THEN 'accepted'
+              WHEN token.revoked_at IS NOT NULL THEN 'revoked'
+              WHEN token.expires_at <= UTC_TIMESTAMP(3) THEN 'expired'
+              ELSE token.delivery_status END
+            FROM account_setup_tokens AS token
+            WHERE token.user_id = u.id ORDER BY token.created_at DESC, token.id DESC LIMIT 1) AS invitation_status,
+          (SELECT token.consumed_at FROM account_setup_tokens AS token
+            WHERE token.user_id = u.id ORDER BY token.created_at DESC, token.id DESC LIMIT 1) AS latest_invitation_consumed_at,
+          (SELECT token.revoked_at FROM account_setup_tokens AS token
+            WHERE token.user_id = u.id ORDER BY token.created_at DESC, token.id DESC LIMIT 1) AS latest_invitation_revoked_at,
+          (SELECT token.expires_at FROM account_setup_tokens AS token
+            WHERE token.user_id = u.id ORDER BY token.created_at DESC, token.id DESC LIMIT 1) AS invitation_expires_at,
           sp.first_name, sp.last_name, sp.department, s.student_no,
           s.first_name AS student_first_name, s.middle_name AS student_middle_name,
           s.last_name AS student_last_name, s.suffix AS student_suffix
@@ -388,14 +418,20 @@ function createAdminService({
 
   async function createUser(actorId, input) {
     const account = validateCreateUser(input);
-    const passwordHash = await hashPassword(account.password, PASSWORD_HASH_ROUNDS);
+    const passwordHash = await hashPassword(crypto.randomBytes(32).toString('base64url'), PASSWORD_HASH_ROUNDS);
     return runTransaction(async (transaction) => {
       await requireAdminActor(transaction, actorId);
+      await transaction.request().query(`SELECT id, user_id, created_by, token_hash, email_snapshot, expires_at,
+        delivery_status, consumed_at, revoked_at, active_user_id, created_at
+        FROM account_setup_tokens LIMIT 0`);
       const inserted = await transaction.request()
         .input('email', sql.NVarChar(255), account.email)
         .input('passwordHash', sql.NVarChar(255), passwordHash)
         .input('role', sql.NVarChar(30), account.role)
-        .query('INSERT INTO users (email, password_hash, role, is_active) VALUES (@email, @passwordHash, @role, 1)');
+        .input('invitationRequired', sql.Bit, true)
+        .input('mustChangePassword', sql.Bit, false)
+        .query(`INSERT INTO users (email, password_hash, role, is_active, invitation_required, must_change_password)
+          VALUES (@email, @passwordHash, @role, 1, @invitationRequired, @mustChangePassword)`);
       const userId = inserted.insertId;
       if (!Number.isSafeInteger(userId) || userId < 1) throw new Error('Account insert failed.');
 
@@ -418,14 +454,21 @@ function createAdminService({
       await requireAdminActor(transaction, actorId);
       const current = await loadTarget(transaction, id);
       await guardAdminTransition(transaction, { actorId, userId: id, current, role: account.role, isActive: account.isActive });
+      const emailChanged = String(current.email).toLowerCase() !== account.email.toLowerCase();
+      const roleChanged = current.role !== account.role;
+      const statusChanged = Boolean(current.is_active) !== account.isActive;
 
       await transaction.request()
         .input('userId', sql.Int, id)
         .input('email', sql.NVarChar(255), account.email)
         .input('role', sql.NVarChar(30), account.role)
         .input('isActive', sql.Bit, account.isActive)
-        .input('emailChanged', sql.Bit, String(current.email).toLowerCase() !== account.email.toLowerCase())
         .query('UPDATE users SET email = @email, role = @role, is_active = @isActive, updated_at = UTC_TIMESTAMP(6) WHERE id = @userId');
+      if (emailChanged || roleChanged || statusChanged) {
+        await transaction.request().input('userId', sql.Int, id)
+          .query(`UPDATE account_setup_tokens SET revoked_at = UTC_TIMESTAMP(6)
+            WHERE user_id = @userId AND consumed_at IS NULL AND revoked_at IS NULL`);
+      }
       if (String(current.email).toLowerCase() !== account.email || !account.isActive) {
         for (const table of ['two_factor_codes', 'password_reset_tokens', 'pending_email_changes']) {
           await transaction.request().input('userId', sql.Int, id)
@@ -461,7 +504,8 @@ function createAdminService({
           role: account.role,
           wasActive: Boolean(current.is_active),
           isActive: account.isActive,
-          emailChanged: current.email !== account.email
+          emailChanged,
+          invitationRevoked: emailChanged || roleChanged || statusChanged
         }
       });
     });
@@ -474,7 +518,10 @@ function createAdminService({
     const passwordHash = await hashPassword(password, PASSWORD_HASH_ROUNDS);
     return runTransaction(async (transaction) => {
       await requireAdminActor(transaction, actorId);
-      await loadTarget(transaction, id);
+      const current = await loadTarget(transaction, id);
+      if (current.invitation_required === true || current.invitation_required === 1) {
+        throw new AdminServiceError('This account has not finished setup. Send a new setup invitation instead.', 409);
+      }
       await transaction.request()
         .input('userId', sql.Int, id)
         .input('passwordHash', sql.NVarChar(255), passwordHash)

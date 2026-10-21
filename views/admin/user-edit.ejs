@@ -13,6 +13,33 @@
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% if (currentUserId === user.id) { %><p class="form-success" role="status">Changing your email address or password signs out this session. Sign in again with the updated credentials.</p><% } %>
 
+  <% if (user.invitation_required) { %>
+    <section class="admin-form-section admin-account-form-section" aria-labelledby="invitation-status-title">
+      <h2 id="invitation-status-title">Password setup invitation</h2>
+      <% if (!user.is_active) { %>
+        <p class="form-alert" role="status">This account is inactive. Its recipient cannot finish setup until the account is reactivated.</p>
+      <% } else { %>
+        <% const invitationState = user.invitation_status || 'unknown'; %>
+        <p>This account is waiting for its recipient to choose a password. The latest invitation is <strong><%= invitationState === 'expired' ? 'expired' : invitationState === 'revoked' ? 'revoked' : invitationState === 'failed' ? 'undelivered' : invitationState === 'sent' ? 'sent' : 'not confirmed' %></strong>.</p>
+        <% if (invitationState === 'pending' || invitationState === 'unknown') { %><p class="field-help">The message may still be sending, or delivery may not have been confirmed. Refresh this page to check the saved status before sending another invitation.</p><% } %>
+        <% if (user.invitation_status === 'revoked' && user.latest_invitation_revoked_at) { %><p class="field-help">The latest link was revoked <time datetime="<%= new Date(user.latest_invitation_revoked_at).toISOString() %>"><%= new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(user.latest_invitation_revoked_at)) %> (Asia/Manila)</time>.</p>
+        <% } else if (user.invitation_expires_at) { const invitationExpired = user.invitation_status === 'expired'; %><p class="field-help">The latest link <%= invitationExpired ? 'expired' : 'expires' %> <time datetime="<%= new Date(user.invitation_expires_at).toISOString() %>"><%= new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(user.invitation_expires_at)) %> (Asia/Manila)</time>.</p><% } %>
+        <div class="admin-form-actions">
+          <form method="post" action="/admin/users/<%= user.id %>/invitation/resend" data-submitting-message="Sending a new setup invitation. Please wait.">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+            <button class="button button--secondary" type="submit">Send setup invitation again</button>
+          </form>
+          <form method="post" action="/admin/users/<%= user.id %>/invitation/revoke" data-confirm="Revoke this setup link? The account will remain unable to sign in until you send a new invitation." data-submitting-message="Revoking the setup invitation. Please wait.">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+            <button class="button button--danger" type="submit">Revoke setup invitation</button>
+          </form>
+        </div>
+      <% } %>
+    </section>
+  <% } else if (user.latest_invitation_consumed_at) { %>
+    <p class="form-success" role="status">Account setup was completed. The recipient chose a password using the one-time invitation.</p>
+  <% } %>
+
   <section class="admin-form-section admin-account-form-section" aria-labelledby="account-settings-title">
     <h2 id="account-settings-title">Account settings</h2>
     <form class="form-stack admin-form admin-user-form" method="post" action="/admin/users/<%= user.id %>" data-submitting-message="Saving the account. Please wait.">
@@ -67,7 +94,7 @@
     </form>
   </section>
 
-  <section class="admin-form-section admin-account-form-section admin-user-password-section" aria-labelledby="password-reset-title">
+  <% if (!user.invitation_required) { %><section class="admin-form-section admin-account-form-section admin-user-password-section" aria-labelledby="password-reset-title">
     <h2 id="password-reset-title">Reset password</h2>
     <p class="admin-user-password-intro">Set a new password for this account. Pending email sign-in codes will be invalidated.</p>
     <form class="form-stack admin-form admin-user-form" method="post" action="/admin/users/<%= user.id %>/password" data-password-match-form data-submitting-message="Resetting the password. Please wait.">
@@ -86,6 +113,6 @@
       </div>
       <button class="button button--secondary button--align-start" type="submit">Reset password</button>
     </form>
-  </section>
+  </section><% } else { %><p class="field-help">An administrator password reset is available after the recipient finishes account setup.</p><% } %>
 </main>
 <%- include('../partials/foot') %>

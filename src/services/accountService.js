@@ -1,7 +1,12 @@
 const crypto = require('node:crypto');
 const bcrypt = require('bcrypt');
-const nodemailer = require('nodemailer');
 const { getPool: defaultGetPool, sql: defaultSql, Transaction } = require('../config/database');
+const {
+  buildEmailChangeRequestNotice,
+  buildEmailConfirmationEmail,
+  buildPasswordResetEmail,
+  deliverTransactionalEmail
+} = require('./transactionalEmail');
 
 const PASSWORD_HASH_ROUNDS = 12;
 const ACTION_TOKEN_TTL_MINUTES = 30;
@@ -51,21 +56,8 @@ function smtpReady(smtp) {
     && (!smtp.user && !smtp.pass || smtp.user && smtp.pass));
 }
 
-async function sendEmail(smtp, { to, subject, text }) {
-  if (!smtpReady(smtp)) throw new Error('Mail delivery is unavailable.');
-  const options = {
-    host: smtp.host,
-    port: smtp.port,
-    secure: smtp.secure,
-    requireTLS: !smtp.secure,
-    tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 15_000
-  };
-  if (smtp.user || smtp.pass) options.auth = { user: smtp.user, pass: smtp.pass };
-  const transporter = nodemailer.createTransport(options);
-  await transporter.sendMail({ from: smtp.from, to, subject, text });
+async function sendEmail(smtp, message) {
+  await deliverTransactionalEmail(smtp, message);
 }
 
 function createAccountService({
@@ -107,7 +99,7 @@ function createAccountService({
 
   async function readPasswordAccount(userId) {
     const result = await execute(`
-      SELECT id, email, password_hash, is_active
+      SELECT id, email, password_hash, is_active, invitation_required
       FROM users WHERE id = @userId;
     `, (request) => request.input('userId', sql.Int, userId));
     return result.recordset?.[0] || null;
@@ -116,9 +108,10 @@ function createAccountService({
   async function currentPasswordMatches(userId, currentPassword) {
     if (typeof currentPassword !== 'string' || !currentPassword || Buffer.byteLength(currentPassword, 'utf8') > 72) return null;
     const account = await readPasswordAccount(userId);
-    const active = account && (account.is_active === true || account.is_active === 1);
-    const matches = await comparePassword(currentPassword, active ? account.password_hash : DUMMY_PASSWORD_HASH);
-    return active && matches ? account : null;
+    const usable = account && (account.is_active === true || account.is_active === 1)
+      && !(account.invitation_required === true || account.invitation_required === 1);
+    const matches = await comparePassword(currentPassword, usable ? account.password_hash : DUMMY_PASSWORD_HASH);
+    return usable && matches ? account : null;
   }
 
   async function getAccountDetails(userId) {
@@ -134,7 +127,7 @@ function createAccountService({
       FROM users AS u
       LEFT JOIN staff_profiles AS sp ON sp.user_id = u.id
       LEFT JOIN students AS s ON s.user_id = u.id
-      WHERE u.id = @userId AND u.is_active = 1;
+      WHERE u.id = @userId AND u.is_active = 1 AND u.invitation_required = 0;
     `, (request) => request.input('userId', sql.Int, userId));
     return result.recordset?.[0] || null;
   }
@@ -150,13 +143,13 @@ function createAccountService({
     const changed = await inTransaction(async (transaction) => {
       const current = await transaction.request().input('userId', sql.Int, userId)
         .input('currentHash', sql.NVarChar(255), account.password_hash)
-        .query(`SELECT id FROM users WHERE id = @userId AND is_active = 1
+        .query(`SELECT id FROM users WHERE id = @userId AND is_active = 1 AND invitation_required = 0
           AND password_hash = @currentHash FOR UPDATE`);
       if (!current.recordset?.length) return false;
       await transaction.request().input('userId', sql.Int, userId)
         .input('passwordHash', sql.NVarChar(255), passwordHash)
         .query(`UPDATE users SET password_hash = @passwordHash, must_change_password = 0, updated_at = UTC_TIMESTAMP()
-          WHERE id = @userId AND is_active = 1`);
+          WHERE id = @userId AND is_active = 1 AND invitation_required = 0`);
       await transaction.request().input('userId', sql.Int, userId)
         .query('UPDATE two_factor_codes SET consumed_at = UTC_TIMESTAMP() WHERE user_id = @userId AND consumed_at IS NULL');
       await transaction.request().input('userId', sql.Int, userId)
@@ -174,10 +167,10 @@ function createAccountService({
   async function rotateOtherSessions(userId) {
     return inTransaction(async (transaction) => {
       const active = await transaction.request().input('userId', sql.Int, userId)
-        .query('SELECT id FROM users WHERE id = @userId AND is_active = 1 FOR UPDATE');
+        .query('SELECT id FROM users WHERE id = @userId AND is_active = 1 AND invitation_required = 0 FOR UPDATE');
       if (!active.recordset?.length) return null;
       await transaction.request().input('userId', sql.Int, userId)
-        .query('UPDATE users SET auth_session_version = UUID() WHERE id = @userId AND is_active = 1');
+        .query('UPDATE users SET auth_session_version = UUID() WHERE id = @userId AND is_active = 1 AND invitation_required = 0');
       const result = await transaction.request().input('userId', sql.Int, userId)
         .query('SELECT auth_session_version FROM users WHERE id = @userId');
       await transaction.request().input('userId', sql.Int, userId)
@@ -199,7 +192,7 @@ function createAccountService({
     const tokenHash = hashActionToken(token);
     const row = await inTransaction(async (transaction) => {
       const current = await transaction.request().input('userId', sql.Int, userId)
-        .query('SELECT email, password_hash FROM users WHERE id = @userId AND is_active = 1 FOR UPDATE');
+        .query('SELECT email, password_hash FROM users WHERE id = @userId AND is_active = 1 AND invitation_required = 0 FOR UPDATE');
       const currentAccount = current.recordset?.[0];
       if (!currentAccount || currentAccount.password_hash !== account.password_hash) return { status: 'account_changed' };
 
@@ -235,13 +228,11 @@ function createAccountService({
     try {
       await deliverEmail(smtp, {
         to: row.current_email,
-        subject: 'ARKTIESIIS email change requested',
-        text: `A request was made to change your ARKTIESIIS sign-in and verification email to ${newEmail}. The change will not take effect until the new address is confirmed. If you did not request this, change your password and contact the school administrator.`
+        ...buildEmailChangeRequestNotice(newEmail)
       });
       await deliverEmail(smtp, {
         to: newEmail,
-        subject: 'Confirm your ARKTIESIIS email address',
-        text: `Confirm this address for ARKTIESIIS sign-in and email verification. This link expires in ${ACTION_TOKEN_TTL_MINUTES} minutes and can be used once: ${confirmationUrl}`
+        ...buildEmailConfirmationEmail(confirmationUrl, ACTION_TOKEN_TTL_MINUTES)
       });
       return 'created';
     } catch {
@@ -258,10 +249,12 @@ function createAccountService({
     const token = normalizeActionToken(tokenInput);
     if (!requestId || !token) return null;
     const result = await execute(`
-      SELECT new_email
-      FROM pending_email_changes
-      WHERE id = @requestId AND token_hash = @tokenHash
-        AND consumed_at IS NULL AND expires_at > UTC_TIMESTAMP() AND attempt_count < @maxAttempts;
+      SELECT pending.new_email
+      FROM pending_email_changes AS pending
+      INNER JOIN users AS account ON account.id = pending.user_id
+        AND account.is_active = 1 AND account.invitation_required = 0
+      WHERE pending.id = @requestId AND pending.token_hash = @tokenHash
+        AND pending.consumed_at IS NULL AND pending.expires_at > UTC_TIMESTAMP() AND pending.attempt_count < @maxAttempts;
     `, (request) => request
       .input('requestId', sql.Int, requestId)
       .input('tokenHash', sql.Char(64), hashActionToken(token))
@@ -274,15 +267,20 @@ function createAccountService({
     const token = normalizeActionToken(tokenInput);
     if (!requestId || !token) return 'invalid_token';
     return inTransaction(async (transaction) => {
+      const ownerResult = await transaction.request().input('requestId', sql.Int, requestId)
+        .query('SELECT user_id FROM pending_email_changes WHERE id = @requestId');
+      const ownerId = normalizeTokenId(ownerResult.recordset?.[0]?.user_id);
+      if (!ownerId) return 'invalid_token';
+      const userResult = await transaction.request().input('userId', sql.Int, ownerId)
+        .query('SELECT id FROM users WHERE id = @userId AND is_active = 1 AND invitation_required = 0 FOR UPDATE');
+      if (!userResult.recordset?.length) return 'invalid_token';
       const pendingResult = await transaction.request().input('requestId', sql.Int, requestId)
+        .input('userId', sql.Int, ownerId)
         .query(`SELECT id, user_id, new_email, token_hash, attempt_count,
             expires_at <= UTC_TIMESTAMP() AS is_expired
-          FROM pending_email_changes WHERE id = @requestId AND consumed_at IS NULL FOR UPDATE`);
+          FROM pending_email_changes WHERE id = @requestId AND user_id = @userId AND consumed_at IS NULL FOR UPDATE`);
       const pending = pendingResult.recordset?.[0];
       if (!pending) return 'invalid_token';
-      const userResult = await transaction.request().input('userId', sql.Int, pending.user_id)
-        .query('SELECT id FROM users WHERE id = @userId AND is_active = 1 FOR UPDATE');
-      if (!userResult.recordset?.length) return 'invalid_token';
       if (Number(pending.attempt_count) >= MAX_ACTION_TOKEN_ATTEMPTS || Number(pending.is_expired) === 1) {
         await transaction.request().input('requestId', sql.Int, requestId)
           .query('UPDATE pending_email_changes SET consumed_at = UTC_TIMESTAMP() WHERE id = @requestId AND consumed_at IS NULL');
@@ -306,7 +304,7 @@ function createAccountService({
       }
       const updated = await transaction.request().input('newEmail', sql.NVarChar(255), pending.new_email)
         .input('userId', sql.Int, pending.user_id)
-        .query('UPDATE users SET email = @newEmail, updated_at = UTC_TIMESTAMP() WHERE id = @userId AND is_active = 1');
+        .query('UPDATE users SET email = @newEmail, updated_at = UTC_TIMESTAMP() WHERE id = @userId AND is_active = 1 AND invitation_required = 0');
       if (updated.rowsAffected?.[0] !== 1) return 'invalid_token';
       await transaction.request().input('requestId', sql.Int, requestId)
         .query('UPDATE pending_email_changes SET consumed_at = UTC_TIMESTAMP() WHERE id = @requestId');
@@ -325,7 +323,7 @@ function createAccountService({
     const email = normalizeEmail(emailInput);
     if (!email || !smtpReady(smtp)) return false;
     const userResult = await execute(`
-      SELECT id, email FROM users WHERE email = @email AND is_active = 1;
+      SELECT id, email FROM users WHERE email = @email AND is_active = 1 AND invitation_required = 0;
     `, (request) => request.input('email', sql.NVarChar(255), email));
     const user = userResult.recordset?.[0];
     if (!user) return false;
@@ -349,8 +347,7 @@ function createAccountService({
     try {
       await deliverEmail(smtp, {
         to: user.email,
-        subject: 'Reset your ARKTIESIIS password',
-        text: `A password reset was requested for your ARKTIESIIS account. This link expires in ${ACTION_TOKEN_TTL_MINUTES} minutes and can be used once: ${resetUrl}`
+        ...buildPasswordResetEmail(resetUrl, ACTION_TOKEN_TTL_MINUTES)
       });
       return true;
     } catch {
@@ -370,6 +367,7 @@ function createAccountService({
       SELECT token.id
       FROM password_reset_tokens AS token
       INNER JOIN users AS account_user ON account_user.id = token.user_id AND account_user.is_active = 1
+        AND account_user.invitation_required = 0
       WHERE token.id = @requestId AND token.token_hash = @tokenHash
         AND token.consumed_at IS NULL AND token.expires_at > UTC_TIMESTAMP()
         AND token.attempt_count < @maxAttempts;
@@ -387,9 +385,17 @@ function createAccountService({
     if (!requestId || !token || !password) return 'invalid_request';
     const passwordHash = await hashPassword(password, PASSWORD_HASH_ROUNDS);
     return inTransaction(async (transaction) => {
+      const ownerResult = await transaction.request().input('requestId', sql.Int, requestId)
+        .query('SELECT user_id FROM password_reset_tokens WHERE id = @requestId');
+      const ownerId = normalizeTokenId(ownerResult.recordset?.[0]?.user_id);
+      if (!ownerId) return 'invalid_token';
+      const account = await transaction.request().input('userId', sql.Int, ownerId)
+        .query('SELECT id FROM users WHERE id = @userId AND is_active = 1 AND invitation_required = 0 FOR UPDATE');
+      if (!account.recordset?.length) return 'expired';
       const result = await transaction.request().input('requestId', sql.Int, requestId)
+        .input('userId', sql.Int, ownerId)
         .query(`SELECT id, user_id, token_hash, attempt_count, expires_at <= UTC_TIMESTAMP() AS is_expired
-          FROM password_reset_tokens WHERE id = @requestId AND consumed_at IS NULL FOR UPDATE`);
+          FROM password_reset_tokens WHERE id = @requestId AND user_id = @userId AND consumed_at IS NULL FOR UPDATE`);
       const tokenRecord = result.recordset?.[0];
       if (!tokenRecord) return 'invalid_token';
       if (Number(tokenRecord.attempt_count) >= MAX_ACTION_TOKEN_ATTEMPTS || Number(tokenRecord.is_expired) === 1) {
@@ -405,13 +411,6 @@ function createAccountService({
             WHERE id = @requestId AND consumed_at IS NULL`);
         return 'invalid_token';
       }
-      const account = await transaction.request().input('userId', sql.Int, tokenRecord.user_id)
-        .query('SELECT id FROM users WHERE id = @userId AND is_active = 1 FOR UPDATE');
-      if (!account.recordset?.length) {
-        await transaction.request().input('requestId', sql.Int, requestId)
-          .query('UPDATE password_reset_tokens SET consumed_at = UTC_TIMESTAMP() WHERE id = @requestId');
-        return 'expired';
-      }
       await transaction.request().input('requestId', sql.Int, requestId)
         .query('UPDATE password_reset_tokens SET consumed_at = UTC_TIMESTAMP() WHERE id = @requestId');
       await transaction.request().input('userId', sql.Int, tokenRecord.user_id)
@@ -419,7 +418,7 @@ function createAccountService({
       await transaction.request().input('userId', sql.Int, tokenRecord.user_id)
         .input('passwordHash', sql.NVarChar(255), passwordHash)
         .query(`UPDATE users SET password_hash = @passwordHash, must_change_password = 0, updated_at = UTC_TIMESTAMP()
-          WHERE id = @userId AND is_active = 1`);
+          WHERE id = @userId AND is_active = 1 AND invitation_required = 0`);
       await transaction.request().input('userId', sql.Int, tokenRecord.user_id)
         .query('UPDATE two_factor_codes SET consumed_at = UTC_TIMESTAMP() WHERE user_id = @userId AND consumed_at IS NULL');
       await transaction.request().input('userId', sql.Int, tokenRecord.user_id)

@@ -44,6 +44,35 @@ test('does not retry a domain conflict or other non-retryable error', async () =
   assert.deepEqual(stats, { attempts: 1, begins: 1, commits: 0, rollbacks: 1 });
 });
 
+test('does not retry an unknown commit outcome reported as a network error', async () => {
+  const { stats, dependencies } = harness();
+  const commitError = Object.assign(new Error('connection reset after commit request'), { code: 'ECONNRESET' });
+  let callbacks = 0;
+  const transactionFactory = () => {
+    stats.attempts += 1;
+    return {
+      async begin(level) { assert.equal(level, 'SERIALIZABLE'); stats.begins += 1; },
+      async commit() { stats.commits += 1; throw commitError; },
+      async rollback() { stats.rollbacks += 1; }
+    };
+  };
+
+  await assert.rejects(runSerializableTransaction({ ...dependencies, transactionFactory }, async () => {
+    callbacks += 1;
+    return 'write committed before transport failure';
+  }), (error) => error === commitError);
+  assert.equal(callbacks, 1, 'an uncertain commit outcome must not replay the transaction callback');
+  assert.deepEqual(stats, { attempts: 1, begins: 1, commits: 1, rollbacks: 1 });
+});
+
+test('does not retry unexpected network errors', async () => {
+  const { stats, dependencies } = harness();
+  const networkError = Object.assign(new Error('connection reset'), { code: 'ECONNRESET' });
+  await assert.rejects(runSerializableTransaction(dependencies, async () => { throw networkError; }),
+    (error) => error === networkError);
+  assert.deepEqual(stats, { attempts: 1, begins: 1, commits: 0, rollbacks: 1 });
+});
+
 test('returns the final transient error after the bounded retry limit', async () => {
   const { stats, dependencies } = harness();
   let callbacks = 0;

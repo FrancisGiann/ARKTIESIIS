@@ -77,7 +77,11 @@
                 <td data-label="<%= filters.category === 'students' ? 'Student number' : 'Department' %>"><%= filters.category === 'students' ? (user.student_no || '—') : (user.department || '—') %></td>
                 <td data-label="Email"><%= user.email %></td>
                 <% if (filters.category === 'staff') { %><td data-label="Role"><%= user.role.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()) %></td><% } %>
-                <td data-label="Status"><span class="account-status <%= active ? 'account-status--active' : 'account-status--inactive' %>"><%= active ? 'Active' : 'Inactive' %></span></td>
+                <td data-label="Status">
+                  <span class="account-status <%= active ? 'account-status--active' : 'account-status--inactive' %>"><%= active ? 'Active' : 'Inactive' %></span>
+                  <% if (user.invitation_required) { const statusText = user.invitation_status === 'expired' ? 'Invitation expired' : user.invitation_status === 'revoked' ? 'Invitation revoked' : user.invitation_status === 'failed' ? 'Invitation delivery failed' : user.invitation_status === 'unknown' ? 'Invitation delivery not confirmed' : user.invitation_status === 'pending' ? 'Invitation delivery not confirmed' : user.invitation_status === 'sent' ? 'Invitation sent' : 'Password setup pending'; %><span class="table-subtext"><%= statusText %></span>
+                  <% } else if (user.latest_invitation_consumed_at) { %><span class="table-subtext">Setup complete</span><% } %>
+                </td>
                 <td data-label="Actions"><a class="table-action" href="/admin/users/<%= user.id %>/edit">Manage</a></td>
               </tr>
             <% } %>

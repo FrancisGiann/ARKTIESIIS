@@ -11,6 +11,7 @@ const {
   readForwardMigrations,
   validateAppliedVersions
 } = require('../scripts/db-setup-v2');
+const dbCheck = require('../scripts/check-db');
 
 test('V2 setup splits MariaDB statements without breaking quoted semicolons', () => {
   assert.deepEqual(splitSqlStatements("SELECT 'a;b' AS value; SELECT `semi;colon` FROM t; -- comment;\nSELECT 3;"), [
@@ -26,8 +27,16 @@ test('V2 setup targets the existing MariaDB baseline and ordered forward migrati
   assert.ok(baseline.every((statement) => !/\b(?:CREATE|DROP)\s+DATABASE\b/i.test(statement)));
   const migrations = readForwardMigrations();
   assert.deepEqual(migrations.map(({ version }) => version),
-    Array.from({ length: 21 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
+    Array.from({ length: 22 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
   assert.ok(migrations.every(({ statements }) => statements.length > 0));
+  assert.ok(migrations.at(-1).statements.some((statement) => /ALTER TABLE users[\s\S]+invitation_required/i.test(statement)));
+  assert.ok(migrations.at(-1).statements.some((statement) => /CREATE TABLE account_setup_tokens/i.test(statement)));
+  assert.ok(migrations.at(-1).statements.some((statement) => /delivery_status IN \('pending', 'sent', 'failed', 'unknown'\)/i.test(statement)));
+  assert.deepEqual(dbCheck.EXPECTED_VERSIONS.at(-1), 'v2.023');
+  assert.ok(dbCheck.REQUIRED_COLUMNS.users.includes('invitation_required'));
+  assert.ok(dbCheck.REQUIRED_COLUMNS.account_setup_tokens.includes('token_hash'));
+  assert.ok(dbCheck.REQUIRED_INDEXES.some((item) => item.indexName === 'UX_account_setup_token_hash'));
+  assert.ok(dbCheck.REQUIRED_FOREIGN_KEYS.some((item) => item.constraintName === 'FK_account_setup_user'));
 });
 
 test('V2 setup rejects SQL Server or Hostinger-incompatible DDL in an active MariaDB file', () => {
@@ -60,7 +69,10 @@ test('V2 setup refuses unknown or discontinuous migration history', () => {
   assert.doesNotThrow(() => validateAppliedVersions(new Set(
     Array.from({ length: 22 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
   )));
-  assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.023'])), /Unknown migration/);
+  assert.doesNotThrow(() => validateAppliedVersions(new Set(
+    Array.from({ length: 23 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
+  )));
+  assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.024'])), /Unknown migration/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.017', 'v2.018'])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.013'])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.003'])), /history is inconsistent/);

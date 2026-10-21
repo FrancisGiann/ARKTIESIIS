@@ -352,6 +352,29 @@ test('password recovery uses the same response for found, missing, and unavailab
   });
 });
 
+test('password reset cannot issue a reset link for an account that has not completed invitation setup', async () => {
+  const statements = [];
+  let deliveries = 0;
+  const service = createAccountService({
+    async getPool() {
+      return { request() {
+        const values = {};
+        return {
+          input(name, _type, value) { values[name] = value; return this; },
+          async query(statement) { statements.push({ statement, values: { ...values } }); return { recordset: [] }; }
+        };
+      } };
+    },
+    sql: { Int: 'Int', Char: () => 'Char', NVarChar: () => 'NVarChar' },
+    smtp: { host: 'smtp.example.test', from: 'no-reply@example.test' },
+    async deliverEmail() { deliveries += 1; }
+  });
+  assert.equal(await service.requestPasswordReset('pending@example.edu'), false);
+  assert.match(statements[0].statement, /is_active = 1 AND invitation_required = 0/);
+  assert.equal(statements.some(({ statement }) => statement.includes('INSERT INTO password_reset_tokens')), false);
+  assert.equal(deliveries, 0);
+});
+
 test('expired reset links offer a replacement while valid links retain their token on validation errors', async () => {
   const requestId = 'fixture-reset-request';
   const token = 'v'.repeat(43);
@@ -458,7 +481,7 @@ test('password change verifies the current password and stores only the bcrypt h
   assert.equal(mutation.values.passwordHash, 'new-bcrypt-hash');
   assert.equal(lockedAccount.values.currentHash, 'old-bcrypt-hash');
   assert.doesNotMatch(mutation.statement, /New-Secure-Password-99|Current-Secure-Password-88/);
-  assert.match(lockedAccount.statement, /WHERE id = @userId AND is_active = 1\s+AND password_hash = @currentHash/);
+  assert.match(lockedAccount.statement, /WHERE id = @userId AND is_active = 1 AND invitation_required = 0\s+AND password_hash = @currentHash/);
   assert.match(mutation.statement, /must_change_password = 0/);
   assert.ok(calls.some(({ statement }) => statement.startsWith('UPDATE two_factor_codes')));
   assert.ok(calls.some(({ statement }) => statement.startsWith('INSERT INTO audit_logs')));
@@ -512,7 +535,8 @@ test('email-change request sends both notices but updates the email only in the 
           if (statement.includes('SELECT id FROM users WHERE email = @newEmail')) return { recordset: [] };
           if (statement.includes('FROM pending_email_changes') && statement.includes('SELECT id FROM')) return { recordset: [] };
           if (statement.includes('INSERT INTO pending_email_changes')) return { insertId: 31 };
-          if (statement.includes('SELECT new_email')) return { recordset: [{ new_email: 'new@example.edu' }] };
+          if (statement.includes('SELECT pending.new_email')) return { recordset: [{ new_email: 'new@example.edu' }] };
+          if (statement.includes('SELECT user_id FROM pending_email_changes WHERE id = @requestId')) return { recordset: [{ user_id: 24 }] };
           if (statement.includes('SELECT id, user_id, new_email, token_hash')) return { recordset: [{ id: 31, user_id: 24, new_email: 'new@example.edu', token_hash: hashActionToken('x'.repeat(43)), attempt_count: 0, is_expired: 0 }] };
           if (statement.includes('SELECT id FROM users WHERE id = @userId')) return { recordset: [{ id: 24 }] };
           if (statement.startsWith('UPDATE users SET email = @newEmail')) return { rowsAffected: [1] };

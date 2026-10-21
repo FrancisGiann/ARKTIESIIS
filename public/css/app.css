@@ -1113,6 +1113,12 @@ label { font-size: 0.84rem; }
 .auth-form-section--focused { padding: clamp(1.1rem, 4vw, 1.8rem); }
 .auth-form-section--focused h1 { margin-bottom: 0.55rem; font-size: clamp(1.8rem, 4vw, 2.2rem); }
 .auth-form-section--focused > p:not(.auth-note):not(.form-success):not(.form-alert) { margin-bottom: 1rem; }
+.auth-verification-page { max-width: 31rem; }
+.auth-verification-page .auth-form-section--focused { border: 1px solid var(--line); border-radius: var(--radius-feature); background: var(--surface); box-shadow: var(--shadow-card); }
+.auth-eyebrow { margin: 0 0 0.45rem; color: var(--accent); font-size: 0.75rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+.auth-verification-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 1rem; margin-top: 0.85rem; }
+.auth-verification-actions .resend-form, .auth-verification-actions .account-switch-form { margin: 0; }
+.auth-verification-actions .account-switch-form .text-button { min-height: 2.75rem; }
 .auth-intro h1 { font-size: 1.85rem; }
 .auth-form-section { padding: 1.4rem; }
 .auth-form-section h2 { font-size: 1.08rem; }

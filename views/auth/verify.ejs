@@ -1,29 +1,31 @@
 <%- include('../partials/head', { title }) %>
-<main class="page-shell auth-page" id="main-content">
-  <section class="auth-intro" aria-labelledby="verify-title">
+<main class="page-shell auth-page auth-page--focused auth-verification-page" id="main-content">
+  <section class="auth-form-section auth-form-section--focused" aria-labelledby="verify-title">
     <h1 id="verify-title">Check your email</h1>
-    <p>Enter the six-digit code sent to the email address on your account. The code expires after five minutes.</p>
-  </section>
-  <section class="auth-form-section" aria-labelledby="code-title">
-    <h2 id="code-title">Email verification</h2>
-    <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+    <p>We sent a sign-in code to <strong><%= emailHint || 'the email address on your account' %></strong>.</p>
+    <p class="auth-note">Enter the latest six-digit code. It expires five minutes after it was sent.</p>
+    <% if (error) { %><p class="form-alert" id="verification-error" role="alert"><%= error %></p><% } %>
+    <% if (notice) { %><p class="form-success" id="verification-notice" role="status"><%= notice %></p><% } %>
     <form class="form-stack" method="post" action="/login/verify" data-submitting-message="Verifying the code. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="field">
         <label for="code">Six-digit code</label>
-        <input class="code-input" id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" aria-describedby="code-help" required>
-        <span class="field-help" id="code-help">Enter the code from your latest email.</span>
+        <input class="code-input" id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" aria-describedby="code-help<%= error ? ' verification-error' : '' %>"<% if (codeInvalid) { %> aria-invalid="true"<% } %> required autofocus>
+        <span class="field-help" id="code-help">Paste all six digits from your latest email.</span>
       </div>
       <button class="button button--primary" type="submit">Verify and sign in</button>
     </form>
-    <form class="resend-form" method="post" action="/login/verify/resend" data-submitting-message="Requesting a new verification code. Please wait.">
-      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-      <button class="button button--secondary" type="submit">Send a new code</button>
-    </form>
-    <form class="account-switch-form" method="post" action="/login/verify/cancel" data-submitting-message="Returning to sign in. Please wait.">
-      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
-      <button class="text-button" type="submit">Use another account</button>
-    </form>
+    <div class="auth-verification-actions">
+      <form class="resend-form" method="post" action="/login/verify/resend" data-submitting-message="Requesting a new verification code. Please wait.">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <button class="button button--secondary" type="submit">Send a new code</button>
+      </form>
+      <p class="field-help">Wait 30 seconds between code requests. A new code replaces the previous one.</p>
+      <form class="account-switch-form" method="post" action="/login/verify/cancel" data-submitting-message="Returning to sign in. Please wait.">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <button class="text-button" type="submit">Use another account</button>
+      </form>
+    </div>
   </section>
 </main>
 <%- include('../partials/foot') %>

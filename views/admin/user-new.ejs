@@ -5,7 +5,7 @@
   <section class="dashboard-heading">
     <div>
       <h1>Create user account</h1>
-      <p>Assign an approved role and set an initial password.</p>
+      <p>Create the account with an approved role, then invite its recipient to choose a password.</p>
     </div>
   </section>
 
@@ -13,7 +13,7 @@
 
   <section class="admin-form-section admin-account-form-section" aria-labelledby="account-details-title">
     <h2 id="account-details-title">Account details</h2>
-    <form class="form-stack admin-form admin-user-form" method="post" action="/admin/users" data-password-match-form data-submitting-message="Creating the account. Please wait.">
+    <form class="form-stack admin-form admin-user-form" method="post" action="/admin/users" data-submitting-message="Creating the account and preparing its setup invitation. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="admin-form-grid">
         <div class="field">
@@ -52,20 +52,9 @@
           </div>
         </div>
       </fieldset>
-      <div class="admin-form-grid">
-        <div class="field">
-          <label for="password">Initial password</label>
-          <input id="password" name="password" type="password" minlength="12" maxlength="72" autocomplete="new-password" required aria-describedby="password-help" data-password-source data-password-toggle>
-          <span id="password-help" class="field-help">Use 12 or more ordinary letters, numbers, or symbols. Emoji and some other characters reach the maximum length sooner. Passwords are stored securely.</span>
-        </div>
-        <div class="field">
-          <label for="confirm-password">Confirm password</label>
-          <input id="confirm-password" name="confirmPassword" type="password" minlength="12" maxlength="72" autocomplete="new-password" required aria-describedby="confirm-password-mismatch" data-password-confirm data-password-toggle>
-          <span id="confirm-password-mismatch" class="password-match-error" data-password-mismatch-message aria-live="polite" aria-atomic="true"></span>
-        </div>
-      </div>
+      <p class="admin-user-password-intro">The recipient receives a one-time setup link by email and chooses their own password. This page never asks the administrator to create or send a password.</p>
       <div class="admin-form-actions">
-        <button class="button button--primary" type="submit">Create account</button>
+        <button class="button button--primary" type="submit">Create account and send invitation</button>
         <a class="button button--secondary" href="/admin/users?category=<%= accountCategory %>">Cancel</a>
       </div>
     </form>

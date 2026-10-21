@@ -290,6 +290,7 @@ test('scheduled departure preview and recording retain Registrar role and CSRF p
 test('bulk setup revalidates all rows and rolls back if a student became linked', async () => {
   const fixture = setupFixture(({ statement }) => {
     if (statement.includes('SELECT id, role FROM users')) return { recordset: [admin] };
+    if (statement.includes('FROM account_setup_tokens LIMIT 0')) return { recordset: [] };
     if (statement.includes('WITH input_rows AS')) {
       return { recordset: [unlinkedRows[0], { ...unlinkedRows[1], user_id: 77 }] };
     }
@@ -306,10 +307,11 @@ test('bulk setup revalidates all rows and rolls back if a student became linked'
   assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE students')), false);
 });
 
-test('bulk setup returns distinct temporary credentials while storing bcrypt hashes only', async () => {
+test('bulk setup stores pending users with internal random hashes and returns no passwords', async () => {
   let nextUserId = 20;
   const fixture = setupFixture(({ statement, values }) => {
     if (statement.includes('SELECT id, role FROM users')) return { recordset: [admin] };
+    if (statement.includes('FROM account_setup_tokens LIMIT 0')) return { recordset: [] };
     if (statement.includes('WITH input_rows AS')) return { recordset: unlinkedRows };
     if (statement.includes('INSERT INTO users')) return { insertId: nextUserId++ };
     if (statement.includes('UPDATE students')) return { affectedRows: 1 };
@@ -319,18 +321,37 @@ test('bulk setup returns distinct temporary credentials while storing bcrypt has
     }
     throw new Error('Unexpected query: ' + statement);
   }, {
-    hashPassword: async (password, rounds) => { assert.equal(rounds, 12); return 'bcrypt:' + password; },
+    hashPassword: async (password, rounds) => { assert.equal(rounds, 12); assert.match(password, /^temp-/); return `bcrypt-placeholder-hash-${password.endsWith('1') ? 1 : 2}`; },
     createPassword: (() => { let count = 0; return () => 'temp-' + (++count); })()
   });
-  const credentials = await fixture.service.createBulkStudentAccounts(4, rosterRows);
-  assert.deepEqual(credentials.map(({ studentNo, email, password }) => [studentNo, email, password]), [
-    ['ST-101', 'one@example.edu', 'temp-1'], ['ST-102', 'two@example.edu', 'temp-2']
+  const accounts = await fixture.service.createBulkStudentAccounts(4, rosterRows);
+  assert.deepEqual(accounts.map(({ userId, rowNumber, studentNo, email, status, password }) => [userId, rowNumber, studentNo, email, status, password]), [
+    [20, 2, 'ST-101', 'one@example.edu', undefined, undefined], [21, 3, 'ST-102', 'two@example.edu', undefined, undefined]
   ]);
   assert.equal(fixture.log.isolation, 'SERIALIZABLE');
   assert.equal(fixture.log.committed, true);
   const writes = fixture.log.queries.filter(({ statement }) => statement.includes('INSERT INTO users'));
-  assert.deepEqual(writes.map(({ values }) => values.passwordHash), ['bcrypt:temp-1', 'bcrypt:temp-2']);
-  assert.ok(writes.every(({ statement }) => statement.includes('must_change_password')));
+  assert.deepEqual(writes.map(({ values }) => values.passwordHash), ['bcrypt-placeholder-hash-1', 'bcrypt-placeholder-hash-2']);
+  assert.ok(writes.every(({ statement, values }) => statement.includes('invitation_required')
+    && values.invitationRequired === true && values.mustChangePassword === false));
+  assert.equal(JSON.stringify(accounts).includes('temp-'), false);
+  assert.equal(JSON.stringify(fixture.log.queries).includes('temp-'), false);
+});
+
+test('bulk account creation fails closed before linking students when invitation schema is incomplete', async () => {
+  let nextPassword = 0;
+  const fixture = setupFixture(({ statement }) => {
+    if (statement.includes('SELECT id, role FROM users')) return { recordset: [admin] };
+    if (statement.includes('FROM account_setup_tokens LIMIT 0')) throw new Error('Table does not exist');
+    throw new Error(`Bulk setup must stop at invitation schema preflight: ${statement}`);
+  }, {
+    hashPassword: async () => 'synthetic-bcrypt-hash',
+    createPassword: () => `synthetic-setup-password-${++nextPassword}`
+  });
+  await assert.rejects(fixture.service.createBulkStudentAccounts(4, rosterRows), /Table does not exist/);
+  assert.equal(fixture.log.rolledBack, true);
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('INSERT INTO users')), false);
+  assert.equal(fixture.log.queries.some(({ statement }) => statement.includes('UPDATE students')), false);
 });
 
 test('legacy registrar intake creation and activation services are retired without database writes', async () => {
@@ -1453,6 +1474,99 @@ test('bulk roster template provides a starter file and print control is compatib
   assert.match(printPage, /<script src="\/js\/app\.js" defer><\/script>/);
   assert.doesNotMatch(printPage, /onclick\s*=/i);
   assert.match(appScript, /querySelectorAll\('\[data-print-page\]'\)[\s\S]*window\.print\(\)/);
+});
+
+test('bulk confirmation waits for invitation delivery and a retry cannot recreate accounts after a slow response', async () => {
+  const app = express();
+  app.set('views', path.join(__dirname, '..', 'views'));
+  app.set('view engine', 'ejs');
+  app.use(express.urlencoded({ extended: false }));
+  app.use(session({ secret: 'bulk-invitation-timeout-test-secret', resave: false, saveUninitialized: true }));
+  const preview = {
+    id: 'synthetic-bulk-preview', expiresAt: Date.now() + 60_000, valid: true,
+    rows: [
+      { rowNumber: 2, studentNo: 'SYN-100', email: 'student@example.edu', errors: [] },
+      { rowNumber: 3, studentNo: 'SYN-101', email: 'student-101@example.edu', errors: [] }
+    ],
+    validRows: [
+      { rowNumber: 2, studentNo: 'SYN-100', email: 'student@example.edu' },
+      { rowNumber: 3, studentNo: 'SYN-101', email: 'student-101@example.edu' }
+    ]
+  };
+  app.get('/seed', (req, res) => {
+    req.session.csrfToken = 'bulk-timeout-csrf';
+    req.session.studentBulkPreview = preview;
+    res.status(204).end();
+  });
+  app.use((req, _res, next) => { req.authUser = admin; next(); });
+
+  let accountCreateCalls = 0;
+  let invitationCalls = 0;
+  let markDeliveryStarted;
+  let releaseDelivery;
+  const deliveryStarted = new Promise((resolve) => { markDeliveryStarted = resolve; });
+  const deliveryGate = new Promise((resolve) => { releaseDelivery = resolve; });
+  app.use('/bulk', createStudentBulkAccountsRouter({
+    studentSetupService: {
+      async createBulkStudentAccounts(actorId, rows) {
+        accountCreateCalls += 1;
+        assert.equal(actorId, admin.id);
+        assert.deepEqual(rows, preview.validRows);
+        return [
+          { userId: 901, rowNumber: 2, studentNo: 'SYN-100', email: 'student@example.edu' },
+          { userId: 902, rowNumber: 3, studentNo: 'SYN-101', email: 'student-101@example.edu' }
+        ];
+      }
+    },
+    accountInvitationService: {
+      async issueBulkInvitations(actorId, accounts) {
+        invitationCalls += 1;
+        assert.equal(actorId, admin.id);
+        assert.equal(accounts.length, 2);
+        assert.equal(accounts[0].requiredRole, 'student');
+        assert.equal(accounts[1].requiredRole, 'student');
+        markDeliveryStarted();
+        await deliveryGate;
+        return [
+          { userId: 901, rowNumber: 2, studentNo: 'SYN-100', email: 'student@example.edu', status: 'delivery_failed' },
+          { userId: 902, rowNumber: 3, studentNo: 'SYN-101', email: 'student-101@example.edu', status: 'delivery_pending' }
+        ];
+      }
+    }
+  }));
+
+  await withServer(app, async (baseUrl) => {
+    const seeded = await fetch(`${baseUrl}/seed`);
+    const cookie = seeded.headers.get('set-cookie')?.split(';', 1)[0];
+    assert.ok(cookie);
+    const submit = () => fetch(`${baseUrl}/bulk/confirm`, {
+      method: 'POST', redirect: 'manual',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ _csrf: 'bulk-timeout-csrf', previewId: preview.id })
+    });
+
+    let responseReceived = false;
+    const firstSubmit = submit().then((response) => { responseReceived = true; return response; });
+    await deliveryStarted;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(accountCreateCalls, 1);
+    assert.equal(invitationCalls, 1);
+    assert.equal(responseReceived, false, 'the results page waits for the delivery outcome instead of claiming success early');
+
+    releaseDelivery();
+    const response = await firstSubmit;
+    const html = await response.text();
+    assert.equal(response.status, 200);
+    assert.match(html, /Accounts were created\. 1 invitation delivery is still in progress or not confirmed; 1 invitation needs status review/);
+    assert.match(html, /Delivery failed; resend from account management/);
+    assert.match(html, /Delivery is still in progress or unconfirmed; check status before resending/);
+    assert.doesNotMatch(html, /temporary-password-[A-Za-z0-9_-]+/);
+
+    const replay = await submit();
+    assert.equal(replay.status, 410, 'the confirmed preview is consumed even when delivery needs recovery');
+    assert.equal(accountCreateCalls, 1, 'replaying the timed confirmation cannot create duplicate accounts');
+    assert.equal(invitationCalls, 1);
+  });
 });
 
 test('pre-enrollment source identity, version, token, and receipt labels survive annual-intake validation rerender', async () => {

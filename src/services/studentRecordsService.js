@@ -452,6 +452,7 @@ function createStudentRecordsService({
         SELECT s.id, s.student_no, s.lrn, s.first_name, s.middle_name,
           s.last_name, s.suffix, s.birth_date, s.sex, s.phone, s.status,
           s.user_id, u.is_active AS linked_account_is_active,
+          u.invitation_required AS linked_account_invitation_required,
           e.id AS enrollment_id, e.enrollment_status,
           t.id AS academic_term_id, t.school_year, t.term, sec.name AS section_name,
           good_moral.status AS good_moral_status, psa.status AS psa_status,
@@ -535,6 +536,7 @@ function createStudentRecordsService({
         s.emergency_contact_address_city, s.emergency_contact_address_province, s.emergency_contact_address_zip,
         s.mother_name, s.mother_phone, s.father_name, s.father_phone, s.status, s.created_at, s.updated_at,
         u.is_active AS linked_account_is_active,
+        u.invitation_required AS linked_account_invitation_required,
         good_moral.status AS good_moral_status, good_moral.created_at AS good_moral_submitted_at,
         psa.status AS psa_status, psa.created_at AS psa_submitted_at,
         previous_report_card.status AS previous_report_card_status,
@@ -882,10 +884,15 @@ function createStudentRecordsService({
       if (student.status === 'archived') throw new StudentRecordsError('Archived student logins are already disabled.', 409);
       if (!student.user_id) throw new StudentRecordsError('This student has no linked login account.', 409);
       const userResult = await transaction.request().input('userId', sql.Int, student.user_id)
-        .query('SELECT id, is_active FROM users WHERE id = @userId AND role = N\'student\' FOR UPDATE');
+        .query('SELECT id, is_active, invitation_required FROM users WHERE id = @userId AND role = N\'student\' FOR UPDATE');
       const user = userResult.recordset?.[0];
       if (!user) throw new StudentRecordsError('The linked student login could not be found.', 409);
       if (!(user.is_active === true || user.is_active === 1)) throw new StudentRecordsError('The linked student login is already inactive.', 409);
+      if (user.invitation_required === true || user.invitation_required === 1) {
+        await transaction.request().input('userId', sql.Int, user.id)
+          .query(`UPDATE account_setup_tokens SET revoked_at = UTC_TIMESTAMP(3)
+            WHERE user_id = @userId AND consumed_at IS NULL AND revoked_at IS NULL`);
+      }
       await transaction.request().input('userId', sql.Int, user.id)
         .query('UPDATE users SET is_active = 0, updated_at = UTC_TIMESTAMP(6) WHERE id = @userId');
       await transaction.request().input('studentId', sql.Int, studentId)
