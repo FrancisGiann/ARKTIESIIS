@@ -162,7 +162,8 @@ test('confirmation snapshot reader excludes later charges and waivers and verifi
           if (normalized.includes('FROM users')) return { recordset: [{ id: Number(inputs.actorId), role: actorRole }] };
           if (normalized.includes('FROM annual_registrar_confirmations AS confirmation')) return { recordset: [confirmation] };
           if (normalized.includes('FROM annual_assessments')) return { recordset: [{ selection_json: '{"optionalLineIds":[]}' }] };
-          if (normalized.includes('FROM assessed_charges AS charge')) {
+          if (normalized.includes('FROM finance_assessment_restatement_annuals AS archive')) return { recordset: [] };
+          if (normalized.includes('FROM v_finance_effective_assessed_charges AS charge')) {
             const cutoff = Date.parse(confirmation.confirmed_at.replace(' ', 'T') + 'Z');
             return { recordset: chargeRows.filter((row) => Date.parse(row.created_at.replace(' ', 'T') + 'Z') <= cutoff).map((row) => ({
               term_number: row.annual_term_number, fee_category: row.fee_category, line_name: row.line_name,
@@ -187,7 +188,10 @@ test('confirmation snapshot reader excludes later charges and waivers and verifi
   assert.equal(savedSnapshot.lines[0].grossAmount, '100.00', 'the confirmation fingerprint uses the original charge.amount, not a later gross_amount value');
   assert.equal(savedSnapshot.lines[0].waivedAmount, '15.00', 'post-confirmation waiver applications do not change the printed snapshot');
   assert.equal(queryCalls.some(({ statement }) => statement.includes('FROM finance_schedules')), false);
-  const chargeQuery = queryCalls.find(({ statement }) => statement.includes('FROM assessed_charges AS charge'))?.statement || '';
+  const restatementQuery = queryCalls.find(({ statement }) => statement.includes('FROM finance_assessment_restatement_annuals AS archive'))?.statement || '';
+  assert.match(restatementQuery, /archive\.assessment_id = @restatementAssessmentId/);
+  const chargeQuery = queryCalls.find(({ statement }) => statement.includes('FROM v_finance_effective_assessed_charges AS charge'))?.statement || '';
+  assert.ok(chargeQuery, 'the saved confirmation composition reads only effective assessed charges');
   assert.match(chargeQuery, /charge\.created_at <= confirmation\.confirmed_at/);
   assert.match(chargeQuery, /application\.applied_at <= confirmation\.confirmed_at/);
   assert.match(chargeQuery, /CAST\(charge\.amount AS CHAR\(40\)\) AS original_gross_amount/);

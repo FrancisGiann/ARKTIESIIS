@@ -440,10 +440,10 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
         `SELECT id, school_year, grade_level, voucher_code, voucher_category, intake_status, entry_term_number, updated_at FROM annual_enrollments WHERE student_id = @studentId ORDER BY id`,
         `SELECT enrollment.id, enrollment.academic_term_id, enrollment.annual_term_number, enrollment.enrollment_status, enrollment.term_scope_status, enrollment.section_id FROM enrollments AS enrollment INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id WHERE annual.student_id = @studentId ORDER BY enrollment.id`,
         `SELECT assessment.id, assessment.annual_enrollment_id, assessment.schedule_id, assessment.schedule_version, assessment.voucher_code_snapshot, assessment.selection_json, assessment.idempotency_key FROM annual_assessments AS assessment INNER JOIN annual_enrollments AS annual ON annual.id = assessment.annual_enrollment_id WHERE annual.student_id = @studentId ORDER BY assessment.id`,
-        `SELECT charge.id, charge.assessment_id, charge.annual_enrollment_id, charge.enrollment_id, charge.schedule_line_id, charge.fee_category, charge.line_name, charge.installment, charge.amount, charge.waived_amount, due.amount_due, due.annual_allocated, due.legacy_allocated FROM assessed_charges AS charge INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id WHERE annual.student_id = @studentId ORDER BY charge.id`,
-        `SELECT adjustment.id, adjustment.charge_id, adjustment.amount, adjustment.reason, adjustment.reverses_adjustment_id, adjustment.idempotency_key FROM finance_charge_adjustments AS adjustment INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id WHERE annual.student_id = @studentId ORDER BY adjustment.id`,
+        `SELECT charge.id, charge.assessment_id, charge.annual_enrollment_id, charge.enrollment_id, charge.schedule_line_id, charge.fee_category, charge.line_name, charge.installment, charge.amount, charge.waived_amount, due.amount_due, due.annual_allocated, due.legacy_allocated FROM v_finance_effective_assessed_charges AS charge INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id WHERE annual.student_id = @studentId ORDER BY charge.id`,
+        `SELECT adjustment.id, adjustment.charge_id, adjustment.amount, adjustment.reason, adjustment.reverses_adjustment_id, adjustment.idempotency_key FROM finance_charge_adjustments AS adjustment INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = adjustment.charge_id INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id WHERE annual.student_id = @studentId ORDER BY adjustment.id`,
         `SELECT payment.id, payment.amount, payment.payment_date, payment.reference_no, payment.receipt_issued, payment.private_remarks, payment.is_reversed FROM finance_payments AS payment WHERE payment.student_id = @studentId ORDER BY payment.id`,
-        `SELECT allocation.id, allocation.payment_id, allocation.charge_id, allocation.legacy_opening_charge_id, allocation.amount, net.net_amount FROM finance_payment_allocations AS allocation INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id INNER JOIN v_finance_net_payment_allocations AS net ON net.allocation_id = allocation.id WHERE payment.student_id = @studentId ORDER BY allocation.id`,
+        `SELECT allocation.id, allocation.payment_id, allocation.charge_id, allocation.legacy_opening_charge_id, allocation.amount, net.net_amount FROM finance_payment_allocations AS allocation INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id INNER JOIN v_finance_net_payment_allocations AS net ON net.allocation_id = allocation.id LEFT JOIN v_finance_effective_assessed_charges AS charge ON charge.id = allocation.charge_id WHERE payment.student_id = @studentId AND (allocation.charge_id IS NULL OR charge.id IS NOT NULL) ORDER BY allocation.id`,
         `SELECT reconciliation.id, reconciliation.transaction_id, reconciliation.charge_id, reconciliation.amount, net.net_amount FROM finance_legacy_reconciliations AS reconciliation INNER JOIN financial_transactions AS transaction_record ON transaction_record.id = reconciliation.transaction_id INNER JOIN financial_accounts AS account ON account.id = transaction_record.financial_account_id INNER JOIN v_finance_net_legacy_reconciliations AS net ON net.reconciliation_id = reconciliation.id WHERE account.student_id = @studentId ORDER BY reconciliation.id`,
         `SELECT account.id, account.balance, legacy.remaining_legacy_balance FROM financial_accounts AS account LEFT JOIN v_finance_legacy_account_balance AS legacy ON legacy.financial_account_id = account.id WHERE account.student_id = @studentId ORDER BY account.id`,
         `SELECT opening.id, opening.amount, due.amount_due FROM finance_legacy_opening_charges AS opening INNER JOIN v_finance_opening_liability_due AS due ON due.opening_charge_id = opening.id WHERE opening.student_id = @studentId ORDER BY opening.id`,
@@ -451,12 +451,24 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
         `SELECT event.id, event.enrollment_id, event.event_type, event.reason, event.arrangement, event.finance_note, event.created_at FROM term_clearance_events AS event INNER JOIN enrollments AS enrollment ON enrollment.id = event.enrollment_id INNER JOIN annual_enrollments AS annual ON annual.id = enrollment.annual_enrollment_id WHERE annual.student_id = @studentId ORDER BY event.id`,
         `SELECT event.id, event.payment_id, event.event_type, event.reference_no, event.private_remark, event.created_at FROM finance_payment_metadata_events AS event INNER JOIN finance_payments AS payment ON payment.id = event.payment_id WHERE payment.student_id = @studentId ORDER BY event.id`,
         `SELECT event.id, event.annual_enrollment_id, event.before_value, event.after_value, event.created_at FROM finance_handbook_number_events AS event INNER JOIN annual_enrollments AS annual ON annual.id = event.annual_enrollment_id WHERE annual.student_id = @studentId ORDER BY event.id`,
-        `SELECT event.id, event.charge_id, event.comment, event.created_at FROM finance_fee_comment_events AS event INNER JOIN assessed_charges AS charge ON charge.id = event.charge_id INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id WHERE annual.student_id = @studentId ORDER BY event.id`
+        `SELECT event.id, event.charge_id, event.comment, event.created_at FROM finance_fee_comment_events AS event INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = event.charge_id INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id WHERE annual.student_id = @studentId ORDER BY event.id`
       ];
       for (const query of queries) {
         const rows = await idParam('studentId').query(query);
         result.push(rows.recordset || []);
       }
+      const restatementRows = await idParam('studentId').query(`SELECT active.operation_id, active.annual_enrollment_id,
+          active.assessment_id, active.source_schedule_id, active.source_schedule_version,
+          active.target_tuition_schedule_id, active.target_tuition_schedule_version,
+          active.before_image_sha256, active.applied_image_sha256, operation.manifest_sha256,
+          applied.resulting_state_sha256
+        FROM v_finance_restatement_active_annuals AS active
+        INNER JOIN annual_enrollments AS annual ON annual.id = active.annual_enrollment_id
+        INNER JOIN finance_assessment_restatement_operations AS operation ON operation.operation_id = active.operation_id
+        INNER JOIN finance_assessment_restatement_events AS applied
+          ON applied.operation_id = active.operation_id AND applied.event_type = 'applied'
+        WHERE annual.student_id = @studentId ORDER BY active.annual_enrollment_id`);
+      if (restatementRows.recordset?.length) result.push(restatementRows.recordset);
       const transactionRows = await idParam('studentId').query(`SELECT transaction_record.id, transaction_record.transaction_type,
           transaction_record.amount, transaction_record.description, transaction_record.reference_no,
           transaction_record.is_legacy_unattributed, transaction_record.created_at
@@ -626,7 +638,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           CONCAT('Required ₱', CAST(due.amount_due + due.annual_allocated + due.legacy_allocated AS CHAR(40)),
             ' · already applied ₱', CAST(due.annual_allocated + due.legacy_allocated AS CHAR(40)),
             ' · remaining due ₱', CAST(due.amount_due AS CHAR(40))) AS balance
-        FROM assessed_charges AS charge INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
+        FROM v_finance_effective_assessed_charges AS charge INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
         INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
         WHERE charge.id = @chargeId`, [['chargeId', sql.BigInt, chargeId]]);
@@ -637,7 +649,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           CONCAT('Current fee due ₱', CAST(due.amount_due AS CHAR(40)), ' · selected correction ₱', CAST(adjustment.amount AS CHAR(40)),
             CASE WHEN EXISTS (SELECT 1 FROM finance_charge_adjustments AS reversal WHERE reversal.reverses_adjustment_id = adjustment.id)
               THEN ' · already reversed' ELSE ' · not yet reversed' END) AS state
-        FROM finance_charge_adjustments AS adjustment INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id
+        FROM finance_charge_adjustments AS adjustment INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = adjustment.charge_id
         INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
         INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
@@ -663,11 +675,12 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           ' · original ₱', CAST(allocation.amount AS CHAR(40)), ' · currently applied ₱', CAST(net.net_amount AS CHAR(40))) AS target
         FROM finance_payment_allocations AS allocation INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
         INNER JOIN v_finance_net_payment_allocations AS net ON net.allocation_id = allocation.id
-        LEFT JOIN assessed_charges AS charge ON charge.id = allocation.charge_id
+        LEFT JOIN v_finance_effective_assessed_charges AS charge ON charge.id = allocation.charge_id
         LEFT JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         LEFT JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
         LEFT JOIN finance_legacy_opening_charges AS opening ON opening.id = allocation.legacy_opening_charge_id
-        WHERE allocation.id = @allocationId AND payment.student_id = @studentId`,
+        WHERE allocation.id = @allocationId AND payment.student_id = @studentId
+          AND (allocation.charge_id IS NULL OR charge.id IS NOT NULL)`,
       [['allocationId', sql.BigInt, context.allocationId], ['studentId', sql.Int, context.studentId]]);
     }
     if (context.reconciliationId) {
@@ -679,10 +692,11 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           ON transaction_record.id = reconciliation.transaction_id
         INNER JOIN financial_accounts AS account ON account.id = transaction_record.financial_account_id
         INNER JOIN v_finance_net_legacy_reconciliations AS net ON net.reconciliation_id = reconciliation.id
-        LEFT JOIN assessed_charges AS charge ON charge.id = reconciliation.charge_id
+        LEFT JOIN v_finance_effective_assessed_charges AS charge ON charge.id = reconciliation.charge_id
         LEFT JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         LEFT JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
-        WHERE reconciliation.id = @reconciliationId AND account.student_id = @studentId`,
+        WHERE reconciliation.id = @reconciliationId AND account.student_id = @studentId
+          AND (reconciliation.charge_id IS NULL OR charge.id IS NOT NULL)`,
       [['reconciliationId', sql.BigInt, context.reconciliationId], ['studentId', sql.Int, context.studentId]]);
     }
     if (context.requestId) {
@@ -795,7 +809,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
               EXISTS(SELECT 1 FROM finance_charge_adjustments AS reversal
                 WHERE reversal.reverses_adjustment_id = adjustment.id) AS already_reversed
             FROM finance_charge_adjustments AS adjustment
-            INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id
+            INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = adjustment.charge_id
             INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
             WHERE adjustment.id = @adjustmentId`);
         selectedAdjustment = originalResult.recordset?.[0];
@@ -822,7 +836,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           CAST(charge.amount + COALESCE((SELECT SUM(adjustment.amount)
             FROM finance_charge_adjustments AS adjustment WHERE adjustment.charge_id = charge.id), 0) AS CHAR(40)) AS fee_basis,
           CAST(due.amount_due AS CHAR(40)) AS amount_due
-        FROM assessed_charges AS charge
+        FROM v_finance_effective_assessed_charges AS charge
         INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
         WHERE charge.id = @chargeId`);
@@ -982,7 +996,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
             enrollment.annual_term_number AS term_order,
             CASE WHEN LOWER(charge.line_name) = 'tuition' THEN FIELD(LOWER(charge.installment), 'dp', 'prelim', 'midterm', 'finals') ELSE 5 END AS installment_order,
             charge.created_at AS created_at
-          FROM assessed_charges AS charge INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
+          FROM v_finance_effective_assessed_charges AS charge INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
           INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
           INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
           WHERE annual.student_id = @studentId AND due.amount_due > 0
@@ -1069,7 +1083,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
             CAST(charge.amount + COALESCE(adjustments.total, 0) AS CHAR(40)) AS payable_basis
           FROM finance_departure_case_terms AS case_term
           INNER JOIN enrollments AS enrollment ON enrollment.id = case_term.enrollment_id
-          INNER JOIN assessed_charges AS charge ON charge.enrollment_id = enrollment.id
+          INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.enrollment_id = enrollment.id
           LEFT JOIN (SELECT charge_id, SUM(amount) AS total FROM finance_charge_adjustments GROUP BY charge_id) AS adjustments
             ON adjustments.charge_id = charge.id
           WHERE case_term.departure_case_id = @caseId
@@ -1182,7 +1196,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           ? await req.query(`SELECT charge.id, annual.school_year, annual.grade_level, enrollment.annual_term_number,
               charge.line_name, charge.installment, charge.fee_category,
               CAST(due.amount_due AS CHAR(40)) AS amount_due
-            FROM assessed_charges AS charge INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
+            FROM v_finance_effective_assessed_charges AS charge INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
             INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
             INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
             WHERE charge.id IN (${names.join(', ')})`)

@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { splitSqlStatements, readSqlFile, readForwardMigrations, validateAppliedVersions, SetupError } = require('../scripts/db-setup-v2');
+const { splitSqlStatements, readSqlFile, readForwardMigrations, validateAppliedVersions, validateTriggerDdl, SetupError } = require('../scripts/db-setup-v2');
 
  test('SQL splitter preserves semicolons inside strings, quoted identifiers, and comments', () => {
   const statements = splitSqlStatements(`-- note; still a comment\nSELECT 'a;b' AS value; SELECT \`semi;colon\` FROM t; /* x;y */ SELECT 3;`);
@@ -11,11 +11,11 @@ const { splitSqlStatements, readSqlFile, readForwardMigrations, validateAppliedV
   assert.match(statements[1], /\`semi;colon\`/);
 });
 
-test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.022 migrations', () => {
+test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.024 migrations', () => {
   const baseline = readSqlFile(path.resolve('database/mariadb/schema.sql'));
   assert.ok(baseline.some((statement) => /v2\.001/.test(statement)));
   const migrations = readForwardMigrations();
-  assert.deepEqual(migrations.map(({ version }) => version), Array.from({ length: 21 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
+  assert.deepEqual(migrations.map(({ version }) => version), Array.from({ length: 23 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
   assert.ok(migrations.every(({ statements }) => statements.length > 0));
   const wholePaper = migrations.find(({ version }) => version === 'v2.018');
   assert.equal(wholePaper.statements[0].match(/\bALTER\s+TABLE\s+student_term_clearances\b/gi)?.length, 1);
@@ -44,6 +44,14 @@ test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.022 migra
   assert.match(scheduledDeparture.statements.join('\n'), /CREATE TABLE finance_departure_application_events/i);
   assert.doesNotMatch(scheduledDeparture.statements.join('\n'), /UPDATE\s+enrollments|UPDATE\s+finance_departure_cases/i,
     'legacy departure application and placement history is not inferred or rewritten');
+  const restatement = migrations.find(({ version }) => version === 'v2.024');
+  assert.equal(restatement.statements.filter((statement) => /^CREATE TRIGGER\b/i.test(statement)).length, 6);
+  const exactTriggers = restatement.statements.filter((statement) => /^CREATE TRIGGER\b/i.test(statement));
+  assert.doesNotThrow(() => validateTriggerDdl(path.resolve('database/mariadb/migrations/024_finance_assessment_restatement.sql'), exactTriggers));
+  assert.throws(() => validateTriggerDdl(path.resolve('database/mariadb/migrations/024_finance_assessment_restatement.sql'), exactTriggers.slice(1)), SetupError);
+  assert.throws(() => validateTriggerDdl(path.resolve('database/mariadb/migrations/024_finance_assessment_restatement.sql'), [...exactTriggers, exactTriggers[0]]), SetupError);
+  assert.match(restatement.statements.join('\n'), /CREATE OR REPLACE VIEW v_finance_effective_assessed_charges/i);
+  assert.match(restatement.statements.join('\n'), /CREATE OR REPLACE VIEW v_finance_assessed_charge_due[\s\S]*FROM v_finance_effective_assessed_charges/i);
 });
 
 test('setup rejects Hostinger-incompatible schema DDL', () => {
@@ -53,6 +61,44 @@ test('setup rejects Hostinger-incompatible schema DDL', () => {
     assert.throws(() => readSqlFile(pathName), SetupError);
   } finally {
     fs.unlinkSync(pathName);
+  }
+});
+
+test('setup allows only the six exact append-only triggers in finance migration 024', () => {
+  const migrationPath = path.resolve('database/mariadb/migrations/024_finance_assessment_restatement.sql');
+  const statements = readSqlFile(migrationPath);
+  assert.equal(statements.filter((statement) => /^CREATE TRIGGER\b/i.test(statement)).length, 6);
+  const spoofedPath = '/tmp/024_finance_assessment_restatement.sql';
+  fs.writeFileSync(spoofedPath, statements.filter((statement) => /^CREATE TRIGGER\b/i.test(statement)).join(';\n'));
+  try {
+    assert.throws(() => readSqlFile(spoofedPath), SetupError);
+  } finally {
+    fs.unlinkSync(spoofedPath);
+  }
+
+  const variants = [
+    'CREATE OR REPLACE TRIGGER x BEFORE UPDATE ON t FOR EACH ROW SET NEW.id = 1;',
+    'CREATE/*c*/TRIGGER x BEFORE UPDATE ON t FOR EACH ROW SET NEW.id = 1;',
+    '/*!50003 CREATE TRIGGER x BEFORE UPDATE ON t FOR EACH ROW SET NEW.id = 1 */;',
+    'CREATE /*!50003 TRIGGER */ x BEFORE UPDATE ON t FOR EACH ROW SET NEW.id = 1;',
+    '/*M!100100 CREATE TRIGGER x BEFORE UPDATE ON t FOR EACH ROW SET NEW.id = 1 */;',
+    'DROP /*c*/ TRIGGER IF EXISTS x;',
+    'ALTER /*c*/ TRIGGER x ENABLE;',
+    'CREATE OR REPLACE/*c*/DATABASE arbitrary;',
+    'CREATE OR REPLACE/*c*/PROCEDURE p() SELECT 1;',
+    '/*!50003 CREATE OR REPLACE PROCEDURE p() SELECT 1 */;',
+    'CREATE OR REPLACE ALGORITHM=UNDEFINED /*c*/ DEFINER=`operator`@`%` VIEW v AS SELECT 1;',
+    'CREATE OR REPLACE /*!50003 DEFINER=`operator`@`%` */ VIEW v AS SELECT 1;'
+  ];
+  try {
+    for (const statement of variants) {
+      fs.writeFileSync(spoofedPath, statement);
+      assert.throws(() => readSqlFile(spoofedPath), SetupError, statement);
+    }
+    fs.writeFileSync(spoofedPath, "SELECT 'CREATE OR REPLACE TRIGGER';");
+    assert.doesNotThrow(() => readSqlFile(spoofedPath));
+  } finally {
+    fs.rmSync(spoofedPath, { force: true });
   }
 });
 
@@ -81,9 +127,12 @@ test('setup refuses unknown or discontinuous migration history', () => {
   assert.doesNotThrow(() => validateAppliedVersions(new Set(
     Array.from({ length: 21 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
   )));
+  assert.doesNotThrow(() => validateAppliedVersions(new Set(
+    Array.from({ length: 24 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
+  )));
   assert.throws(() => validateAppliedVersions(new Set([
-    ...Array.from({ length: 22 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`), 'v2.023'
-  ])), /Unknown migration version/);
+    ...Array.from({ length: 22 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`), 'v2.024'
+  ])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.017', 'v2.018'])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.019'])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.013'])), /history is inconsistent/);

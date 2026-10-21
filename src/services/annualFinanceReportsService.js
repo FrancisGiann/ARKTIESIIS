@@ -144,7 +144,9 @@ function createAnnualFinanceReportsService({
           CAST(COALESCE(SUM(allocation.net_amount), 0) AS CHAR(40)) AS target_allocated_amount
           FROM v_finance_net_payment_allocations AS allocation
           INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id AND payment.is_reversed = 0
-          WHERE payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive`, queryPhase, failureMessage);
+          WHERE payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive
+            AND allocation.is_effective = 1
+            AND (allocation.charge_id IS NULL OR EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS charge WHERE charge.id = allocation.charge_id))`, queryPhase, failureMessage);
         report.allocationSummary = allocationSummary.recordset?.[0] || {};
         queryPhase = 'allocation_contexts';
         const allocationContexts = await runReportQuery(parameters(transaction.request()), `SELECT annual.school_year, enrollment.annual_term_number, section.name AS section_name,
@@ -152,7 +154,7 @@ function createAnnualFinanceReportsService({
             CAST(SUM(allocation.net_amount) AS CHAR(40)) AS allocated_amount, 'assessed charge' AS target_type
           FROM v_finance_net_payment_allocations AS allocation
           INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id AND payment.is_reversed = 0
-          INNER JOIN assessed_charges AS charge ON charge.id = allocation.charge_id
+          INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = allocation.charge_id
           INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
           INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
           LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
@@ -166,7 +168,8 @@ function createAnnualFinanceReportsService({
           FROM v_finance_net_payment_allocations AS allocation
           INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id AND payment.is_reversed = 0
           INNER JOIN finance_legacy_opening_charges AS opening ON opening.id = allocation.legacy_opening_charge_id
-          WHERE payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive`, queryPhase, failureMessage);
+          WHERE payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive
+            AND allocation.is_effective = 1`, queryPhase, failureMessage);
         report.allocationContexts = [
           ...(allocationContexts.recordset || []),
           {
@@ -198,7 +201,7 @@ function createAnnualFinanceReportsService({
             FROM v_finance_assessed_charge_due AS due GROUP BY due.enrollment_id) AS balance
             ON balance.enrollment_id = enrollment.id
           LEFT JOIN (SELECT charge.enrollment_id, SUM(charge.waived_amount) AS waived_total
-            FROM assessed_charges AS charge GROUP BY charge.enrollment_id) AS waiver
+            FROM v_finance_effective_assessed_charges AS charge GROUP BY charge.enrollment_id) AS waiver
             ON waiver.enrollment_id = enrollment.id
           WHERE enrollment.term_scope_status = 'applicable'
           GROUP BY annual.school_year, annual.grade_level, enrollment.academic_term_id, term.term,
@@ -260,7 +263,9 @@ function createAnnualFinanceReportsService({
       } else {
         countStatement = `SELECT COUNT(*) AS total_records FROM v_finance_net_payment_allocations AS allocation
           INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id AND payment.is_reversed = 0
-          WHERE payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive AND allocation.net_amount > 0`;
+          LEFT JOIN v_finance_effective_assessed_charges AS charge ON charge.id = allocation.charge_id
+          WHERE payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive AND allocation.net_amount > 0
+            AND (allocation.charge_id IS NULL OR charge.id IS NOT NULL)`;
         dataStatement = `SELECT payment.id AS payment_id, DATE_FORMAT(payment.payment_date, '%Y-%m-%d') AS event_date,
             CAST(allocation.net_amount AS CHAR(40)) AS amount, allocation.charge_id, allocation.legacy_opening_charge_id,
             COALESCE(CONCAT(annual.school_year, ' · Term ', enrollment.annual_term_number, ' · ', charge.line_name, ' · ', charge.installment),
@@ -269,11 +274,12 @@ function createAnnualFinanceReportsService({
           FROM v_finance_net_payment_allocations AS allocation
           INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id AND payment.is_reversed = 0
           INNER JOIN students AS student ON student.id = payment.student_id
-          LEFT JOIN assessed_charges AS charge ON charge.id = allocation.charge_id
+          LEFT JOIN v_finance_effective_assessed_charges AS charge ON charge.id = allocation.charge_id
           LEFT JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
           LEFT JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
           LEFT JOIN finance_legacy_opening_charges AS opening ON opening.id = allocation.legacy_opening_charge_id
           WHERE payment.payment_date >= @fromDate AND payment.payment_date < @toExclusive AND allocation.net_amount > 0
+            AND (allocation.charge_id IS NULL OR charge.id IS NOT NULL)
           ORDER BY payment.payment_date DESC, payment.id DESC, allocation.allocation_id DESC LIMIT @pageSize OFFSET @offset`;
       }
       const count = await runReportQuery(

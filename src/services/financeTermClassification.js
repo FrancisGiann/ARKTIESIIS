@@ -50,7 +50,7 @@ const FINANCE_TERM_CLASSIFICATION_CTES = `FinanceChargeTotals AS (
         THEN due.annual_allocated + due.legacy_allocated ELSE 0 END) AS DECIMAL(12,2)) AS finals_applied,
       CAST(SUM(CASE WHEN LOWER(TRIM(charge.fee_category)) = 'tuition' AND UPPER(TRIM(charge.installment)) = 'FINALS'
         THEN due.amount_due ELSE 0 END) AS DECIMAL(12,2)) AS finals_due
-    FROM assessed_charges AS charge
+    FROM v_finance_effective_assessed_charges AS charge
     INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
     GROUP BY charge.annual_enrollment_id, charge.enrollment_id
     LIMIT 18446744073709551615

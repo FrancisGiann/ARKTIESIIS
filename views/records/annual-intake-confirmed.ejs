@@ -81,11 +81,16 @@
     </section>
 
     <section class="admin-section confirmation-section confirmation-fees" aria-labelledby="confirmation-fees-title">
-      <div class="admin-section__heading"><div><h2 id="confirmation-fees-title">Approved fee assessment</h2>
+      <div class="admin-section__heading"><div><h2 id="confirmation-fees-title"><%= preview.restatement ? 'Original confirmed fee assessment' : 'Approved fee assessment' %></h2>
         <p>Voucher <%= preview.voucherCode %> · Schedule version <%= preview.scheduleVersion %> · Saved assessment</p></div>
         <p class="fee-total-line"><span>Student payable assessment</span><strong>₱<%= formatMoney(preview.total) %></strong></p>
       </div>
       <p class="muted-copy">This is the fee assessment confirmed at enrollment, including approved coverage. It is not a payment receipt or payment history; Finance records payments separately.</p>
+      <% if (preview.restatement) { %><aside class="finance-restatement-notice" aria-label="Finance restatement history">
+        <strong><%= preview.restatement.status === 'active' ? 'Current ledger composition' : 'Finance restatement history' %></strong>
+        <span><%= preview.restatement.compositionLabel %></span>
+        <span><%= preview.restatement.confirmationLabel %> This document continues to show the original confirmed assessment above.</span>
+      </aside><% } %>
       <%- include('./partials/annual-tuition-breakdown', { preview, headingId: 'confirmation-approved-tuition-title' }) %>
       <details class="fee-breakdown confirmation-itemized-fees" open>
         <summary>Itemized assessment and approved coverage</summary>

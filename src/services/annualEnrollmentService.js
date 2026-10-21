@@ -458,7 +458,7 @@ function createAnnualEnrollmentService({
         INNER JOIN subjects AS subject ON subject.id = assignment.subject_id
         INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
         LEFT JOIN annual_special_subjects AS special ON special.student_subject_id = assignment.id
-        LEFT JOIN assessed_charges AS charge ON charge.special_subject_id = special.id
+        LEFT JOIN v_finance_effective_assessed_charges AS charge ON charge.special_subject_id = special.id
         WHERE enrollment.annual_enrollment_id = @annualEnrollmentId AND enrollment.term_scope_status = 'applicable'
         ORDER BY enrollment.annual_term_number, subject.subject_code, assignment.id`);
     const scheduleResult = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)

@@ -365,7 +365,7 @@ function createFinanceService({
       .query(`WITH annual_totals AS (
             SELECT annual.student_id, SUM(due.amount_due) AS annual_balance
             FROM annual_enrollments AS annual
-            INNER JOIN assessed_charges AS charge ON charge.annual_enrollment_id = annual.id
+            INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.annual_enrollment_id = annual.id
             INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
             WHERE annual.intake_status <> 'legacy'
             GROUP BY annual.student_id
@@ -387,7 +387,7 @@ function createFinanceService({
           (SELECT COUNT(*) FROM finance_students WHERE balance = 0) AS accounts_settled_count,
           (SELECT COUNT(*) FROM finance_students WHERE balance < 0) AS accounts_credit_count,
           (SELECT COUNT(*) FROM financial_transactions WHERE transaction_type = 'charge')
-            + (SELECT COUNT(*) FROM assessed_charges AS charge INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id WHERE annual.intake_status <> 'legacy') AS charge_count,
+            + (SELECT COUNT(*) FROM v_finance_effective_assessed_charges AS charge INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id WHERE annual.intake_status <> 'legacy') AS charge_count,
           (SELECT COUNT(*) FROM financial_transactions WHERE transaction_type = 'payment')
             + (SELECT COUNT(*) FROM finance_payments) AS payment_count
         WHERE EXISTS (SELECT 1 FROM users

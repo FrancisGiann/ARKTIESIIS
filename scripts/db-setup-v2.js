@@ -9,7 +9,16 @@ const BASELINE_VERSION = 'v2.001';
 const BASELINE_PATH = path.resolve(__dirname, '../database/mariadb/schema.sql');
 const MIGRATIONS_DIRECTORY = path.resolve(__dirname, '../database/mariadb/migrations');
 const APPLICATION_LOCK = 'ARKTIESIIS MariaDB schema setup';
-const KNOWN_VERSIONS = new Set(Array.from({ length: 23 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const KNOWN_VERSIONS = new Set(Array.from({ length: 24 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const RESTATEMENT_MIGRATION = '024_finance_assessment_restatement.sql';
+const RESTATEMENT_TRIGGER_SPECS = Object.freeze([
+  ['trg_finance_restatement_operations_no_update', 'UPDATE', 'finance_assessment_restatement_operations'],
+  ['trg_finance_restatement_operations_no_delete', 'DELETE', 'finance_assessment_restatement_operations'],
+  ['trg_finance_restatement_annuals_no_update', 'UPDATE', 'finance_assessment_restatement_annuals'],
+  ['trg_finance_restatement_annuals_no_delete', 'DELETE', 'finance_assessment_restatement_annuals'],
+  ['trg_finance_restatement_events_no_update', 'UPDATE', 'finance_assessment_restatement_events'],
+  ['trg_finance_restatement_events_no_delete', 'DELETE', 'finance_assessment_restatement_events']
+]);
 
 class SetupError extends Error {}
 
@@ -24,7 +33,7 @@ function splitSqlStatements(contents) {
       if (character === "'") state = 'single';
       else if (character === '"') state = 'double';
       else if (character === '`') state = 'backtick';
-      else if (character === '-' && next === '-') state = 'line-comment';
+      else if (character === '-' && next === '-' && /\s/.test(contents[index + 2] || '')) state = 'line-comment';
       else if (character === '/' && next === '*') state = 'block-comment';
       else if (character === ';') {
         if (current.trim()) statements.push(current.trim());
@@ -51,6 +60,91 @@ function splitSqlStatements(contents) {
   return statements;
 }
 
+function sqlWordsOutsideLiterals(contents) {
+  const words = [];
+  let state = 'code';
+  for (let index = 0; index < contents.length; index += 1) {
+    const character = contents[index];
+    const next = contents[index + 1];
+    if (state === 'code') {
+      if (character === "'") state = 'single';
+      else if (character === '"') state = 'double';
+      else if (character === '`') state = 'backtick';
+      else if (character === '-' && next === '-') state = 'line-comment';
+      else if (character === '#') state = 'line-comment';
+      else if (character === '/' && next === '*') {
+        const executable = contents[index + 2] === '!' || (contents[index + 2] === 'M' && contents[index + 3] === '!');
+        const close = contents.indexOf('*/', index + 2);
+        if (close < 0) return words;
+        if (executable) {
+          let bodyStart = index + (contents[index + 2] === 'M' ? 4 : 3);
+          while (bodyStart < close && /\d/.test(contents[bodyStart])) bodyStart += 1;
+          const embeddedWords = sqlWordsOutsideLiterals(contents.slice(bodyStart, close));
+          words.push(...embeddedWords);
+        }
+        index = close + 1;
+      } else if (/[A-Za-z_]/.test(character)) {
+        let end = index + 1;
+        while (end < contents.length && /[A-Za-z0-9_$]/.test(contents[end])) end += 1;
+        words.push(contents.slice(index, end).toUpperCase());
+        index = end - 1;
+      }
+    } else if (state === 'single' && character === "'") {
+      if (next === "'") index += 1;
+      else if (contents[index - 1] !== '\\') state = 'code';
+    } else if (state === 'double' && character === '"') {
+      if (next === '"') index += 1;
+      else if (contents[index - 1] !== '\\') state = 'code';
+    } else if (state === 'backtick' && character === '`') {
+      if (next === '`') index += 1;
+      else state = 'code';
+    } else if (state === 'line-comment' && (character === '\n' || character === '\r')) {
+      state = 'code';
+    }
+  }
+  return words;
+}
+
+function isTriggerDdlStatement(statement) {
+  const words = sqlWordsOutsideLiterals(statement);
+  const verb = words[0];
+  if (!['CREATE', 'ALTER', 'DROP'].includes(verb)) return false;
+  return words.slice(1).includes('TRIGGER');
+}
+
+function isForbiddenHostingerDdlStatement(statement) {
+  const words = sqlWordsOutsideLiterals(statement);
+  const verb = words[0];
+  if (!['CREATE', 'ALTER', 'DROP'].includes(verb)) return false;
+  const objectTypes = new Set(['DATABASE', 'SCHEMA', 'PROCEDURE', 'FUNCTION', 'TRIGGER', 'TABLE', 'VIEW', 'INDEX', 'EVENT']);
+  const objectIndex = words.findIndex((word, index) => index > 0 && objectTypes.has(word));
+  const objectType = objectIndex < 0 ? null : words[objectIndex];
+  if (objectType === 'DATABASE' || objectType === 'SCHEMA' || objectType === 'PROCEDURE') return true;
+  if (!['CREATE', 'ALTER'].includes(verb)) return false;
+  const definerIndex = words.indexOf('DEFINER');
+  return definerIndex > 0 && (objectIndex < 0 || definerIndex < objectIndex);
+}
+
+function validateTriggerDdl(filePath, triggerStatements) {
+  if (!triggerStatements.length) return;
+  const isApprovedMigration = path.resolve(filePath) === path.join(MIGRATIONS_DIRECTORY, RESTATEMENT_MIGRATION);
+  const byName = new Map(RESTATEMENT_TRIGGER_SPECS.map(([name, event, table]) => [name, { event, table }]));
+  const accepted = triggerStatements.every((statement) => {
+    const normalized = statement.replace(/\s+/g, ' ').trim();
+    const match = /^CREATE TRIGGER ([a-z0-9_]+) BEFORE (UPDATE|DELETE) ON ([a-z0-9_]+) FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Finance restatement history is append-only'$/i.exec(normalized);
+    if (!match) return false;
+    const [, name, event, table] = match;
+    const expected = byName.get(name.toLowerCase());
+    return expected && expected.event === event.toUpperCase() && expected.table === table.toLowerCase();
+  });
+  const names = triggerStatements.map((statement) => /^CREATE TRIGGER ([a-z0-9_]+)/i.exec(statement.replace(/\s+/g, ' ').trim())?.[1]?.toLowerCase());
+  if (!isApprovedMigration || !accepted || triggerStatements.length !== RESTATEMENT_TRIGGER_SPECS.length
+    || new Set(names).size !== RESTATEMENT_TRIGGER_SPECS.length
+    || RESTATEMENT_TRIGGER_SPECS.some(([name]) => !names.includes(name))) {
+    throw new SetupError(`SQL file ${path.relative(process.cwd(), filePath)} uses DDL disallowed by the Hostinger setup path.`);
+  }
+}
+
 function readSqlFile(filePath) {
   let contents;
   try {
@@ -58,11 +152,13 @@ function readSqlFile(filePath) {
   } catch {
     throw new SetupError(`Could not read SQL file ${path.relative(process.cwd(), filePath)}.`);
   }
-  if (/\b(?:CREATE|DROP)\s+DATABASE\b|\bCREATE\s+(?:TRIGGER|PROCEDURE)\b|\bDEFINER\s*=/i.test(contents)) {
-    throw new SetupError(`SQL file ${path.relative(process.cwd(), filePath)} uses DDL disallowed by the Hostinger setup path.`);
-  }
   const statements = splitSqlStatements(contents);
   if (!statements.length) throw new SetupError(`SQL file ${path.relative(process.cwd(), filePath)} is empty.`);
+  if (statements.some(isForbiddenHostingerDdlStatement)) {
+    throw new SetupError(`SQL file ${path.relative(process.cwd(), filePath)} uses DDL disallowed by the Hostinger setup path.`);
+  }
+  const triggerStatements = statements.filter(isTriggerDdlStatement);
+  validateTriggerDdl(filePath, triggerStatements);
   return statements;
 }
 
@@ -76,7 +172,7 @@ function readForwardMigrations() {
     throw new SetupError('Could not read the MariaDB forward migrations.');
   }
   const seen = new Set();
-  return filenames.map((filename) => {
+  const migrations = filenames.map((filename) => {
     const sequence = filename.slice(0, 3);
     const version = `v2.${sequence}`;
     if (sequence === '001' || !KNOWN_VERSIONS.has(version) || seen.has(version)) {
@@ -85,6 +181,13 @@ function readForwardMigrations() {
     seen.add(version);
     return { filename, version, statements: readSqlFile(path.join(MIGRATIONS_DIRECTORY, filename)) };
   });
+  for (let index = 0; index < migrations.length; index += 1) {
+    const expected = `v2.${String(index + 2).padStart(3, '0')}`;
+    if (migrations[index].version !== expected) {
+      throw new SetupError(`The MariaDB migration sequence is incomplete: expected ${expected} after the prior migration.`);
+    }
+  }
+  return migrations;
 }
 
 function readBaseline() {
@@ -121,7 +224,7 @@ function validateAppliedVersions(versions) {
   }
   const unknown = [...versions].filter((version) => !KNOWN_VERSIONS.has(version));
   if (unknown.length) throw new SetupError(`Unknown migration version(s): ${unknown.sort().join(', ')}.`);
-  for (let sequence = 2; sequence <= 23; sequence += 1) {
+  for (let sequence = 2; sequence <= 24; sequence += 1) {
     const version = `v2.${String(sequence).padStart(3, '0')}`;
     const prior = `v2.${String(sequence - 1).padStart(3, '0')}`;
     if (versions.has(version) && !versions.has(prior)) {
@@ -192,4 +295,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { SetupError, splitSqlStatements, readSqlFile, readForwardMigrations, validateAppliedVersions, runSetup };
+module.exports = { SetupError, splitSqlStatements, readSqlFile, readForwardMigrations, validateAppliedVersions, validateTriggerDdl, runSetup };

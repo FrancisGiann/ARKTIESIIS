@@ -6,7 +6,11 @@ const { createAnnualFinanceCasesService } = require('./annualFinanceCasesService
 const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
 const { runSerializableTransaction } = require('./transactionRetry');
 const { FINANCE_STATUS, FINANCE_TERM_CLASSIFICATION_CTES, TRACKING_MODES } = require('./financeTermClassification');
-const { formatFeePurpose, formatAllocationPurpose, buildPaymentPurposeHistory } = require('../utils/paymentPurpose');
+const {
+  formatFeePurpose, formatAllocationPurpose, annotateRestatementSourceAllocations,
+  buildRestatementSourceAllocationPurposeMap, annotateRestatementSyntheticPlacementAllocations,
+  buildRestatementSyntheticPlacementPurposeMap, buildPaymentPurposeHistory
+} = require('../utils/paymentPurpose');
 
 const FEE_CATEGORIES = new Set(['tuition', 'miscellaneous', 'uniform', 'id', 'activity', 'retake', 'other']);
 const ID_PATTERN = /^\d{1,10}$/;
@@ -29,11 +33,7 @@ const STUDENT_LEDGER_SUMMARY_SQL = `SELECT
     CAST(
       COALESCE((SELECT SUM(payment.amount) FROM finance_payments AS payment
         WHERE payment.student_id = @studentId AND payment.is_reversed = 0), 0)
-      - COALESCE((SELECT SUM(allocation.amount) FROM finance_payment_allocations AS allocation
-        INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
-        WHERE payment.student_id = @studentId AND payment.is_reversed = 0), 0)
-      + COALESCE((SELECT SUM(release_row.amount) FROM finance_payment_allocation_releases AS release_row
-        INNER JOIN finance_payment_allocations AS allocation ON allocation.id = release_row.allocation_id
+      - COALESCE((SELECT SUM(allocation.net_amount) FROM v_finance_net_payment_allocations AS allocation
         INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
         WHERE payment.student_id = @studentId AND payment.is_reversed = 0), 0)
       AS CHAR(40)) AS available_credit
@@ -70,7 +70,7 @@ const STUDENT_LEDGER_SUMMARY_SQL = `SELECT
   ) AS opening ON opening.student_id = student.id
   LEFT JOIN (
     SELECT annual.student_id, SUM(charge.amount) AS total
-    FROM assessed_charges AS charge
+    FROM v_finance_effective_assessed_charges AS charge
     INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
     WHERE annual.student_id = @studentId
     GROUP BY annual.student_id
@@ -78,7 +78,7 @@ const STUDENT_LEDGER_SUMMARY_SQL = `SELECT
   LEFT JOIN (
     SELECT annual.student_id, SUM(adjustment.amount) AS total
     FROM finance_charge_adjustments AS adjustment
-    INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id
+    INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = adjustment.charge_id
     INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
     WHERE annual.student_id = @studentId
     GROUP BY annual.student_id
@@ -348,6 +348,118 @@ function canonicalAssessmentSnapshot(lines) {
   return { lines: normalized, total: formatMoneyCents(totalCents), fingerprint: requestFingerprint(normalized) };
 }
 
+async function loadAnnualRestatement(request, sqlTypes, annualEnrollmentId, assessmentId = null) {
+  request.input('restatementAnnualEnrollmentId', sqlTypes.Int, annualEnrollmentId);
+  if (assessmentId != null) request.input('restatementAssessmentId', sqlTypes.Int, assessmentId);
+  const result = await request.query(`SELECT archive.operation_id, archive.annual_enrollment_id, archive.assessment_id,
+      archive.source_schedule_id, archive.source_schedule_version,
+      archive.target_tuition_schedule_id, archive.target_tuition_schedule_version,
+      archive.before_image_sha256, archive.applied_image_sha256,
+      operation.operation_kind, operation.manifest_sha256,
+      applied.id AS applied_event_id, applied.manifest_sha256 AS applied_manifest_sha256,
+      applied.resulting_state_sha256 AS applied_state_sha256,
+      reversed.id AS reversed_event_id, reversed.manifest_sha256 AS reversed_manifest_sha256,
+      reversed.resulting_state_sha256 AS reversed_state_sha256
+    FROM finance_assessment_restatement_annuals AS archive
+    INNER JOIN finance_assessment_restatement_operations AS operation ON operation.operation_id = archive.operation_id
+    LEFT JOIN finance_assessment_restatement_events AS applied
+      ON applied.operation_id = archive.operation_id AND applied.event_type = 'applied'
+    LEFT JOIN finance_assessment_restatement_events AS reversed
+      ON reversed.operation_id = archive.operation_id AND reversed.event_type = 'reversed'
+    WHERE archive.annual_enrollment_id = @restatementAnnualEnrollmentId
+      ${assessmentId == null ? '' : 'AND archive.assessment_id = @restatementAssessmentId'}
+    LIMIT 1`);
+  const row = result.recordset?.[0];
+  if (!row) return null;
+  validateRestatementRow(row);
+  const isActive = row.reversed_event_id == null;
+  return {
+    operationId: String(row.operation_id), status: isActive ? 'active' : 'reversed',
+    annualEnrollmentId: Number(row.annual_enrollment_id), assessmentId: Number(row.assessment_id),
+    sourceScheduleId: Number(row.source_schedule_id), sourceScheduleVersion: Number(row.source_schedule_version),
+    targetTuitionScheduleId: Number(row.target_tuition_schedule_id),
+    targetTuitionScheduleVersion: Number(row.target_tuition_schedule_version),
+    beforeImageSha256: String(row.before_image_sha256), appliedImageSha256: String(row.applied_image_sha256),
+    compositionLabel: isActive
+      ? `Synthetic tuition installments from schedule v${Number(row.target_tuition_schedule_version)}; non-tuition fees remain from the original schedule v${Number(row.source_schedule_version)}.`
+      : 'Original fee composition restored after a logical finance restatement reversal.',
+    confirmationLabel: 'The original Registrar confirmation and its saved assessment snapshot were not changed.'
+  };
+}
+
+function validateRestatementRow(row) {
+  const sha256 = /^[a-f0-9]{64}$/i;
+  const operationManifest = String(row.manifest_sha256 || '').toLowerCase();
+  if (row.operation_kind !== 'synthetic_tuition_installments'
+    || row.applied_event_id == null
+    || !sha256.test(operationManifest)
+    || String(row.applied_manifest_sha256 || '').toLowerCase() !== operationManifest
+    || !sha256.test(String(row.applied_state_sha256 || ''))
+    || !sha256.test(String(row.before_image_sha256 || ''))
+    || !sha256.test(String(row.applied_image_sha256 || ''))
+    || (row.reversed_event_id != null && (String(row.reversed_manifest_sha256 || '').toLowerCase() !== operationManifest
+      || !sha256.test(String(row.reversed_state_sha256 || ''))))) {
+    throw new AnnualFinanceError('The saved finance restatement history is incomplete or inconsistent.', 409);
+  }
+  for (const field of ['annual_enrollment_id', 'assessment_id', 'source_schedule_id', 'source_schedule_version',
+    'target_tuition_schedule_id', 'target_tuition_schedule_version']) {
+    if (!Number.isSafeInteger(Number(row[field])) || Number(row[field]) < 1) {
+      throw new AnnualFinanceError('The saved finance restatement schedule binding is invalid.', 409);
+    }
+  }
+}
+
+function activeRestatementFingerprint(restatement) {
+  if (!restatement || restatement.status !== 'active') return null;
+  return {
+    operationId: restatement.operationId,
+    sourceScheduleId: restatement.sourceScheduleId,
+    sourceScheduleVersion: restatement.sourceScheduleVersion,
+    targetTuitionScheduleId: restatement.targetTuitionScheduleId,
+    targetTuitionScheduleVersion: restatement.targetTuitionScheduleVersion,
+    beforeImageSha256: restatement.beforeImageSha256,
+    appliedImageSha256: restatement.appliedImageSha256
+  };
+}
+
+function archiveTimestamp(value, label) {
+  const timestamp = value instanceof Date ? value.getTime() : Date.parse(String(value || ''));
+  if (!Number.isFinite(timestamp)) throw new AnnualFinanceError(`The archived ${label} timestamp is invalid.`, 409);
+  return timestamp;
+}
+
+function buildArchivedConfirmationLines(beforeImage, assessmentId, confirmedAt) {
+  const confirmedTimestamp = archiveTimestamp(confirmedAt, 'confirmation');
+  const termsByEnrollment = new Map((beforeImage.enrollments || []).map((row) => [Number(row.id), Number(row.annual_term_number)]));
+  const scheduleLinesById = new Map((beforeImage.sourceScheduleLines || []).map((row) => [Number(row.id), row]));
+  const waivedByCharge = new Map();
+  for (const application of beforeImage.exemptionApplications || []) {
+    if (archiveTimestamp(application.applied_at, 'exemption') > confirmedTimestamp) continue;
+    const chargeId = Number(application.charge_id);
+    waivedByCharge.set(chargeId, (waivedByCharge.get(chargeId) || 0n)
+      + parseMoneyCents(String(application.amount), { allowZero: true }));
+  }
+  return (beforeImage.charges || [])
+    .filter((charge) => Number(charge.assessment_id) === assessmentId
+      && archiveTimestamp(charge.created_at, 'charge') <= confirmedTimestamp)
+    .map((charge) => {
+      const scheduleLine = charge.schedule_line_id == null ? null : scheduleLinesById.get(Number(charge.schedule_line_id));
+      const grossCents = parseMoneyCents(String(charge.amount), { allowZero: true });
+      const waivedCents = waivedByCharge.get(Number(charge.id)) || 0n;
+      if (waivedCents > grossCents) throw new AnnualFinanceError('The saved coverage exceeds its original charge amount.', 409);
+      const termNumber = termsByEnrollment.get(Number(charge.enrollment_id));
+      if (!Number.isInteger(termNumber) || termNumber < 1 || termNumber > 3) {
+        throw new AnnualFinanceError('An original confirmed charge has no archived term placement.', 409);
+      }
+      return {
+        term_number: termNumber, fee_category: charge.fee_category, line_name: charge.line_name,
+        installment: charge.installment, schedule_line_id: charge.schedule_line_id,
+        is_optional: scheduleLine && flag(scheduleLine.is_optional) ? 1 : 0,
+        original_gross_amount: formatMoneyCents(grossCents), confirmed_waived_amount: formatMoneyCents(waivedCents)
+      };
+    });
+}
+
 function applyExemptionPreview(lines, rules) {
   const cappedRuleRemaining = new Map(rules.filter((rule) => !flag(rule.is_full_coverage))
     .map((rule) => [Number(rule.id), parseMoneyCents(String(rule.approved_amount || '0.00'), { allowZero: true })
@@ -437,7 +549,7 @@ function createAnnualFinanceService({
           charge.fee_category, charge.line_name, charge.installment,
           CAST(charge.amount AS CHAR(40)) AS gross_amount,
           CAST(charge.waived_amount AS CHAR(40)) AS waived_amount
-        FROM assessed_charges AS charge
+        FROM v_finance_effective_assessed_charges AS charge
         INNER JOIN enrollments AS enrollment  ON enrollment.id = charge.enrollment_id
         WHERE charge.assessment_id = @assessmentId`);
     const lines = (result.recordset || []).map((line) => ({
@@ -463,6 +575,7 @@ function createAnnualFinanceService({
       return { parent: parent || null, assessment: null, assessmentFingerprint: null,
         dependencyFingerprint: null, dp: { status: 'missing_assessment' }, latestReview: null };
     }
+    const restatement = await loadAnnualRestatement(transaction.request(), sql, annualEnrollmentId, Number(parent.assessment_id));
     let selection;
     try {
       selection = JSON.parse(parent.selection_json || '{}');
@@ -489,11 +602,26 @@ function createAnnualFinanceService({
       .query(`SELECT id, term_number, fee_category, line_name, installment,
           CAST(amount AS CHAR(40)) AS amount, is_optional
         FROM finance_schedule_lines WHERE schedule_id = @scheduleId ORDER BY term_number, id${lock ? ' FOR UPDATE' : ''}`);
-    const scheduleLines = (scheduleLinesResult.recordset || []).map((line) => ({
+    let scheduleLines = (scheduleLinesResult.recordset || []).map((line) => ({
       id: Number(line.id), termNumber: Number(line.term_number), category: String(line.fee_category),
       lineName: String(line.line_name), installment: String(line.installment), amount: String(line.amount),
       isOptional: flag(line.is_optional)
     }));
+    if (restatement?.status === 'active') {
+      const targetLinesResult = await transaction.request().input('targetScheduleId', sql.Int, restatement.targetTuitionScheduleId)
+        .query(`SELECT id, term_number, fee_category, line_name, installment,
+            CAST(amount AS CHAR(40)) AS amount, is_optional
+          FROM finance_schedule_lines WHERE schedule_id = @targetScheduleId
+            AND LOWER(TRIM(fee_category)) = 'tuition' ORDER BY term_number, id${lock ? ' FOR UPDATE' : ''}`);
+      const targetTuitionLines = (targetLinesResult.recordset || []).map((line) => ({
+        id: Number(line.id), termNumber: Number(line.term_number), category: String(line.fee_category),
+        lineName: String(line.line_name), installment: String(line.installment), amount: String(line.amount),
+        isOptional: flag(line.is_optional)
+      }));
+      if (targetTuitionLines.length !== 12) throw new AnnualFinanceError('The bound tuition installment schedule is incomplete.', 409);
+      scheduleLines = [...scheduleLines.filter((line) => line.category.trim().toLowerCase() !== 'tuition'), ...targetTuitionLines]
+        .sort((left, right) => left.termNumber - right.termNumber || left.id - right.id);
+    }
     const chargeResult = await transaction.request().input('assessmentId', sql.Int, parent.assessment_id)
       .query(`SELECT charge.id, charge.annual_enrollment_id, charge.enrollment_id, charge.schedule_line_id,
           charge.fee_category, charge.line_name, charge.installment, charge.is_manual,
@@ -501,7 +629,9 @@ function createAnnualFinanceService({
           enrollment.annual_term_number AS term_number
         FROM assessed_charges AS charge
         INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
-        WHERE charge.assessment_id = @assessmentId ORDER BY charge.id${lock ? ' FOR UPDATE' : ''}`);
+        WHERE charge.assessment_id = @assessmentId
+          AND EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS effective WHERE effective.id = charge.id)
+        ORDER BY charge.id${lock ? ' FOR UPDATE' : ''}`);
     const charges = chargeResult.recordset || [];
     const chargeIds = charges.map((charge) => Number(charge.id));
     let adjustments = [];
@@ -528,11 +658,14 @@ function createAnnualFinanceService({
       installment: charge.installment, grossAmount: String(charge.amount), waivedAmount: String(charge.waived_amount || '0.00')
     })));
     const assessmentFingerprint = assessedComposition.fingerprint;
-    const assessmentSnapshotFingerprint = requestFingerprint({ assessmentId: Number(parent.assessment_id),
+    const assessmentSnapshotState = { assessmentId: Number(parent.assessment_id),
       scheduleId: Number(parent.schedule_id), scheduleVersion: Number(parent.schedule_version),
       voucherCode: parent.voucher_code_snapshot, payableTotal: assessedComposition.total,
-      optionalLineIds, postedComposition: assessmentFingerprint });
-    const dependencyFingerprint = requestFingerprint({
+      optionalLineIds, postedComposition: assessmentFingerprint };
+    const activeRestatement = activeRestatementFingerprint(restatement);
+    if (activeRestatement) assessmentSnapshotState.restatement = activeRestatement;
+    const assessmentSnapshotFingerprint = requestFingerprint(assessmentSnapshotState);
+    const dependencyState = {
       annualEnrollmentId: Number(parent.id), studentId: Number(parent.student_id), schoolYear: parent.school_year,
       gradeLevel: parent.grade_level, voucherCode: parent.voucher_code, entryTermNumber: Number(parent.entry_term_number || 1),
       assessmentId: Number(parent.assessment_id), scheduleId: Number(parent.schedule_id),
@@ -544,7 +677,9 @@ function createAnnualFinanceService({
         isManual: flag(charge.is_manual), amount: String(charge.amount), waivedAmount: String(charge.waived_amount || '0.00')
       })),
       adjustments
-    });
+    };
+    if (activeRestatement) dependencyState.restatement = activeRestatement;
+    const dependencyFingerprint = requestFingerprint(dependencyState);
     const selectedOptional = new Set(optionalLineIds);
     const expectedDpLines = scheduleLines.filter((line) => line.termNumber === Number(parent.entry_term_number || 1)
       && line.category.trim().toLowerCase() === 'tuition' && line.installment.trim().toUpperCase() === 'DP'
@@ -596,7 +731,8 @@ function createAnnualFinanceService({
     return { parent, assessment: { id: Number(parent.assessment_id), scheduleId: Number(parent.schedule_id),
       scheduleVersion: Number(parent.schedule_version), voucherCode: parent.voucher_code_snapshot,
       optionalLineIds, total: assessedComposition.total, snapshotFingerprint: assessmentSnapshotFingerprint },
-      assessmentFingerprint, dependencyFingerprint, dp, voucherReview, latestReview: latestResult.recordset?.[0] || null };
+      assessmentFingerprint, dependencyFingerprint, dp, voucherReview, latestReview: latestResult.recordset?.[0] || null,
+      ...(restatement ? { restatement } : {}) };
   }
 
   async function recordAnnualFinanceReview(transaction, actor, annualEnrollmentId, confirmation) {
@@ -980,13 +1116,14 @@ function createAnnualFinanceService({
       let selection = {};
       try { selection = JSON.parse(posted.selection_json || '{}'); } catch { throw new AnnualFinanceError('The saved assessment selection needs staff review.', 409); }
       const selected = normalizeSelections(selection.optionalLineIds || []);
+      const restatement = await loadAnnualRestatement(pool.request(), sql, annualEnrollmentId, Number(posted.id));
       const charges = await pool.request().input('assessmentId', sql.Int, posted.id)
         .query(`SELECT charge.id, charge.enrollment_id, enrollment.annual_term_number AS term_number,
             charge.fee_category, charge.line_name, charge.installment, charge.schedule_line_id,
             COALESCE(schedule_line.is_optional, CAST(0 AS UNSIGNED)) AS is_optional,
             CAST(charge.amount AS CHAR(40)) AS amount,
             CAST(charge.waived_amount AS CHAR(40)) AS waived_amount
-          FROM assessed_charges AS charge
+          FROM v_finance_effective_assessed_charges AS charge
           INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
           LEFT JOIN finance_schedule_lines AS schedule_line ON schedule_line.id = charge.schedule_line_id
           WHERE charge.assessment_id = @assessmentId ORDER BY enrollment.annual_term_number, charge.id`);
@@ -1001,16 +1138,20 @@ function createAnnualFinanceService({
       const snapshot = canonicalAssessmentSnapshot(lines);
       const totalCents = parseMoneyCents(snapshot.total, { allowZero: true });
       const tuitionBreakdown = tuitionInstallmentBreakdown(lines, parent.entry_term_number);
+      const activeRestatement = activeRestatementFingerprint(restatement);
+      const snapshotFingerprint = activeRestatement
+        ? requestFingerprint({ postedComposition: snapshot.fingerprint, restatement: activeRestatement })
+        : snapshot.fingerprint;
       return { parent, scheduleId: Number(posted.schedule_id), scheduleVersion: Number(posted.schedule_version),
         voucherCode: posted.voucher_code_snapshot, assessmentId: Number(posted.id), existingAssessment: true,
-        voucherReview,
+        voucherReview, ...(restatement ? { restatement } : {}),
         optionalLineIds: [...selected], lines, total: formatMoneyCents(totalCents), totalCents,
         optionalLines: [], termTotals: assessmentTermTotals(lines, parent.entry_term_number),
         tuitionTermTotals: tuitionTermTotals(lines, parent.entry_term_number),
         nonTuitionTermTotals: nonTuitionTermTotals(lines, parent.entry_term_number),
         tuitionBreakdown,
         tuitionBreakdownComplete: tuitionBreakdown.filter((term) => !term.installments[0].notApplicable).every((term) => term.complete),
-        snapshotFingerprint: snapshot.fingerprint };
+        snapshotFingerprint };
     }
 
     const scheduleResult = await pool.request()
@@ -1126,14 +1267,39 @@ function createAnnualFinanceService({
       throw new AnnualFinanceError('The saved assessment and confirmation selections do not match.', 409);
     }
 
-    const chargesResult = await pool.request().input('assessmentId', sql.Int, confirmation.assessment_id)
+    const restatement = await loadAnnualRestatement(pool.request(), sql, annualEnrollmentId, Number(confirmation.assessment_id));
+    let archivedBeforeImage = null;
+    if (restatement) {
+      const archiveResult = await pool.request().input('operationId', sql.Char(36), restatement.operationId)
+        .input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .input('restatementAssessmentId', sql.Int, Number(confirmation.assessment_id))
+        .query(`SELECT before_image_json, before_image_sha256
+          FROM finance_assessment_restatement_annuals
+          WHERE operation_id = @operationId AND annual_enrollment_id = @annualEnrollmentId
+            AND assessment_id = @restatementAssessmentId`);
+      const archive = archiveResult.recordset?.[0];
+      if (!archive || crypto.createHash('sha256').update(String(archive.before_image_json)).digest('hex')
+        !== String(archive.before_image_sha256).toLowerCase()) {
+        throw new AnnualFinanceError('The original Registrar confirmation snapshot failed its finance archive check.', 409);
+      }
+      try { archivedBeforeImage = JSON.parse(String(archive.before_image_json)); }
+      catch { throw new AnnualFinanceError('The original Registrar confirmation snapshot is unreadable.', 409); }
+      if (Number(archivedBeforeImage.annual?.id) !== annualEnrollmentId
+        || !Array.isArray(archivedBeforeImage.charges) || !Array.isArray(archivedBeforeImage.enrollments)
+        || !Array.isArray(archivedBeforeImage.sourceScheduleLines) || !Array.isArray(archivedBeforeImage.exemptionApplications)) {
+        throw new AnnualFinanceError('The original Registrar confirmation archive is incomplete.', 409);
+      }
+    }
+    const chargesResult = archivedBeforeImage
+      ? { recordset: buildArchivedConfirmationLines(archivedBeforeImage, Number(confirmation.assessment_id), confirmation.confirmed_at) }
+      : await pool.request().input('assessmentId', sql.Int, confirmation.assessment_id)
       .query(`SELECT enrollment.annual_term_number AS term_number, charge.fee_category, charge.line_name,
           charge.installment, charge.schedule_line_id,
           COALESCE(schedule_line.is_optional, CAST(0 AS UNSIGNED)) AS is_optional,
           CAST(charge.amount AS CHAR(40)) AS original_gross_amount,
           CAST(COALESCE((SELECT SUM(application.amount) FROM finance_exemption_applications AS application
             WHERE application.charge_id = charge.id AND application.applied_at <= confirmation.confirmed_at), 0) AS CHAR(40)) AS confirmed_waived_amount
-        FROM assessed_charges AS charge
+        FROM v_finance_effective_assessed_charges AS charge
         INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
         INNER JOIN annual_registrar_confirmations AS confirmation
           ON confirmation.assessment_id = charge.assessment_id
@@ -1184,7 +1350,8 @@ function createAnnualFinanceService({
       nonTuitionTermTotals: nonTuitionTermTotals(lines, entryTermNumber),
       tuitionBreakdown,
       tuitionBreakdownComplete: tuitionBreakdown.filter((term) => !term.installments[0].notApplicable).every((term) => term.complete),
-      snapshotFingerprint: snapshot.fingerprint
+      snapshotFingerprint: snapshot.fingerprint,
+      ...(restatement ? { restatement } : {})
     };
   }
 
@@ -1417,7 +1584,9 @@ function createAnnualFinanceService({
           .query(`SELECT charge.id FROM assessed_charges AS charge
             INNER JOIN annual_enrollments AS annual  ON annual.id = charge.annual_enrollment_id
             INNER JOIN students AS student  ON student.id = annual.student_id
-            WHERE charge.id = @chargeId AND annual.student_id = @studentId`);
+            WHERE charge.id = @chargeId AND annual.student_id = @studentId
+              AND EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS effective WHERE effective.id = charge.id)
+            FOR UPDATE`);
         if (!owner.recordset?.length) throw new AnnualFinanceError('A charge must belong to the same student account as its payment.', 409);
         const dueResult = await transaction.request().input('chargeId', sql.BigInt, targetId)
           .query('SELECT amount_due FROM v_finance_assessed_charge_due WHERE charge_id = @chargeId');
@@ -1720,13 +1889,16 @@ function createAnnualFinanceService({
             CAST(allocation.amount AS CHAR(40)) AS amount, payment.id AS payment_id, payment.is_reversed
           FROM finance_payment_allocations AS allocation
           INNER JOIN finance_payments AS payment  ON payment.id = allocation.payment_id
-          WHERE allocation.id = @allocationId AND payment.student_id = @studentId`);
+          WHERE allocation.id = @allocationId AND payment.student_id = @studentId
+            AND (allocation.charge_id IS NULL OR EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS charge
+              WHERE charge.id = allocation.charge_id))
+          FOR UPDATE`);
       const source = sourceResult.recordset?.[0];
       if (!source) throw new AnnualFinanceError('Payment allocation not found for this student.', 404);
       if (flag(source.is_reversed)) throw new AnnualFinanceError('Allocations from a reversed payment cannot be released as available credit.', 409);
       const releasedResult = await transaction.request().input('allocationId', sql.BigInt, allocationId)
-        .query(`SELECT COALESCE(SUM(amount), 0) AS amount FROM finance_payment_allocation_releases
-          WHERE allocation_id = @allocationId`);
+        .query(`SELECT COALESCE(MAX(active_released_amount), 0) AS amount
+          FROM v_finance_net_payment_allocations WHERE allocation_id = @allocationId`);
       const originCents = parseMoneyCents(String(source.amount));
       const releasedCents = parseMoneyCents(String(releasedResult.recordset?.[0]?.amount || '0.00'), { allowZero: true });
       if (amountCents > originCents - releasedCents) throw new AnnualFinanceError('Cumulative releases cannot exceed the original allocation.', 409);
@@ -1740,7 +1912,7 @@ function createAnnualFinanceService({
       const releaseId = generatedId(inserted, 'Allocation release');
       if (source.charge_id) {
         const charge = await transaction.request().input('chargeId', sql.BigInt, source.charge_id)
-          .query('SELECT enrollment_id FROM assessed_charges  WHERE id = @chargeId');
+        .query('SELECT enrollment_id FROM v_finance_effective_assessed_charges WHERE id = @chargeId');
         if (charge.recordset?.[0]) await requireFreshApproval(transaction, actor, Number(charge.recordset[0].enrollment_id), 'payment_allocation_released');
       }
       await writeAudit(transaction, actor, 'payment_allocation_released', releaseId, {
@@ -1789,7 +1961,7 @@ function createAnnualFinanceService({
         .query(`SELECT reconciliation.id, reconciliation.charge_id, CAST(reconciliation.amount AS CHAR(40)) AS amount,
             annual.student_id, charge.enrollment_id
           FROM finance_legacy_reconciliations AS reconciliation
-          INNER JOIN assessed_charges AS charge  ON charge.id = reconciliation.charge_id
+          INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = reconciliation.charge_id
           INNER JOIN annual_enrollments AS annual  ON annual.id = charge.annual_enrollment_id
           WHERE reconciliation.id = @reconciliationId AND annual.student_id = @studentId`);
       const source = sourceResult.recordset?.[0];
@@ -1871,7 +2043,7 @@ function createAnnualFinanceService({
         return { commentEventId: generatedId(prior.id, 'Fee comment'), alreadyRecorded: true };
       }
       const chargeResult = await transaction.request().input('studentId', sql.Int, studentId).input('chargeId', sql.BigInt, chargeId)
-        .query(`SELECT charge.id FROM assessed_charges AS charge
+        .query(`SELECT charge.id FROM v_finance_effective_assessed_charges AS charge
           INNER JOIN annual_enrollments AS annual  ON annual.id = charge.annual_enrollment_id
           WHERE charge.id = @chargeId AND annual.student_id = @studentId`);
       if (!chargeResult.recordset?.length) throw new AnnualFinanceError('Choose a fee from this student account.', 404);
@@ -1911,18 +2083,20 @@ function createAnnualFinanceService({
         return { adjustmentId: generatedId(prior.id, 'Charge adjustment'), alreadyRecorded: true };
       }
       const owner = await transaction.request().input('chargeId', sql.BigInt, chargeId)
-        .query(`SELECT annual.student_id FROM assessed_charges AS charge
+        .query(`SELECT annual.student_id FROM v_finance_effective_assessed_charges AS charge
           INNER JOIN annual_enrollments AS annual  ON annual.id = charge.annual_enrollment_id
           WHERE charge.id = @chargeId`);
       if (!owner.recordset?.[0] || Number(owner.recordset[0].student_id) !== studentId) throw new AnnualFinanceError('This charge does not belong to the selected student.', 409);
       const chargeResult = await transaction.request().input('chargeId', sql.BigInt, chargeId)
-        .query('SELECT id FROM assessed_charges WHERE id = @chargeId FOR UPDATE');
+        .query(`SELECT charge.id FROM assessed_charges AS charge WHERE charge.id = @chargeId
+          AND EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS effective WHERE effective.id = charge.id)
+          FOR UPDATE`);
       if (!chargeResult.recordset?.length) throw new AnnualFinanceError('This assessed fee is no longer available.', 409);
       const basisResult = await transaction.request().input('chargeId', sql.BigInt, chargeId)
         .query(`SELECT CAST(charge.amount + COALESCE((SELECT SUM(adjustment.amount)
               FROM finance_charge_adjustments AS adjustment WHERE adjustment.charge_id = charge.id), 0) AS CHAR(40)) AS fee_basis,
             CAST(due.amount_due AS CHAR(40)) AS amount_due
-          FROM assessed_charges AS charge
+          FROM v_finance_effective_assessed_charges AS charge
           INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
           WHERE charge.id = @chargeId`);
       const beforeBasisCents = parseMoneyCents(String(basisResult.recordset?.[0]?.fee_basis ?? '0.00'), { allowNegative: true, allowZero: true });
@@ -1940,7 +2114,7 @@ function createAnnualFinanceService({
       const adjustmentId = generatedId(inserted, 'Charge adjustment');
       if (amountCents > 0n) {
         const termResult = await transaction.request().input('chargeId', sql.BigInt, chargeId)
-          .query('SELECT enrollment_id FROM assessed_charges  WHERE id = @chargeId');
+          .query('SELECT enrollment_id FROM v_finance_effective_assessed_charges WHERE id = @chargeId');
         if (termResult.recordset?.[0]) await requireFreshApproval(transaction, actor, Number(termResult.recordset[0].enrollment_id), 'positive_charge_adjustment');
       }
       let releasePlan = { totalCents: 0n, annualCents: 0n, legacyCents: 0n };
@@ -2037,7 +2211,7 @@ function createAnnualFinanceService({
       const prior = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
         .query(`SELECT adjustment.id, adjustment.reverses_adjustment_id, adjustment.request_fingerprint, annual.student_id
           FROM finance_charge_adjustments AS adjustment
-          INNER JOIN assessed_charges AS charge  ON charge.id = adjustment.charge_id
+          INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = adjustment.charge_id
           INNER JOIN annual_enrollments AS annual  ON annual.id = charge.annual_enrollment_id
           WHERE adjustment.idempotency_key = @idempotencyKey FOR UPDATE`);
       if (prior.recordset?.[0]) {
@@ -2052,9 +2226,11 @@ function createAnnualFinanceService({
             charge.enrollment_id,
             annual.student_id
           FROM finance_charge_adjustments AS adjustment
-          INNER JOIN assessed_charges AS charge  ON charge.id = adjustment.charge_id
+          INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id
           INNER JOIN annual_enrollments AS annual  ON annual.id = charge.annual_enrollment_id
-          WHERE adjustment.id = @adjustmentId FOR UPDATE`);
+          WHERE adjustment.id = @adjustmentId
+            AND EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS effective WHERE effective.id = charge.id)
+          FOR UPDATE`);
       const original = originalResult.recordset?.[0];
       if (!original || Number(original.student_id) !== studentId) throw new AnnualFinanceError('Adjustment not found for this student.', 404);
       if (original.reverses_adjustment_id != null) throw new AnnualFinanceError('A reversal entry cannot be reversed again.', 409);
@@ -2062,13 +2238,15 @@ function createAnnualFinanceService({
         .query('SELECT id FROM finance_charge_adjustments WHERE reverses_adjustment_id = @adjustmentId LIMIT 1 FOR UPDATE');
       if (existingReversal.recordset?.length) throw new AnnualFinanceError('This adjustment has already been reversed.', 409);
       const chargeLock = await transaction.request().input('chargeId', sql.BigInt, original.charge_id)
-        .query('SELECT id FROM assessed_charges WHERE id = @chargeId FOR UPDATE');
+        .query(`SELECT charge.id FROM assessed_charges AS charge WHERE charge.id = @chargeId
+          AND EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS effective WHERE effective.id = charge.id)
+          FOR UPDATE`);
       if (!chargeLock.recordset?.length) throw new AnnualFinanceError('This assessed fee is no longer available.', 409);
       const basisResult = await transaction.request().input('chargeId', sql.BigInt, original.charge_id)
         .query(`SELECT CAST(charge.amount + COALESCE((SELECT SUM(adjustment.amount)
               FROM finance_charge_adjustments AS adjustment WHERE adjustment.charge_id = charge.id), 0) AS CHAR(40)) AS fee_basis,
             CAST(due.amount_due AS CHAR(40)) AS amount_due
-          FROM assessed_charges AS charge
+          FROM v_finance_effective_assessed_charges AS charge
           INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
           WHERE charge.id = @chargeId`);
       const beforeBasisCents = parseMoneyCents(String(basisResult.recordset?.[0]?.fee_basis ?? '0.00'), { allowNegative: true, allowZero: true });
@@ -2145,7 +2323,7 @@ function createAnnualFinanceService({
       const affectedTerms = await transaction.request().input('paymentId', sql.BigInt, paymentId)
         .query(`SELECT DISTINCT charge.enrollment_id
           FROM v_finance_net_payment_allocations AS allocation
-          INNER JOIN assessed_charges AS charge  ON charge.id = allocation.charge_id
+            INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = allocation.charge_id
           INNER JOIN enrollments AS enrollment  ON enrollment.id = charge.enrollment_id
           WHERE allocation.payment_id = @paymentId AND allocation.net_amount > 0`);
       await transaction.request().input('paymentId', sql.BigInt, paymentId).input('actorId', sql.Int, actor.id)
@@ -2224,8 +2402,10 @@ function createAnnualFinanceService({
           .input('studentId', sql.Int, studentId)
           .query(`SELECT annual.student_id, charge.enrollment_id
             FROM assessed_charges AS charge
-            INNER JOIN annual_enrollments AS annual  ON annual.id = charge.annual_enrollment_id
-            WHERE charge.id = @chargeId AND annual.student_id = @studentId`);
+            INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
+            WHERE charge.id = @chargeId AND annual.student_id = @studentId
+              AND EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS effective WHERE effective.id = charge.id)
+            FOR UPDATE`);
         const charge = chargeResult.recordset?.[0];
         if (!charge || Number(charge.student_id) !== studentId) throw new AnnualFinanceError('A legacy payment may only be reconciled to a charge for the same student.', 409);
         const dueResult = await transaction.request().input('chargeId', sql.BigInt, allocation.chargeId)
@@ -2410,7 +2590,7 @@ function createAnnualFinanceService({
         FROM students WHERE id = @studentId`);
     const summaryResult = await transaction.request().input('studentId', sql.Int, studentId)
       .query(STUDENT_LEDGER_SUMMARY_SQL);
-    const chargesResult = await transaction.request().input('studentId', sql.Int, studentId).query(`SELECT charge.id AS charge_id, charge.enrollment_id,
+    const chargesResult = await transaction.request().input('studentId', sql.Int, studentId).query(`SELECT charge.id AS charge_id, charge.annual_enrollment_id, charge.enrollment_id,
           annual.school_year, annual.grade_level, annual.voucher_code, enrollment.annual_term_number, term.term,
           section.name AS section_name, charge.fee_category, charge.line_name, charge.installment,
           CAST(COALESCE(schedule_line.is_optional, 0) AS UNSIGNED) AS is_optional,
@@ -2420,7 +2600,7 @@ function createAnnualFinanceService({
           CAST(COALESCE(due.annual_allocated + due.legacy_allocated, 0) AS CHAR(40)) AS allocated,
           CAST(COALESCE(due.amount_due, charge.amount) AS CHAR(40)) AS remaining_due,
           CAST(CASE WHEN term.is_current = 1 THEN 1 ELSE 0 END AS UNSIGNED) AS is_current_term
-        FROM assessed_charges AS charge
+        FROM v_finance_effective_assessed_charges AS charge
         INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
         INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
@@ -2433,15 +2613,27 @@ function createAnnualFinanceService({
         FROM (
           SELECT charge.created_at AS event_date, 'charge' AS event_type,
             CAST(charge.amount AS CHAR(40)) AS amount, CAST(NULL AS CHAR(100)) AS reference_no,
-            CONCAT(annual.school_year, ' · Term ', enrollment.annual_term_number, ' · ', charge.line_name, ' · ', charge.installment) AS details,
+            CONCAT(CASE WHEN charge.synthetic_restatement_role = 'source'
+              THEN 'Original whole-term tuition source · '
+              WHEN charge.synthetic_restatement_role = 'generated' AND EXISTS (
+                SELECT 1 FROM finance_assessment_restatement_events AS reversed
+                WHERE reversed.operation_id = charge.synthetic_restatement_operation_id AND reversed.event_type = 'reversed')
+              THEN 'Retired synthetic tuition installment (restatement reversed) · '
+              WHEN charge.synthetic_restatement_role = 'generated' THEN 'Synthetic tuition installment · ' ELSE '' END,
+              annual.school_year, ' · Term ', enrollment.annual_term_number, ' · ', charge.line_name, ' · ', charge.installment) AS details,
             charge.id AS sort_key, charge.id AS source_id
           FROM assessed_charges AS charge
           INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
           INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id WHERE annual.student_id = @studentId
           UNION ALL
           SELECT adjustment.created_at, 'adjustment', CAST(adjustment.amount AS CHAR(40)), CAST(NULL AS CHAR(100)),
-            CASE WHEN @isStudent = 1 THEN CONCAT('Finance adjustment to charge #', adjustment.charge_id)
-              ELSE CONCAT('Charge #', adjustment.charge_id, ' · ', adjustment.reason) END, adjustment.id, adjustment.id
+            CASE WHEN @isStudent = 1 THEN CONCAT('Finance adjustment to charge #', adjustment.charge_id,
+                CASE WHEN charge.synthetic_restatement_role = 'generated' THEN ' · synthetic tuition installment'
+                  WHEN charge.synthetic_restatement_role = 'source' THEN ' · original whole-term tuition source' ELSE '' END)
+              ELSE CONCAT('Charge #', adjustment.charge_id, ' · ', adjustment.reason,
+                CASE WHEN charge.synthetic_restatement_role = 'generated' THEN ' · synthetic tuition installment'
+                  WHEN charge.synthetic_restatement_role = 'source' THEN ' · original whole-term tuition source' ELSE '' END) END,
+            adjustment.id, adjustment.id
           FROM finance_charge_adjustments AS adjustment
           INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id
           INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id WHERE annual.student_id = @studentId
@@ -2456,23 +2648,58 @@ function createAnnualFinanceService({
           FROM finance_legacy_opening_charges AS opening WHERE opening.student_id = @studentId
           UNION ALL
           SELECT allocation.created_at, 'allocation', CAST(NULL AS CHAR(40)), CAST(NULL AS CHAR(100)),
-            CONCAT('Payment #', allocation.payment_id, ' allocated to charge #', allocation.charge_id, ' · ', CAST(allocation.amount AS CHAR(40))), allocation.id, allocation.id
+            CONCAT(CASE
+              WHEN allocation.synthetic_restatement_kind = 'placement' AND EXISTS (
+                SELECT 1 FROM finance_assessment_restatement_events AS reversed
+                WHERE reversed.operation_id = allocation.synthetic_restatement_operation_id AND reversed.event_type = 'reversed')
+                THEN 'Retired synthetic tuition installment placement · '
+              WHEN allocation.synthetic_restatement_kind = 'placement' AND EXISTS (
+                SELECT 1 FROM finance_assessment_restatement_events AS applied
+                WHERE applied.operation_id = allocation.synthetic_restatement_operation_id AND applied.event_type = 'applied')
+                THEN 'Synthetic tuition installment placement · '
+              WHEN allocation.synthetic_restatement_kind = 'placement' THEN 'Inactive synthetic tuition installment placement · '
+              WHEN allocation.synthetic_restatement_kind = 'restoration' THEN 'Restored original tuition application · '
+              ELSE '' END,
+              'Payment #', allocation.payment_id, ' allocated to charge #', allocation.charge_id, ' · ', CAST(allocation.amount AS CHAR(40))), allocation.id, allocation.id
           FROM finance_payment_allocations AS allocation
           INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
-          WHERE payment.student_id = @studentId AND allocation.charge_id IS NOT NULL
+          INNER JOIN assessed_charges AS charge ON charge.id = allocation.charge_id
+          WHERE payment.student_id = @studentId
           UNION ALL
           SELECT allocation.created_at, 'allocation', CAST(NULL AS CHAR(40)), CAST(NULL AS CHAR(100)),
-            CONCAT('Payment #', allocation.payment_id, ' allocated to verified prior balance · ', CAST(allocation.amount AS CHAR(40))), allocation.id, allocation.id
+            CONCAT(CASE
+              WHEN allocation.synthetic_restatement_kind = 'placement' AND EXISTS (
+                SELECT 1 FROM finance_assessment_restatement_events AS reversed
+                WHERE reversed.operation_id = allocation.synthetic_restatement_operation_id AND reversed.event_type = 'reversed')
+                THEN 'Retired synthetic tuition installment placement · '
+              WHEN allocation.synthetic_restatement_kind = 'placement' AND EXISTS (
+                SELECT 1 FROM finance_assessment_restatement_events AS applied
+                WHERE applied.operation_id = allocation.synthetic_restatement_operation_id AND applied.event_type = 'applied')
+                THEN 'Synthetic tuition installment placement · '
+              WHEN allocation.synthetic_restatement_kind = 'placement' THEN 'Inactive synthetic tuition installment placement · '
+              WHEN allocation.synthetic_restatement_kind = 'restoration' THEN 'Restored original tuition application · '
+              ELSE '' END,
+              'Payment #', allocation.payment_id, ' allocated to verified prior balance · ', CAST(allocation.amount AS CHAR(40))), allocation.id, allocation.id
           FROM finance_payment_allocations AS allocation
           INNER JOIN finance_legacy_opening_charges AS opening ON opening.id = allocation.legacy_opening_charge_id
           WHERE opening.student_id = @studentId
           UNION ALL
           SELECT allocation_release.created_at, 'allocation release', CAST(allocation_release.amount AS CHAR(40)), CAST(NULL AS CHAR(100)),
-            CASE WHEN @isStudent = 1 THEN CONCAT('Payment #', payment.id, ' allocation corrected')
-              ELSE CONCAT('Payment #', payment.id, ' allocation released · ', allocation_release.reason) END, allocation_release.id, allocation_release.id
+            CASE WHEN allocation_release.synthetic_restatement_operation_id IS NOT NULL
+                AND allocation.synthetic_restatement_kind IS NULL
+              THEN CONCAT('Original tuition application released for canonical installment placement · Payment #', payment.id)
+              WHEN allocation_release.synthetic_restatement_operation_id IS NOT NULL
+                AND allocation.synthetic_restatement_kind = 'placement'
+              THEN CONCAT('Synthetic tuition installment placement released during reversal · Payment #', payment.id)
+              WHEN allocation_release.synthetic_restatement_operation_id IS NOT NULL
+              THEN CONCAT('Finance restatement allocation release · Payment #', payment.id)
+              WHEN @isStudent = 1 THEN CONCAT('Payment #', payment.id, ' allocation corrected')
+              ELSE CONCAT('Payment #', payment.id, ' allocation released · ', allocation_release.reason) END,
+            allocation_release.id, allocation_release.id
           FROM finance_payment_allocation_releases AS allocation_release
           INNER JOIN finance_payment_allocations AS allocation ON allocation.id = allocation_release.allocation_id
-          INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id WHERE payment.student_id = @studentId
+          INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
+          WHERE payment.student_id = @studentId
           UNION ALL
           SELECT metadata.created_at, CONCAT('payment ', metadata.event_type), CAST(NULL AS CHAR(40)), metadata.reference_no,
             CASE WHEN @isStudent = 1 THEN CASE WHEN metadata.event_type = 'receipt_marked_issued' THEN 'Receipt marked issued' ELSE 'Receipt reference updated' END
@@ -2559,6 +2786,43 @@ function createAnnualFinanceService({
           AND voucher_event.event_rank = 1
         LEFT JOIN latest_clearance_event AS clearance ON clearance.enrollment_id = enrollment.id AND clearance.event_rank = 1
         WHERE annual.student_id = @studentId ORDER BY annual.school_year DESC, enrollment.annual_term_number`);
+    const restatementResult = await transaction.request().input('studentId', sql.Int, studentId)
+      .query(`SELECT archive.operation_id, archive.annual_enrollment_id, archive.assessment_id,
+          annual.school_year, annual.grade_level,
+          archive.source_schedule_id, archive.source_schedule_version,
+          archive.target_tuition_schedule_id, archive.target_tuition_schedule_version,
+          archive.before_image_json, archive.before_image_sha256,
+          archive.applied_image_json, archive.applied_image_sha256,
+          operation.operation_kind, operation.manifest_sha256,
+          applied.id AS applied_event_id, applied.manifest_sha256 AS applied_manifest_sha256,
+          applied.resulting_state_sha256 AS applied_state_sha256,
+          reversed.id AS reversed_event_id, reversed.manifest_sha256 AS reversed_manifest_sha256,
+          reversed.resulting_state_sha256 AS reversed_state_sha256
+        FROM finance_assessment_restatement_annuals AS archive
+        INNER JOIN annual_enrollments AS annual ON annual.id = archive.annual_enrollment_id
+        INNER JOIN finance_assessment_restatement_operations AS operation ON operation.operation_id = archive.operation_id
+        LEFT JOIN finance_assessment_restatement_events AS applied
+          ON applied.operation_id = archive.operation_id AND applied.event_type = 'applied'
+        LEFT JOIN finance_assessment_restatement_events AS reversed
+          ON reversed.operation_id = archive.operation_id AND reversed.event_type = 'reversed'
+        WHERE annual.student_id = @studentId ORDER BY annual.school_year, archive.annual_enrollment_id`);
+    const restatementsByAnnual = new Map();
+    const sourceAllocationPurposeById = buildRestatementSourceAllocationPurposeMap(restatementResult.recordset || []);
+    const syntheticPlacementPurposeById = buildRestatementSyntheticPlacementPurposeMap(restatementResult.recordset || []);
+    for (const row of restatementResult.recordset || []) {
+      validateRestatementRow(row);
+      const isActive = row.reversed_event_id == null;
+      restatementsByAnnual.set(Number(row.annual_enrollment_id), {
+        schoolYear: String(row.school_year), gradeLevel: String(row.grade_level),
+        status: isActive ? 'active' : 'reversed',
+        sourceScheduleVersion: Number(row.source_schedule_version),
+        targetTuitionScheduleVersion: Number(row.target_tuition_schedule_version),
+        compositionLabel: isActive
+          ? `Current composition: synthetic tuition installments from schedule v${Number(row.target_tuition_schedule_version)}; non-tuition fees from original schedule v${Number(row.source_schedule_version)}.`
+          : 'Original fee composition restored after a logical Finance restatement reversal.',
+        confirmationLabel: 'The original Registrar confirmation and its saved assessment snapshot were not changed.'
+      });
+    }
     const financeClassificationsResult = access === 'student'
       ? { recordset: [] }
       : await transaction.request().input('studentId', sql.Int, studentId)
@@ -2594,9 +2858,28 @@ function createAnnualFinanceService({
     const allocationHistoryResult = await transaction.request().input('studentId', sql.Int, studentId)
       .query(`SELECT allocation.id AS allocation_id, allocation.payment_id, allocation.charge_id,
           allocation.legacy_opening_charge_id, payment.payment_date, payment.reference_no, payment.is_reversed,
+          allocation.synthetic_restatement_operation_id, allocation.synthetic_restatement_kind,
+          CAST(CASE WHEN allocation.charge_id IS NOT NULL AND current_charge.id IS NULL THEN 0 ELSE 1 END AS UNSIGNED) AS charge_is_effective,
+          CASE
+            WHEN allocation.synthetic_restatement_kind = 'placement' AND net.is_effective = 1
+              THEN 'Synthetic tuition installment placement'
+            WHEN allocation.synthetic_restatement_kind = 'placement' AND EXISTS (
+              SELECT 1 FROM finance_assessment_restatement_events AS reversed
+              WHERE reversed.operation_id = allocation.synthetic_restatement_operation_id AND reversed.event_type = 'reversed')
+              THEN 'Historical synthetic tuition installment placement; restatement reversed'
+            WHEN allocation.synthetic_restatement_kind = 'placement'
+              THEN 'Inactive synthetic tuition installment placement; no active apply event'
+            WHEN allocation.synthetic_restatement_kind = 'restoration' AND net.is_effective = 1
+              THEN 'Restored original tuition application'
+            WHEN allocation.synthetic_restatement_kind = 'restoration'
+              THEN 'Inactive original tuition application restoration'
+            ELSE NULL
+          END AS restatement_history_label,
           CAST(allocation.amount AS CHAR(40)) AS original_amount,
           CAST(CASE WHEN payment.is_reversed = 1 THEN 0 ELSE net.net_amount END AS CHAR(40)) AS remaining_amount,
-          CAST(allocation.amount - net.net_amount AS CHAR(40)) AS released_amount,
+          CAST(net.active_released_amount AS CHAR(40)) AS released_amount,
+          CAST(COALESCE(release_history.recorded_released_amount, 0) AS CHAR(40)) AS recorded_released_amount,
+          release_history.source_restatement_operation_id,
           annual.school_year, annual.grade_level, enrollment.annual_term_number, term.term,
           charge.line_name, charge.fee_category, charge.installment,
           CAST(COALESCE(charge_due.amount_due, opening_due.amount_due) AS CHAR(40)) AS current_due_amount,
@@ -2605,13 +2888,23 @@ function createAnnualFinanceService({
         INNER JOIN v_finance_net_payment_allocations AS net ON net.allocation_id = allocation.id
         INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
         LEFT JOIN assessed_charges AS charge ON charge.id = allocation.charge_id
+        LEFT JOIN v_finance_effective_assessed_charges AS current_charge ON current_charge.id = charge.id
         LEFT JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         LEFT JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
         LEFT JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
         LEFT JOIN v_finance_assessed_charge_due AS charge_due ON charge_due.charge_id = allocation.charge_id
         LEFT JOIN finance_legacy_opening_charges AS opening ON opening.id = allocation.legacy_opening_charge_id
         LEFT JOIN v_finance_opening_liability_due AS opening_due ON opening_due.opening_charge_id = opening.id
-        WHERE payment.student_id = @studentId AND (net.net_amount > 0 OR allocation.amount > net.net_amount)
+        LEFT JOIN (
+          SELECT release_row.allocation_id,
+            SUM(release_row.amount) AS recorded_released_amount,
+            MAX(CASE WHEN release_row.synthetic_restatement_operation_id IS NOT NULL
+              THEN release_row.synthetic_restatement_operation_id END) AS source_restatement_operation_id
+          FROM finance_payment_allocation_releases AS release_row
+          GROUP BY release_row.allocation_id
+        ) AS release_history ON release_history.allocation_id = allocation.id
+        WHERE payment.student_id = @studentId
+          AND (net.net_amount > 0 OR net.active_released_amount > 0 OR allocation.synthetic_restatement_operation_id IS NOT NULL)
         ORDER BY payment.payment_date, allocation.id`);
     const legacyReconciliationHistoryResult = await transaction.request().input('studentId', sql.Int, studentId)
       .query(`SELECT reconciliation.id AS reconciliation_id, reconciliation.transaction_id,
@@ -2626,7 +2919,7 @@ function createAnnualFinanceService({
         INNER JOIN v_finance_net_legacy_reconciliations AS net ON net.reconciliation_id = reconciliation.id
         INNER JOIN financial_transactions AS legacy ON legacy.id = reconciliation.transaction_id
         INNER JOIN financial_accounts AS account ON account.id = legacy.financial_account_id
-        INNER JOIN assessed_charges AS charge ON charge.id = reconciliation.charge_id
+        INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = reconciliation.charge_id
         INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
         INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
@@ -2671,7 +2964,7 @@ function createAnnualFinanceService({
           THEN CAST(1 AS UNSIGNED) ELSE CAST(0 AS UNSIGNED) END AS already_reversed,
         annual.school_year, enrollment.annual_term_number, charge.line_name, charge.installment
       FROM finance_charge_adjustments AS adjustment
-      INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id
+      INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = adjustment.charge_id
       INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
       INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
       WHERE annual.student_id = @studentId ORDER BY adjustment.created_at, adjustment.id`);
@@ -2691,7 +2984,7 @@ function createAnnualFinanceService({
       .query(`SELECT event.id, event.charge_id, event.comment, event.created_at,
           COALESCE(NULLIF(LTRIM(RTRIM(CONCAT(actor.first_name, ' ', actor.last_name))), ''), CONCAT('Staff ', event.actor_id)) AS actor_name
         FROM finance_fee_comment_events AS event
-        INNER JOIN assessed_charges AS charge ON charge.id = event.charge_id
+        INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = event.charge_id
         INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         LEFT JOIN staff_profiles AS actor ON actor.user_id = event.actor_id
         WHERE annual.student_id = @studentId ORDER BY event.created_at DESC, event.id DESC`);
@@ -2707,10 +3000,12 @@ function createAnnualFinanceService({
     const financeClassificationByEnrollmentId = new Map((financeClassificationsResult.recordset || [])
       .map((classification) => [Number(classification.enrollment_id), classification]));
     const termRows = (termsResult.recordset || []).map((term) => {
-      if (access === 'student') return term;
+      const restatement = restatementsByAnnual.get(Number(term.annual_enrollment_id));
+      if (access === 'student') return { ...term, ...(restatement ? { restatement } : {}) };
       const classification = financeClassificationByEnrollmentId.get(Number(term.enrollment_id));
       return {
         ...term,
+        ...(restatement ? { restatement } : {}),
         paymentClassification: classification ? {
           assessment_id: classification.assessment_id,
           registrar_confirmation_id: classification.registrar_confirmation_id,
@@ -2734,6 +3029,8 @@ function createAnnualFinanceService({
     const currentTermContext = currentTermContextResult.recordset?.[0] || null;
     const charges = (chargesResult.recordset || []).map((charge) => ({
       ...charge,
+      ...(restatementsByAnnual.has(Number(charge.annual_enrollment_id))
+        ? { restatement: restatementsByAnnual.get(Number(charge.annual_enrollment_id)) } : {}),
       purpose_label: formatFeePurpose(charge),
       remaining_amount: formatMoneyCents(parseMoneyCents(String(charge.remaining_due || '0.00'), { allowNegative: true, allowZero: true }))
     }));
@@ -2766,9 +3063,13 @@ function createAnnualFinanceService({
     const annualBalanceSchoolYear = [...annualByYear.keys()].sort().at(-1) || null;
     const annualBalanceCents = annualBalanceSchoolYear ? annualByYear.get(annualBalanceSchoolYear) : 0n;
     const totalBalanceCents = legacyCents + openingDueCents + allYearsAnnualBalanceCents;
+    const allocationHistory = annotateRestatementSyntheticPlacementAllocations(
+      annotateRestatementSourceAllocations(allocationHistoryResult.recordset || [], sourceAllocationPurposeById),
+      syntheticPlacementPurposeById
+    );
     const paymentPurposeHistory = buildPaymentPurposeHistory({
       payments: paymentMetadataResult.recordset || [],
-      allocations: allocationHistoryResult.recordset || [],
+      allocations: allocationHistory,
       legacyReconciliations: legacyReconciliationHistoryResult.recordset || [],
       events: eventsResult.recordset || []
     });
@@ -2791,12 +3092,13 @@ function createAnnualFinanceService({
         availableCredit: String(summary.available_credit || '0.00')
       },
       charges,
+      restatements: [...restatementsByAnnual.entries()].map(([annualEnrollmentId, restatement]) => ({ annualEnrollmentId, ...restatement })),
       events: eventsResult.recordset || [],
       terms: termBalances,
       availablePayments: paymentOptionsResult.recordset || [],
       openingLiabilities: openingLiabilitiesResult.recordset || [],
       paymentPurposeHistory,
-      allocationHistory: access === 'student' ? [] : allocationHistoryResult.recordset || [],
+      allocationHistory: access === 'student' ? [] : allocationHistory,
       legacyReconciliationHistory: access === 'student' ? [] : legacyReconciliationHistoryResult.recordset || [],
       payments: access === 'student' ? [] : paymentMetadataResult.recordset || [],
       legacyCredits: legacyCreditsResult.recordset || [],
@@ -2831,25 +3133,86 @@ function createAnnualFinanceService({
       if (!payment) throw new AnnualFinanceError('Payment not found for this student.', 404);
       const allocationResult = await transaction.request().input('paymentId', sql.BigInt, paymentId)
         .query(`SELECT allocation.id AS allocation_id, allocation.charge_id, allocation.legacy_opening_charge_id,
+            allocation.synthetic_restatement_operation_id, allocation.synthetic_restatement_kind,
+            CASE
+              WHEN allocation.synthetic_restatement_kind = 'placement' AND net.is_effective = 1
+                THEN 'Synthetic tuition installment placement'
+              WHEN allocation.synthetic_restatement_kind = 'placement' AND EXISTS (
+                SELECT 1 FROM finance_assessment_restatement_events AS reversed
+                WHERE reversed.operation_id = allocation.synthetic_restatement_operation_id AND reversed.event_type = 'reversed')
+                THEN 'Historical synthetic tuition installment placement; restatement reversed'
+              WHEN allocation.synthetic_restatement_kind = 'placement'
+                THEN 'Inactive synthetic tuition installment placement; no active apply event'
+              WHEN allocation.synthetic_restatement_kind = 'restoration' AND net.is_effective = 1
+                THEN 'Restored original tuition application'
+              WHEN allocation.synthetic_restatement_kind = 'restoration'
+                THEN 'Inactive original tuition application restoration'
+              ELSE NULL
+            END AS restatement_history_label,
             CAST(allocation.amount AS CHAR(40)) AS original_amount,
             CAST(CASE WHEN payment.is_reversed = 1 THEN 0 ELSE COALESCE(net.net_amount, 0) END AS CHAR(40)) AS current_net_amount,
-            CAST(allocation.amount - COALESCE(net.net_amount, 0) AS CHAR(40)) AS released_amount,
+            CAST(COALESCE(net.active_released_amount, 0) AS CHAR(40)) AS released_amount,
+            CAST(COALESCE(release_history.recorded_released_amount, 0) AS CHAR(40)) AS recorded_released_amount,
+            release_history.source_restatement_operation_id,
             annual.school_year, annual.grade_level, enrollment.annual_term_number,
             charge.line_name, charge.fee_category, charge.installment, opening.source_label,
             CAST(COALESCE(charge_due.amount_due, opening_due.amount_due) AS CHAR(40)) AS current_due_amount
           FROM finance_payment_allocations AS allocation
           INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
-          LEFT JOIN v_finance_net_payment_allocations AS net ON net.allocation_id = allocation.id
+          INNER JOIN v_finance_net_payment_allocations AS net ON net.allocation_id = allocation.id
           LEFT JOIN assessed_charges AS charge ON charge.id = allocation.charge_id
           LEFT JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
           LEFT JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
           LEFT JOIN finance_legacy_opening_charges AS opening ON opening.id = allocation.legacy_opening_charge_id
           LEFT JOIN v_finance_assessed_charge_due AS charge_due ON charge_due.charge_id = allocation.charge_id
           LEFT JOIN v_finance_opening_liability_due AS opening_due ON opening_due.opening_charge_id = opening.id
-          WHERE allocation.payment_id = @paymentId ORDER BY allocation.id`);
-      return { payment, allocations: (allocationResult.recordset || []).map((allocation) => ({
+          LEFT JOIN (
+            SELECT release_row.allocation_id,
+              SUM(release_row.amount) AS recorded_released_amount,
+              MAX(CASE WHEN release_row.synthetic_restatement_operation_id IS NOT NULL
+                THEN release_row.synthetic_restatement_operation_id END) AS source_restatement_operation_id
+            FROM finance_payment_allocation_releases AS release_row
+            GROUP BY release_row.allocation_id
+          ) AS release_history ON release_history.allocation_id = allocation.id
+          WHERE allocation.payment_id = @paymentId
+          ORDER BY allocation.id`);
+      const allocations = allocationResult.recordset || [];
+      const sourceOperationIds = [...new Set(allocations
+        .flatMap((allocation) => [allocation.source_restatement_operation_id, allocation.synthetic_restatement_operation_id])
+        .map((operationId) => String(operationId || '').trim())
+        .filter(Boolean))];
+      let sourcePurposeByAllocationId = new Map();
+      let syntheticPlacementPurposeById = new Map();
+      if (sourceOperationIds.length) {
+        const archiveRequest = transaction.request().input('studentId', sql.Int, studentId);
+        const operationParams = sourceOperationIds.map((operationId, index) => {
+          const name = `sourceOperationId${index}`;
+          archiveRequest.input(name, sql.Char(36), operationId);
+          return `@${name}`;
+        }).join(', ');
+        const archiveResult = await archiveRequest.query(`SELECT archive.operation_id, archive.annual_enrollment_id,
+            annual.school_year, annual.grade_level,
+            archive.before_image_json, archive.before_image_sha256,
+            archive.applied_image_json, archive.applied_image_sha256,
+            applied.id AS applied_event_id,
+            reversed.id AS reversed_event_id
+          FROM finance_assessment_restatement_annuals AS archive
+          INNER JOIN annual_enrollments AS annual ON annual.id = archive.annual_enrollment_id
+          LEFT JOIN finance_assessment_restatement_events AS applied
+            ON applied.operation_id = archive.operation_id AND applied.event_type = 'applied'
+          LEFT JOIN finance_assessment_restatement_events AS reversed
+            ON reversed.operation_id = archive.operation_id AND reversed.event_type = 'reversed'
+          WHERE annual.student_id = @studentId AND archive.operation_id IN (${operationParams})`);
+        sourcePurposeByAllocationId = buildRestatementSourceAllocationPurposeMap(archiveResult.recordset || []);
+        syntheticPlacementPurposeById = buildRestatementSyntheticPlacementPurposeMap(archiveResult.recordset || []);
+      }
+      const annotatedAllocations = annotateRestatementSyntheticPlacementAllocations(
+        annotateRestatementSourceAllocations(allocations, sourcePurposeByAllocationId),
+        syntheticPlacementPurposeById
+      );
+      return { payment, allocations: annotatedAllocations.map((allocation) => ({
         ...allocation,
-        target_label: allocation.charge_id != null ? formatFeePurpose(allocation) : formatAllocationPurpose(allocation)
+        target_label: allocation.original_purpose_label || (allocation.charge_id != null ? formatFeePurpose(allocation) : formatAllocationPurpose(allocation))
       })) };
     });
   }
@@ -2883,7 +3246,7 @@ function createAnnualFinanceService({
             CAST(due.amount_due AS CHAR(40)) AS current_due_amount
           FROM finance_legacy_reconciliations AS reconciliation
           LEFT JOIN v_finance_net_legacy_reconciliations AS net ON net.reconciliation_id = reconciliation.id
-          INNER JOIN assessed_charges AS charge ON charge.id = reconciliation.charge_id
+        INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = reconciliation.charge_id
           INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
           INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
           LEFT JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
@@ -2947,10 +3310,10 @@ function createAnnualFinanceService({
         LEFT JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = annual.id
         LEFT JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.id
         LEFT JOIN (SELECT charge.annual_enrollment_id, SUM(due.amount_due) AS amount_due
-          FROM assessed_charges AS charge INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
+        FROM v_finance_effective_assessed_charges AS charge INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
           GROUP BY charge.annual_enrollment_id) AS annual_due ON annual_due.annual_enrollment_id = annual.id
         LEFT JOIN (SELECT charge.enrollment_id, SUM(due.amount_due) AS amount_due
-          FROM assessed_charges AS charge INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
+          FROM v_finance_effective_assessed_charges AS charge INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
           GROUP BY charge.enrollment_id) AS term_due ON term_due.enrollment_id = enrollment.id
         LEFT JOIN v_finance_legacy_account_balance AS legacy_balance ON legacy_balance.student_id = annual.student_id
         LEFT JOIN (SELECT due.student_id, SUM(due.amount_due) AS amount_due
@@ -3229,7 +3592,7 @@ function createAnnualFinanceService({
         const annualBalanceIds = bindAnnualIds(annualBalanceRequest, annualIds, 'assessedAnnualId');
         const assessedCharges = await runFinanceRosterQuery(annualBalanceRequest, 'assessed_charge_balances', `SELECT charge.annual_enrollment_id,
             charge.enrollment_id, CAST(due.amount_due AS CHAR(40)) AS amount_due
-          FROM assessed_charges AS charge
+          FROM v_finance_effective_assessed_charges AS charge
           INNER JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
           WHERE charge.annual_enrollment_id IN (${annualBalanceIds.join(', ')})`);
         for (const row of assessedCharges.recordset || []) {

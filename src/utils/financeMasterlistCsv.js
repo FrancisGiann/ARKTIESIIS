@@ -11,6 +11,7 @@ function createCsvColumns(masterlist) {
     { heading: 'Annual intake status', kind: 'text', read: (row) => row.intakeStatus },
     { heading: 'Assessed voucher', kind: 'text', read: (row) => row.assessedVoucherCode },
     { heading: 'Assessment schedule version', kind: 'text', read: (row) => row.assessmentVersion },
+    { heading: 'Current fee composition provenance', kind: 'text', read: (row) => row.restatement?.label || '' },
     { heading: 'Voucher review required', kind: 'text', read: (row) => row.voucherReviewRequired ? 'Yes' : 'No' }
   ];
   for (const termNumber of [1, 2, 3]) {
@@ -59,9 +60,13 @@ function applicationSummary(applications) {
     neutralizeSpreadsheetText(item.type),
     neutralizeSpreadsheetText(item.date),
     `Reference: ${neutralizeSpreadsheetText(item.reference)}`,
+    item.originalPurpose ? `Original purpose: ${neutralizeSpreadsheetText(item.originalPurpose)}` : '',
+    item.restatementHistory ? neutralizeSpreadsheetText(item.restatementHistory) : '',
     `Original ${item.original}`,
     `Applied ${item.current}`,
     `Released ${item.released}`,
+    item.recordedReleased != null && String(item.recordedReleased) !== String(item.released)
+      ? `Recorded release ${item.recordedReleased} (historical)` : '',
     item.receiptIssued ? 'Receipt issued' : '',
     item.reversed ? 'Payment reversed' : ''
   ].filter(Boolean).join('; ')).join(' | ');

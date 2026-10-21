@@ -242,7 +242,7 @@ const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'account_setup_tokens', constraintName: 'FK_account_setup_creator',
     columnName: 'created_by', referencedTable: 'users', referencedColumn: 'id' }
 ]);
-const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 23 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 24 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 function bindInList(request, values, prefix) {
   return values.map((value, index) => {
@@ -363,7 +363,7 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
       process.exitCode = 1;
       return;
     }
-    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.023.`);
+    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.024.`);
   } catch {
     logger.error('MariaDB database check failed. Confirm DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD, then run npm run db:setup.');
     process.exitCode = 1;

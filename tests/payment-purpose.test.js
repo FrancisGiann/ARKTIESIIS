@@ -3,7 +3,9 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const ejs = require('ejs');
 const {
-  formatFeePurpose, buildPaymentPurposeHistory, safeStudentPaymentPurposeHistory
+  formatFeePurpose, buildPaymentPurposeHistory, safeStudentPaymentPurposeHistory,
+  annotateRestatementSourceAllocations, buildRestatementSourceAllocationPurposeMap,
+  annotateRestatementSyntheticPlacementAllocations, buildRestatementSyntheticPlacementPurposeMap
 } = require('../src/utils/paymentPurpose');
 const { formatMoney } = require('../src/utils/formatMoney');
 
@@ -65,6 +67,111 @@ test('payment-purpose history groups saved allocations and preserves reversal, r
   assert.doesNotMatch(JSON.stringify(history), /PRIVATE-TRANS|PRIVATE-NOTE|PRIVATE-LEGACY/);
 });
 
+test('restatement history keeps recorded releases separate from current releases and restores original whole-term purpose', () => {
+  const beforeImage = {
+    annual: { id: 7, school_year: '2026-2027', grade_level: 'Grade 11' },
+    charges: [{ id: 81, enrollment_id: 91, fee_category: 'tuition', line_name: 'Tuition', installment: 'Term 2' }],
+    enrollments: [{ id: 91, annual_term_number: 2 }],
+    allocations: [{ id: 501, charge_id: 81 }]
+  };
+  const beforeImageJson = JSON.stringify(beforeImage);
+  const archiveRow = {
+    operation_id: 'op-7', annual_enrollment_id: 7, before_image_json: beforeImageJson,
+    before_image_sha256: require('node:crypto').createHash('sha256').update(beforeImageJson).digest('hex'),
+    applied_event_id: 1, reversed_event_id: null
+  };
+  const sourcePurpose = buildRestatementSourceAllocationPurposeMap([archiveRow]);
+  const sourceAllocation = {
+    allocation_id: 501, payment_id: 1, charge_id: 81, source_restatement_operation_id: 'op-7',
+    school_year: '2026-2027', grade_level: 'Grade 11', annual_term_number: 2,
+    line_name: 'Tuition', fee_category: 'tuition', installment: 'DP',
+    original_amount: '950.00', remaining_amount: '0.00', released_amount: '0.00',
+    recorded_released_amount: '950.00', current_due_amount: '300.00'
+  };
+  const active = annotateRestatementSourceAllocations([sourceAllocation], sourcePurpose);
+  const reversed = annotateRestatementSourceAllocations([sourceAllocation], buildRestatementSourceAllocationPurposeMap([{ ...archiveRow, reversed_event_id: 3 }]));
+  const activeHistory = buildPaymentPurposeHistory({ payments: [{ payment_id: 1, is_reversed: 0 }], allocations: active });
+  const reversedHistory = buildPaymentPurposeHistory({ payments: [{ payment_id: 1, is_reversed: 0 }], allocations: reversed });
+
+  assert.match(activeHistory.payments[0].allocations[0].purpose, /Original whole-term tuition/);
+  assert.match(activeHistory.payments[0].allocations[0].purpose, /released into synthetic installment placements/);
+  assert.equal(activeHistory.payments[0].allocations[0].released_amount, '950.00');
+  assert.equal(activeHistory.payments[0].allocations[0].current_released_amount, '0.00');
+  assert.equal(activeHistory.payments[0].allocations[0].current_fee_balance, null,
+    'the reused DP balance is not presented as the old whole-term tuition balance');
+  assert.match(reversedHistory.payments[0].allocations[0].purpose, /Original whole-term tuition/);
+  assert.match(reversedHistory.payments[0].allocations[0].purpose, /remains in history/);
+  assert.equal(reversedHistory.payments[0].allocations[0].released_amount, '950.00');
+  assert.equal(reversedHistory.payments[0].allocations[0].current_released_amount, '0.00');
+  assert.equal(reversedHistory.payments[0].allocations[0].current_fee_balance, '300.00',
+    'after reversal the restored whole-term source charge can provide its own current balance');
+
+  const incomplete = annotateRestatementSourceAllocations([sourceAllocation], buildRestatementSourceAllocationPurposeMap([
+    { ...archiveRow, applied_event_id: null, reversed_event_id: null }
+  ]));
+  const incompleteHistory = buildPaymentPurposeHistory({ payments: [{ payment_id: 1, is_reversed: 0 }], allocations: incomplete });
+  assert.match(incompleteHistory.payments[0].allocations[0].purpose, /apply evidence is incomplete/);
+  assert.equal(incompleteHistory.payments[0].allocations[0].current_fee_balance, '300.00',
+    'missing applied evidence leaves the original source balance available');
+});
+
+test('restatement source purpose mapping rejects altered archived evidence and ignores unrelated releases', () => {
+  const beforeImageJson = JSON.stringify({ annual: { id: 7 }, charges: [], enrollments: [], allocations: [] });
+  assert.throws(() => buildRestatementSourceAllocationPurposeMap([{
+    operation_id: 'op-7', annual_enrollment_id: 7, before_image_json: beforeImageJson,
+    before_image_sha256: '0'.repeat(64)
+  }]), /before-image digest is invalid/);
+  assert.equal(annotateRestatementSourceAllocations([{
+    allocation_id: 999, source_restatement_operation_id: 'other-op'
+  }], new Map()).length, 1);
+});
+
+test('synthetic placement history keeps its applied-image installment purpose after reversal', () => {
+  const appliedImageJson = JSON.stringify({ placementAllocations: [
+    { allocationId: 705, annualId: 7, term: 1, installment: 'DP' },
+    { allocationId: 706, annualId: 7, term: 1, installment: 'Prelim' }
+  ] });
+  const archiveRow = {
+    operation_id: 'op-7', annual_enrollment_id: 7, school_year: '2026-2027', grade_level: 'Grade 11',
+    applied_image_json: appliedImageJson,
+    applied_image_sha256: require('node:crypto').createHash('sha256').update(appliedImageJson).digest('hex'),
+    applied_event_id: 2,
+    reversed_event_id: 3
+  };
+  const purposeByAllocationId = buildRestatementSyntheticPlacementPurposeMap([archiveRow]);
+  const [reversed] = annotateRestatementSyntheticPlacementAllocations([{
+    allocation_id: 705, payment_id: 10, synthetic_restatement_operation_id: 'op-7', synthetic_restatement_kind: 'placement',
+    line_name: 'Tuition', fee_category: 'tuition', installment: 'Term 1',
+    original_amount: '950.00', remaining_amount: '950.00', current_due_amount: '5000.00'
+  }], purposeByAllocationId);
+  const [projected] = buildPaymentPurposeHistory({
+    payments: [{ payment_id: 10, is_reversed: 0 }],
+    allocations: [reversed]
+  }).payments[0].allocations;
+
+  assert.match(projected.purpose, /Historical synthetic tuition placement; restatement reversed/);
+  assert.match(projected.purpose, /2026-2027 · Grade 11 · Term 1 · Tuition · DP/);
+  assert.doesNotMatch(projected.purpose, /Term 1 · Tuition · Term 1/);
+  assert.equal(projected.current_fee_balance, null,
+    'the restored whole-term source charge balance does not belong to a historical DP placement');
+
+  const [active] = annotateRestatementSyntheticPlacementAllocations([{
+    allocation_id: 706, synthetic_restatement_operation_id: 'op-7', synthetic_restatement_kind: 'placement',
+    line_name: 'Tuition', fee_category: 'tuition', installment: 'Term 1', current_due_amount: '2500.00'
+  }], buildRestatementSyntheticPlacementPurposeMap([{ ...archiveRow, reversed_event_id: null }]));
+  assert.match(active.original_purpose_label, /Term 1 · Tuition · Prelim/);
+  assert.equal(active.current_due_amount, '2500.00', 'an active placement keeps its own current balance');
+  const [incomplete] = annotateRestatementSyntheticPlacementAllocations([{
+    allocation_id: 705, synthetic_restatement_operation_id: 'op-7', synthetic_restatement_kind: 'placement',
+    line_name: 'Tuition', fee_category: 'tuition', installment: 'Term 1', current_due_amount: '2500.00'
+  }], buildRestatementSyntheticPlacementPurposeMap([{ ...archiveRow, applied_event_id: null, reversed_event_id: null }]));
+  assert.match(incomplete.restatement_history_label, /no applied restatement event/);
+  assert.equal(incomplete.current_due_amount, null, 'without active evidence a generated placement has no current balance');
+  assert.throws(() => buildRestatementSyntheticPlacementPurposeMap([{
+    ...archiveRow, applied_image_sha256: '0'.repeat(64)
+  }]), /applied-image digest is invalid/);
+});
+
 test('student payment-purpose projection allowlists only safe, current payment details', () => {
   const projected = safeStudentPaymentPurposeHistory({
     payments: [{ payment_id: 4, payment_date: '2026-10-01', amount: '50.00', reference_no: 'REF-4', receipt_issued: true,
@@ -100,7 +207,7 @@ test('printable payment confirmation renders allocation purpose and current bala
   assert.match(html, /data-label="Originally applied">₱4,000\.00/);
   assert.match(html, /data-label="Currently applied">₱3,500\.00/);
   assert.match(html, /data-label="Current fee balance">₱1,250\.00/);
-  assert.match(html, /₱500\.00 has since been removed from this application/);
+  assert.match(html, /₱500\.00 was released from this application and is excluded from its current applied amount/);
   assert.doesNotMatch(html, /SECRET-TRANS|SECRET-NOTE|SECRET-CORRECTION/);
 
   const unavailableCreditHtml = await ejs.renderFile(template, {
@@ -109,6 +216,18 @@ test('printable payment confirmation renders allocation purpose and current bala
     confirmation: { payment: { amount: '50.00', current_available_credit: null, is_reversed: false, receipt_issued: false }, allocations: [] }
   });
   assert.match(unavailableCreditHtml, /Unused credit currently available<\/dt><dd>Unavailable/);
+
+  const reversedRestatementHtml = await ejs.renderFile(template, {
+    title: 'Payment confirmation', currentUser: { role: 'student' }, kind: 'annual', formatMoney,
+    formatFinanceDateTime: () => 'October 1, 2026',
+    confirmation: { payment: { amount: '950.00', current_available_credit: '0.00', is_reversed: false, receipt_issued: false },
+      allocations: [{ target_label: 'Original whole-term tuition · 2026-2027 · Grade 11 · Term 2 · Tuition',
+        original_amount: '950.00', current_net_amount: '950.00', released_amount: '0.00', recorded_released_amount: '950.00',
+        restatement_history_label: 'Original assessment allocation release remains in history; its value was restored as a separate current application.' }] }
+  });
+  assert.match(reversedRestatementHtml, /Original whole-term tuition/);
+  assert.match(reversedRestatementHtml, /historical restatement recorded a ₱950\.00 release; that release is inactive after reversal/);
+  assert.doesNotMatch(reversedRestatementHtml, /has since been removed/);
 });
 
 test('Finance review renders a split payment with distinct saved school-year and term purposes', async () => {

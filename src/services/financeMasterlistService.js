@@ -2,6 +2,10 @@
 
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 const { moneyCents, moneyText } = require('../utils/financeStatementProjection');
+const {
+  annotateRestatementSourceAllocations, buildRestatementSourceAllocationPurposeMap,
+  annotateRestatementSyntheticPlacementAllocations, buildRestatementSyntheticPlacementPurposeMap
+} = require('../utils/paymentPurpose');
 const { FINANCE_STATUS, FINANCE_TERM_CLASSIFICATION_CTES, TRACKING_MODES } = require('./financeTermClassification');
 
 const PAGE_SIZE = 20;
@@ -10,6 +14,21 @@ const TUITION_INSTALLMENTS = ['dp', 'prelim', 'midterm', 'finals'];
 const TUITION_INSTALLMENT_LABELS = { dp: 'DP', prelim: 'Prelim', midterm: 'Midterm', finals: 'Finals' };
 const PAYMENT_STATUSES = Object.freeze({ FULL: 'Fully paid', PARTIAL: 'Partially paid', UNPAID: 'Unpaid', NONE: 'No payment required', UNAVAILABLE: 'Unavailable' });
 const FINANCE_STATUS_COLUMNS = Object.freeze({ whole: 'whole_status', dp: 'dp_status', prelim: 'prelim_status', midterm: 'midterm_status', finals: 'finals_status' });
+
+function restatementSourceApplicationType(sourcePurpose) {
+  const wholeTerm = sourcePurpose.label.startsWith('Original whole-term tuition');
+  if (sourcePurpose.status === 'active') {
+    return wholeTerm ? 'Original whole-term tuition release' : 'Original tuition allocation release';
+  }
+  if (sourcePurpose.status === 'reversed') {
+    return wholeTerm
+      ? 'Original whole-term tuition source allocation; value restored separately'
+      : 'Original tuition source allocation; value restored separately';
+  }
+  return wholeTerm
+    ? 'Original whole-term tuition source allocation; restatement apply evidence is incomplete'
+    : 'Original tuition source allocation; restatement apply evidence is incomplete';
+}
 
 class FinanceMasterlistError extends Error {
   constructor(message, status = 400, { cause, queryPhase } = {}) {
@@ -209,6 +228,14 @@ function buildMasterlistProjection({ annualRows = [], chargeRows = [], configure
         voucherCode: source.voucher_code || '', intakeStatus: source.intake_status || 'unknown',
         assessmentId: source.assessment_id == null ? null : Number(source.assessment_id),
         assessmentVersion: source.schedule_version == null ? null : Number(source.schedule_version),
+        restatement: source.restatement_status ? {
+          status: String(source.restatement_status),
+          sourceScheduleVersion: Number(source.restatement_source_schedule_version),
+          targetTuitionScheduleVersion: Number(source.restatement_target_schedule_version),
+          label: source.restatement_status === 'active'
+            ? `Current composition: synthetic tuition installments from schedule v${Number(source.restatement_target_schedule_version)}; non-tuition fees from original schedule v${Number(source.restatement_source_schedule_version)}. Original Registrar confirmation is unchanged.`
+            : 'Original fee composition restored after a logical Finance restatement reversal.'
+        } : null,
         assessedVoucherCode: source.assessed_voucher_code || null,
         confirmationId: source.confirmation_id == null ? null : Number(source.confirmation_id),
         anyConfirmationId: source.any_confirmation_id == null ? null : Number(source.any_confirmation_id),
@@ -704,7 +731,11 @@ function createFinanceMasterlistService({ getPool = defaultGetPool, sql = defaul
         section.cluster AS section_cluster, section.strand AS section_strand, section.adviser AS section_adviser,
         section.modality, section.modular_subtype,
         enrollment.enrollment_status, enrollment.term_scope_status,
-          clearance.event_type AS finance_clearance,
+        clearance.event_type AS finance_clearance,
+        CASE WHEN applied.id IS NOT NULL AND reversed.id IS NULL THEN 'active'
+          WHEN applied.id IS NOT NULL AND reversed.id IS NOT NULL THEN 'reversed' ELSE NULL END AS restatement_status,
+        restatement.source_schedule_version AS restatement_source_schedule_version,
+        restatement.target_tuition_schedule_version AS restatement_target_schedule_version,
           DATE_FORMAT(CONVERT_TZ(clearance.created_at, '+00:00', '+08:00'), '%Y-%m-%d') AS finance_clearance_date
       FROM MatchingAnnual AS annual
       LEFT JOIN annual_assessments AS annual_assessment ON annual_assessment.annual_enrollment_id = annual.annual_enrollment_id
@@ -714,6 +745,10 @@ function createFinanceMasterlistService({ getPool = defaultGetPool, sql = defaul
         AND any_confirmation.confirmation_rank = 1
       LEFT JOIN LatestVoucherReviewEvent AS voucher_event ON voucher_event.annual_enrollment_id = annual.annual_enrollment_id
         AND voucher_event.event_rank = 1
+      LEFT JOIN finance_assessment_restatement_annuals AS restatement ON restatement.annual_enrollment_id = annual.annual_enrollment_id
+        AND restatement.assessment_id = annual_assessment.id
+      LEFT JOIN finance_assessment_restatement_events AS applied ON applied.operation_id = restatement.operation_id AND applied.event_type = 'applied'
+      LEFT JOIN finance_assessment_restatement_events AS reversed ON reversed.operation_id = restatement.operation_id AND reversed.event_type = 'reversed'
       LEFT JOIN enrollments AS enrollment ON enrollment.annual_enrollment_id = annual.annual_enrollment_id
       LEFT JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
       LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
@@ -729,7 +764,7 @@ function createFinanceMasterlistService({ getPool = defaultGetPool, sql = defaul
         CAST(COALESCE(due.annual_allocated + due.legacy_allocated, 0) AS CHAR(40)) AS applied_amount,
         CAST(COALESCE(due.amount_due, charge.amount + COALESCE(adjustment.total, 0)) AS CHAR(40)) AS balance_amount
       FROM MatchingAnnual AS annual
-      INNER JOIN assessed_charges AS charge ON charge.annual_enrollment_id = annual.annual_enrollment_id
+      INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.annual_enrollment_id = annual.annual_enrollment_id
       INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
       LEFT JOIN finance_schedule_lines AS schedule_line ON schedule_line.id = charge.schedule_line_id
       LEFT JOIN (SELECT charge_id, SUM(amount) AS total FROM finance_charge_adjustments GROUP BY charge_id) AS adjustment
@@ -737,15 +772,49 @@ function createFinanceMasterlistService({ getPool = defaultGetPool, sql = defaul
       LEFT JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
       ORDER BY annual.annual_enrollment_id, enrollment.annual_term_number, charge.id`, 'charge_rows');
     const configuredLinesResult = await query(transaction, bind(transaction.request()), `${cte}
-      SELECT annual.annual_enrollment_id, line.id AS schedule_line_id, line.term_number, line.fee_category,
-        line.line_name, line.installment, line.is_optional, CAST(line.amount AS CHAR(40)) AS amount
-      FROM MatchingAnnual AS annual
-      LEFT JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.annual_enrollment_id
-      INNER JOIN finance_schedules AS schedule ON schedule.id = assessment.schedule_id
-        OR (assessment.id IS NULL AND schedule.status = 'active' AND schedule.school_year = annual.school_year
-          AND schedule.grade_level = annual.grade_level AND schedule.voucher_code = annual.voucher_code)
-      INNER JOIN finance_schedule_lines AS line ON line.schedule_id = schedule.id
-      ORDER BY annual.annual_enrollment_id, line.term_number, line.fee_category, line.line_name, line.installment, line.id`, 'configured_fee_rows');
+      , ConfiguredFeeRows AS (
+        SELECT annual.annual_enrollment_id, line.id AS schedule_line_id, line.term_number, line.fee_category,
+          line.line_name, line.installment, line.is_optional, line.amount
+        FROM MatchingAnnual AS annual
+        LEFT JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.annual_enrollment_id
+        LEFT JOIN finance_assessment_restatement_annuals AS restatement ON restatement.annual_enrollment_id = annual.annual_enrollment_id
+          AND restatement.assessment_id = assessment.id
+        LEFT JOIN finance_assessment_restatement_events AS applied ON applied.operation_id = restatement.operation_id AND applied.event_type = 'applied'
+        LEFT JOIN finance_assessment_restatement_events AS reversed ON reversed.operation_id = restatement.operation_id AND reversed.event_type = 'reversed'
+        INNER JOIN finance_schedules AS schedule ON schedule.id = assessment.schedule_id
+          OR (assessment.id IS NULL AND schedule.status = 'active' AND schedule.school_year = annual.school_year
+            AND schedule.grade_level = annual.grade_level AND schedule.voucher_code = annual.voucher_code)
+        INNER JOIN finance_schedule_lines AS line ON line.schedule_id = schedule.id
+        WHERE applied.id IS NULL OR reversed.id IS NOT NULL
+        UNION ALL
+        SELECT annual.annual_enrollment_id, line.id AS schedule_line_id, line.term_number, line.fee_category,
+          line.line_name, line.installment, line.is_optional, line.amount
+        FROM MatchingAnnual AS annual
+        INNER JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.annual_enrollment_id
+        INNER JOIN finance_assessment_restatement_annuals AS restatement ON restatement.annual_enrollment_id = annual.annual_enrollment_id
+          AND restatement.assessment_id = assessment.id
+        INNER JOIN finance_assessment_restatement_events AS applied ON applied.operation_id = restatement.operation_id AND applied.event_type = 'applied'
+        LEFT JOIN finance_assessment_restatement_events AS reversed ON reversed.operation_id = restatement.operation_id AND reversed.event_type = 'reversed'
+        INNER JOIN finance_schedule_lines AS line ON line.schedule_id = restatement.source_schedule_id
+          AND LOWER(TRIM(line.fee_category)) <> 'tuition'
+        WHERE reversed.id IS NULL
+        UNION ALL
+        SELECT annual.annual_enrollment_id, line.id AS schedule_line_id, line.term_number, line.fee_category,
+          line.line_name, line.installment, line.is_optional, line.amount
+        FROM MatchingAnnual AS annual
+        INNER JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.annual_enrollment_id
+        INNER JOIN finance_assessment_restatement_annuals AS restatement ON restatement.annual_enrollment_id = annual.annual_enrollment_id
+          AND restatement.assessment_id = assessment.id
+        INNER JOIN finance_assessment_restatement_events AS applied ON applied.operation_id = restatement.operation_id AND applied.event_type = 'applied'
+        LEFT JOIN finance_assessment_restatement_events AS reversed ON reversed.operation_id = restatement.operation_id AND reversed.event_type = 'reversed'
+        INNER JOIN finance_schedule_lines AS line ON line.schedule_id = restatement.target_tuition_schedule_id
+          AND LOWER(TRIM(line.fee_category)) = 'tuition'
+        WHERE reversed.id IS NULL
+      )
+      SELECT annual_enrollment_id, schedule_line_id, term_number, fee_category,
+        line_name, installment, is_optional, CAST(amount AS CHAR(40)) AS amount
+      FROM ConfiguredFeeRows
+      ORDER BY annual_enrollment_id, term_number, fee_category, line_name, installment, schedule_line_id`, 'configured_fee_rows');
     const historyRowsResult = await query(transaction, bind(transaction.request()), `${cte}
       , MatchingStudent AS (SELECT DISTINCT student_id FROM MatchingAnnual)
       SELECT annual.student_id, annual.school_year, assessment.id AS assessment_id, confirmation.id AS confirmation_id,
@@ -756,7 +825,7 @@ function createFinanceMasterlistService({ getPool = defaultGetPool, sql = defaul
       LEFT JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.id
       LEFT JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = annual.id
         AND confirmation.assessment_id = assessment.id
-      LEFT JOIN assessed_charges AS charge ON charge.annual_enrollment_id = annual.id
+      LEFT JOIN v_finance_effective_assessed_charges AS charge ON charge.annual_enrollment_id = annual.id
       LEFT JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
       GROUP BY annual.student_id, annual.school_year, assessment.id, confirmation.id
       ORDER BY annual.student_id, annual.school_year`, 'earlier_year_balances');
@@ -813,41 +882,108 @@ function createFinanceMasterlistService({ getPool = defaultGetPool, sql = defaul
         application.application_date, application.reference_no, application.receipt_issued,
         application.is_reversed, CAST(application.original_amount AS CHAR(40)) AS original_amount,
         CAST(application.current_amount AS CHAR(40)) AS current_amount,
-        CAST(application.released_amount AS CHAR(40)) AS released_amount
+        CAST(application.released_amount AS CHAR(40)) AS released_amount,
+        CAST(application.recorded_released_amount AS CHAR(40)) AS recorded_released_amount,
+        application.source_id AS allocation_id, application.source_restatement_operation_id,
+        application.synthetic_restatement_operation_id, application.synthetic_restatement_kind
       FROM (
-        SELECT allocation.charge_id, 'Payment' AS application_type,
+        SELECT allocation.charge_id,
+          CASE WHEN allocation.synthetic_restatement_kind = 'placement' AND net.is_effective = 0
+              THEN 'Historical synthetic tuition installment placement'
+            WHEN allocation.synthetic_restatement_kind = 'placement' THEN 'Synthetic tuition installment placement'
+            WHEN allocation.synthetic_restatement_kind = 'restoration' AND net.is_effective = 1
+              THEN 'Restored original tuition application'
+            WHEN allocation.synthetic_restatement_kind = 'restoration'
+              THEN 'Inactive original tuition application restoration'
+            WHEN release_history.source_restatement_operation_id IS NOT NULL THEN 'Original tuition release'
+            ELSE 'Payment' END AS application_type,
           DATE_FORMAT(payment.payment_date, '%Y-%m-%d') AS application_date, payment.reference_no,
           payment.receipt_issued, payment.is_reversed, allocation.amount AS original_amount,
           CASE WHEN payment.is_reversed = 1 THEN 0 ELSE net.net_amount END AS current_amount,
-          allocation.amount - net.net_amount AS released_amount, allocation.id AS source_id
+          allocation.amount - net.net_amount AS released_amount,
+          COALESCE(release_history.recorded_released_amount, 0) AS recorded_released_amount,
+          allocation.id AS source_id, release_history.source_restatement_operation_id,
+          allocation.synthetic_restatement_operation_id, allocation.synthetic_restatement_kind
         FROM finance_payment_allocations AS allocation
         INNER JOIN v_finance_net_payment_allocations AS net ON net.allocation_id = allocation.id
         INNER JOIN finance_payments AS payment ON payment.id = allocation.payment_id
         INNER JOIN assessed_charges AS charge ON charge.id = allocation.charge_id
+        LEFT JOIN v_finance_effective_assessed_charges AS effective_charge ON effective_charge.id = charge.id
+        LEFT JOIN (
+          SELECT release_row.allocation_id,
+            SUM(release_row.amount) AS recorded_released_amount,
+            MAX(CASE WHEN release_row.synthetic_restatement_operation_id IS NOT NULL
+              THEN release_row.synthetic_restatement_operation_id END) AS source_restatement_operation_id
+          FROM finance_payment_allocation_releases AS release_row
+          GROUP BY release_row.allocation_id
+        ) AS release_history ON release_history.allocation_id = allocation.id
         WHERE charge.annual_enrollment_id IN (${ids})
+          AND (net.is_effective = 1 OR release_history.source_restatement_operation_id IS NOT NULL
+            OR allocation.synthetic_restatement_operation_id IS NOT NULL)
         UNION ALL
         SELECT reconciliation.charge_id, 'Earlier payment' AS application_type,
           DATE_FORMAT(CONVERT_TZ(transaction_record.created_at, '+00:00', '+08:00'), '%Y-%m-%d') AS application_date, transaction_record.reference_no,
           0 AS receipt_issued, 0 AS is_reversed, reconciliation.amount AS original_amount,
           net.net_amount AS current_amount, reconciliation.amount - net.net_amount AS released_amount,
-          reconciliation.id AS source_id
+          0 AS recorded_released_amount, reconciliation.id AS source_id, NULL AS source_restatement_operation_id,
+          NULL AS synthetic_restatement_operation_id, NULL AS synthetic_restatement_kind
         FROM finance_legacy_reconciliations AS reconciliation
         INNER JOIN v_finance_net_legacy_reconciliations AS net ON net.reconciliation_id = reconciliation.id
-        INNER JOIN assessed_charges AS charge ON charge.id = reconciliation.charge_id
+        INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.id = reconciliation.charge_id
         INNER JOIN financial_transactions AS transaction_record ON transaction_record.id = reconciliation.transaction_id
         WHERE charge.annual_enrollment_id IN (${ids})
       ) AS application
       ORDER BY application.charge_id, application.application_date, application.source_id`, 'application_details');
+    const rows = result.recordset || [];
+    const sourceOperationIds = [...new Set(rows
+      .flatMap((row) => [row.source_restatement_operation_id, row.synthetic_restatement_operation_id])
+      .map((operationId) => String(operationId || '').trim())
+      .filter(Boolean))];
+    let sourcePurposeByAllocationId = new Map();
+    let syntheticPlacementPurposeById = new Map();
+    if (sourceOperationIds.length) {
+      const archiveRequest = transaction.request();
+      const archiveAnnualIds = bindIds(archiveRequest, annualIds, 'archiveAnnualId', sql).join(', ');
+      const operationParams = sourceOperationIds.map((operationId, index) => {
+        const name = `sourceOperationId${index}`;
+        archiveRequest.input(name, sql.Char(36), operationId);
+        return `@${name}`;
+      }).join(', ');
+      const archiveResult = await query(transaction, archiveRequest, `SELECT archive.operation_id, archive.annual_enrollment_id,
+          annual.school_year, annual.grade_level,
+          archive.before_image_json, archive.before_image_sha256,
+          archive.applied_image_json, archive.applied_image_sha256,
+          applied.id AS applied_event_id,
+          reversed.id AS reversed_event_id
+        FROM finance_assessment_restatement_annuals AS archive
+        INNER JOIN annual_enrollments AS annual ON annual.id = archive.annual_enrollment_id
+        LEFT JOIN finance_assessment_restatement_events AS applied
+          ON applied.operation_id = archive.operation_id AND applied.event_type = 'applied'
+        LEFT JOIN finance_assessment_restatement_events AS reversed
+          ON reversed.operation_id = archive.operation_id AND reversed.event_type = 'reversed'
+        WHERE archive.operation_id IN (${operationParams}) AND archive.annual_enrollment_id IN (${archiveAnnualIds})`, 'application_restatement_sources');
+      sourcePurposeByAllocationId = buildRestatementSourceAllocationPurposeMap(archiveResult.recordset || []);
+      syntheticPlacementPurposeById = buildRestatementSyntheticPlacementPurposeMap(archiveResult.recordset || []);
+    }
+    const annotatedRows = annotateRestatementSyntheticPlacementAllocations(
+      annotateRestatementSourceAllocations(rows, sourcePurposeByAllocationId),
+      syntheticPlacementPurposeById
+    );
     const grouped = new Map();
-    for (const row of result.recordset || []) {
+    for (const row of annotatedRows) {
       const key = Number(row.charge_id);
       if (!grouped.has(key)) grouped.set(key, []);
       const reversed = truthyDb(row.is_reversed);
+      const sourcePurpose = sourcePurposeByAllocationId.get(Number(row.allocation_id));
+      const type = sourcePurpose ? restatementSourceApplicationType(sourcePurpose) : row.application_type;
       grouped.get(key).push({
-        type: row.application_type, date: row.application_date || 'Date unavailable', reference: row.reference_no || 'No receipt/reference recorded',
+        type, date: row.application_date || 'Date unavailable', reference: row.reference_no || 'No receipt/reference recorded',
         receiptIssued: truthyDb(row.receipt_issued), reversed,
         original: String(row.original_amount || '0.00'), current: String(reversed ? '0.00' : row.current_amount || '0.00'),
-        released: String(row.released_amount || '0.00')
+        released: String(row.released_amount || '0.00'),
+        recordedReleased: String(row.recorded_released_amount || '0.00'),
+        originalPurpose: row.original_purpose_label || null,
+        restatementHistory: row.restatement_history_label || null
       });
     }
     return grouped;

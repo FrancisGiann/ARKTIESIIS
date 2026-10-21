@@ -370,7 +370,7 @@ test('annual roster preserves signed legacy credit and sums opening liabilities 
               amount_due: '0.00', whole_tracking_available: 0
             }] };
           }
-          if (statement.includes('FROM assessed_charges AS charge')) return { recordset: [] };
+          if (statement.includes('FROM v_finance_effective_assessed_charges AS charge')) return { recordset: [] };
           if (statement.includes('FROM v_finance_legacy_account_balance')) {
             return { recordset: [{ student_id: 77, remaining_legacy_balance: '-25.50' }] };
           }
@@ -453,7 +453,7 @@ test('finance annual roster separates page data, classification, and balances in
             ] };
           }
           if (statement.includes('voucher_review_required') && statement.includes('FROM annual_enrollments AS annual')) return { recordset: annualRows };
-          if (statement.includes('FROM assessed_charges AS charge')) {
+          if (statement.includes('FROM v_finance_effective_assessed_charges AS charge')) {
             return { recordset: [
               { annual_enrollment_id: 10, enrollment_id: 81, amount_due: '2500.01' },
               { annual_enrollment_id: 10, enrollment_id: 82, amount_due: '1250.00' },
@@ -497,11 +497,12 @@ test('finance annual roster separates page data, classification, and balances in
   const countQuery = observed.find(({ statement }) => statement.includes('COUNT(DISTINCT annual.id) AS total_records'));
   const pageIdsQuery = observed.find(({ statement }) => statement.includes('SELECT DISTINCT annual.id AS annual_enrollment_id'));
   const classificationQuery = observed.find(({ statement }) => statement.includes('classification.annual_enrollment_id IN'));
-  const balanceQuery = observed.find(({ statement }) => statement.includes('FROM assessed_charges AS charge'));
+  const balanceQuery = observed.find(({ statement }) => statement.includes('FROM v_finance_effective_assessed_charges AS charge'));
   assert.ok(countQuery, 'the default roster count query is preserved');
   assert.ok(pageIdsQuery, 'default pages select annual IDs before loading detail rows');
   assert.ok(classificationQuery, 'finance classification is hydrated separately');
   assert.ok(balanceQuery, 'assessed-charge due is hydrated separately');
+  assert.match(balanceQuery.statement, /INNER JOIN v_finance_assessed_charge_due AS due ON due\.charge_id = charge\.id/);
   assert.doesNotMatch(countQuery.statement, /FinanceChargeTotals|FinanceTermClassification/);
   assert.match(pageIdsQuery.statement, /LIMIT @pageSize OFFSET @offset/);
   assert.match(pageIdsQuery.statement, /ORDER BY annual\.school_year DESC, student\.last_name, student\.first_name, annual\.id/);
@@ -527,7 +528,7 @@ test('finance annual roster separates page data, classification, and balances in
   assert.equal(filteredResult.rows[0].opening_liability_due, '0.00');
   const filteredCount = observed.find(({ statement }) => statement.includes('SELECT COUNT(*) AS total_records'));
   const filteredPage = observed.find(({ statement }) => statement.includes('SELECT classification.annual_enrollment_id, classification.school_year'));
-  const filteredBalance = observed.filter(({ statement }) => statement.includes('FROM assessed_charges AS charge')).at(-1);
+  const filteredBalance = observed.filter(({ statement }) => statement.includes('FROM v_finance_effective_assessed_charges AS charge')).at(-1);
   assert.equal(filteredCount.values.financeStatus, 'needs_review');
   assert.equal(filteredCount.values.termId, 1);
   assert.equal(filteredPage.values.financeStatus, 'needs_review');

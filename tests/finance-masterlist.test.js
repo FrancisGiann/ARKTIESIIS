@@ -6,6 +6,7 @@ const ejs = require('ejs');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const crypto = require('node:crypto');
 const {
   FinanceMasterlistError, parseMasterlistFilters, buildMasterlistProjection, createFinanceMasterlistService
 } = require('../src/services/financeMasterlistService');
@@ -220,7 +221,8 @@ test('rendered Student accounts page exposes compact installment cells and targe
   const row = result.rows[0];
   row.terms[1].fees[JSON.stringify(['tuition', 'tuition', 'dp'])].applications.push({
     type: 'Payment', date: '2026-08-12', reference: 'RCPT-54321', original: '20.00',
-    current: '15.00', released: '5.00', receiptIssued: true, reversed: false
+    current: '15.00', released: '5.00', recordedReleased: '8.00', originalPurpose: 'Original whole-term tuition · 2026-2027 · Term 1 · Tuition',
+    restatementHistory: 'Original assessment allocation release remains in history.', receiptIssued: true, reversed: false
   });
   const masterlist = {
     ...result,
@@ -245,7 +247,9 @@ test('rendered Student accounts page exposes compact installment cells and targe
   assert.match(html, /<th scope="col">DP<\/th><th scope="col">Prelim<\/th><th scope="col">Midterm<\/th><th scope="col">Finals<\/th>/);
   assert.match(html, /href="\/finance\/students\/1\/annual\?backSchoolYear=2026-2027&amp;backPlacementTerm=1/);
   assert.match(html, /RCPT-54321/);
-  assert.match(html, /Original ₱20\.00 · Applied ₱15\.00 · Released ₱5\.00/);
+  assert.match(html, /Original ₱20\.00 · Applied ₱15\.00 · Current release ₱5\.00/);
+  assert.match(html, /Original whole-term tuition · 2026-2027 · Term 1 · Tuition/);
+  assert.match(html, /Recorded release ₱8\.00 \(historical\)/);
   assert.match(html, /aria-controls="finance-account-details-1-dp"/);
   assert.match(html, /id="finance-account-details-1-dp"[^>]*data-finance-account-panel="dp" hidden/);
   assert.match(html, /id="finance-account-details-1-account"[^>]*data-finance-account-panel="account" hidden/);
@@ -259,6 +263,8 @@ test('rendered Student accounts page exposes compact installment cells and targe
     'an ordinary active assessed row does not show a redundant review action');
   assert.match(csv, /Reference: RCPT-54321/);
   assert.match(csv, /Original 20\.00; Applied 15\.00; Released 5\.00/);
+  assert.match(csv, /Original purpose: Original whole-term tuition/);
+  assert.match(csv, /Recorded release 8\.00 \(historical\)/);
   assert.match(csv, /"School year"/);
   assert.doesNotMatch(html, /Test decision|Registrar confirmation is missing/);
 
@@ -442,6 +448,85 @@ test('service rechecks Finance roles, binds filter text, supports an empty confi
   assert.doesNotMatch(matching.statement, /' OR 1=1/);
   assert.ok(db.calls.every(({ statement }) => /^\s*(?:WITH\b|SELECT\b)/i.test(statement)), 'all SQL statements are read-only projections');
   assert.equal(db.transaction.committed, true);
+});
+
+test('masterlist keeps incomplete restatement source allocations distinct from reversed history', async () => {
+  const operationId = '96c41280-66f5-4e26-a2bb-27ed65ea8321';
+  const beforeImage = {
+    annual: { id: 1, school_year: '2026-2027', grade_level: 'Grade 10' },
+    enrollments: [{ id: 11, annual_term_number: 1 }],
+    charges: [{ id: 81, enrollment_id: 11, fee_category: 'tuition', line_name: 'Tuition', installment: 'Whole term' }],
+    allocations: [{ id: 91, charge_id: 81, payment_id: 101, amount: '50.00' }]
+  };
+  const beforeImageJson = JSON.stringify(beforeImage);
+  const appliedImageJson = JSON.stringify({ placementAllocations: [] });
+  const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
+  const annual = annualRow(1);
+  const assessedCharge = charge(81, 1, {
+    line_name: 'Tuition', installment: 'Whole term', gross_amount: '100.00', waived_amount: '0.00',
+    required_amount: '100.00', applied_amount: '50.00', balance_amount: '50.00'
+  });
+  const transaction = {
+    active: false,
+    async begin(level) { this.active = true; this.level = level; },
+    async commit() { this.active = false; this.committed = true; },
+    async rollback() { this.active = false; this.rolledBack = true; },
+    request() {
+      const params = {};
+      return {
+        input(name, _type, value) { params[name] = value; return this; },
+        async query(statement) {
+          if (statement.includes('FROM users WHERE id = @actorId')) return { recordset: [{ id: 7 }] };
+          if (statement.includes('WHERE term.is_current = 1')) return { recordset: [{ school_year: '2026-2027', term_number: 1 }] };
+          if (statement.includes('SELECT DISTINCT school_year')) return { recordset: [{ school_year: '2026-2027' }] };
+          if (statement.includes('SELECT DISTINCT grade_level')) return { recordset: [{ grade_level: 'Grade 10' }] };
+          if (statement.includes('SELECT DISTINCT section.id AS section_id')) return { recordset: [] };
+          if (statement.includes('LatestFinanceClearance AS')) return { recordset: [annual] };
+          if (statement.includes('SELECT charge.id AS charge_id')) return { recordset: [assessedCharge] };
+          if (statement.includes('ConfiguredFeeRows AS')) return { recordset: [] };
+          if (statement.includes('COUNT(charge.id) AS assessed_charge_count')) return { recordset: [] };
+          if (statement.includes('v_finance_legacy_account_balance')) return { recordset: [] };
+          if (statement.includes('FROM finance_payment_allocations AS allocation')) {
+            return { recordset: [{
+              charge_id: 81, application_type: 'Original tuition release', application_date: '2026-08-01',
+              reference_no: 'PRIVATE-REFERENCE', receipt_issued: 0, is_reversed: 0,
+              original_amount: '50.00', current_amount: '50.00', released_amount: '0.00',
+              recorded_released_amount: '50.00', allocation_id: 91,
+              source_restatement_operation_id: operationId,
+              synthetic_restatement_operation_id: null, synthetic_restatement_kind: null
+            }] };
+          }
+          if (statement.includes('FROM finance_assessment_restatement_annuals AS archive')) {
+            return { recordset: [{
+              operation_id: operationId, annual_enrollment_id: 1, school_year: '2026-2027', grade_level: 'Grade 10',
+              before_image_json: beforeImageJson, before_image_sha256: sha256(beforeImageJson),
+              applied_image_json: appliedImageJson, applied_image_sha256: sha256(appliedImageJson),
+              applied_event_id: null, reversed_event_id: null
+            }] };
+          }
+          return { recordset: [] };
+        }
+      };
+    }
+  };
+  const sql = {
+    ISOLATION_LEVEL: { REPEATABLE_READ: 'REPEATABLE_READ' },
+    NVarChar: (length) => `NVarChar(${length})`, VarChar: (length) => `VarChar(${length})`,
+    Char: (length) => `Char(${length})`, TinyInt: 'TinyInt', Int: 'Int'
+  };
+  const service = createFinanceMasterlistService({
+    getPool: async () => ({}), sql, transactionFactory: () => transaction
+  });
+
+  const result = await service.list(7, { schoolYear: '2026-2027', placementTerm: '1' });
+  const tuition = result.rows[0].terms[1].fees[JSON.stringify(['tuition', 'tuition', 'whole term'])];
+  assert.equal(tuition.applications[0].type,
+    'Original whole-term tuition source allocation; restatement apply evidence is incomplete');
+  assert.match(tuition.applications[0].restatementHistory, /apply evidence is incomplete/);
+  assert.equal(tuition.applications[0].current, '50.00');
+  assert.equal(tuition.applications[0].released, '0.00');
+  assert.equal(tuition.applications[0].recordedReleased, '50.00', 'recorded release history remains distinct from effective net allocation');
+  assert.equal(transaction.committed, true);
 });
 
 test('unmapped or ambiguous current terms require explicit year and placement term without hiding explicit scopes', async () => {

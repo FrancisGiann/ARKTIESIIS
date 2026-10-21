@@ -218,7 +218,9 @@ function createAnnualFinanceCasesService({
         .query(`SELECT account.id FROM assessed_charges AS charge
           INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
           INNER JOIN financial_accounts AS account  ON account.student_id = annual.student_id
-          WHERE charge.id = @chargeId FOR UPDATE`);
+          WHERE charge.id = @chargeId
+            AND EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS effective WHERE effective.id = charge.id)
+          FOR UPDATE`);
       const accountId = accountResult.recordset?.[0]?.id;
       const reconciliations = await tx.request().input('chargeId', sql.BigInt, chargeId)
         .query(`SELECT reconciliation.reconciliation_id, reconciliation.transaction_id,
@@ -321,7 +323,9 @@ function createAnnualFinanceCasesService({
           CAST(charge.waived_amount AS CHAR(40)) AS waived_amount, enrollment.annual_term_number
         FROM assessed_charges AS charge
         INNER JOIN enrollments AS enrollment  ON enrollment.id = charge.enrollment_id
-        WHERE charge.id = @chargeId AND charge.annual_enrollment_id = @annualId FOR UPDATE`);
+        WHERE charge.id = @chargeId AND charge.annual_enrollment_id = @annualId
+          AND EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS effective WHERE effective.id = charge.id)
+        FOR UPDATE`);
     const charge = chargeResult.recordset?.[0];
     if (!charge) throw new FinanceCasesError('The charge does not belong to this annual enrollment.', 409);
     const rulesResult = await tx.request().input('annualId', sql.Int, annual.id).input('termNumber', sql.TinyInt, charge.annual_term_number)
@@ -393,7 +397,9 @@ function createAnnualFinanceCasesService({
       }
       const charges = await tx.request().input('annualId', sql.Int, annualEnrollmentId)
         .query(`SELECT charge.id AS charge_id FROM assessed_charges AS charge
-          WHERE charge.annual_enrollment_id = @annualId ORDER BY charge.enrollment_id, charge.id FOR UPDATE`);
+          WHERE charge.annual_enrollment_id = @annualId
+            AND EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS effective WHERE effective.id = charge.id)
+          ORDER BY charge.enrollment_id, charge.id FOR UPDATE`);
       for (const charge of charges.recordset || []) await applyApprovedExemptionsForCharge(tx, actor, annualEnrollmentId, charge.charge_id);
       await debtRevisions.recordIncreaseIfAny(tx, ownerStudentId, debtBefore);
       await writeAudit(tx, actor, 'exemption_approved', caseId, { annualEnrollmentId, schoolYear: annual.school_year, reason, ruleCount: rules.length });
@@ -567,7 +573,7 @@ function createAnnualFinanceCasesService({
             charge.fee_category, charge.line_name, charge.installment,
             CAST(charge.amount + COALESCE(adjustments.total, 0) AS CHAR(40)) AS payable_basis
           FROM finance_departure_case_terms AS terms
-          INNER JOIN assessed_charges AS charge ON charge.enrollment_id = terms.enrollment_id
+          INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.enrollment_id = terms.enrollment_id
           INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
           LEFT JOIN (SELECT charge_id, SUM(amount) AS total FROM finance_charge_adjustments GROUP BY charge_id) AS adjustments
             ON adjustments.charge_id = charge.id
@@ -680,7 +686,7 @@ function createAnnualFinanceCasesService({
         INNER JOIN enrollments AS enrollment ON enrollment.id = special.enrollment_id AND enrollment.annual_enrollment_id = special.annual_enrollment_id AND enrollment.student_id = special.student_id
         INNER JOIN student_subjects AS assignment ON assignment.id = special.student_subject_id AND assignment.enrollment_id = special.enrollment_id
         INNER JOIN subjects AS subject ON subject.id = assignment.subject_id
-        LEFT JOIN assessed_charges AS charge ON charge.special_subject_id = special.id
+        LEFT JOIN v_finance_effective_assessed_charges AS charge ON charge.special_subject_id = special.id
         LEFT JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
         WHERE special.student_id = @studentId ORDER BY annual.school_year DESC, enrollment.annual_term_number, subject.subject_name`),
       pool.request().input('studentId', sql.Int, studentId).query(`SELECT exemption.id AS exemption_case_id, annual.id AS annual_enrollment_id,
@@ -706,7 +712,7 @@ function createAnnualFinanceCasesService({
         LEFT JOIN finance_departure_cutoff_reviews AS cutoff ON cutoff.departure_case_id = departure.id
         INNER JOIN finance_departure_case_terms AS terms ON terms.departure_case_id = departure.id
         INNER JOIN enrollments AS enrollment ON enrollment.id = terms.enrollment_id
-        LEFT JOIN assessed_charges AS charge ON charge.enrollment_id = enrollment.id
+        LEFT JOIN v_finance_effective_assessed_charges AS charge ON charge.enrollment_id = enrollment.id
         LEFT JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
         WHERE annual.student_id = @studentId ORDER BY annual.school_year DESC, departure.id, enrollment.annual_term_number`)
     ]);
@@ -749,7 +755,7 @@ function createAnnualFinanceCasesService({
       INNER JOIN finance_departure_case_terms AS terms ON terms.departure_case_id = departure.id
       INNER JOIN enrollments AS enrollment ON enrollment.id = terms.enrollment_id
       INNER JOIN enrollments AS effective ON effective.id = departure.effective_enrollment_id
-      LEFT JOIN assessed_charges AS charge ON charge.enrollment_id = enrollment.id
+      LEFT JOIN v_finance_effective_assessed_charges AS charge ON charge.enrollment_id = enrollment.id
       LEFT JOIN v_finance_assessed_charge_due AS due ON due.charge_id = charge.id
       LEFT JOIN (SELECT charge_id, SUM(amount) AS total FROM finance_charge_adjustments GROUP BY charge_id) AS adjustments
         ON adjustments.charge_id = charge.id

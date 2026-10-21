@@ -64,6 +64,8 @@ body.finance-schedule-dialog-open { overflow: hidden; }
 .finance-allocation-credit-option legend { padding: 0 0.25rem; font-size: 0.86rem; font-weight: 700; }
 .finance-allocation-credit-option p { margin: 0; color: var(--muted); font-size: 0.8rem; }
 .finance-allocation-final-actions { justify-content: space-between; padding-top: 0.75rem; border-top: 1px solid var(--line); }
+.finance-restatement-notice { display: grid; gap: 0.15rem; padding: 0.45rem 0.6rem; margin: 0.4rem 0; color: var(--ink-soft); background: #f7f8f8; border: 1px solid var(--line); border-left: 3px solid var(--accent); font-size: 0.78rem; }
+.finance-restatement-notice strong { color: var(--ink); }
 
 @media (max-width: 760px) {
   .finance-schedule-heading { align-items: stretch; flex-direction: column; }
@@ -105,6 +107,7 @@ body.finance-schedule-dialog-open { overflow: hidden; }
   .annual-confirmation-document .admin-section__heading h2 { margin-bottom: 0.1rem; font-size: 9pt; }
   .annual-confirmation-document .admin-section__heading p,
   .annual-confirmation-document .confirmation-section > p { margin: 0.08rem 0; font-size: 7pt; }
+  .annual-confirmation-document .finance-restatement-notice { gap: 0.04rem; padding: 0.1rem 0.18rem; margin: 0.1rem 0; font-size: 6.8pt; break-inside: avoid; }
   .annual-confirmation-document .confirmation-identity-list { gap: 0.12rem 0.45rem; }
   .annual-confirmation-document .confirmation-identity-list dt { font-size: 6.5pt; }
   .annual-confirmation-document .confirmation-identity-list dd { margin-top: 0; font-size: 7.5pt; line-height: 1.15; }
