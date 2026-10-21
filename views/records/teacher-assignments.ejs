@@ -87,7 +87,7 @@
                 <td data-label="Workbook"><%= assignment.latest_submission_status ? assignment.latest_submission_status.replaceAll('_', ' ') : 'No submission' %></td>
                 <td data-label="Actions"><div class="teacher-assignment-actions">
                   <a class="button button--secondary" href="/registrar/schedules?termId=<%= assignment.academic_term_id %>&amp;sectionId=<%= assignment.section_id %>&amp;assignmentId=<%= assignment.id %>&amp;showCreate=1#schedule-create-title">Set class times</a>
-                  <form class="teacher-assignment-action" method="post" action="/registrar/records/teacher-assignments/<%= assignment.id %>/revoke"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="filterTermId" value="<%= selectedTermId || '' %>"><input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>"><button class="button button--danger" type="submit">Revoke</button></form>
+                  <form class="teacher-assignment-action" method="post" action="/registrar/records/teacher-assignments/<%= assignment.id %>/revoke" data-confirm data-confirm-title="Revoke teacher assignment" data-confirm-message="The teacher will no longer be assigned to this class. The assignment will remain in history." data-confirm-accept-label="Revoke assignment"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="filterTermId" value="<%= selectedTermId || '' %>"><input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>"><button class="button button--danger" type="submit">Revoke</button></form>
                 </div></td>
               </tr><% } %></tbody>
             </table></div>

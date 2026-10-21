@@ -151,7 +151,7 @@
                               </div>
                               <div class="schedule-form-actions"><button class="button button--secondary" type="button" data-check-schedule-conflicts>Check conflicts</button><button class="button button--secondary" type="submit">Save class time</button><a class="table-action" href="/registrar/schedules?termId=<%= academicTermId || '' %><% if (selectedSectionId) { %>&amp;sectionId=<%= selectedSectionId %><% } %><% if (selectedAssignmentId) { %>&amp;assignmentId=<%= selectedAssignmentId %><% } %>&amp;focusScheduleId=<%= schedule.id %>#schedule-<%= schedule.id %>">Cancel</a></div>
                             </form>
-                            <form method="post" action="/registrar/schedules/<%= schedule.id %>/delete" class="schedule-delete-form">
+                            <form method="post" action="/registrar/schedules/<%= schedule.id %>/delete" class="schedule-delete-form" data-confirm data-confirm-title="Remove class time" data-confirm-message="This class-time entry will be deleted from the schedule." data-confirm-accept-label="Remove class time">
                               <input type="hidden" name="_csrf" value="<%= csrfToken %>">
                               <input type="hidden" name="termId" value="<%= academicTermId || '' %>">
                               <input type="hidden" name="filterSectionId" value="<%= selectedSectionId || '' %>">

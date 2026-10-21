@@ -476,6 +476,7 @@ test('teacher assignment list keeps concise context and working status and revok
     assert.match(html, /pending review/);
     assert.match(html, /Active assignments/);
     assert.match(html, /action="\/registrar\/records\/teacher-assignments\/20\/revoke"/);
+    assert.match(html, /action="\/registrar\/records\/teacher-assignments\/20\/revoke" data-confirm data-confirm-title="Revoke teacher assignment" data-confirm-message="The teacher will no longer be assigned to this class\. The assignment will remain in history\." data-confirm-accept-label="Revoke assignment"/);
     assert.match(html, /<button class="button button--danger" type="submit">Revoke<\/button>/);
     assert.match(html, /name="termId"/);
     assert.match(html, /name="sectionId"/);

@@ -616,7 +616,7 @@ test('registrar weekly schedule renders ordered section and weekday groups with 
   assert.equal((html.match(/schedule-entry__status--revoked/g) || []).length, 1);
   assert.match(html, /<details class="schedule-edit"\s*>\s*<summary>Edit class time<\/summary>/);
   assert.match(html, /<form method="post" action="\/registrar\/schedules\/72" data-schedule-conflict-form/);
-  assert.match(html, /<form method="post" action="\/registrar\/schedules\/72\/delete" class="schedule-delete-form">/);
+  assert.match(html, /<form method="post" action="\/registrar\/schedules\/72\/delete" class="schedule-delete-form" data-confirm data-confirm-title="Remove class time" data-confirm-message="This class-time entry will be deleted from the schedule\." data-confirm-accept-label="Remove class time">/);
   assert.match(html, /name="_csrf" value="test-token"/);
   assert.match(html, /name="filterSectionId" value=""/);
   assert.match(html, /name="filterAssignmentId" value=""/);
