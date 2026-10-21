@@ -8,6 +8,7 @@
   <title><%= title %> | ARKTIESIIS</title>
   <% const stylesheetUrl = typeof assetVersion === 'undefined' ? '/css/app.css' : `/css/app.css?v=${assetVersion}`; %>
   <link rel="stylesheet" href="<%= stylesheetUrl %>">
+  <% if (typeof pageStylesheet === 'string' && /^\/css\/[a-z0-9-]+\.css$/.test(pageStylesheet)) { %><link rel="stylesheet" href="<%= typeof assetVersion === 'undefined' ? pageStylesheet : `${pageStylesheet}?v=${assetVersion}` %>"><% } %>
 </head>
 <body class="<%= typeof currentUser !== 'undefined' && currentUser && typeof navigationItems !== 'undefined' ? `workspace-body${currentUser.role === 'registrar' ? ' workspace-body--registrar' : ''}${navigationItems.some((item) => item.current && item.id?.startsWith('finance-')) ? ' workspace-body--finance' : ''}` : 'public-body' %>">
 <a class="skip-link" href="#main-content">Skip to main content</a>

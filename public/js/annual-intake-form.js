@@ -23,6 +23,17 @@
   const overrideInputFor = (termNumber) => document.getElementById(`annual-section-${termNumber}-override`);
   let activeStep = Math.max(1, Math.min(3, Number(form.dataset.activeStep || 1)));
 
+  const prefillPaperCounts = (checkbox) => {
+    if (form.dataset.paperPrefill !== '1') return;
+    const row = checkbox.closest('[data-requirement-applicability]');
+    if (!row || row.hidden) return;
+    row.querySelectorAll('[data-paper-count]').forEach((input) => {
+      if (input.dataset.paperCountTouched === 'true' || input.value.trim() !== '') return;
+      const configuredCount = input.dataset.defaultCount;
+      if (/^\d{1,2}$/.test(configuredCount || '')) input.value = configuredCount;
+    });
+  };
+
   const updateMode = () => {
     const isReturning = mode.value === 'returning';
     returning.hidden = !isReturning;
@@ -212,7 +223,14 @@
     }
     updateSections();
   }));
-  form.querySelectorAll('[data-paper-record]').forEach((checkbox) => checkbox.addEventListener('change', updatePaperRows));
+  form.querySelectorAll('[data-paper-record]').forEach((checkbox) => checkbox.addEventListener('change', () => {
+    if (checkbox.checked) prefillPaperCounts(checkbox);
+    updatePaperRows();
+  }));
+  form.querySelectorAll('[data-paper-count]').forEach((input) => {
+    input.addEventListener('input', () => { input.dataset.paperCountTouched = 'true'; });
+    input.addEventListener('change', () => { input.dataset.paperCountTouched = 'true'; });
+  });
   form.querySelectorAll('[data-paper-update-fields] select[name$="_status"]').forEach((select) => select.addEventListener('change', updatePaperRows));
   termSelects.forEach((select) => {
     if (select.value) select.dataset.explicit = 'true';

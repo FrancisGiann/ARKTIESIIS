@@ -1,6 +1,39 @@
 (() => {
   const form = document.querySelector('[data-finance-schedule-form]');
   if (!form) return;
+  const dialog = document.getElementById('schedule-editor-dialog');
+  const dialogParent = dialog?.closest('.finance-schedule-editor-fallback');
+  const dialogCancelButtons = [...(dialog?.querySelectorAll('[data-schedule-dialog-cancel]') || [])];
+  let dialogOpener = null;
+  if (dialog?.showModal) {
+    dialogParent?.classList.add('is-enhanced');
+    dialogCancelButtons.forEach((button) => {
+      button.removeAttribute('hidden');
+      button.addEventListener('click', () => dialog.close());
+    });
+    if (dialog.open) dialog.removeAttribute('open');
+    if (dialog.dataset.openOnLoad === '1') {
+      dialogOpener = document.querySelector('[data-open-schedule-dialog]');
+      dialog.showModal();
+      document.body.classList.add('finance-schedule-dialog-open');
+      dialog.querySelector('[data-schedule-dialog-error]')?.focus();
+    }
+    document.querySelectorAll('[data-open-schedule-dialog]').forEach((opener) => {
+      opener.addEventListener('click', (event) => {
+        event.preventDefault();
+        dialogOpener = opener;
+        if (!dialog.open) {
+          dialog.showModal();
+          document.body.classList.add('finance-schedule-dialog-open');
+        }
+      });
+    });
+    dialog.addEventListener('close', () => {
+      document.body.classList.remove('finance-schedule-dialog-open');
+      if (dialogOpener?.isConnected) dialogOpener.focus();
+      dialogOpener = null;
+    });
+  }
   const rows = form.querySelector('[data-finance-line-rows]');
   const template = form.querySelector('[data-finance-line-template]');
   const addButton = form.querySelector('[data-add-finance-line]');
@@ -34,6 +67,7 @@
   }
 
   form.addEventListener('submit', (event) => {
+    if (event.submitter?.formMethod === 'dialog') return;
     const invalidField = [...form.elements].find((field) => field.willValidate && !field.validity.valid);
     if (!invalidField) return;
     event.preventDefault();

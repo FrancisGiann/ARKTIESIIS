@@ -252,10 +252,49 @@ test('rendered Student accounts page exposes compact installment cells and targe
   const identityCell = html.match(/<td class="finance-accounts-student"[\s\S]*?<\/td>/)?.[0] || '';
   assert.doesNotMatch(identityCell, /LRN 000012345678/);
   assert.match(html, /<dt>LRN<\/dt><dd>000000000001<\/dd>/);
+  const activeAccountActions = identityCell.match(/<div class="finance-account-actions">([\s\S]*?)<\/div>/)?.[1] || '';
+  assert.match(activeAccountActions, /class="button button--primary" href="[^"]*view=payments#payment-record-title">Record payment<\/a>/,
+    'an assessed, payment-available row gets the primary payment action');
+  assert.doesNotMatch(activeAccountActions, /Review assessment/,
+    'an ordinary active assessed row does not show a redundant review action');
   assert.match(csv, /Reference: RCPT-54321/);
   assert.match(csv, /Original 20\.00; Applied 15\.00; Released 5\.00/);
   assert.match(csv, /"School year"/);
   assert.doesNotMatch(html, /Test decision|Registrar confirmation is missing/);
+
+  const unassessedProjection = projection([annualRow(3, {
+    assessment_id: null, confirmation_id: null, intake_status: 'pending'
+  })]);
+  const unassessedHtml = await ejs.renderFile(path.join(__dirname, '../views/finance/masterlist.ejs'), {
+    title: 'Student accounts', currentUser: { id: 7, role: 'finance' }, csrfToken: '',
+    navigationItems: [{ id: 'finance-roster', label: 'Student accounts', href: '/finance', current: true }],
+    navigationGroups: [], masterlist: {
+      ...unassessedProjection,
+      options: { schoolYears: ['2026-2027'], grades: ['Grade 10'], sections: [{ id: '11', label: 'Section A' }], placementTerms: [1, 2, 3] }
+    }
+  });
+  const unassessedRow = unassessedHtml.match(/<tr class="finance-accounts-row">[\s\S]*?<\/tr>/)?.[0] || '';
+  assert.match(unassessedRow, /class="button button--primary" href="\/finance\/students\/3\/annual\?backSchoolYear=2026-2027&amp;backPlacementTerm=1&amp;backPage=1&amp;view=charges#assessment-3">Review assessment<\/a>/);
+  assert.doesNotMatch(unassessedRow, /Record payment/);
+  assert.match(unassessedRow, /<span>Applied —<\/span><span>Balance —<\/span>/,
+    'a missing assessment displays unavailable amounts instead of zeros');
+  assert.match(unassessedRow, /class="finance-accounts-term-balance"[^>]*><strong>—<\/strong>/);
+
+  const pendingAssessmentProjection = projection([annualRow(4, {
+    intake_status: 'pending', confirmation_id: null
+  })], [charge(401, 4)]);
+  const pendingAssessmentHtml = await ejs.renderFile(path.join(__dirname, '../views/finance/masterlist.ejs'), {
+    title: 'Student accounts', currentUser: { id: 7, role: 'finance' }, csrfToken: '',
+    navigationItems: [{ id: 'finance-roster', label: 'Student accounts', href: '/finance', current: true }],
+    navigationGroups: [], masterlist: {
+      ...pendingAssessmentProjection,
+      options: { schoolYears: ['2026-2027'], grades: ['Grade 10'], sections: [{ id: '11', label: 'Section A' }], placementTerms: [1, 2, 3] }
+    }
+  });
+  const pendingAssessmentRow = pendingAssessmentHtml.match(/<tr class="finance-accounts-row">[\s\S]*?<\/tr>/)?.[0] || '';
+  assert.match(pendingAssessmentRow, /class="button button--primary" href="\/finance\/students\/4\/annual\?backSchoolYear=2026-2027&amp;backPlacementTerm=1&amp;backPage=1&amp;view=charges#assessment-review-4">Review assessment<\/a>/);
+  assert.match(pendingAssessmentRow, /class="button button--secondary" href="\/finance\/students\/4\/annual\?backSchoolYear=2026-2027&amp;backPlacementTerm=1&amp;backPage=1&amp;view=payments#payment-record-title">Record payment<\/a>/,
+    'pending entry-term DP remains reachable before Registrar confirmation, while assessment review stays primary');
 
   const mixedResult = projection([annualRow(2)], [
     charge(201, 2, { applied_amount: '10.00', balance_amount: '80.00' }),

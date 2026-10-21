@@ -23,7 +23,7 @@
     <li data-step-indicator="5" aria-label="Step 5 of 5: Review details"><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li>
   </ol>
   <form class="form-stack admin-form annual-intake-form" method="post" action="/registrar/intake"<% if (recovered) { %> data-unsaved-initially-dirty="true"<% } %>
-    data-intake-wizard data-profile-validation data-active-step="<%= activeStep || 1 %>" data-submitting-message="Saving the student and paper updates. Please wait.">
+    data-intake-wizard data-profile-validation data-paper-prefill="<%= recovered ? '0' : '1' %>" data-active-step="<%= activeStep || 1 %>" data-submitting-message="Saving the student and paper updates. Please wait.">
     <input type="hidden" name="_csrf" value="<%= csrfToken %>">
     <input type="hidden" name="idempotencyKey" value="<%= values.idempotencyKey || idempotencyKey %>">
     <% if (values.preEnrollmentId) { %><input type="hidden" name="preEnrollmentId" value="<%= values.preEnrollmentId %>"><input type="hidden" name="preEnrollmentVersion" value="<%= values.preEnrollmentVersion || '' %>"><% } %>
@@ -174,6 +174,7 @@
       <div class="intake-step__heading"><h2 id="intake-documents-heading">Paper document review</h2></div>
       <p>Select a paper only after staff has received and checked it. Checking the box records that item as verified today; leave it unchecked when it was not received and checked. Existing history stays unchanged unless you select a row. Missing papers do not block enrollment.</p>
       <p class="muted-copy">Place submitted papers together in a long brown envelope; the separate paper receipt note is informational and does not create a physical-checklist event. Enter only counts that apply to each paper, and leave counts blank if unknown. SF10 / Form 137 keeps its separate staff-only history. Do not upload scans here.</p>
+      <p class="muted-copy">With JavaScript on a new form, configured counts start in blank fields when you first check a paper. Without JavaScript, enter them manually. Correct any starting value to the quantity actually received; counts do not verify or complete the requirement by themselves.</p>
       <div class="paper-checklist-rows">
         <% for (const requirement of paperRequirements) { const code = requirement.requirement_code; const appliesByGrade = requirement.applicability === 'grade11' ? 'Applies to Grade 11 intake' : requirement.applicability === 'grade12' ? 'Applies to Grade 12 intake' : null; const manualApplicability = ['als', 'esc', 'optional'].includes(requirement.applicability); const hasCountTypes = Number(requirement.originals_required) > 0 || Number(requirement.copies_required) > 0 || Number(requirement.pieces_required) > 0; const formPrefix = `paper_${code}`; %>
           <article class="paper-checklist-row" data-requirement-applicability="<%= requirement.applicability %>">
@@ -186,9 +187,9 @@
                 <% } else { %><span class="paper-applicability"><%= appliesByGrade || 'Applies to all learners' %></span><% } %>
                 </div>
                 <div class="paper-counts">
-                  <% if (Number(requirement.originals_required) > 0) { %><label class="field"><span>Originals received</span><input type="number" min="0" max="20" name="<%= formPrefix %>_originals" value="<%= values[`${formPrefix}_originals`] || '' %>"></label><% } %>
-                  <% if (Number(requirement.copies_required) > 0) { %><label class="field"><span>Photocopies received</span><input type="number" min="0" max="50" name="<%= formPrefix %>_copies" value="<%= values[`${formPrefix}_copies`] || '' %>"></label><% } %>
-                  <% if (Number(requirement.pieces_required) > 0) { %><label class="field"><span>Pieces received</span><input type="number" min="0" max="50" name="<%= formPrefix %>_pieces" value="<%= values[`${formPrefix}_pieces`] || '' %>"></label><% } %>
+                  <% if (Number(requirement.originals_required) > 0) { %><label class="field"><span>Originals received</span><input type="number" min="0" max="20" name="<%= formPrefix %>_originals" data-paper-count data-default-count="<%= requirement.originals_required %>" value="<%= values[`${formPrefix}_originals`] ?? '' %>"></label><% } %>
+                  <% if (Number(requirement.copies_required) > 0) { %><label class="field"><span>Photocopies received</span><input type="number" min="0" max="50" name="<%= formPrefix %>_copies" data-paper-count data-default-count="<%= requirement.copies_required %>" value="<%= values[`${formPrefix}_copies`] ?? '' %>"></label><% } %>
+                  <% if (Number(requirement.pieces_required) > 0) { %><label class="field"><span>Pieces received</span><input type="number" min="0" max="50" name="<%= formPrefix %>_pieces" data-paper-count data-default-count="<%= requirement.pieces_required %>" value="<%= values[`${formPrefix}_pieces`] ?? '' %>"></label><% } %>
                 </div>
               </details><% } %>
               </div>

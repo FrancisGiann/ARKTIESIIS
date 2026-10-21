@@ -636,7 +636,8 @@ test('finance annual roster separates page data, classification, and balances in
   const accountHtml = await renderFinanceView('annual-student', accountLocals);
   assert.match(accountHtml, /aria-current="page">Overview<\/a>/);
   assert.match(accountHtml, /Student number: S-22 · LRN: 001234567890/);
-  assert.match(accountHtml, /href="\/finance\/students\/22\/annual\?view=payments&amp;backSchoolYear=2026-2027&amp;backTermId=1">Record a payment<\/a>/);
+  assert.match(accountHtml, /href="\/finance\/students\/22\/annual\?view=charges&amp;backSchoolYear=2026-2027&amp;backTermId=1#assessment-10">Review assessment<\/a>/,
+    'the account overview routes an unassessed pending intake to fee assessment first');
   assert.match(accountHtml, /class="button button--secondary finance-statement-action" href="\/finance\/students\/22\/statement">Statement of Account<\/a>/);
   const assessedAccountLocals = structuredClone(accountLocals);
   assessedAccountLocals.ledger.terms[0].assessment_id = 202;
@@ -689,6 +690,37 @@ test('finance annual roster separates page data, classification, and balances in
   assert.match(emptyAssessedAccountHtml, /Payment status · Entire term:<\/strong> Fees not recorded/);
   assert.match(emptyAssessedBreakdown, /No fee details are available for this account/);
   assert.doesNotMatch(emptyAssessedBreakdown, /No school-year fees have been assessed/);
+
+  const unassessedEmptyAccountLocals = structuredClone(accountLocals);
+  unassessedEmptyAccountLocals.ledger.terms[0].assessment_id = null;
+  unassessedEmptyAccountLocals.ledger.terms[0].paymentClassification.assessment_id = null;
+  unassessedEmptyAccountLocals.ledger.charges = [];
+  unassessedEmptyAccountLocals.chargeBreakdown = [];
+  unassessedEmptyAccountLocals.chargeGroups = [];
+  unassessedEmptyAccountLocals.feeBreakdownYears = [];
+  unassessedEmptyAccountLocals.annualFeeBalance = '0.00';
+  const unassessedEmptyAccountHtml = await renderFinanceView('annual-student', unassessedEmptyAccountLocals);
+  const unassessedEmptyBreakdown = unassessedEmptyAccountHtml.match(/<section class="finance-panel" aria-labelledby="charge-history-title" data-finance-view="overview charges">[\s\S]*?<\/section>/)?.[0] || '';
+  assert.match(unassessedEmptyAccountHtml, /No school-year fees have been assessed/);
+  assert.doesNotMatch(unassessedEmptyBreakdown, /No fee details are available for this account/);
+  assert.match(unassessedEmptyAccountHtml, /href="\/finance\/students\/22\/annual\?view=charges&amp;backSchoolYear=2026-2027&amp;backTermId=1#assessment-10">Review assessment<\/a>/,
+    'an unassessed selected year links to its assessment section instead of a payment screen');
+
+  const mixedYearAccountLocals = structuredClone(assessedAccountLocals);
+  const olderUnassessedTerm = structuredClone(mixedYearAccountLocals.ledger.terms[0]);
+  Object.assign(olderUnassessedTerm, {
+    annual_enrollment_id: 9, school_year: '2025-2026', grade_level: 'Grade 10', assessment_id: null,
+    voucher_review_required: false, term: 'Term 1', annual_term_number: 1,
+    paymentClassification: { ...olderUnassessedTerm.paymentClassification, assessment_id: null, finance_status: 'needs_review' }
+  });
+  mixedYearAccountLocals.ledger.terms.push(olderUnassessedTerm);
+  const currentYearHeaderHtml = await renderFinanceView('annual-student', mixedYearAccountLocals);
+  assert.match(currentYearHeaderHtml, /href="\/finance\/students\/22\/annual\?view=payments&amp;backSchoolYear=2026-2027&amp;backTermId=1">Record a payment<\/a>/,
+    'a missing assessment in an older year does not replace the action for the selected assessed year');
+  mixedYearAccountLocals.backHref = '/finance?schoolYear=2025-2026&termId=1';
+  const olderYearHeaderHtml = await renderFinanceView('annual-student', mixedYearAccountLocals);
+  assert.match(olderYearHeaderHtml, /href="\/finance\/students\/22\/annual\?view=charges&amp;backSchoolYear=2025-2026&amp;backTermId=1#assessment-9">Review assessment<\/a>/,
+    'changing the selected year changes the header action to that year’s unassessed annual record');
 
   const feeBreakdown = accountHtml.match(/<section class="finance-panel" aria-labelledby="charge-history-title" data-finance-view="overview charges">[\s\S]*?<\/section>/)?.[0] || '';
   assert.match(feeBreakdown, /Fee breakdown[\s\S]*?An approved waiver or exemption reduces the assessed fee[\s\S]*?Voucher rates are already reflected in the schedule and are not deducted again/);
@@ -890,6 +922,17 @@ test('finance annual roster separates page data, classification, and balances in
   assert.match(paymentDetails, /<details class="finance-payment-optional-details"\s*>[\s\S]*name="transmittalReference"[\s\S]*name="privateRemarks"/);
   assert.match(paymentDetails, /Optional transmittal reference and private note/);
   assert.match(paymentAllocations, /Suggest oldest balances/);
+  const allocationSuggestionPosition = paymentAllocations.indexOf('class="finance-allocation-suggestion"');
+  const allocationRowsPosition = paymentAllocations.indexOf('data-allocation-rows');
+  const allocationEditorActionsPosition = paymentAllocations.indexOf('finance-allocation-editor-actions');
+  const allocationCreditPosition = paymentAllocations.indexOf('finance-allocation-credit-option');
+  const allocationReviewPosition = paymentAllocations.indexOf('finance-allocation-final-actions');
+  assert.ok(allocationSuggestionPosition >= 0 && allocationSuggestionPosition < allocationRowsPosition,
+    'the existing suggestion control appears before the manual allocation rows');
+  assert.ok(allocationRowsPosition < allocationEditorActionsPosition && allocationEditorActionsPosition < allocationCreditPosition
+    && allocationCreditPosition < allocationReviewPosition,
+  'manual edits, the unused-credit alternative, and review controls remain visibly separate and ordered');
+  assert.match(paymentAllocations, /This fills the allocation rows below in the existing oldest-balance order and replaces their current values/);
   assert.match(paymentAllocations, /name="allocationMode" value="credit">Leave full amount as unused credit/);
   assert.match(paymentAllocations, /Any amount not assigned stays as unused payment credit for later use/);
   assert.match(paymentAllocations, /Amount for this fee or balance \(PHP\)/);
@@ -1027,12 +1070,13 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
       { id: 2, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC', version_no: 2, status: 'active', line_id: 2, term_number: 2, line_name: 'Current fee', installment: 'Prelim', fee_category: 'tuition', amount: '20.00' }
     ]
   });
-  assert.doesNotMatch(scheduleHtml, /<details class="finance-schedule-create" open/);
-  assert.match(scheduleHtml, /aria-current="page">ESC<span>2 version groups<\/span><\/a>/);
+  assert.match(scheduleHtml, /<dialog id="schedule-editor-dialog" class="finance-schedule-dialog" open/,
+    'without JavaScript, the schedule editor remains visible as an inline form');
+  assert.match(scheduleHtml, /aria-current="page">ESC<span>2 saved versions across all years and grades<\/span><\/a>/);
   assert.match(scheduleHtml, /Current approved amounts/);
   assert.match(scheduleHtml, /Active version 2/);
   assert.match(scheduleHtml, /Previous versions · 2026-2027 · Grade 11 · ESC/);
-  assert.match(scheduleHtml, /<summary[^>]*>Create or revise this schedule/);
+  assert.match(scheduleHtml, /<h2 id="schedule-create-title">Create or revise this schedule<\/h2>/);
   assert.match(scheduleHtml, /Fee lines for 2026-2027 Grade 11 ESC version 1/);
   assert.equal((scheduleHtml.match(/data-schedule-term="[123]"/g) || []).length, 3);
   assert.match(scheduleHtml, /data-schedule-term="1" open/);
@@ -1137,7 +1181,8 @@ test('schedule validation reopens the form with submitted fee lines and idempote
   assert.equal(response.statusCode, 400);
   assert.equal(response.view, 'finance/schedules');
   const html = await renderFinanceView('schedules', response.locals);
-  assert.match(html, /<details class="finance-schedule-create" open>/);
+  assert.match(html, /<dialog id="schedule-editor-dialog" class="finance-schedule-dialog" open/,
+    'validation errors keep the form visible and preserve submitted values without JavaScript');
   assert.match(html, /name="schoolYear"[^>]*value="2026-2027"/);
   assert.match(html, /name="idempotencyKey" value="41111111-1111-4111-8111-111111111111"/);
   assert.match(html, /value="Activity &lt;fees&gt;"/);

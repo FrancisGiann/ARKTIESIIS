@@ -45,7 +45,7 @@ function loadScheduleFormScript() {
   };
 
   vm.runInNewContext(formScript, {
-    document: { querySelector: () => form },
+    document: { querySelector: () => form, getElementById: () => null },
     HTMLElement: FakeHTMLElement
   });
 

@@ -1,4 +1,4 @@
-<%- include('../partials/head', { title }) %>
+<%- include('../partials/head', { title, pageStylesheet: '/css/finance-ui-followups.css' }) %>
 <%
   const parent = record?.parent || {};
   const studentName = [parent.first_name || enrollment.firstName, parent.middle_name || enrollment.middleName,
@@ -93,10 +93,10 @@
           <table class="admin-table fee-assessment-table confirmation-table">
             <thead><tr><th scope="col">Term</th><th scope="col">Fee</th><th scope="col">Schedule label</th><th scope="col">Amount</th><th scope="col">Approved coverage</th><th scope="col">Payable</th></tr></thead>
             <tbody>
-              <% if (preview.lines.length) { for (const line of preview.lines) { %>
-                <tr>
+              <% if (preview.lines.length) { let lastFeeTerm = null; for (const line of preview.lines) { const feeTermNumber = Number(line.termNumber); const startsFeeTerm = feeTermNumber !== lastFeeTerm; lastFeeTerm = feeTermNumber; const categoryLabel = String(line.category || '').replaceAll('_', ' '); const normalizedFeeName = String(line.lineName || '').trim().toLowerCase().replaceAll('_', ' ').replace(/\s+/g, ' '); %>
+                <tr<%= startsFeeTerm ? ' class="confirmation-fee-term-start"' : '' %>>
                   <td data-label="Term">Term <%= line.termNumber %></td>
-                  <td data-label="Fee"><%= line.lineName %><small><%= line.category.replaceAll('_', ' ') %><% if (line.isOptional) { %> · Optional<% } %></small></td>
+                  <td data-label="Fee"><%= line.lineName %><small><% if (categoryLabel.toLowerCase() !== normalizedFeeName) { %><%= categoryLabel %><% } %><% if (line.isOptional) { %><%= categoryLabel.toLowerCase() !== normalizedFeeName ? ' · ' : '' %>Optional<% } %></small></td>
                   <td data-label="Schedule label"><%= line.installment || '—' %></td>
                   <td data-label="Amount">₱<%= formatMoney(line.grossAmount) %></td>
                   <td data-label="Approved coverage"><%= line.waivedAmount === '0.00' ? '—' : `₱${formatMoney(line.waivedAmount)}` %></td>

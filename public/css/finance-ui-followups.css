@@ -1,0 +1,141 @@
+.finance-schedule-heading,
+.finance-schedule-active-version,
+.finance-schedule-dialog__header,
+.finance-schedule-dialog__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+}
+
+.finance-schedule-heading > div { min-width: 0; }
+.finance-schedule-active-version { margin: 0.65rem 0; }
+.finance-schedule-active-version > span { min-width: 0; }
+.finance-schedule-voucher-tabs a span { max-width: 16rem; }
+.finance-schedule-editor-fallback.is-enhanced { padding: 0; margin: 0; border: 0; background: transparent; box-shadow: none; }
+.finance-schedule-dialog[open]:not(:modal) {
+  position: static;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  padding: 1rem;
+  margin: 0;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+}
+.finance-schedule-dialog:modal {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  width: min(58rem, calc(100% - 2rem));
+  max-width: none;
+  max-height: min(92dvh, 58rem);
+  padding: clamp(1rem, 2.2vw, 1.5rem);
+  margin: 0;
+  overflow: auto;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  box-shadow: 0 1.5rem 4rem rgb(20 24 28 / 28%);
+  transform: translate(-50%, -50%);
+}
+.finance-schedule-dialog::backdrop { background: rgb(20 24 28 / 48%); }
+body.finance-schedule-dialog-open { overflow: hidden; }
+.finance-schedule-dialog__header { align-items: flex-start; padding-bottom: 0.8rem; margin-bottom: 0.8rem; border-bottom: 1px solid var(--line); }
+.finance-schedule-dialog__header h2 { margin: 0 0 0.25rem; font-size: 1.2rem; }
+.finance-schedule-dialog__header p { max-width: 68ch; margin: 0; color: var(--muted); font-size: 0.84rem; }
+.finance-schedule-dialog__actions { justify-content: flex-end; padding-top: 0.85rem; border-top: 1px solid var(--line); }
+.finance-schedule-create-body > p:first-child { padding: 0.6rem 0.75rem; background: #f7f8f8; border-left: 3px solid var(--accent); }
+
+.finance-account-actions { display: grid; justify-items: start; gap: 0.35rem; margin-top: 0.55rem; }
+.finance-account-actions .button { min-height: 2.35rem; padding: 0.4rem 0.65rem; font-size: 0.78rem; }
+.finance-account-actions .finance-accounts-expand { min-height: 2.35rem; }
+.finance-handoff-note { padding: 0.65rem 0.8rem; margin: 0 0 0.8rem; color: var(--ink-soft); background: #f7f8f8; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-control); }
+.finance-handoff-note p { margin: 0; font-size: 0.82rem; line-height: 1.45; }
+.finance-handoff-next { padding: 0.55rem 0.7rem; margin: 0.6rem 0; background: #f7f8f8; border-left: 3px solid var(--accent); }
+
+.finance-allocation-suggestion { display: flex; align-items: flex-start; gap: 0.5rem 0.8rem; flex-wrap: wrap; margin: 0 0 0.7rem; }
+.finance-allocation-suggestion .muted-copy { flex: 1 1 22rem; margin: 0.25rem 0 0; }
+.finance-allocation-editor-actions { margin-top: 0.6rem; }
+.finance-allocation-credit-option { display: grid; justify-items: start; gap: 0.35rem; padding: 0.7rem 0.8rem; margin: 0.85rem 0; background: #f7f8f8; border: 1px solid var(--line); border-radius: var(--radius-control); }
+.finance-allocation-credit-option legend { padding: 0 0.25rem; font-size: 0.86rem; font-weight: 700; }
+.finance-allocation-credit-option p { margin: 0; color: var(--muted); font-size: 0.8rem; }
+.finance-allocation-final-actions { justify-content: space-between; padding-top: 0.75rem; border-top: 1px solid var(--line); }
+
+@media (max-width: 760px) {
+  .finance-schedule-heading { align-items: stretch; flex-direction: column; }
+  .finance-schedule-heading > .button { width: 100%; }
+  .finance-schedule-active-version { align-items: stretch; flex-direction: column; }
+  .finance-schedule-active-version > .button { width: 100%; }
+  .finance-schedule-dialog:modal {
+    inset: 0;
+    width: 100%;
+    max-height: 100dvh;
+    min-height: 100dvh;
+    padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+    border: 0;
+    border-radius: 0;
+    transform: none;
+  }
+  .finance-schedule-dialog__actions { align-items: stretch; flex-direction: column-reverse; }
+  .finance-schedule-dialog__actions .button { width: 100%; }
+  .finance-account-actions { align-items: stretch; }
+  .finance-account-actions .button,
+  .finance-account-actions .finance-accounts-expand { width: 100%; justify-content: center; }
+  .finance-allocation-suggestion { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .finance-allocation-suggestion > .button,
+  .finance-allocation-editor-actions > .button,
+  .finance-allocation-credit-option > .button { width: 100%; justify-content: center; }
+  .finance-allocation-final-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
+}
+
+@page annual-confirmation-sheet { size: A4; margin: 9mm; }
+
+@media print {
+  .annual-confirmation-document .confirmation-document-header { gap: 0.55rem; padding: 0 0 0.35rem; margin-bottom: 0.4rem; }
+  .annual-confirmation-document .confirmation-document-header img { width: 0.42in; height: 0.42in; }
+  .annual-confirmation-document .confirmation-document-header p { font-size: 7.5pt; }
+  .annual-confirmation-document .confirmation-document-header__title h1 { font-size: 14pt; }
+  .annual-confirmation-document .confirmation-section { margin-bottom: 0.38rem; }
+  .annual-confirmation-document .admin-section { padding: 0.3rem 0; margin-bottom: 0.3rem; }
+  .annual-confirmation-document .admin-section__heading { margin-bottom: 0.2rem; }
+  .annual-confirmation-document .admin-section__heading h2 { margin-bottom: 0.1rem; font-size: 9pt; }
+  .annual-confirmation-document .admin-section__heading p,
+  .annual-confirmation-document .confirmation-section > p { margin: 0.08rem 0; font-size: 7pt; }
+  .annual-confirmation-document .confirmation-identity-list { gap: 0.12rem 0.45rem; }
+  .annual-confirmation-document .confirmation-identity-list dt { font-size: 6.5pt; }
+  .annual-confirmation-document .confirmation-identity-list dd { margin-top: 0; font-size: 7.5pt; line-height: 1.15; }
+  .annual-confirmation-document .fee-total-line { margin: 0; font-size: 7.5pt; }
+  .annual-confirmation-document .fee-approved-tuition { margin: 0.15rem 0 0.25rem; }
+  .annual-confirmation-document .fee-approved-tuition > div:first-child { display: none; }
+  .annual-confirmation-document .fee-approved-tuition .table-scroll { margin: 0; }
+  .annual-confirmation-document .fee-approved-tuition .admin-table { table-layout: fixed; font-size: 7.5pt; }
+  .annual-confirmation-document .fee-approved-tuition th,
+  .annual-confirmation-document .fee-approved-tuition td { padding: 0.07rem 0.12rem; line-height: 1.1; }
+  .annual-confirmation-document .fee-approved-tuition--installments .admin-table th:nth-child(2),
+  .annual-confirmation-document .fee-approved-tuition--installments .admin-table th:nth-child(3),
+  .annual-confirmation-document .fee-approved-tuition--installments .admin-table th:nth-child(4),
+  .annual-confirmation-document .fee-approved-tuition--installments .admin-table th:nth-child(5),
+  .annual-confirmation-document .fee-approved-tuition--installments .admin-table td:nth-child(2),
+  .annual-confirmation-document .fee-approved-tuition--installments .admin-table td:nth-child(3),
+  .annual-confirmation-document .fee-approved-tuition--installments .admin-table td:nth-child(4),
+  .annual-confirmation-document .fee-approved-tuition--installments .admin-table td:nth-child(5) { display: none !important; }
+  .annual-confirmation-document .confirmation-itemized-fees { margin-top: 0.1rem; }
+  .annual-confirmation-document .confirmation-itemized-fees > summary { display: none; }
+  .annual-confirmation-document .confirmation-itemized-fees .table-scroll { margin: 0; }
+  .annual-confirmation-document .confirmation-itemized-fees .admin-table { table-layout: fixed; font-size: 7.6pt; }
+  .annual-confirmation-document .confirmation-itemized-fees th,
+  .annual-confirmation-document .confirmation-itemized-fees td { padding: 0.08rem 0.12rem; line-height: 1.15; }
+  .annual-confirmation-document .confirmation-itemized-fees th:nth-child(1) { width: 8%; }
+  .annual-confirmation-document .confirmation-itemized-fees th:nth-child(2) { width: 29%; }
+  .annual-confirmation-document .confirmation-itemized-fees th:nth-child(3) { width: 16%; }
+  .annual-confirmation-document .confirmation-itemized-fees th:nth-child(4) { width: 13%; }
+  .annual-confirmation-document .confirmation-itemized-fees th:nth-child(5) { width: 18%; }
+  .annual-confirmation-document .confirmation-itemized-fees th:nth-child(6) { width: 16%; }
+  .annual-confirmation-document .confirmation-itemized-fees td small { font-size: 7pt; }
+  .annual-confirmation-document .confirmation-itemized-fees .confirmation-fee-term-start:not(:first-child) td { border-top: 0.9pt solid #777; }
+  .annual-confirmation-document .confirmation-itemized-fees tfoot tr { break-inside: avoid; }
+}
