@@ -2420,7 +2420,8 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     const staffDetail = await fetch(`${baseUrl}/documents/15`, { headers: { cookie: registrarCookie } });
     const staffDetailHtml = await staffDetail.text();
     assert.equal(staffDetail.status, 200);
-    assert.match(staffDetailHtml, /href="\/documents\/15\/preview" target="_blank" rel="noopener">Open source in a new tab<\/a>/);
+    assert.match(staffDetailHtml, /<a class="button button--secondary" href="\/documents\/15\/preview" target="_blank" rel="noopener">Open source in a new tab<\/a>/);
+    assert.match(staffDetailHtml, /<a class="button button--secondary" href="\/documents\/15\/download" download>Download source<\/a>/);
     assert.match(staffDetailHtml, /Automated precheck/);
     assert.match(staffDetailHtml, /Needs attention/);
     assert.match(staffDetailHtml, /Supported PDF, JPEG, or PNG/);
@@ -2673,7 +2674,9 @@ test('document preview links open the same-origin file in a modal and clear it o
   assert.match(template, /<a class="document-image-thumbnail" href="\/documents\/<%= document\.id %>\/preview" data-document-preview-trigger/);
   assert.match(template, /aria-label="Open full-size preview of <%= document\.original_filename %>"/);
   assert.match(template, /alt="Uploaded <%= documentLabel %> image: <%= document\.original_filename %>"/);
-  assert.match(template, /Open full-size image/);
+  assert.match(template, /<span class="button button--secondary document-image-thumbnail__label">Open full-size image<\/span>/);
+  assert.match(template, /<a class="button button--secondary" href="\/documents\/<%= document\.id %>\/preview" target="_blank" rel="noopener">Open source in a new tab<\/a>/);
+  assert.match(template, /<a class="button button--secondary" href="\/documents\/<%= document\.id %>\/download" download>Download source<\/a>/);
   assert.doesNotMatch(template, /Expand image|document-image-viewer--detail/);
   assert.doesNotMatch(template, /data-document-preview-trigger[^>]*target="_blank"/);
   assert.match(template, /<dialog[^>]*data-document-preview-dialog[^>]*aria-labelledby="document-preview-title"/);

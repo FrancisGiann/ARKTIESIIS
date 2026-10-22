@@ -38,14 +38,14 @@
           <% } %>
           <div class="mobile-nav__account">
             <a class="mobile-nav__link<%= currentNavItem?.id === 'account' ? ' is-current' : '' %>" href="/account"<% if (currentNavItem?.id === 'account') { %> aria-current="page"<% } %>>Account settings</a>
-            <form method="post" action="/logout"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><button class="sign-out-button" type="submit">Sign out</button></form>
+            <form method="post" action="/logout" data-confirm data-confirm-title="Sign out?" data-confirm-message="Are you sure you want to sign out?" data-confirm-accept-label="Sign out"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><button class="sign-out-button" type="submit">Sign out</button></form>
           </div>
         </div>
       </details>
       <div class="app-header__user">
         <span class="role-label"><%= roleLabels[currentUser.role] || 'School account' %></span>
         <a class="account-shortcut<%= currentNavItem?.id === 'account' ? ' is-current' : '' %>" href="/account"<% if (currentNavItem?.id === 'account') { %> aria-current="page"<% } %>>Account settings</a>
-        <form method="post" action="/logout">
+        <form method="post" action="/logout" data-confirm data-confirm-title="Sign out?" data-confirm-message="Are you sure you want to sign out?" data-confirm-accept-label="Sign out">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <button class="sign-out-button" type="submit">Sign out</button>
         </form>

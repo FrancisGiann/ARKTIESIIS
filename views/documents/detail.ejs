@@ -36,14 +36,14 @@
   <% } else if (['image/jpeg', 'image/png'].includes(document.mime_type)) { %>
       <a class="document-image-thumbnail" href="/documents/<%= document.id %>/preview" data-document-preview-trigger data-preview-title="<%= document.original_filename %>" data-preview-mime="<%= document.mime_type || '' %>" aria-haspopup="dialog" aria-controls="document-preview-dialog" aria-label="Open full-size preview of <%= document.original_filename %>">
         <span class="document-image-thumbnail__viewport"><img src="/documents/<%= document.id %>/preview" alt="Uploaded <%= documentLabel %> image: <%= document.original_filename %>"></span>
-        <span class="document-image-thumbnail__label">Open full-size image</span>
+        <span class="button button--secondary document-image-thumbnail__label">Open full-size image</span>
       </a>
   <% } else if (document.mime_type === 'application/pdf') { %>
       <iframe class="document-source-frame" src="/documents/<%= document.id %>/preview" title="Source PDF: <%= document.original_filename %>" loading="lazy"></iframe>
   <% } else { %>
       <p class="empty-state">Use the document link above to inspect this file in the browser.</p>
   <% } %>
-      <% if (sourceAccessAllowed) { %><p class="document-source-links"><a class="text-link" href="/documents/<%= document.id %>/preview" target="_blank" rel="noopener">Open source in a new tab</a><span aria-hidden="true">·</span><a class="text-link" href="/documents/<%= document.id %>/download" download>Download source</a></p><% } %>
+      <% if (sourceAccessAllowed) { %><p class="document-source-links"><a class="button button--secondary" href="/documents/<%= document.id %>/preview" target="_blank" rel="noopener">Open source in a new tab</a><a class="button button--secondary" href="/documents/<%= document.id %>/download" download>Download source</a></p><% } %>
     </section>
 
   <section class="admin-section document-detail-card document-submission-facts" aria-labelledby="submission-title">

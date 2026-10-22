@@ -320,8 +320,15 @@ test('authenticated navigation only exposes destinations available to each role'
       assert.match(navigation, /<a class="app-nav__link[^\"]*" href="[^\"]+" aria-current="page"/);
       assert.match(html, /<details class="mobile-nav">\s*<summary>/, 'mobile navigation uses a keyboard-operable native disclosure');
       assert.match(html, /<a class="account-shortcut[^\"]*" href="\/account"/);
-      assert.match(html, /<form method="post" action="\/logout">/);
-      assert.equal((html.match(/action="\/logout"/g) || []).length, 2, 'shared header supplies mutually exclusive mobile and desktop sign-out controls');
+      const logoutForms = [...html.matchAll(/<form method="post" action="\/logout"[^>]*>[\s\S]*?<\/form>/g)].map((match) => match[0]);
+      assert.equal(logoutForms.length, 2, 'shared header supplies mutually exclusive mobile and desktop sign-out controls');
+      for (const form of logoutForms) {
+        assert.match(form, /data-confirm(?:\s|>)/, 'sign-out requires the shared accessible confirmation dialog');
+        assert.match(form, /data-confirm-title="Sign out\?"/);
+        assert.match(form, /data-confirm-message="Are you sure you want to sign out\?"/);
+        assert.match(form, /data-confirm-accept-label="Sign out"/);
+        assert.match(form, /name="_csrf" value="[^"]+"/, 'confirmed sign-out keeps its existing CSRF-protected POST');
+      }
       assert.ok(csrfFromHtml(html).length >= 32);
       if (scenario.role === 'database_admin') {
         assert.match(html, /Student accounts/);

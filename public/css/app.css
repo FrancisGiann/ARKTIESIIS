@@ -1353,8 +1353,8 @@ label { font-size: 0.84rem; }
 .finance-empty-copy { margin: 0; color: var(--muted); }
 .grade-import-preview__grade-value { font-variant-numeric: tabular-nums; }
 .document-image-thumbnail { display: block; color: var(--ink); text-decoration: none; }
-.document-image-thumbnail:hover .document-image-thumbnail__label { color: var(--accent); text-decoration: underline; text-underline-offset: 0.18em; }
-.document-image-thumbnail__label { display: block; padding-top: 0.55rem; color: var(--muted); font-size: 0.8rem; font-weight: 650; }
+.document-image-thumbnail:hover .document-image-thumbnail__label { color: var(--accent); background: #f8fafa; border-color: var(--accent); }
+.document-image-thumbnail__label { display: inline-flex; width: fit-content; margin-top: 0.55rem; padding: 0.56rem 0.9rem; color: var(--ink); font-size: 0.88rem; font-weight: 700; }
 .document-preview-dialog { inset: 0; margin: auto; box-shadow: 0 1.5rem 4rem rgb(18 39 46 / 25%); }
 .document-preview-dialog::backdrop { background: rgb(16 31 36 / 68%); }
 .document-preview-dialog__header { align-items: center; padding-bottom: 0.8rem; border-bottom: 1px solid var(--line); }
@@ -3654,7 +3654,7 @@ details > summary { min-height: 2.75rem; }
   .pre-enrollment-detail-page .pre-enrollment-detail-group { padding-top: 0.9rem; margin-top: 0.85rem; }
   .pre-enrollment-detail-page .pre-enrollment-detail-group:first-child { padding-top: 0; margin-top: 0; }
   .pre-enrollment-detail-page .pre-enrollment-summary { gap: 0.7rem 1.1rem; }
-  .pre-enrollment-detail-page .pre-enrollment-summary > div { gap: 0.24rem; }
+  .pre-enrollment-detail-page .pre-enrollment-summary > div { gap: 0.32rem; }
   .pre-enrollment-detail-page .pre-enrollment-summary dt,
   .registrar-intake .pre-enrollment-summary dt {
     color: var(--ink-soft);
@@ -3666,7 +3666,7 @@ details > summary { min-height: 2.75rem; }
   .registrar-intake .pre-enrollment-summary dd {
     color: var(--ink);
     font-size: 1rem;
-    font-weight: 680;
+    font-weight: 400;
     line-height: 1.45;
   }
 
@@ -3682,7 +3682,7 @@ details > summary { min-height: 2.75rem; }
   .annual-intake-review .enrollment-summary-list,
   .annual-confirmation-document .confirmation-identity-list { gap: 0.9rem 1.4rem; }
   .annual-intake-review .enrollment-summary-list > div,
-  .annual-confirmation-document .confirmation-identity-list > div { gap: 0.24rem; }
+  .annual-confirmation-document .confirmation-identity-list > div { gap: 0.32rem; }
   .annual-intake-review .enrollment-summary-list dt,
   .annual-confirmation-document .confirmation-identity-list dt {
     color: var(--ink-soft);
@@ -3694,7 +3694,7 @@ details > summary { min-height: 2.75rem; }
   .annual-confirmation-document .confirmation-identity-list dd {
     color: var(--ink);
     font-size: 1rem;
-    font-weight: 700;
+    font-weight: 400;
     line-height: 1.45;
     overflow-wrap: anywhere;
   }

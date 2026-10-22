@@ -434,7 +434,7 @@ test('forced password mismatch remains on the required-password page and offers 
     assert.equal(page.status, 200);
     assert.equal(page.headers.get('cache-control'), 'private, no-store, max-age=0');
     assert.match(html, /Change your temporary password/);
-    assert.match(html, /action="\/logout"/);
+    assert.match(html, /<form method="post" action="\/logout" data-confirm[^>]*>[\s\S]*?name="_csrf" value="csrf-forced-password"/);
     const response = await postForm(baseUrl, '/account/password', 'unused-session-cookie', {
       _csrf: 'csrf-forced-password', currentPassword: 'Temporary-Password-55',
       password: 'New-Secure-Password-88', confirmPassword: 'Different-Password-99'
