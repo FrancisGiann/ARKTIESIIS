@@ -1163,8 +1163,9 @@ test('departure draft edits can save incomplete decisions without hidden browser
     assert.equal(first.status, 200);
     assert.doesNotMatch(firstHtml, /data-unsaved-initially-dirty="true"/,
       'a normal draft editor starts clean');
-    assert.match(firstHtml, /Current payable amount before/);
-    assert.match(firstHtml, /Recorded tuition installment/);
+    assert.match(firstHtml, /<dt>Current payable<\/dt><dd>₱100\.00<\/dd>/);
+    assert.match(firstHtml, /<dt>Proposed reduction<\/dt><dd>₱100\.00<\/dd>/);
+    assert.doesNotMatch(firstHtml, /tuition · Tuition/i, 'a tuition category and its Tuition line name are shown once');
     assert.match(firstHtml, /Overall Finance reason: Synthetic overall review reason/,
       'the reason from the initial case form is visible as per-charge evidence');
     assert.match(firstHtml, /<details class="finance-review-edit finance-panel" open>/,
@@ -1286,7 +1287,7 @@ test('departure draft edits can save incomplete decisions without hidden browser
     assert.equal(complete.status, 200);
     assert.match(completeHtml, /<strong>Last payable tuition installment:<\/strong> Midterm/,
       'the selected cutoff is visible with the saved placement evidence');
-    assert.match(completeHtml, /Current payable amount after<\/dt><dd>₱100\.00/);
+    assert.match(completeHtml, /<dt>Current payable<\/dt><dd>₱100\.00<\/dd>/);
     assert.match(completeHtml, /All decisions recorded/);
     assert.match(completeHtml, /<button class="button button--primary" type="submit"\s*>Review complete · Save update<\/button>/,
       'a complete review enables confirmation without this preview posting a mock finance write');

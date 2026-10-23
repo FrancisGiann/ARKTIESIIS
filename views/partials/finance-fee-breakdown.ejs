@@ -76,46 +76,6 @@
                       <span class="finance-fee-breakdown-category"><%= categoryLabel(charge.fee_category) %></span>
                       <span class="finance-fee-status <%= paymentStatusClass(charge.payment_status) %>"><%= charge.payment_status %></span>
                       <% if (charge.fee_basis_negative) { %><span class="finance-fee-breakdown-note" role="status">Negative fee basis: review the recorded reduction. Any credit is shown in the balance.</span><% } %>
-                      <% if (displayStaffDetails && applications.length) { %>
-                        <details class="finance-fee-staff-details">
-                          <summary>Payment applications · <%= applications.length %></summary>
-                          <p class="muted-copy">Earlier account applications remain identified as earlier payments. Missing dates or receipt references are not reconstructed.</p>
-                          <div class="table-scroll" tabindex="0" aria-label="Payment applications for <%= charge.line_name %>">
-                            <table class="admin-table finance-fee-applications-table"><thead><tr><th scope="col">Application</th><th scope="col">Date</th><th scope="col">Receipt reference</th><th scope="col">Originally applied</th><th scope="col">Still applied</th><th scope="col">Released</th><th scope="col">Reversed</th></tr></thead><tbody>
-                              <% for (const application of applications) { const paymentId = application.payment_id || application.transaction_id; %>
-                                <tr>
-                                  <td data-label="Application"><%= application.application_kind === 'earlier payment' ? `Earlier payment #${paymentId}` : `Payment #${paymentId}` %></td>
-                                  <td data-label="Date"><%= dateLabel(application.payment_date) %></td>
-                                  <td data-label="Receipt reference"><%= application.reference_no || 'No receipt reference recorded' %></td>
-                                  <td data-label="Originally applied"><%= application.original_amount == null ? 'Unavailable' : cash(application.original_amount) %></td>
-                                  <td data-label="Still applied"><%= application.still_applied_amount == null ? 'Unavailable' : cash(application.still_applied_amount) %></td>
-                                  <td data-label="Released"><%= application.released_display_amount == null ? 'Unavailable' : cash(application.released_display_amount) %></td>
-                                  <td data-label="Reversed"><%= application.reversed_display_amount == null ? 'Unavailable' : cash(application.reversed_display_amount) %></td>
-                                </tr>
-                              <% } %>
-                            </tbody></table>
-                          </div>
-                        </details>
-                      <% } %>
-                      <% if (displayStaffDetails && feeAdjustments.length) { %>
-                        <details class="finance-fee-staff-details" <%= reversalNeedsRecovery ? 'open' : '' %>>
-                          <summary>History &amp; comments<% if (feeComments.length) { %><span> · <%= feeComments.length %> comments</span><% } %></summary>
-                          <% if (feeAdjustments.length) { %><h4>Adjustment history</h4><ul class="document-review-history">
-                            <% for (const adjustment of feeAdjustments) { const reversalEntry = adjustment.reverses_adjustment_id != null; const alreadyReversed = adjustment.already_reversed === true || adjustment.already_reversed === 1 || adjustment.already_reversed === '1'; const reversalPath = `/students/${ledger.student.id}/annual/adjustments/${adjustment.adjustment_id}/reverse`; const reversalRecovery = recoveryFor(reversalPath); %>
-                              <li><strong><%= reversalEntry ? `Reversal of adjustment #${adjustment.reverses_adjustment_id}` : `Adjustment #${adjustment.adjustment_id}` %> · <%= cash(adjustment.amount) %></strong><span><%= dateLabel(adjustment.created_at) %> · <%= adjustment.reason %></span>
-                                <% if (!reversalEntry && alreadyReversed) { %><p>Already reversed.</p>
-                                <% } else if (!reversalEntry && !studentIsArchived) { %><form class="form-stack" method="post" action="/finance/students/<%= ledger.student.id %>/annual/adjustments/<%= adjustment.adjustment_id %>/reverse"<% if (currentFailedAction?.path === reversalPath) { %> data-unsaved-initially-dirty="true"<% } %>><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= tokens[`adjustmentReversal:${adjustment.adjustment_id}`] %>"><label class="field"><span>Reversal reason</span><textarea name="reason" rows="2" maxlength="1000" required><%= reversalRecovery.reason || '' %></textarea></label><button class="button button--secondary" type="submit">Reverse adjustment</button></form><% } %>
-                              </li>
-                            <% } %></ul><% } %>
-                          <% if (feeComments.length) { %><h4>Fee comments</h4><ul class="document-review-history"><% for (const comment of feeComments) { %><li><strong><%= comment.actor_name %> · <%= dateLabel(comment.created_at) %></strong><p><%= comment.comment %></p></li><% } %></ul><% } %>
-                        </details>
-                      <% } else if (displayStaffDetails && feeComments.length) { %>
-                        <details class="finance-fee-staff-details"><summary>Comments · <%= feeComments.length %></summary><ul class="document-review-history"><% for (const comment of feeComments) { %><li><strong><%= comment.actor_name %> · <%= dateLabel(comment.created_at) %></strong><p><%= comment.comment %></p></li><% } %></ul></details>
-                      <% } %>
-                      <% if (displayStaffDetails && requestedAccountView === 'charges' && !studentIsArchived) { %>
-                        <details class="finance-fee-adjustment-details" <%= adjustmentNeedsRecovery || adjustmentRecovery.amount || adjustmentRecovery.reason ? 'open' : '' %>><summary>Adjust</summary><form class="form-stack" method="post" action="/finance/students/<%= ledger.student.id %>/annual/charges/<%= charge.charge_id %>/adjustments"<% if (currentFailedAction?.path === adjustmentPath) { %> data-unsaved-initially-dirty="true"<% } %>><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= tokens[`adjustment:${charge.charge_id}`] %>"><label class="field"><span>Adjustment amount (PHP)</span><input name="amount" inputmode="decimal" maxlength="14" value="<%= adjustmentRecovery.amount || '' %>" required><small class="muted-copy">A positive amount increases the fee; a negative amount reduces it.</small></label><label class="field"><span>Reason</span><textarea name="reason" rows="2" maxlength="1000" required><%= adjustmentRecovery.reason || '' %></textarea></label><button class="button button--secondary" type="submit">Record adjustment</button></form></details>
-                        <details class="finance-fee-comment-details" <%= commentNeedsRecovery || commentRecovery.comment ? 'open' : '' %>><summary>Add comment<% if (feeComments.length) { %><span> · <%= feeComments.length %> recorded</span><% } %></summary><form class="form-stack" method="post" action="/finance/students/<%= ledger.student.id %>/annual/charges/<%= charge.charge_id %>/comments"<% if (currentFailedAction?.path === commentPath) { %> data-unsaved-initially-dirty="true"<% } %>><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= tokens[`feeComment:${charge.charge_id}`] %>"><label class="field"><span>Append comment</span><textarea name="comment" rows="2" maxlength="1000" required><%= commentRecovery.comment || '' %></textarea></label><button class="button button--secondary" type="submit">Add fee comment</button></form></details>
-                      <% } %>
                     </td>
                     <td data-label="Assessed fee"><%= cash(charge.assessed_amount) %></td>
                     <td data-label="Discounts / exemptions"><%= reduction(charge.coverage_amount) %></td>
@@ -123,6 +83,52 @@
                     <td data-label="Payments applied"><%= reduction(charge.applied_amount) %></td>
                     <td data-label="Balance" data-balance-state="<%= balanceState(charge.due_amount) %>"><strong><%= balance(charge.due_amount) %></strong></td>
                   </tr>
+                  <% if (displayStaffDetails && (applications.length || feeAdjustments.length || feeComments.length || (requestedAccountView === 'charges' && !studentIsArchived))) { %>
+                    <tr class="finance-fee-actions-row">
+                      <td colspan="6">
+                        <div class="finance-fee-action-row" role="group" aria-label="Payment history and actions for <%= charge.line_name %>, <%= installment %>">
+                          <% if (applications.length) { %>
+                            <details class="finance-fee-staff-details">
+                              <summary>Payment applications <span>· <%= applications.length %></span></summary>
+                              <p class="muted-copy">Earlier account applications remain identified as earlier payments. Missing dates or receipt references are not reconstructed.</p>
+                              <div class="table-scroll" tabindex="0" aria-label="Payment applications for <%= charge.line_name %>">
+                                <table class="admin-table finance-fee-applications-table"><thead><tr><th scope="col">Application</th><th scope="col">Date</th><th scope="col">Receipt reference</th><th scope="col">Originally applied</th><th scope="col">Still applied</th><th scope="col">Released</th><th scope="col">Reversed</th></tr></thead><tbody>
+                                  <% for (const application of applications) { const paymentId = application.payment_id || application.transaction_id; %>
+                                    <tr>
+                                      <td data-label="Application"><%= application.application_kind === 'earlier payment' ? `Earlier payment #${paymentId}` : `Payment #${paymentId}` %></td>
+                                      <td data-label="Date"><%= dateLabel(application.payment_date) %></td>
+                                      <td data-label="Receipt reference"><%= application.reference_no || 'No receipt reference recorded' %></td>
+                                      <td data-label="Originally applied"><%= application.original_amount == null ? 'Unavailable' : cash(application.original_amount) %></td>
+                                      <td data-label="Still applied"><%= application.still_applied_amount == null ? 'Unavailable' : cash(application.still_applied_amount) %></td>
+                                      <td data-label="Released"><%= application.released_display_amount == null ? 'Unavailable' : cash(application.released_display_amount) %></td>
+                                      <td data-label="Reversed"><%= application.reversed_display_amount == null ? 'Unavailable' : cash(application.reversed_display_amount) %></td>
+                                    </tr>
+                                  <% } %>
+                                </tbody></table>
+                              </div>
+                            </details>
+                          <% } %>
+                          <% if (feeAdjustments.length || feeComments.length) { %>
+                            <details class="finance-fee-staff-details" <%= reversalNeedsRecovery ? 'open' : '' %>>
+                              <summary>History &amp; comments<% if (feeComments.length) { %><span>· <%= feeComments.length %> comments</span><% } %></summary>
+                              <% if (feeAdjustments.length) { %><h4>Adjustment history</h4><ul class="document-review-history">
+                                <% for (const adjustment of feeAdjustments) { const reversalEntry = adjustment.reverses_adjustment_id != null; const alreadyReversed = adjustment.already_reversed === true || adjustment.already_reversed === 1 || adjustment.already_reversed === '1'; const reversalPath = `/students/${ledger.student.id}/annual/adjustments/${adjustment.adjustment_id}/reverse`; const reversalRecovery = recoveryFor(reversalPath); %>
+                                  <li><strong><%= reversalEntry ? `Reversal of adjustment #${adjustment.reverses_adjustment_id}` : `Adjustment #${adjustment.adjustment_id}` %> · <%= cash(adjustment.amount) %></strong><span><%= dateLabel(adjustment.created_at) %> · <%= adjustment.reason %></span>
+                                    <% if (!reversalEntry && alreadyReversed) { %><p>Already reversed.</p>
+                                    <% } else if (!reversalEntry && !studentIsArchived) { %><details class="finance-fee-reversal-details" <%= currentFailedAction?.path === reversalPath ? 'open' : '' %>><summary>Reverse adjustment</summary><form class="form-stack" method="post" action="/finance/students/<%= ledger.student.id %>/annual/adjustments/<%= adjustment.adjustment_id %>/reverse" data-fee-action-dialog="Reverse adjustment"<% if (currentFailedAction?.path === reversalPath) { %> data-unsaved-initially-dirty="true"<% } %>><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= tokens[`adjustmentReversal:${adjustment.adjustment_id}`] %>"><label class="field"><span>Reversal reason</span><textarea name="reason" rows="2" maxlength="1000" required><%= reversalRecovery.reason || '' %></textarea></label><button class="button button--secondary" type="submit">Reverse adjustment</button></form></details><% } %>
+                                  </li>
+                                <% } %></ul><% } %>
+                              <% if (feeComments.length) { %><h4>Fee comments</h4><ul class="document-review-history"><% for (const comment of feeComments) { %><li><strong><%= comment.actor_name %> · <%= dateLabel(comment.created_at) %></strong><p><%= comment.comment %></p></li><% } %></ul><% } %>
+                            </details>
+                          <% } %>
+                          <% if (requestedAccountView === 'charges' && !studentIsArchived) { %>
+                            <details class="finance-fee-adjustment-details" <%= adjustmentNeedsRecovery || adjustmentRecovery.amount || adjustmentRecovery.reason ? 'open' : '' %>><summary>Adjust</summary><form class="form-stack" method="post" action="/finance/students/<%= ledger.student.id %>/annual/charges/<%= charge.charge_id %>/adjustments" data-fee-action-dialog="Adjust fee"<% if (currentFailedAction?.path === adjustmentPath) { %> data-unsaved-initially-dirty="true"<% } %>><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= tokens[`adjustment:${charge.charge_id}`] %>"><label class="field"><span>Adjustment amount (PHP)</span><input name="amount" inputmode="decimal" maxlength="14" value="<%= adjustmentRecovery.amount || '' %>" required><small class="muted-copy">A positive amount increases the fee; a negative amount reduces it.</small></label><label class="field"><span>Reason</span><textarea name="reason" rows="2" maxlength="1000" required><%= adjustmentRecovery.reason || '' %></textarea></label><button class="button button--secondary" type="submit">Record adjustment</button></form></details>
+                            <details class="finance-fee-comment-details" <%= commentNeedsRecovery || commentRecovery.comment ? 'open' : '' %>><summary>Add comment<% if (feeComments.length) { %><span>· <%= feeComments.length %> recorded</span><% } %></summary><form class="form-stack" method="post" action="/finance/students/<%= ledger.student.id %>/annual/charges/<%= charge.charge_id %>/comments" data-fee-action-dialog="Add fee comment"<% if (currentFailedAction?.path === commentPath) { %> data-unsaved-initially-dirty="true"<% } %>><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= tokens[`feeComment:${charge.charge_id}`] %>"><label class="field"><span>Append comment</span><textarea name="comment" rows="2" maxlength="1000" required><%= commentRecovery.comment || '' %></textarea></label><button class="button button--secondary" type="submit">Add fee comment</button></form></details>
+                          <% } %>
+                        </div>
+                      </td>
+                    </tr>
+                  <% } %>
                 <% } %>
                 <% for (const subtotal of rowsByCategory) { const categoryRows = group.charges.filter((charge) => subtotal.category === 'other' ? !['tuition', 'miscellaneous'].includes(String(charge.fee_category || '').toLowerCase()) : String(charge.fee_category || '').toLowerCase() === subtotal.category); const categoryTotal = subtotal.category === 'tuition' ? group.tuitionSubtotal : subtotal.category === 'miscellaneous' ? group.miscellaneousSubtotal : group.otherFeesSubtotal; if (!categoryRows.length) continue; %>
                   <tr class="finance-fee-subtotal"><td data-label="Subtotal"><strong><%= subtotal.label %></strong></td><td data-label="Assessed fee"><%= cash(categoryTotal.assessed_amount) %></td><td data-label="Discounts / exemptions"><%= reduction(categoryTotal.coverage_amount) %></td><td data-label="Adjustments"><%= cash(categoryTotal.other_adjustments) %></td><td data-label="Payments applied"><%= reduction(categoryTotal.applied_amount) %></td><td data-label="Balance"><strong><%= balance(categoryTotal.due_amount) %></strong></td></tr>

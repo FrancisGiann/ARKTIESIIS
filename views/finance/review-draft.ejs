@@ -130,15 +130,18 @@
               <summary><strong>Term <%= termNumber %> · <%= termItems.length %> fee<%= termItems.length === 1 ? '' : 's' %></strong><span><%= pendingDecisions ? `${pendingDecisions} decision${pendingDecisions === 1 ? '' : 's'} pending` : 'All decisions recorded' %></span></summary>
               <div class="finance-review-departure-term__fees">
                 <% for (const item of termItems) { %>
+                  <% const itemCategory = String(item.feeCategory || '').trim(); const itemLineName = String(item.lineName || '').trim(); const itemTitle = itemLineName && itemCategory.toLowerCase() === itemLineName.toLowerCase() ? itemLineName : [itemCategory, itemLineName].filter(Boolean).join(' · ') || item.fee; %>
                   <article class="finance-review-departure-fee">
-                    <h3><%= item.fee %><% if (item.installment) { %> · <%= item.installment %><% } %></h3>
+                    <h3><%= itemTitle %><% if (item.installment) { %> · <%= item.installment %><% } %></h3>
+                    <dl class="finance-review-departure-amounts">
+                      <div><dt>Current payable</dt><dd>₱<%= item.payableBefore %></dd></div>
+                      <div class="finance-review-departure-amounts__proposal"><dt>Proposed reduction</dt><dd>₱<%= item.proposedReduction %></dd></div>
+                    </dl>
                     <dl class="finance-review-fields">
-                      <div><dt>Classification</dt><dd><%= item.categoryLabel %></dd></div>
-                      <div><dt>Current payable amount before</dt><dd>₱<%= item.payableBefore %></dd></div>
-                      <div><dt>Proposed reduction</dt><dd>₱<%= item.proposedReduction %></dd></div>
+                      <% if (item.reviewCategory !== 'canonical_tuition' && !(item.reviewCategory == null && itemCategory.toLowerCase() === 'tuition' && itemLineName.toLowerCase() === 'tuition')) { %><div><dt>Classification</dt><dd><%= item.reviewCategory === 'manual_tuition' ? 'Whole-term / noncanonical · manual review' : item.categoryLabel %></dd></div><% } %>
                       <div><dt>Finance decision</dt><dd><%= item.decision === 'retain' ? 'Keep fee' : item.decision === 'reduce' ? 'Reduce fee' : 'Pending' %></dd></div>
                       <div><dt>Reviewed reduction</dt><dd><%= item.reviewedReductionReady ? `₱${item.reductionAmount}` : 'Pending' %></dd></div>
-                      <div><dt>Current payable amount after</dt><dd><%= !item.reviewedReductionReady || item.payableAfter == null ? 'Review required' : `₱${item.payableAfter}` %></dd></div>
+                      <div><dt>Payable after review</dt><dd><%= !item.reviewedReductionReady || item.payableAfter == null ? 'Review required' : `₱${item.payableAfter}` %></dd></div>
                       <div><dt>Finance reason</dt><dd><%= item.reason || 'Overall reason required' %></dd></div>
                     </dl>
                   </article>
@@ -222,9 +225,14 @@
                   || (typeof row.reason === 'string' && (row.reason.length > 1000 || /[\u0000-\u001f\u007f]/.test(row.reason)))); %>
                 <details class="finance-review-term-editor" <%= termNumber === Number(draft.preview.departureTermNumber) || termNeedsCorrection ? 'open' : '' %>><summary>Term <%= termNumber %> · <%= termRows.length %> fee<%= termRows.length === 1 ? '' : 's' %></summary>
                   <% for (const row of termRows) { %>
+                    <% const rowCategory = String(row.feeCategory || '').trim(); const rowLineName = String(row.lineName || '').trim(); const rowTitle = rowLineName && rowCategory.toLowerCase() === rowLineName.toLowerCase() ? rowLineName : [rowCategory, rowLineName].filter(Boolean).join(' · '); %>
                     <div class="finance-review-fee-line" data-departure-charge-review data-keep-amount-needs-correction="<%= row.keepAmountNeedsCorrection ? 'true' : 'false' %>">
-                      <h3><%= row.feeCategory %> · <%= row.lineName %><%= row.installment ? ` · ${row.installment}` : '' %></h3>
-                      <p><%= row.categoryLabel %> · current payable ₱<%= row.payableBefore %> · proposal ₱<%= row.proposedReduction %></p>
+                      <h3><%= rowTitle || 'Fee' %><% if (row.installment) { %> · <%= row.installment %><% } %></h3>
+                      <% if (row.reviewCategory !== 'canonical_tuition' && !(row.reviewCategory == null && rowCategory.toLowerCase() === 'tuition' && rowLineName.toLowerCase() === 'tuition')) { %><p class="finance-review-departure-classification"><%= row.reviewCategory === 'manual_tuition' ? 'Whole-term / noncanonical · manual review' : row.categoryLabel %></p><% } %>
+                      <dl class="finance-review-departure-amounts">
+                        <div><dt>Current payable</dt><dd>₱<%= row.payableBefore %></dd></div>
+                        <div class="finance-review-departure-amounts__proposal"><dt>Proposed reduction</dt><dd>₱<%= row.proposedReduction %></dd></div>
+                      </dl>
                       <fieldset class="finance-review-decision"><legend>Finance decision</legend>
                         <label><input type="radio" name="item_chargeReviews_<%= row.index %>_decision" value="retain" <%= row.decision === 'retain' ? 'checked' : '' %>> Keep fee</label>
                         <label><input type="radio" name="item_chargeReviews_<%= row.index %>_decision" value="reduce" <%= row.decision === 'reduce' ? 'checked' : '' %>> Reduce fee</label>
