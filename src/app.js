@@ -27,6 +27,12 @@ function createApp({ databasePool = getPool, environment = env, twoFactorService
   app.set('views', path.join(projectRoot, 'views'));
 
   app.use(helmet());
+  app.use((req, res, next) => {
+    if (!['/', '/robots.txt', '/sitemap.xml'].includes(req.path)) {
+      res.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
+    }
+    next();
+  });
   app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 500 }));
   app.use(express.urlencoded({ extended: false, parameterLimit: 1200, limit: '300kb' }));
   app.use(express.json());

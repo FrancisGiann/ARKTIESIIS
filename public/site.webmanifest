@@ -1,0 +1,17 @@
+{
+  "name": "ARKTIESIIS",
+  "short_name": "ARKTIESIIS",
+  "start_url": "/",
+  "scope": "/",
+  "display": "browser",
+  "background_color": "#f7f8f8",
+  "theme_color": "#f7f8f8",
+  "icons": [
+    {
+      "src": "/images/arktiesiis-school-seal.png",
+      "sizes": "447x447",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

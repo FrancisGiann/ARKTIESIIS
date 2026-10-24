@@ -5,7 +5,27 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#f7f8f8">
   <meta name="color-scheme" content="light">
-  <title><%= title %> | ARKTIESIIS</title>
+  <% const isPublicHome = typeof publicSeo !== 'undefined' && publicSeo === true; %>
+  <title><%= isPublicHome ? 'ARKTIESIIS | Ark Technological Institute Education System Inc. in Lucena' : `${title} | ARKTIESIIS` %></title>
+  <meta name="robots" content="<%= isPublicHome ? 'index, follow' : 'noindex, nofollow, noarchive' %>">
+  <% if (isPublicHome) { %>
+  <meta name="description" content="ARKTIESIIS is the school portal of Ark Technological Institute Education System Inc. in Lucena. Students and staff use it for schedules, enrollment, approved grades, and school requirements.">
+  <link rel="canonical" href="https://arklucena.com/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="ARKTIESIIS">
+  <meta property="og:title" content="ARKTIESIIS | Ark Technological Institute Education System Inc. in Lucena">
+  <meta property="og:description" content="The school portal of Ark Technological Institute Education System Inc. in Lucena, with schedules, enrollment, approved grades, and school requirements for students and staff.">
+  <meta property="og:url" content="https://arklucena.com/">
+  <meta property="og:image" content="https://arklucena.com/images/arktiesiis-campus-building-hero.png">
+  <meta property="og:image:alt" content="Ark Technological Institute Education System Inc. campus building in Lucena">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="ARKTIESIIS | Ark Technological Institute Education System Inc. in Lucena">
+  <meta name="twitter:description" content="The school portal of Ark Technological Institute Education System Inc. in Lucena.">
+  <meta name="twitter:image" content="https://arklucena.com/images/arktiesiis-campus-building-hero.png">
+  <% } %>
+  <link rel="icon" type="image/png" sizes="447x447" href="/images/arktiesiis-school-seal.png">
+  <link rel="apple-touch-icon" href="/images/arktiesiis-school-seal.png">
+  <link rel="manifest" href="/site.webmanifest">
   <% const stylesheetUrl = typeof assetVersion === 'undefined' ? '/css/app.css' : `/css/app.css?v=${assetVersion}`; %>
   <link rel="stylesheet" href="<%= stylesheetUrl %>">
   <% if (typeof pageStylesheet === 'string' && /^\/css\/[a-z0-9-]+\.css$/.test(pageStylesheet)) { %><link rel="stylesheet" href="<%= typeof assetVersion === 'undefined' ? pageStylesheet : `${pageStylesheet}?v=${assetVersion}` %>"><% } %>

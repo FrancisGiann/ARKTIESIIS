@@ -233,6 +233,42 @@ test('home page renders with Helmet default content security policy', async () =
   });
 });
 
+test('only the public home advertises indexing while private routes and API responses do not', async () => {
+  await withServer(createApp({ databasePool: async () => { throw new Error('Synthetic unavailable database'); } }), async (baseUrl) => {
+    const home = await fetch(baseUrl);
+    const html = await home.text();
+    assert.equal(home.status, 200);
+    assert.match(html, /<title>ARKTIESIIS \| Ark Technological Institute Education System Inc\. in Lucena<\/title>/);
+    assert.match(html, /<meta name="robots" content="index, follow">/);
+    assert.match(html, /<link rel="canonical" href="https:\/\/arklucena\.com\/">/);
+    assert.match(html, /itemtype="https:\/\/schema\.org\/EducationalOrganization"/);
+    assert.match(html, /rel="icon"[^>]+arktiesiis-school-seal\.png/);
+    assert.match(html, /rel="apple-touch-icon"[^>]+arktiesiis-school-seal\.png/);
+
+    const login = await fetch(`${baseUrl}/login`);
+    assert.match(await login.text(), /<meta name="robots" content="noindex, nofollow, noarchive">/);
+    assert.equal(login.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive');
+    const protectedPage = await fetch(`${baseUrl}/finance`, { redirect: 'manual' });
+    assert.equal(protectedPage.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive');
+    const api = await fetch(`${baseUrl}/health`);
+    assert.equal(api.headers.get('x-robots-tag'), 'noindex, nofollow, noarchive');
+
+    const robots = await fetch(`${baseUrl}/robots.txt`);
+    assert.equal(robots.status, 200);
+    assert.match(await robots.text(), /Sitemap: https:\/\/arklucena\.com\/sitemap\.xml/);
+    const sitemap = await fetch(`${baseUrl}/sitemap.xml`);
+    const sitemapXml = await sitemap.text();
+    assert.equal(sitemap.status, 200);
+    assert.match(sitemapXml, /<loc>https:\/\/arklucena\.com\/<\/loc>/);
+    assert.doesNotMatch(sitemapXml, /<loc>https:\/\/arklucena\.com\/(?:login|finance|student|admin)/);
+    const manifest = await fetch(`${baseUrl}/site.webmanifest`);
+    assert.equal(manifest.status, 200);
+    const manifestJson = await manifest.json();
+    assert.equal(manifestJson.icons[0].src, '/images/arktiesiis-school-seal.png');
+    assert.equal(manifestJson.icons[0].sizes, '447x447');
+  });
+});
+
 test('home page references the content-hashed stylesheet served by Express', async () => {
   await withServer(createApp({ databasePool: async () => { throw new Error('Database not used'); } }), async (baseUrl) => {
     const homeResponse = await fetch(baseUrl);

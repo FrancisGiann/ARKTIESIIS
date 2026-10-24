@@ -1,5 +1,8 @@
-<%- include('partials/head', { title }) %>
-<main class="home-page" id="main-content">
+<%- include('partials/head', { title, publicSeo: true }) %>
+<main class="home-page" id="main-content" itemscope itemtype="https://schema.org/EducationalOrganization">
+  <meta itemprop="name" content="Ark Technological Institute Education System Inc.">
+  <meta itemprop="url" content="https://arklucena.com/">
+  <meta itemprop="image" content="https://arklucena.com/images/arktiesiis-campus-building-hero.png">
   <section class="home-hero" id="home-overview" aria-labelledby="home-title">
     <figure class="home-visual">
       <img src="/images/arktiesiis-campus-building-hero.png" alt="Street view of the Ark Technological Institute Education System Inc. building at Lucena Branch, with its blue glass facade and ARK sign visible." width="1672" height="941" fetchpriority="high">
