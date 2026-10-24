@@ -1,0 +1,29 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page records-page teacher-class-page" id="main-content">
+  <a class="context-back" href="/teacher">Back to my classes</a>
+  <header class="dashboard-heading">
+    <div><h1>Class overview</h1><p><%= assignment.subject_code %> · <%= assignment.subject_name %> · <%= assignment.school_year %> · <%= assignment.term %> · <%= formatStudentPlacement(assignment.grade_level, assignment.section_name) %></p></div>
+  </header>
+  <section class="admin-section" aria-labelledby="class-grade-title">
+    <div class="admin-section__heading"><div><h2 id="class-grade-title">Grades</h2><p><%= assignment.latest_submission_status ? `Latest workbook: ${assignment.latest_submission_status.replaceAll('_', ' ')}` : 'No workbook submitted yet' %></p></div></div>
+    <% const canSubmit = !assignment.latest_submission_status || assignment.latest_submission_status === 'correction_requested'; %>
+    <a class="button button--primary" href="<%= canSubmit || !assignment.latest_submission_id ? `/teacher/grades/${assignment.assignment_id}` : `/teacher/grades/submissions/${assignment.latest_submission_id}` %>"><%= assignment.latest_submission_status === 'correction_requested' ? 'Submit corrected grades' : canSubmit ? 'Submit grades' : 'View grade submission' %></a>
+  </section>
+  <section class="admin-section" aria-labelledby="class-schedule-title">
+    <div class="admin-section__heading"><div><h2 id="class-schedule-title">Weekly schedule</h2></div></div>
+    <% if (assignment.schedule.length) { const days = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']; %>
+      <div class="table-scroll" tabindex="0" aria-label="Schedule for this assigned class"><table class="admin-table"><thead><tr><th scope="col">Day</th><th scope="col">Time</th><th scope="col">Room</th></tr></thead><tbody>
+        <% for (const slot of assignment.schedule) { %><tr><td data-label="Day"><%= days[Number(slot.day_of_week)] || 'Day not set' %></td><td data-label="Time"><%= slot.start_time %>–<%= slot.end_time %></td><td data-label="Room"><%= slot.room || 'Room TBA' %></td></tr><% } %>
+      </tbody></table></div>
+    <% } else { %><p class="empty-state">No class time has been scheduled yet. Ask the registrar if a schedule is expected.</p><% } %>
+  </section>
+  <section class="admin-section" aria-labelledby="class-roster-title">
+    <div class="admin-section__heading"><div><h2 id="class-roster-title">Students in this class</h2><p><%= assignment.roster.length %> enrolled <%= assignment.roster.length === 1 ? 'student' : 'students' %> in this assigned subject.</p></div></div>
+    <% if (assignment.roster.length) { %>
+      <div class="table-scroll" tabindex="0" aria-label="Student roster for this assigned class"><table class="admin-table"><thead><tr><th scope="col">Student number</th><th scope="col">Student name</th></tr></thead><tbody>
+        <% for (const student of assignment.roster) { %><tr><td data-label="Student number"><%= student.student_no %></td><td data-label="Student name"><%= [student.first_name, student.middle_name, student.last_name, student.suffix].filter(Boolean).join(' ') %></td></tr><% } %>
+      </tbody></table></div>
+    <% } else { %><p class="empty-state">No active students are enrolled in this assigned subject.</p><% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

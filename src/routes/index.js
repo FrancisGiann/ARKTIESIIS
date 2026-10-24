@@ -31,7 +31,7 @@ const { createAcademicRecordsService } = require('../services/academicRecordsSer
 const { createFinanceService } = require('../services/financeService');
 const { createAnnualFinanceCasesService } = require('../services/annualFinanceCasesService');
 const { createAnnualFinanceReportsService } = require('../services/annualFinanceReportsService');
-const { createTeacherGradeSubmissionService } = require('../services/teacherGradeSubmissionService');
+const { createTeacherGradeSubmissionService, TeacherGradeSubmissionError } = require('../services/teacherGradeSubmissionService');
 const { createGradeImportService } = require('../services/gradeImportService');
 const { createAccountService, normalizeEmail } = require('../services/accountService');
 const { createAccountInvitationService, maskEmail: maskInvitationEmail } = require('../services/accountInvitationService');
@@ -581,6 +581,19 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       });
     } catch {
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'Teacher assignments are temporarily unavailable.' });
+    }
+  });
+
+  router.get('/teacher/classes/:assignmentId', requireAuth, requireRole('teacher'), async (req, res) => {
+    res.set('Cache-Control', 'private, no-store');
+    try {
+      const assignment = await teacherSubmissions.getTeacherAssignment(req.authUser.id, req.params.assignmentId);
+      return res.render('dashboards/teacher-class', { title: 'Class overview', assignment });
+    } catch (error) {
+      if (error instanceof TeacherGradeSubmissionError) {
+        return res.status(error.status).render('error', { title: 'Class unavailable', message: error.message });
+      }
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'The assigned class could not be loaded.' });
     }
   });
 

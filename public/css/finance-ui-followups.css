@@ -43,7 +43,37 @@
   transform: translate(-50%, -50%);
 }
 .finance-schedule-dialog::backdrop { background: rgb(20 24 28 / 48%); }
+.finance-assessment-dialog[open]:not(:modal) {
+  position: static;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.finance-assessment-dialog:modal {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  width: min(62rem, calc(100% - 2rem));
+  max-width: none;
+  max-height: min(92dvh, 58rem);
+  padding: 0;
+  margin: 0;
+  overflow: auto;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-panel);
+  box-shadow: 0 1.5rem 4rem rgb(20 24 28 / 28%);
+  transform: translate(-50%, -50%);
+}
+.finance-assessment-dialog:modal .finance-panel { margin: 0; border: 0; box-shadow: none; }
+.finance-assessment-dialog::backdrop { background: rgb(20 24 28 / 48%); }
+.finance-assessment-dialog [data-assessment-preview-close] { margin-top: 0.75rem; }
 body.finance-schedule-dialog-open { overflow: hidden; }
+body.finance-assessment-dialog-open { overflow: hidden; }
 .finance-schedule-dialog__header { align-items: flex-start; padding-bottom: 0.8rem; margin-bottom: 0.8rem; border-bottom: 1px solid var(--line); }
 .finance-schedule-dialog__header h2 { margin: 0 0 0.25rem; font-size: 1.2rem; }
 .finance-schedule-dialog__header p { max-width: 68ch; margin: 0; color: var(--muted); font-size: 0.84rem; }
@@ -78,6 +108,15 @@ body.finance-schedule-dialog-open { overflow: hidden; }
     max-height: 100dvh;
     min-height: 100dvh;
     padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+    border: 0;
+    border-radius: 0;
+    transform: none;
+  }
+  .finance-assessment-dialog:modal {
+    inset: 0;
+    width: 100%;
+    max-height: 100dvh;
+    min-height: 100dvh;
     border: 0;
     border-radius: 0;
     transform: none;

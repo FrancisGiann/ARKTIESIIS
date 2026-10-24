@@ -56,10 +56,11 @@
   </section>
 
   <% if (preview && !archivedStudent) { %>
+    <dialog class="finance-assessment-dialog" open data-assessment-preview-dialog data-annual-id="<%= preview.parent.id %>" aria-labelledby="assessment-preview-title">
     <section class="finance-panel" aria-labelledby="assessment-preview-title" data-finance-view="charges">
       <div class="admin-section__heading"><div><h2 id="assessment-preview-title"><%= preview.existingAssessment ? 'Current assessment review' : 'Assessment preview' %> · <%= preview.parent.school_year %> · <%= preview.parent.grade_level %> · <%= preview.parent.voucher_code %></h2><p>Schedule version <%= preview.scheduleVersion %>. <%= preview.existingAssessment ? 'This assessment is already posted; Finance review will keep its charges and payment history unchanged.' : 'Review all selected student-payable charges before confirming.' %></p></div></div>
       <div class="table-scroll" tabindex="0"><table class="admin-table"><thead><tr><th>Term</th><th>Fee</th><th>Installment</th><th>Category</th><th>Amount</th><th>Optional</th></tr></thead><tbody>
-        <% for (const line of preview.lines) { %><tr><td>Term <%= line.termNumber %></td><td><%= line.lineName %></td><td><%= line.installment %></td><td><%= line.category %></td><td>₱<%= formatMoney(line.amount) %></td><td><%= line.isOptional ? 'Selected' : 'Included' %></td></tr><% } %>
+        <% for (const line of preview.lines) { %><tr><td data-label="Term">Term <%= line.termNumber %></td><td data-label="Fee"><%= line.lineName %></td><td data-label="Installment"><%= line.installment %></td><td data-label="Category"><%= line.category %></td><td data-label="Amount">₱<%= formatMoney(line.amount) %></td><td data-label="Optional"><%= line.isOptional ? 'Selected' : 'Included' %></td></tr><% } %>
       </tbody></table></div>
       <p><strong>Annual total: ₱<%= formatMoney(preview.total) %></strong></p>
       <form method="post" action="/finance/annual/<%= preview.parent.id %>/assessment" data-submitting-message="<%= preview.existingAssessment ? 'Saving the Finance review without changing posted charges.' : 'Posting the confirmed annual assessment. Please wait.' %>">
@@ -68,7 +69,9 @@
         <% for (const line of preview.lines.filter((item) => item.isOptional)) { %><input type="hidden" name="optionalLineId" value="<%= line.scheduleLineId %>"><% } %>
         <button class="button button--primary" type="submit"><%= preview.existingAssessment ? 'Confirm Finance review · keep existing charges' : 'Confirm and post annual assessment' %></button>
       </form>
+      <a class="button button--secondary" href="<%= financeAccountHref('charges') %>#<%= preview.existingAssessment ? `assessment-review-${preview.parent.id}` : `assessment-${preview.parent.id}` %>" data-assessment-preview-close>Back to account without confirming</a>
     </section>
+    </dialog>
   <% } %>
 
   <section class="finance-panel" aria-labelledby="charge-history-title" data-finance-view="overview charges">
@@ -101,11 +104,11 @@
           <p><strong>Payment status:</strong> <%= annualPaymentStatus.reason || annualPaymentStatus.label %><% if (!archivedStudent && annualPaymentStatus.guidance) { %><br><span class="muted-copy"><%= annualPaymentStatus.guidance %></span><% } %></p>
           <p class="finance-handoff-next"><strong>Next:</strong> Review or prepare the saved assessment, then complete Finance review and entry-term DP readiness when required. Registrar handles enrollment confirmation.</p>
           <% if (!activeSchedule.length) { %><p class="empty-state">No active schedule matches this year, grade, and voucher. Configure a schedule before assessing.</p><% } else if (archivedStudent) { %><p class="empty-state">This archived account is read-only. The current fees and records remain available for review.</p><% } else { %>
-            <form class="form-stack" method="post" action="/finance/annual/<%= annualRecord.annual_enrollment_id %>/assessment-preview"<% if (failedAction?.path === `/annual/${annualRecord.annual_enrollment_id}/assessment-preview`) { %> data-unsaved-initially-dirty="true"<% } %>>
+            <form class="form-stack" method="post" action="/finance/annual/<%= annualRecord.annual_enrollment_id %>/assessment-preview" data-assessment-preview-form data-annual-id="<%= annualRecord.annual_enrollment_id %>"<% if (failedAction?.path === `/annual/${annualRecord.annual_enrollment_id}/assessment-preview`) { %> data-unsaved-initially-dirty="true"<% } %>>
               <input type="hidden" name="_csrf" value="<%= csrfToken %>">
               <p>Schedule version <%= activeSchedule[0].version_no %>.</p>
               <% for (const line of activeSchedule.filter((item) => item.line_id)) { %>
-                <label class="checkbox-field"><input type="checkbox" name="optionalLineId" value="<%= line.line_id %>" <%= line.is_optional ? '' : 'checked disabled' %>><span><%= line.is_optional ? 'Optional · ' : 'Included · ' %>Term <%= line.term_number %> · <%= line.line_name %> · <%= line.installment %> · ₱<%= formatMoney(line.amount) %></span></label>
+                <label class="checkbox-field"><input type="checkbox" name="optionalLineId" value="<%= line.line_id %>" <%= line.is_optional ? (Number(preview?.parent.id) === Number(annualRecord.annual_enrollment_id) && preview.lines.some((item) => item.isOptional && Number(item.scheduleLineId) === Number(line.line_id)) ? 'checked' : '') : 'checked disabled' %>><span><%= line.is_optional ? 'Optional · ' : 'Included · ' %>Term <%= line.term_number %> · <%= line.line_name %> · <%= line.installment %> · ₱<%= formatMoney(line.amount) %></span></label>
               <% } %>
               <button class="button button--primary" type="submit">Preview annual assessment</button>
             </form>
@@ -117,7 +120,7 @@
             <div class="admin-section__heading"><div><h2 id="assessment-review-<%= annualRecord.annual_enrollment_id %>">Finance review for pending intake · <%= annualRecord.school_year %></h2><p><%= annualRecord.grade_level %> · Voucher type <%= annualRecord.voucher_code %></p></div></div>
             <p>The assessment is already posted. Review its saved fee composition and current Finance dependencies; this review does not post charges or change payment history. Re-review after assessment-affecting corrections.</p>
             <p class="finance-handoff-next"><strong>After review:</strong> When Finance review and entry-term DP readiness are complete, return this pending intake to the Registrar for confirmation. Finance does not confirm enrollment.</p>
-            <form class="form-stack" method="post" action="/finance/annual/<%= annualRecord.annual_enrollment_id %>/assessment-preview">
+            <form class="form-stack" method="post" action="/finance/annual/<%= annualRecord.annual_enrollment_id %>/assessment-preview" data-assessment-preview-form data-annual-id="<%= annualRecord.annual_enrollment_id %>">
               <input type="hidden" name="_csrf" value="<%= csrfToken %>">
               <button class="button button--secondary" type="submit">Review current assessment for enrollment</button>
             </form>
@@ -387,4 +390,5 @@
 <script src="/js/finance-allocation-form.js" defer></script>
 <script src="/js/finance-payment-wizard.js" defer></script>
 <script src="/js/finance-fee-actions.js" defer></script>
+<script src="/js/finance-assessment-preview.js" defer></script>
 <%- include('../partials/foot') %>

@@ -360,7 +360,13 @@ function createTeacherGradeSubmissionService({
         INNER JOIN student_subjects AS ss ON ss.enrollment_id = e.id AND ss.subject_id = @subjectId
         WHERE e.academic_term_id = @termId AND e.section_id = @sectionId AND e.enrollment_status = 'enrolled'
         ORDER BY st.last_name, st.first_name, st.student_no`);
-      return { ...assignment, roster: roster.recordset || [] };
+      const schedule = await transaction.request().input('assignmentId', sql.Int, assignment.assignment_id)
+        .query(`SELECT day_of_week,
+          TIME_FORMAT(start_time, '%H:%i') AS start_time,
+          TIME_FORMAT(end_time, '%H:%i') AS end_time, room
+          FROM class_schedules WHERE assignment_id = @assignmentId
+          ORDER BY day_of_week, start_time, id`);
+      return { ...assignment, roster: roster.recordset || [], schedule: schedule.recordset || [] };
     });
   }
 

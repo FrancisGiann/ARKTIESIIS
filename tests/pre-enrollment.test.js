@@ -48,6 +48,28 @@ test('pre-enrollment validates supplied paper data, ready requirements, school y
   assert.throws(() => normalizeRecord(readyInput({ status: 'enrollment_started' })), /Choose Draft or Ready/);
 });
 
+test('front-desk receipt defaults use configured Registrar requirement counts, including zero-count sides', async () => {
+  const sql = { Int: 'int' };
+  const pool = { request() { return {
+    input() { return this; },
+    async query(query) {
+      if (query.includes('FROM users AS account')) return { recordset: [{ id: 7, role: 'front_desk' }] };
+      assert.match(query, /FROM physical_requirement_definitions/);
+      return { recordset: [
+        { requirement_code: 'jhs_report_card', originals_required: 2, copies_required: 1 },
+        { requirement_code: 'birth_certificate', originals_required: 0, copies_required: 3 },
+        { requirement_code: 'two_by_two_photo', originals_required: 0, copies_required: 0, pieces_required: 3 }
+      ] };
+    }
+  }; } };
+  const service = createPreEnrollmentService({ getPool: async () => pool, sql });
+  const defaults = await service.listReceiptCountDefaults(7);
+  assert.deepEqual(defaults.report_card, { original: 2, photocopy: 1 });
+  assert.deepEqual(defaults.birth_certificate, { original: 0, photocopy: 3 });
+  assert.deepEqual(defaults.two_by_two_photos, { original: 3, photocopy: 0 });
+  assert.deepEqual(defaults.good_moral, { original: 0, photocopy: 0 }, 'missing configuration never invents a count');
+});
+
 test('drafts defer completion but validate every supplied field and Ready errors identify missing controls', () => {
   const draft = normalizeRecord({ schoolYear: '2027-2028', status: 'draft', firstName: '', lrn: '1234',
     email: '', studentContactNumber: '' });
@@ -973,7 +995,7 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.match(invalidOptionalReceiptHtml, /href="#receipt-report_card-original" data-error-target="receipt_report_card_original_pieces/);
     assert.match(invalidOptionalReceiptHtml, /data-pre-enrollment-receipts open/,
       'a receipt error expands the receipt disclosure so the linked control is reachable');
-    assert.match(invalidOptionalReceiptHtml, /id="receipt-report_card-original" name="receipt_report_card_original_pieces" type="number" min="1" max="99" value="0"/,
+    assert.match(invalidOptionalReceiptHtml, /id="receipt-report_card-original" name="receipt_report_card_original_pieces" type="number" min="1" max="99"[^>]*value="0"/,
       'failed receipt quantity remains visible for correction');
     assert.match(invalidOptionalReceiptHtml, /<details class="pre-enrollment-optional-details" data-pre-enrollment-optional-profile>/,
       'a receipt error does not expand the neighboring optional profile details');

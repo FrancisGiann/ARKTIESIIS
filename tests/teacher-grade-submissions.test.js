@@ -349,6 +349,7 @@ test('assignment and roster reads share a serializable active-assignment check',
           subject_code: 'ENG11', subject_name: 'Oral Communication'
         }] };
         if (statement.includes('FROM enrollments AS e')) return { recordset: [{ student_no: 'S-44', first_name: 'Jamie', last_name: 'Garcia' }] };
+        if (statement.includes('FROM class_schedules WHERE assignment_id')) return { recordset: [{ day_of_week: 1, start_time: '08:00', end_time: '09:00', room: 'Room 1' }] };
         throw new Error(`Unexpected SQL: ${statement}`);
       }, calls);
     },
@@ -360,11 +361,14 @@ test('assignment and roster reads share a serializable active-assignment check',
   const assignment = await service.getTeacherAssignment(7, '12');
   assert.equal(transactionStarted, true);
   assert.equal(assignment.roster.length, 1);
+  assert.equal(assignment.schedule.length, 1);
   const assignmentQuery = calls.find(({ statement }) => statement.includes('FROM teacher_assignments AS a'));
   assert.match(assignmentQuery.statement, /a\.teacher_id = @teacherId AND a\.is_active = 1/);
   const rosterQuery = calls.find(({ statement }) => statement.includes('FROM enrollments AS e'));
   assert.match(rosterQuery.statement, /e\.academic_term_id = @termId AND e\.section_id = @sectionId/);
   assert.match(rosterQuery.statement, /ss\.subject_id = @subjectId/);
+  const scheduleQuery = calls.find(({ statement }) => statement.includes('FROM class_schedules WHERE assignment_id'));
+  assert.equal(scheduleQuery.values.assignmentId, 12);
 });
 
 test('staged workbook reads and writes recheck the live teacher assignment', async () => {
@@ -503,6 +507,7 @@ test('teacher upload, preview, durable submission, and registrar approval routes
   const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
   const users = [
     { id: 7, email: 'teacher@example.edu', password_hash: passwordHash, role: 'teacher', is_active: true },
+    { id: 8, email: 'other-teacher@example.edu', password_hash: passwordHash, role: 'teacher', is_active: true },
     { id: 11, email: 'registrar@example.edu', password_hash: passwordHash, role: 'registrar', is_active: true }
   ];
   const workbookPath = path.join(__dirname, 'fixtures/grade-import/corrected-mini.xlsx');
@@ -515,6 +520,7 @@ test('teacher upload, preview, durable submission, and registrar approval routes
     assignment_id: 12, academic_term_id: 3, section_id: 4, subject_id: 77,
     school_year: '2026-2027', term: 'Term 1', section_name: 'STEM A', grade_level: 'Grade 11',
     subject_code: 'ENG11', subject_name: 'Oral Communication', roster: [{ student_no: 'S-44', first_name: 'Jamie', last_name: 'Garcia' }],
+    schedule: [{ day_of_week: 1, start_time: '08:00', end_time: '09:00', room: 'Room 1' }],
     latest_submission_id: null, latest_submission_status: null, latest_decision_reason: null, latest_revision_number: null
   };
   const context = { key: 'term-context-key', academic_term_id: 3, school_year: '2026-2027', grade_level: 'Grade 11',
@@ -527,7 +533,11 @@ test('teacher upload, preview, durable submission, and registrar approval routes
   };
   const teacherGradeSubmissionService = {
     async listTeacherAssignments(actorId) { calls.push(['assignments', actorId]); return [assignment]; },
-    async getTeacherAssignment(actorId, assignmentId) { calls.push(['assignment', actorId, assignmentId]); return assignment; },
+    async getTeacherAssignment(actorId, assignmentId) {
+      calls.push(['assignment', actorId, assignmentId]);
+      if (actorId !== 7 || String(assignmentId) !== '12') throw new TeacherGradeSubmissionError('Assigned class not found.', 404);
+      return assignment;
+    },
     async stageWorkbook(actorId, assignmentId, previewId, _sessionId, buffer) { calls.push(['stage', actorId, assignmentId, previewId, buffer.length]); },
     async getStagedWorkbook(actorId, assignmentId, previewId, _sessionId) { calls.push(['staged', actorId, assignmentId, previewId]); return Buffer.from(workbookBytes); },
     async clearStagedWorkbook(previewId) { calls.push(['clear', previewId]); },
@@ -557,6 +567,18 @@ test('teacher upload, preview, durable submission, and registrar approval routes
       assert.equal(classOverview.status, 200, classOverviewHtml);
       assert.match(classOverviewHtml, /My classes/);
       assert.match(classOverviewHtml, /Open class/);
+      assert.match(classOverviewHtml, /href="\/teacher\/classes\/12"/);
+      const classPage = await fetch(`${baseUrl}/teacher/classes/12`, { headers: { cookie: teacherCookie } });
+      const classHtml = await classPage.text();
+      assert.equal(classPage.status, 200, classHtml);
+      assert.match(classHtml, /Class overview/);
+      assert.match(classHtml, /Jamie Garcia/);
+      assert.match(classHtml, /Monday/);
+      assert.match(classHtml, /08:00–09:00/);
+      assert.match(classHtml, /href="\/teacher\/grades\/12"/);
+      assert.equal((await fetch(`${baseUrl}/teacher/classes/999`, { headers: { cookie: teacherCookie } })).status, 404);
+      const otherTeacherCookie = await signIn(baseUrl, 'other-teacher@example.edu');
+      assert.equal((await fetch(`${baseUrl}/teacher/classes/12`, { headers: { cookie: otherTeacherCookie } })).status, 404);
 
       const gradeSelection = await fetch(`${baseUrl}/teacher/grades`, { headers: { cookie: teacherCookie } });
       const gradeSelectionHtml = await gradeSelection.text();
@@ -609,6 +631,24 @@ test('teacher upload, preview, durable submission, and registrar approval routes
       assert.equal(submit.status, 303);
       assert.equal(submit.headers.get('location'), `/teacher/grades/submissions/${SUBMISSION_ID}`);
       assert.ok(calls.some(([action, actorId]) => action === 'submit' && actorId === 7));
+      assignment.latest_submission_status = 'pending';
+      assignment.latest_submission_id = SUBMISSION_ID;
+      const afterSubmission = await fetch(`${baseUrl}/teacher/classes/12`, { headers: { cookie: teacherCookie } });
+      const afterSubmissionHtml = await afterSubmission.text();
+      assert.equal(afterSubmission.status, 200);
+      assert.match(afterSubmissionHtml, /Jamie Garcia/);
+      assert.match(afterSubmissionHtml, /Latest workbook: pending/);
+      assert.match(afterSubmissionHtml, /View grade submission/);
+      assert.match(afterSubmissionHtml, new RegExp(`href="/teacher/grades/submissions/${SUBMISSION_ID}"`));
+      assignment.latest_submission_status = 'correction_requested';
+      assignment.roster = [];
+      assignment.schedule = [];
+      const unscheduled = await fetch(`${baseUrl}/teacher/classes/12`, { headers: { cookie: teacherCookie } });
+      const unscheduledHtml = await unscheduled.text();
+      assert.equal(unscheduled.status, 200);
+      assert.match(unscheduledHtml, /Submit corrected grades/);
+      assert.match(unscheduledHtml, /No class time has been scheduled yet/);
+      assert.match(unscheduledHtml, /No active students are enrolled/);
       const ownSubmission = await fetch(`${baseUrl}/teacher/grades/submissions/${SUBMISSION_ID}`, { headers: { cookie: teacherCookie } });
       assert.equal(ownSubmission.status, 200);
       const download = await fetch(`${baseUrl}/teacher/grades/submissions/${SUBMISSION_ID}/workbook`, { headers: { cookie: teacherCookie } });
@@ -616,6 +656,7 @@ test('teacher upload, preview, durable submission, and registrar approval routes
       assert.equal(download.headers.get('cache-control'), 'private, no-store');
 
       const registrarCookie = await signIn(baseUrl, 'registrar@example.edu');
+      assert.equal((await fetch(`${baseUrl}/teacher/classes/12`, { headers: { cookie: registrarCookie } })).status, 403);
       const queue = await fetch(`${baseUrl}/registrar/grade-submissions`, { headers: { cookie: registrarCookie } });
       assert.equal(queue.status, 200);
       assert.match(await queue.text(), /grades\.xlsx/);

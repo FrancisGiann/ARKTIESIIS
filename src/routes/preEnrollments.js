@@ -121,6 +121,11 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
         return res.status(503).render('error', { title: 'Return evaluation choices', message: 'Accepted return evaluations could not be loaded.' });
       }
     }
+    let receiptCountDefaults = {};
+    if (!error && service.listReceiptCountDefaults) {
+      try { receiptCountDefaults = await service.listReceiptCountDefaults(req.authUser.id); }
+      catch { /* An unavailable count hint must not block correcting or saving the paper form. */ }
+    }
     return privateHeaders(res).status(status).render('pre-enrollments/form', {
       title: record ? 'Correct pre-enrollment record' : 'Record paper form',
       currentUser: req.authUser, csrfToken: ensureCsrfToken(req), record,
@@ -131,7 +136,7 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
         receipt_long_brown_envelopes_received: envelopeCheckboxDefault,
         envelopeReceiptMode: record ? 'preserve' : 'replace', ...values
       },
-      requirements: RECEIPT_REQUIREMENTS, acceptedReadmissionChoices, latestBirthDate: latestBirthDate(),
+      requirements: RECEIPT_REQUIREMENTS, receiptCountDefaults, acceptedReadmissionChoices, latestBirthDate: latestBirthDate(),
       programCatalog: PROGRAM_CATALOG, programTracks: TRACKS, envelopeState, error,
       errorFieldLinks: errorFieldLinks({ fields: errorFields }), hasRecoveredValues: Boolean(error && values && Object.keys(values).length), staleVersion
     });

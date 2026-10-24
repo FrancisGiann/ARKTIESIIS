@@ -23,6 +23,16 @@ const RECEIPT_REQUIREMENTS = Object.freeze([
   ['national_id', 'National ID (optional)'],
   ['two_by_two_photos', 'Three 2×2 pictures (name tag and white background)']
 ]);
+const RECEIPT_DEFINITION_CODES = Object.freeze({
+  report_card: 'jhs_report_card',
+  birth_certificate: 'birth_certificate',
+  good_moral: 'good_moral',
+  junior_high_certificate: 'jhs_certificate',
+  certificate_of_rating: 'als_certificate_of_rating',
+  esc_certificate: 'esc_certificate',
+  national_id: 'national_id',
+  two_by_two_photos: 'two_by_two_photo'
+});
 const LEGACY_ENVELOPE_CODE = 'long_brown_envelopes';
 const FIELD_SPEC = Object.freeze([
   ['school_year', 'schoolYear', 20], ['first_name', 'firstName', 100], ['middle_name', 'middleName', 100],
@@ -403,6 +413,23 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
     if (!actor || !roles.has(actor.role)) throw new PreEnrollmentError('You cannot access pre-enrollment records.', 403);
     actor.displayName = [actor.first_name, actor.last_name].filter(Boolean).join(' ');
     return actor;
+  }
+
+  async function listReceiptCountDefaults(actorInput) {
+    const pool = await getPool();
+    await requireActor(pool.request(), actorInput, READ_ROLES);
+    const result = await pool.request().query(`SELECT requirement_code, originals_required, copies_required, pieces_required
+      FROM physical_requirement_definitions
+      WHERE requirement_code IN ('jhs_report_card', 'birth_certificate', 'good_moral', 'jhs_certificate',
+        'als_certificate_of_rating', 'esc_certificate', 'national_id', 'two_by_two_photo')`);
+    const definitions = new Map((result.recordset || []).map((item) => [item.requirement_code, item]));
+    return Object.fromEntries(RECEIPT_REQUIREMENTS.map(([code]) => {
+      const definition = definitions.get(RECEIPT_DEFINITION_CODES[code]);
+      return [code, {
+        original: code === 'two_by_two_photos' ? Number(definition?.pieces_required || 0) : Number(definition?.originals_required || 0),
+        photocopy: Number(definition?.copies_required || 0)
+      }];
+    }));
   }
 
   async function writeEvent(request, { recordId, actorId, eventType, version, fromStatus, toStatus, changedFields = [] }) {
@@ -845,7 +872,8 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
     return record;
   }
 
-  return { create, update, get, getActorDisplayName, list, listAcceptedReadmissionChoices, openConversion, getForConversion, RECEIPT_REQUIREMENTS };
+  return { create, update, get, getActorDisplayName, list, listAcceptedReadmissionChoices, listReceiptCountDefaults,
+    openConversion, getForConversion, RECEIPT_REQUIREMENTS };
 }
 
 module.exports = { PreEnrollmentError, RECEIPT_REQUIREMENTS, normalizeDate, manilaDate, normalizeRecord, createPreEnrollmentService };

@@ -69,16 +69,16 @@
         allowEmergencyAddressCopy: true }) %>
       </details>
     </section>
-    <section class="form-section"><h2>Requirements received</h2><p>Receipt notes are optional and do not affect readiness or record inspection, approval, or verification.</p><details class="pre-enrollment-optional-details" data-pre-enrollment-receipts<% if (receiptDetailsHaveError || recoveredErrorWithoutFieldLinks) { %> open<% } %>><summary>Optional receipt checklist · eight paper requirements and envelopes</summary><p>Mark original and photocopy receipt separately and enter pieces when known.</p><div class="pre-enrollment-receipts"><% for (const [code, label] of requirements) { %><fieldset class="pre-enrollment-receipt">
+    <section class="form-section"><h2>Requirements received</h2><p>Receipt notes are optional and do not affect readiness or record inspection, approval, or verification.</p><details class="pre-enrollment-optional-details" data-pre-enrollment-receipts<% if (receiptDetailsHaveError || recoveredErrorWithoutFieldLinks) { %> open<% } %>><summary>Optional receipt checklist · eight paper requirements and envelopes</summary><p>When you check receipt, configured counts fill blank fields. Correct them to the quantity actually received.</p><div class="pre-enrollment-receipts"><% for (const [code, label] of requirements) { %><fieldset class="pre-enrollment-receipt">
       <legend><%= label %></legend>
       <div class="pre-enrollment-receipt-groups">
         <div class="pre-enrollment-receipt-group">
-          <label class="pre-enrollment-receipt-check"><input id="receipt-<%= code %>-original-check" type="checkbox" name="receipt_<%= code %>_original" value="1" <%= values[`receipt_${code}_original`] === '1' || values[`receipt_${code}_original`] === true || values[`receipt_${code}_original`] === 1 ? 'checked' : '' %>><span>Original received</span></label>
-          <div class="field pre-enrollment-receipt-quantity"><label for="receipt-<%= code %>-original">Original pieces</label><input id="receipt-<%= code %>-original" name="receipt_<%= code %>_original_pieces" type="number" min="1" max="99" value="<%= values[`receipt_${code}_original_pieces`] ?? '' %>"></div>
+          <label class="pre-enrollment-receipt-check"><input id="receipt-<%= code %>-original-check" type="checkbox" name="receipt_<%= code %>_original" value="1" data-receipt-check <%= values[`receipt_${code}_original`] === '1' || values[`receipt_${code}_original`] === true || values[`receipt_${code}_original`] === 1 ? 'checked' : '' %>><span>Original received</span></label>
+          <div class="field pre-enrollment-receipt-quantity"><label for="receipt-<%= code %>-original">Original pieces</label><input id="receipt-<%= code %>-original" name="receipt_<%= code %>_original_pieces" type="number" min="1" max="99" data-receipt-count data-default-count="<%= receiptCountDefaults[code]?.original || '' %>" value="<%= values[`receipt_${code}_original_pieces`] ?? '' %>"></div>
         </div>
         <div class="pre-enrollment-receipt-group">
-          <label class="pre-enrollment-receipt-check"><input id="receipt-<%= code %>-photocopy-check" type="checkbox" name="receipt_<%= code %>_photocopy" value="1" <%= values[`receipt_${code}_photocopy`] === '1' || values[`receipt_${code}_photocopy`] === true || values[`receipt_${code}_photocopy`] === 1 ? 'checked' : '' %>><span>Photocopy received</span></label>
-          <div class="field pre-enrollment-receipt-quantity"><label for="receipt-<%= code %>-photocopy">Photocopy pieces</label><input id="receipt-<%= code %>-photocopy" name="receipt_<%= code %>_photocopy_pieces" type="number" min="1" max="99" value="<%= values[`receipt_${code}_photocopy_pieces`] ?? '' %>"></div>
+          <label class="pre-enrollment-receipt-check"><input id="receipt-<%= code %>-photocopy-check" type="checkbox" name="receipt_<%= code %>_photocopy" value="1" data-receipt-check <%= values[`receipt_${code}_photocopy`] === '1' || values[`receipt_${code}_photocopy`] === true || values[`receipt_${code}_photocopy`] === 1 ? 'checked' : '' %>><span>Photocopy received</span></label>
+          <div class="field pre-enrollment-receipt-quantity"><label for="receipt-<%= code %>-photocopy">Photocopy pieces</label><input id="receipt-<%= code %>-photocopy" name="receipt_<%= code %>_photocopy_pieces" type="number" min="1" max="99" data-receipt-count data-default-count="<%= receiptCountDefaults[code]?.photocopy || '' %>" value="<%= values[`receipt_${code}_photocopy_pieces`] ?? '' %>"></div>
         </div>
       </div>
     </fieldset><% } %><fieldset class="pre-enrollment-receipt pre-enrollment-envelope-receipt" id="pre-envelope-receipt" data-envelope-receipt>
@@ -104,4 +104,5 @@
 <script src="/js/paper-program-fields.js" defer></script>
 <script src="/js/pre-enrollment-readmission.js" defer></script>
 <script src="/js/pre-enrollment-envelope.js" defer></script>
+<script src="/js/pre-enrollment-receipt-counts.js" defer></script>
 <%- include('../partials/foot') %>

@@ -783,6 +783,7 @@ test('finance annual roster separates page data, classification, and balances in
   assert.match(pendingReviewHtml, /Finance review for pending intake · 2026-2027/);
   assert.match(pendingReviewHtml, /Review current assessment for enrollment/);
   assert.match(pendingReviewHtml, /action="\/finance\/annual\/21\/assessment-preview"/);
+  assert.match(pendingReviewHtml, /data-assessment-preview-form data-annual-id="21"/);
   assert.match(pendingReviewHtml, /this review does not post charges or change payment history/i);
   const existingAssessmentPreviewHtml = await renderFinanceView('annual-student', {
     ...pendingReviewLocals,
@@ -790,6 +791,9 @@ test('finance annual roster separates page data, classification, and balances in
       scheduleVersion: 4, existingAssessment: true, scheduleId: 4, lines: [], total: '40.00' }
   });
   assert.match(existingAssessmentPreviewHtml, /Current assessment review/);
+  assert.match(existingAssessmentPreviewHtml, /<dialog class="finance-assessment-dialog" open data-assessment-preview-dialog data-annual-id="21"/);
+  assert.match(existingAssessmentPreviewHtml, /data-assessment-preview-close>Back to account without confirming/);
+  assert.match(existingAssessmentPreviewHtml, /src="\/js\/finance-assessment-preview\.js" defer/);
   assert.match(existingAssessmentPreviewHtml, /already posted; Finance review will keep its charges and payment history unchanged/);
   assert.match(existingAssessmentPreviewHtml, /Confirm Finance review · keep existing charges/);
   assert.doesNotMatch(existingAssessmentPreviewHtml, /Confirm and post annual assessment/);
