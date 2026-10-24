@@ -14,7 +14,7 @@
   <p class="muted-copy" role="status"><%= pagination.totalRecords %> record<%= pagination.totalRecords === 1 ? '' : 's' %></p>
   <% if (rows.length) { %>
     <ul class="records-student-list pre-enrollment-record-list" aria-label="Pre-enrollment records">
-      <% for (const row of rows) { const statusClass = row.status === 'ready_for_registrar' || row.status === 'enrollment_started' && row.linked_annual_status === 'enrolled' ? 'pre-enrollment-status--ready' : row.status === 'enrollment_started' ? 'pre-enrollment-status--started' : 'pre-enrollment-status--draft'; const fullName = [row.first_name, row.middle_name, row.last_name, row.suffix].filter(Boolean).join(' ') || 'Name not recorded'; %>
+      <% for (const row of rows) { const statusClass = row.status === 'ready_for_registrar' ? 'pre-enrollment-status--ready' : row.status === 'enrollment_started' && row.linked_annual_status === 'enrolled' ? 'pre-enrollment-status--confirmed' : row.status === 'enrollment_started' ? 'pre-enrollment-status--started' : 'pre-enrollment-status--draft'; const fullName = [row.first_name, row.middle_name, row.last_name, row.suffix].filter(Boolean).join(' ') || 'Name not recorded'; %>
         <li class="records-student-list__item pre-enrollment-record-list__item">
           <div class="records-student-main pre-enrollment-record-list__identity">
             <strong><%= fullName %></strong>

@@ -36,7 +36,9 @@ function createApp({ databasePool = getPool, environment = env, twoFactorService
   app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 500 }));
   app.use(express.urlencoded({ extended: false, parameterLimit: 1200, limit: '300kb' }));
   app.use(express.json());
-  app.use(express.static(path.join(projectRoot, 'public')));
+  // Short-lived browser caching avoids refetching shared assets on every EJS page navigation.
+  // Asset URLs outside the versioned stylesheets can change on deploy, so keep this bounded.
+  app.use(express.static(path.join(projectRoot, 'public'), { maxAge: '1m' }));
 
   app.use(session({
     secret: environment.sessionSecret,

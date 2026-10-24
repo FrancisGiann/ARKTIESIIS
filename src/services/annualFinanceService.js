@@ -2765,7 +2765,7 @@ function createAnnualFinanceService({
         SELECT enrollment.id AS enrollment_id,
           enrollment.academic_term_id, annual.id AS annual_enrollment_id, annual.school_year, annual.grade_level,
           annual.voucher_code, annual.voucher_category, annual.intake_status, annual.entry_term_number,
-          assessment.id AS assessment_id, assessment.schedule_version,
+          assessment.id AS assessment_id, assessment.schedule_id, assessment.schedule_version,
           enrollment.annual_term_number, enrollment.term_scope_status, enrollment.enrollment_status, term.term, term.is_current,
           section.name AS section_name, section.cluster, section.strand, section.adviser, section.modality, section.modular_subtype,
           CAST(COALESCE(due_by_enrollment.total, 0) AS CHAR(40)) AS outstanding,

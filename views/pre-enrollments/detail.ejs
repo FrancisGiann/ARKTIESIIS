@@ -55,7 +55,7 @@
   const statusClass = record.status === 'ready_for_registrar'
     ? 'pre-enrollment-status--ready'
     : record.status === 'enrollment_started' && record.linkedAnnualEnrollment?.intake_status === 'enrolled'
-      ? 'pre-enrollment-status--ready'
+      ? 'pre-enrollment-status--confirmed'
       : record.status === 'enrollment_started' ? 'pre-enrollment-status--started' : 'pre-enrollment-status--draft';
   const applicantKindLabels = { new: 'New applicant', continuing: 'Continuing student', readmission: 'Returning after a break' };
   const annualStatusLabels = {
@@ -69,7 +69,7 @@
     ? linkedAnnualStatusLabel : statusLabels[record.status] || 'Draft';
 %>
 <main class="page-shell dashboard-page admin-page records-page pre-enrollment-page pre-enrollment-detail-page" id="main-content">
-  <a class="context-back" href="/pre-enrollments">Back to pre-enrollment records</a>
+  <a class="context-back" href="/pre-enrollments" aria-label="Back to pre-enrollment records" title="Back to pre-enrollment records">&#8592;</a>
   <header class="dashboard-heading pre-enrollment-detail-heading">
     <div class="pre-enrollment-detail-heading__copy">
       <h1><%= fullName || 'Pre-enrollment record' %></h1>
@@ -83,7 +83,7 @@
       <% if (['front_desk', 'registrar'].includes(currentUser.role) && record.status !== 'enrollment_started') { %>
         <a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(record.id) %>/edit">Correct paper record</a>
       <% } %>
-      <% if (currentUser.role === 'registrar' && record.status === 'ready_for_registrar') { %>
+      <% if (currentUser.role === 'registrar' && record.status === 'ready_for_registrar' && !needsFirstLoginIdentity) { %>
         <a class="button button--primary" href="/registrar/intake/new?preEnrollmentId=<%= encodeURIComponent(record.id) %>">Start enrollment</a>
       <% } %>
       <% if (record.status === 'enrollment_started') { %>
@@ -93,6 +93,7 @@
   </header>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
+  <% if (needsFirstLoginIdentity) { %><div class="notice-panel" role="status"><strong>Correct this paper record before starting enrollment.</strong> A saved surname and valid past birth date are needed for the student’s first login. The paper record is Ready for registrar review, but it cannot start a new or continuing enrollment until those details are saved. <% if (['front_desk', 'registrar'].includes(currentUser.role)) { %><a href="/pre-enrollments/<%= encodeURIComponent(record.id) %>/edit">Correct paper record</a><% } %></div><% } %>
 
   <% if (syntheticDemoFixture) { %>
     <p class="form-alert" role="note"><strong>Synthetic demo intake record.</strong> Contact, preference, previous-school, signature, and date fields are fixture values. No paper form, actual signature, received receipt, or paper clearance was inspected or recorded. The student profile and posted finance history were preserved.</p>
@@ -194,7 +195,7 @@
           <h3 id="pre-readmission-heading">Return evaluation</h3>
           <% if (record.readmission_evaluation) { %>
             <p class="muted-copy">Linked to LRN <%= record.readmission_evaluation.applicant_lrn %>, <%= record.readmission_evaluation.school_year %>, <%= record.readmission_evaluation.target_grade_level %>. Evaluation: <%= record.readmission_evaluation.status === 'accepted' ? 'Accepted' : record.readmission_evaluation.status === 'under_review' ? 'Under review' : 'Not accepted' %><% if (Number(record.readmission_evaluation.version) !== Number(record.readmission_evaluation_version) || record.readmission_evaluation.status !== 'accepted') { %> · the registrar must review the current evaluation before enrollment begins<% } %></p>
-            <% if (['registrar','database_admin'].includes(currentUser.role)) { const evaluationHref = record.readmission_evaluation.student_id ? `/registrar/records/students/${encodeURIComponent(record.readmission_evaluation.student_id)}/return-evaluations/${encodeURIComponent(record.readmission_evaluation_id)}` : `/registrar/records/return-evaluations/${encodeURIComponent(record.readmission_evaluation_id)}`; %><a class="text-link" href="<%= evaluationHref %>">Open return evaluation</a><% } %>
+            <% if (['registrar','database_admin'].includes(currentUser.role)) { const evaluationHref = record.readmission_evaluation.student_id ? `/registrar/records/students/${encodeURIComponent(record.readmission_evaluation.student_id)}/return-evaluations/${encodeURIComponent(record.readmission_evaluation_id)}` : `/registrar/records/return-evaluations/${encodeURIComponent(record.readmission_evaluation_id)}`; %><a class="table-action" href="<%= evaluationHref %>">Open return evaluation</a><% } %>
           <% } else { %><p class="muted-copy">No accepted return evaluation is linked to this paper form yet. The registrar must review the evaluation before enrollment begins.</p><% } %>
         </section>
       <% } %>

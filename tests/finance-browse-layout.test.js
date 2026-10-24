@@ -783,16 +783,17 @@ test('finance annual roster separates page data, classification, and balances in
   pendingReviewLocals.financeReadiness.set(21, { status: 'finance_review_required', reviewed: false });
   const pendingReviewHtml = await renderFinanceView('annual-student', pendingReviewLocals);
   assert.match(pendingReviewHtml, /Finance review for pending intake · 2026-2027/);
-  assert.match(pendingReviewHtml, /Review current assessment for enrollment/);
-  assert.match(pendingReviewHtml, /action="\/finance\/annual\/21\/assessment-preview"/);
-  assert.match(pendingReviewHtml, /data-assessment-preview-form data-annual-id="21"/);
+  assert.match(pendingReviewHtml, /Review assessment/);
+  assert.match(pendingReviewHtml, /action="\/finance\/annual\/21\/assessment"/);
+  assert.doesNotMatch(pendingReviewHtml, /action="\/finance\/annual\/21\/assessment-preview"/,
+    'the normal assessment path opens one reviewed draft without an earlier preview confirmation');
   assert.match(pendingReviewHtml, /this review does not post charges or change payment history/i);
   const completedReviewLocals = structuredClone(pendingReviewLocals);
   completedReviewLocals.financeReadiness.set(21, { status: 'awaiting_down_payment', reviewed: true });
   const completedReviewHtml = await renderFinanceView('annual-student', completedReviewLocals);
   assert.match(completedReviewHtml, /Finance assessment review saved/);
   assert.match(completedReviewHtml, /Record payment/);
-  assert.doesNotMatch(completedReviewHtml, /Review current assessment for enrollment/);
+  assert.doesNotMatch(completedReviewHtml, /Finance review for pending intake/);
   const existingAssessmentPreviewHtml = await renderFinanceView('annual-student', {
     ...pendingReviewLocals,
     preview: { parent: { id: 21, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC' },

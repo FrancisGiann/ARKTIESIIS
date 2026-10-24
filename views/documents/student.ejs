@@ -2,7 +2,7 @@
 <main class="page-shell dashboard-page records-page student-documents-page" id="main-content" data-active-section="<%= activeDocumentSection %>">
   <% const blockedNewOriginalTypeSet = new Set(blockedNewOriginalTypes || []); %>
   <% const availableDocumentTypes = documentTypes.filter(({ value }) => !blockedNewOriginalTypeSet.has(value)); %>
-  <a class="context-back" href="/documents">Back to document review</a>
+  <a class="context-back" href="/documents" aria-label="Back to document review" title="Back to document review">&#8592;</a>
   <%- include('../partials/student-record-navigation', { student, activeStudentView: 'documents' }) %>
   <h2 class="student-record-view-title">Documents</h2>
   <%- include('../partials/student-document-sections', { student, currentUser, activeDocumentSection }) %>

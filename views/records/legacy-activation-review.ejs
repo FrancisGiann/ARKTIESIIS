@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="<%= basePath %>">Back to enrollments</a>
+  <a class="context-back" href="<%= basePath %>" aria-label="Back to enrollments" title="Back to enrollments">&#8592;</a>
   <section class="dashboard-heading"><div><h1>Review older student logins</h1><p>Older enrollment records do not activate a login automatically. Confirm first activation only after checking the original enrollment and student identity.</p></div></section>
   <% if (notice === 'authorized') { %><p class="form-success" role="status">First-login activation approved. The login activates only when its enrollment is finalized.</p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>

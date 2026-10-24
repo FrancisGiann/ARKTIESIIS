@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell student-page" id="main-content">
-  <a class="context-back" href="/student">Back to my school day</a>
+  <a class="context-back" href="/student" aria-label="Back to my school day" title="Back to my school day">&#8592;</a>
   <header class="page-heading"><div><h1>My profile and enrollment history</h1><p>Your school records are maintained by the registrar. Contact them to request a correction.</p></div></header>
   <% const student = ownRecords?.student || null; %>
   <% if (!student) { %>

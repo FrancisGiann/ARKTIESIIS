@@ -16,6 +16,7 @@ const { latestBirthDate } = require('../services/studentRecordsService');
 const { isDuplicateKeyError } = require('../config/database');
 const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
 const { comparePreEnrollmentProfile } = require('../utils/studentProfileReview');
+const { validStudentActivationIdentity } = require('../utils/temporaryPassword');
 
 const MAX_BULK_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_XLSX_ENTRIES = 80;
@@ -650,6 +651,8 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         idempotencyKey: values.idempotencyKey || values.preEnrollmentId || preEnrollmentSource?.id || crypto.randomUUID(),
         ...options, maxBirthDate: latestBirthDate(), values: { ...values, enrollmentStartDate: values.enrollmentStartDate || schoolLocalDate() }, error, activeStep,
         paperRequirements, existingPaperChecklist, preEnrollmentSource, preEnrollmentReceiptRequirements: RECEIPT_REQUIREMENTS, recovered,
+        preEnrollmentNeedsFirstLoginIdentity: Boolean(preEnrollmentSource && preEnrollmentSource.applicant_kind !== 'readmission'
+          && !validStudentActivationIdentity(preEnrollmentSource.last_name, preEnrollmentSource.birth_date)),
         profileReviewFields: preEnrollmentSource?.existingStudent?.profile
           ? comparePreEnrollmentProfile(preEnrollmentSource, preEnrollmentSource.existingStudent.profile).filter((item) => item.differs) : [],
         paperTokens: Object.fromEntries((paperRequirements || []).map((item) => [item.requirement_code,

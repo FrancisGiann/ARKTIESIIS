@@ -1,7 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
   <% const readableStatus = (value) => String(value || '').replaceAll('_', ' ').replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()); %>
-  <a class="context-back" href="/registrar/records/students/<%= student.id %>/edit">Back to student profile</a>
+  <a class="context-back" href="/registrar/records/students/<%= student.id %>/edit" aria-label="Back to student profile" title="Back to student profile">&#8592;</a>
   <%- include('../partials/student-record-navigation', { student, activeStudentView: 'academics' }) %>
   <h2 class="student-record-view-title">Academic record</h2>
   <% if (student.status === 'archived') { %>

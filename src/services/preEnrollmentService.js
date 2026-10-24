@@ -7,6 +7,7 @@ const { ADDRESS_DEFINITIONS, StudentAddressError, normalizeStructuredAddress } =
 const { profileReviewFingerprint } = require('../utils/studentProfileReview');
 const { PROGRAM_CATALOG, isCanonicalProgram, isCanonicalTrack } = require('../utils/paperProgramCatalog');
 const { runSerializableTransaction } = require('./transactionRetry');
+const { validStudentActivationIdentity } = require('../utils/temporaryPassword');
 
 const EDIT_ROLES = new Set(['front_desk', 'registrar']);
 const CREATE_ROLES = new Set(['front_desk']);
@@ -343,6 +344,10 @@ function normalizeRecord(input = {}, { actorName = '', current = null, currentRe
   };
   requireReadyField(Boolean(result.firstName), 'firstName', 'first name');
   requireReadyField(Boolean(result.lastName), 'lastName', 'last name');
+  if (result.applicantKind !== 'readmission') {
+    requireReadyField(validStudentActivationIdentity(result.lastName, result.birthDate), 'birthDate',
+      'saved surname and valid past birth date for first student login');
+  }
   requireReadyField(/^\d{12}$/.test(result.lrn || ''), 'lrn', '12-digit LRN');
   requireReadyField(Boolean(result.studentContactNumber), 'studentContactNumber', 'student contact number');
   requireReadyField(Boolean(result.email), 'email', 'valid email address');

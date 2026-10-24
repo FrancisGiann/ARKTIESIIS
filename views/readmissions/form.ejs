@@ -58,12 +58,12 @@
   const canAccept = curriculumState === 'resolved' && availabilityState === 'available';
 %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/registrar/records">Back to student records</a>
+  <a class="context-back" href="/registrar/records" aria-label="Back to student records" title="Back to student records">&#8592;</a>
   <header class="dashboard-heading"><div><h1><%= evaluation ? 'Return evaluation' : 'Evaluate return' %></h1><p>Use this review only for a student returning after a break. Continuing students follow their usual enrollment path.</p></div>
     <% if (evaluation) { %><p class="status-pill"><%= ({under_review:'Under review',accepted:'Accepted',not_accepted:'Not accepted'})[evaluation.status] || evaluation.status %> · revision <%= evaluation.version %></p><% } %>
   </header>
   <% if (error) { %><p class="form-alert" role="alert" tabindex="-1"><%= error %></p><% } %>
-  <% if (evaluation?.student_id) { %><section class="readmission-evidence-link"><h2>Existing student evidence</h2><p>This evaluation is linked to <strong><%= evaluation.student_no || `student record ${evaluation.student_id}` %></strong>. Review the student’s existing academic progress and paper checklist before deciding.</p><p><a class="text-link" href="/registrar/records/students/<%= encodeURIComponent(evaluation.student_id) %>">Open existing student record and grades</a></p></section><% } %>
+  <% if (evaluation?.student_id) { %><section class="readmission-evidence-link"><h2>Existing student evidence</h2><p>This evaluation is linked to <strong><%= evaluation.student_no || `student record ${evaluation.student_id}` %></strong>. Review the student’s existing academic progress and paper checklist before deciding.</p><p><a class="table-action" href="/registrar/records/students/<%= encodeURIComponent(evaluation.student_id) %>">Open existing student record and grades</a></p></section><% } %>
   <% if (evaluation?.enrollment_started) { %><p class="notice-panel" role="status">This evaluation is read-only because its annual enrollment has started.</p><% } %>
   <form class="form-stack admin-form" method="post" action="<%= evaluation ? `/registrar/readmissions/${encodeURIComponent(evaluation.id)}` : '/registrar/readmissions' %>">
     <input type="hidden" name="_csrf" value="<%= csrfToken %>"><% if (evaluation) { %><input type="hidden" name="version" value="<%= evaluation.version %>"><% } %>

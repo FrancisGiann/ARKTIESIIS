@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { PreEnrollmentError, RECEIPT_REQUIREMENTS, createPreEnrollmentService } = require('../services/preEnrollmentService');
 const { latestBirthDate } = require('../services/studentRecordsService');
+const { validStudentActivationIdentity } = require('../utils/temporaryPassword');
 const { PROGRAM_CATALOG, TRACKS } = require('../utils/paperProgramCatalog');
 
 const DEFAULT_SCHOOL_YEAR = '2027-2028';
@@ -205,6 +206,8 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
       const record = await service.get(req.authUser.id, req.params.id);
       return privateHeaders(res).render('pre-enrollments/detail', {
         title: 'Pre-enrollment record', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), record,
+        needsFirstLoginIdentity: record.status === 'ready_for_registrar' && record.applicant_kind !== 'readmission'
+          && !validStudentActivationIdentity(record.last_name, record.birth_date),
         requirements: RECEIPT_REQUIREMENTS,
         notice: req.query.notice === 'saved' ? 'Pre-enrollment record saved.' : req.query.notice === 'alreadySaved' ? 'This saved submission was already recorded.' : null
       });

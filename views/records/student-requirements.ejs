@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page records-page" id="main-content">
-  <a class="context-back" href="/registrar/records/students/<%= workspace.student.id %>">Back to student overview</a>
+  <a class="context-back" href="/registrar/records/students/<%= workspace.student.id %>" aria-label="Back to student overview" title="Back to student overview">&#8592;</a>
   <%- include('../partials/student-record-navigation', { student: workspace.student, activeStudentView: 'requirements' }) %>
   <header class="page-heading"><div><p class="eyebrow">Registrar workspace</p><h2>Custom enrollment requirements</h2>
     <p>Requirement names and instructions are saved on each assignment. Staff notes and withdrawal reasons remain private.</p></div></header>

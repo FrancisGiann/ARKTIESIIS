@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell student-page" id="main-content">
-  <a class="context-back" href="/student">Back to my school day</a>
+  <a class="context-back" href="/student" aria-label="Back to my school day" title="Back to my school day">&#8592;</a>
   <header class="page-heading"><div><h1>My grades</h1><p>Only grades published after registrar approval appear here.</p></div></header>
   <% if (!ownRecords?.student) { %>
     <section class="student-unlinked" aria-labelledby="grades-unlinked-title"><h2 id="grades-unlinked-title">Your student profile is not linked yet</h2><p>Ask the registrar to connect your account before viewing grades.</p></section>

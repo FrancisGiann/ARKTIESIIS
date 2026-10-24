@@ -421,6 +421,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
   let confirmationCall = null;
   let confirmationCalls = 0;
   let hasConfirmed = false;
+  let financeStatus = 'awaiting_finance_assessment';
   const session = {};
   app.set('views', path.join(__dirname, '..', 'views'));
   app.set('view engine', 'ejs');
@@ -554,7 +555,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
       async getAnnualEntryFinanceReadinessForRegistrar(actorId, annualId) {
         assert.equal(actorId, registrar.id);
         assert.equal(String(annualId), '71');
-        return { entryTermNumber: 1, status: 'ready_for_registrar' };
+        return { entryTermNumber: 1, status: financeStatus };
       },
       async annualConfirmationAssessmentSnapshotForStaff(actorId, annualId) {
         assert.equal(actorId, registrar.id);
@@ -630,6 +631,13 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     const legacyFees = await fetch(`${baseUrl}/registrar/intake/71/fees`, { redirect: 'manual' });
     assert.equal(legacyFees.status, 303);
     assert.equal(legacyFees.headers.get('location'), '/registrar/intake/71/review');
+    const waitingHtml = await (await fetch(`${baseUrl}/registrar/intake/71/review`)).text();
+    assert.match(waitingHtml, /<h1>Awaiting Finance readiness<\/h1>/);
+    assert.match(waitingHtml, /<li aria-current="step"\s*><span class="intake-step-label--full">Finance assessment/);
+    assert.match(waitingHtml, /Finance handoff is next/);
+    assert.match(waitingHtml, /Final review waits for Finance/);
+    assert.doesNotMatch(waitingHtml, /type="submit"[^>]*>Confirm enrollment/);
+    financeStatus = 'ready_for_registrar';
     const finalReview = await fetch(`${baseUrl}/registrar/intake/71/review`);
     const reviewHtml = await finalReview.text();
     assert.equal(finalReview.status, 200);
@@ -637,6 +645,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.ok(csrfToken);
     assert.match(reviewHtml, /data-active-step="5"|aria-current="step"/);
     assert.match(reviewHtml, /Review enrollment details/);
+    assert.match(reviewHtml, /<li aria-current="step"\s*><span class="intake-step-label--full">Review details/);
     assert.match(reviewHtml, /Finance readiness/);
     assert.match(reviewHtml, /123456789012/);
     assert.match(reviewHtml, /2008-04-21/);
@@ -1631,6 +1640,9 @@ test('pre-enrollment source identity, version, token, and receipt labels survive
     assert.equal(opening.status, 200);
     assert.match(openingHtml, /Report Card \(Grade 10 \/ ALS-AF5\)/);
     assert.match(openingHtml, /Receipt counts stay separate/);
+    assert.match(openingHtml, new RegExp(`href="/pre-enrollments/${sourceId}/edit">Correct paper record`));
+    assert.match(openingHtml, /Before saving this intake, correct the saved paper record/);
+    assert.doesNotMatch(openingHtml, /Open paper record to correct details/);
     assert.match(openingHtml, /Block and Lot, Street\/Purok: Block 2, Lot 8, Mabini Street[\s\S]*Barangay: Barangay 1[\s\S]*ZIP code: 4301/);
     assert.match(openingHtml, /Block and Lot, Street\/Purok: Lot 3, Rizal Street[\s\S]*Barangay: Barangay 2[\s\S]*ZIP code: 4301/);
     assert.doesNotMatch(openingHtml, /Old full address value|Old emergency address value/);

@@ -4,7 +4,7 @@
   : ''; %>
 <% const linkedErrorFields = errorFieldLinks || []; %>
 <% const optionalProfileFields = new Set([
-  'birthDate', 'sex', 'profilePhone', 'birthplace', 'facebookName', 'addressMode', 'addressBlockLotStreetPurok',
+  'sex', 'profilePhone', 'birthplace', 'facebookName', 'addressMode', 'addressBlockLotStreetPurok',
   'addressBarangay', 'addressCity', 'addressProvince', 'addressZip', 'emergencyContactSameAsStudent',
   'emergencyContactAddressMode', 'emergencyContactAddressBlockLotStreetPurok', 'emergencyContactAddressBarangay',
   'emergencyContactAddressCity', 'emergencyContactAddressProvince', 'emergencyContactAddressZip',
@@ -15,7 +15,7 @@
 <% const receiptDetailsHaveError = linkedErrorFields.some((item) => item.name.startsWith('receipt_') || item.name === 'envelopeReceiptMode'); %>
 <% const recoveredErrorWithoutFieldLinks = Boolean(error && hasRecoveredValues && linkedErrorFields.length === 0); %>
 <main class="page-shell dashboard-page admin-page records-page pre-enrollment-page" id="main-content">
-  <a class="context-back" href="<%= record ? `/pre-enrollments/${encodeURIComponent(record.id)}` : '/pre-enrollments' %>">Back to pre-enrollment records</a>
+  <a class="context-back" href="<%= record ? `/pre-enrollments/${encodeURIComponent(record.id)}` : '/pre-enrollments' %>" aria-label="Back to pre-enrollment records" title="Back to pre-enrollment records">&#8592;</a>
   <header class="dashboard-heading"><div><h1><%= record ? 'Correct pre-enrollment record' : 'Record paper form' %></h1><p>Copy the details from the student’s paper form. Marking an item received does not mean it was inspected, approved, or verified.</p></div></header>
   <% if (error) { %><div class="form-alert pre-enrollment-error-summary" id="pre-enrollment-error-summary" role="alert" tabindex="-1"><p><%= error %></p><% if (staleVersion && record) { %><p>Another staff member saved a newer version. Your entered values are still shown, but they cannot be saved over that version. Reload the latest record to compare changes, then re-enter any needed corrections.</p><a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(record.id) %>/edit">Reload latest record</a><% } %><% if (linkedErrorFields.length) { %><ul><% for (const item of linkedErrorFields) { %><li><a href="#<%= item.id %>" data-error-target="<%= item.name %>"><%= item.label %></a></li><% } %></ul><% } %></div><% } %>
   <% if (record?.status === 'enrollment_started') { %><p class="notice-panel">Annual enrollment has started. This paper record is read-only.</p><% } else { %>
@@ -42,13 +42,13 @@
       <div class="field"><label for="pre-received-by">Paper received by</label><input id="pre-received-by" name="receivedBy" maxlength="100" value="<%= values.receivedBy || '' %>"></div>
       <div class="field"><label for="pre-received-date">Paper received date</label><input id="pre-received-date" name="receivedDate" type="date" value="<%= values.receivedDate || '' %>"></div>
     </div></section>
-    <section class="form-section"><h2>Student profile and contact</h2><p>Copy these contact details from the paper form. Email is required before you can send this record to the registrar.</p>
+    <section class="form-section"><h2>Student profile and contact</h2><p>Copy these details from the paper form. Email is required for Ready. A saved surname and past birth date are also required before a new or continuing student can start enrollment; Drafts may leave them incomplete.</p>
       <div class="field"><label for="pre-email">Email</label><input id="pre-email" name="email" type="email" autocomplete="email" maxlength="255" aria-describedby="pre-email-help" value="<%= values.email || '' %>"><small id="pre-email-help">This email will be used for the student’s account.</small></div>
+      <div class="field"><label for="pre-birth-date">Birth date <span class="muted-copy">(required for Ready when starting a new or continuing enrollment)</span></label><input id="pre-birth-date" name="birthDate" type="date" max="<%= latestBirthDate %>" aria-describedby="pre-birth-date-help" value="<%= values.birthDate || '' %>"><small id="pre-birth-date-help">Enter a valid past date from the paper form. It is needed for the student’s first login; a Draft may leave it blank.</small></div>
       <details class="pre-enrollment-optional-details" data-pre-enrollment-optional-profile<% if (optionalProfileHasError || recoveredErrorWithoutFieldLinks) { %> open<% } %>>
         <summary>Optional student profile, address, family, and emergency details</summary>
         <p class="muted-copy">Expand to view or edit saved values. These details are not required to submit the paper record as Ready.</p>
         <div class="admin-form-grid">
-      <div class="field"><label for="pre-birth-date">Birth date <span class="muted-copy">(optional)</span></label><input id="pre-birth-date" name="birthDate" type="date" max="<%= latestBirthDate %>" value="<%= values.birthDate || '' %>"></div>
       <div class="field"><label for="pre-sex">Gender <span class="muted-copy">(optional)</span></label><select id="pre-sex" name="sex"><option value="">Not recorded</option><% for (const value of ['Male','Female','Other']) { %><option value="<%= value %>" <%= values.sex === value ? 'selected' : '' %>><%= value %></option><% } %></select></div>
       <div class="field"><label for="pre-profile-phone">Phone <span class="muted-copy">(optional)</span></label><input id="pre-profile-phone" name="profilePhone" type="tel" maxlength="50" value="<%= values.profilePhone || '' %>"></div>
       <div class="field"><label for="pre-birthplace">Birthplace <span class="muted-copy">(optional)</span></label><input id="pre-birthplace" name="birthplace" maxlength="160" value="<%= values.birthplace || '' %>"></div>

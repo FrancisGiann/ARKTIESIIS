@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/teacher">Back to my classes</a>
+  <a class="context-back" href="/teacher" aria-label="Back to my classes" title="Back to my classes">&#8592;</a>
   <section class="dashboard-heading"><div><h1>Submit class grades</h1><p><%= assignment.school_year %> · <%= assignment.term %> · <%= formatStudentPlacement(assignment.grade_level, assignment.section_name) %> · <%= assignment.subject_code %> — <%= assignment.subject_name %></p></div></section>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% if (assignment.latest_submission_status) { %>

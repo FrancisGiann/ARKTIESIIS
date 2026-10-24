@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-reports-page" id="main-content">
-  <a class="context-back" href="/finance">Back to student accounts</a>
+  <a class="context-back" href="/finance" aria-label="Back to student accounts" title="Back to student accounts">&#8592;</a>
   <header class="dashboard-heading"><div><h1>Finance reports</h1><p>Choose one Finance task. Date filters apply to payments recorded, payment applications, or corrections; term balances show today’s account snapshot.</p></div></header>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% const reportViews = [['collections','Payments received'],['allocations','Payments applied'],['corrections','Corrections'],['term-balances','Term balances']]; %>

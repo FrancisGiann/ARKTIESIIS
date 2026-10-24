@@ -1,11 +1,11 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
   <% if (student) { %>
-    <a class="context-back" href="/registrar/records">Back to student search</a>
+    <a class="context-back" href="/registrar/records" aria-label="Back to student search" title="Back to student search">&#8592;</a>
     <%- include('../partials/student-record-navigation', { student, activeStudentView: 'profile' }) %>
     <h2 class="student-record-view-title">Profile</h2>
   <% } else { %>
-    <a class="context-back" href="/registrar/records">Back to student records</a>
+    <a class="context-back" href="/registrar/records" aria-label="Back to student records" title="Back to student records">&#8592;</a>
     <section class="dashboard-heading"><div><h1>Create student profile</h1><p>Enter the student’s master record details. The number is assigned automatically from the current academic year.</p></div></section>
   <% } %>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>

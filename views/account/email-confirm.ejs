@@ -1,7 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell auth-page" id="main-content">
   <section class="auth-intro" aria-labelledby="confirm-email-title">
-    <a class="context-back" href="/login">Return to sign in</a>
+    <a class="context-back" href="/login" aria-label="Return to sign in" title="Return to sign in">&#8592;</a>
     <h1 id="confirm-email-title">Confirm email address</h1>
     <p>Confirm <strong><%= email %></strong> as your sign-in and verification email. This will sign out all sessions, and you will sign in again with the new address.</p>
   </section>

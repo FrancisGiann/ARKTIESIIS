@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/registrar">Back to registrar dashboard</a>
+  <a class="context-back" href="/registrar" aria-label="Back to registrar dashboard" title="Back to registrar dashboard">&#8592;</a>
   <section class="dashboard-heading"><div><h1>Teacher grade submissions</h1><p>Review a teacher’s corrected SSHS E-Class Record workbook before grades become visible to students.</p></div></section>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <section class="admin-section" aria-labelledby="pending-grade-submissions-title"><div class="admin-section__heading"><div><h2 id="pending-grade-submissions-title">Pending review</h2><p>Approval saves the selected grades to student records and publishes them.</p></div></div>

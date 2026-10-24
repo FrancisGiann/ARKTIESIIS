@@ -213,7 +213,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-colo
 .admin-table tbody tr:hover, .portal-table tbody tr:hover, .finance-table tbody tr:hover { background: #fafcfc; }
 .admin-table caption { padding: 0.6rem; text-align: left; }
 .table-subtext { display: block; color: var(--muted); font-size: 0.82rem; }
-.table-action { display: inline-flex; align-items: center; min-height: 2.75rem; }
+.table-action { display: inline-flex; min-height: 2.75rem; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius-control); font-size: 0.84rem; font-weight: 700; line-height: 1.2; text-align: center; text-decoration: none; vertical-align: middle; }
+.table-action:hover { color: var(--accent); background: var(--surface-soft); border-color: var(--accent); text-decoration: none; }
+.table-action:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .table-button { padding: 0; color: var(--accent); background: transparent; border: 0; cursor: pointer; font: inherit; }
 .admin-search, .finance-search { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.8rem; margin-bottom: 1rem; }
 .admin-search .field, .finance-search .field { flex: 1 1 16rem; }
@@ -226,9 +228,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-colo
 .auth-note { margin-top: 1rem; padding-top: 0.9rem; border-top: 1px solid var(--line); font-size: 0.88rem; }
 .auth-form-section h2 { margin-bottom: 1rem; }
 .auth-form-section .form-stack { margin-top: 1rem; }
-.context-back { display: inline-flex; min-height: 2.75rem; align-items: center; margin-bottom: 0.7rem; font-size: 0.87rem; font-weight: 700; }
-.context-back[href^="/finance"] { gap: 0.45rem; }
-.context-back[href^="/finance"]::before { content: "←"; font-size: 1.15em; line-height: 1; }
+.context-back { display: inline-flex; width: 2.75rem; height: 2.75rem; align-items: center; justify-content: center; margin-bottom: 0.7rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface); color: var(--accent); font-size: 1.25rem; font-weight: 700; line-height: 1; text-decoration: none; }
+.context-back:hover { background: var(--surface-soft); }
+.context-back:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 input:not([type=checkbox]):not([type=radio])[type="search"] { padding-left: 2.5rem; background-image: url('/icons/search.svg'); background-repeat: no-repeat; background-size: 1rem 1rem; background-position: 0.85rem center; }
 .resend-form { margin-top: 0.85rem; }
 .account-switch-form { margin-top: 1rem; }
@@ -365,6 +367,7 @@ input:not([type=checkbox]):not([type=radio])[type="search"] { padding-left: 2.5r
 .document-detail-page > .document-history-disclosure { margin-top: 0.8rem; }
 @media (min-width: 881px) {
   .document-detail-page { width: min(calc(100% - 3rem), 90rem); }
+  .document-detail-page .document-source-pane { position: sticky; top: 1rem; z-index: 1; }
   .document-detail-page .document-source-pane .admin-section__heading,
   .document-detail-page .document-findings-pane .admin-section__heading,
   .document-detail-page .document-decision-pane .admin-section__heading { display: block; }
@@ -1961,7 +1964,7 @@ label { font-size: 0.84rem; }
 .enrollment-history li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.85rem 0; border-top: 1px solid var(--line); }
 .enrollment-history li > div { display: grid; min-width: 0; gap: 0.2rem; }
 .enrollment-history li > div span { color: var(--muted); font-size: 0.86rem; }
-.teacher-grade-selection .context-back { display: inline-block; margin-bottom: 0.8rem; }
+.teacher-grade-selection .context-back { display: inline-flex; margin-bottom: 0.8rem; }
 
 @media (max-width: 960px) {
   .schedule-section-grid { grid-template-columns: minmax(0, 1fr); }
@@ -2709,7 +2712,7 @@ body.finance-fee-action-dialog-open { overflow: hidden; }
 .pre-enrollment-filter-bar > .button { min-width: 6rem; white-space: nowrap; }
 
 .pre-enrollment-detail-page { min-width: 0; }
-.pre-enrollment-detail-page .context-back { display: inline-block; margin-bottom: 0.8rem; }
+.pre-enrollment-detail-page .context-back { display: inline-flex; margin-bottom: 0.8rem; }
 .pre-enrollment-form .pre-enrollment-address-copy-toggle {
   display: flex;
   align-items: center;
@@ -2819,7 +2822,8 @@ body.finance-fee-action-dialog-open { overflow: hidden; }
 .pre-enrollment-detail-heading__meta strong { color: var(--ink); font-weight: 700; }
 .pre-enrollment-status { text-transform: none; }
 .pre-enrollment-status--draft { color: var(--ink-soft); background: var(--surface-soft); }
-.pre-enrollment-status--ready { color: var(--success); background: var(--success-soft); }
+.pre-enrollment-status--ready { color: var(--warning); background: var(--warning-soft); }
+.pre-enrollment-status--confirmed { color: var(--success); background: var(--success-soft); }
 .pre-enrollment-status--started { color: var(--warning); background: var(--warning-soft); }
 .pre-enrollment-detail-actions { display: flex; min-width: 0; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.55rem; }
 .pre-enrollment-readonly-note { max-width: 29ch; margin: 0; color: var(--muted); font-size: 0.8rem; }
@@ -3527,13 +3531,13 @@ details > summary { min-height: 2.75rem; }
 .finance-accounts-filter-form .field { min-width: 0; gap: 0.25rem; }
 .finance-accounts-filter-form .field > span { color: var(--muted); font-size: 0.71rem; }
 .finance-accounts-filter-form input:not([type="checkbox"]),
-.finance-accounts-filter-form select { min-height: 2.35rem; padding-block: 0.3rem; }
+.finance-accounts-filter-form select { min-height: 44px; padding-block: 0.3rem; }
 .finance-accounts-search { grid-column: auto; }
 .finance-accounts-active-context { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 0.1rem 0.5rem; margin: 0; color: var(--muted); font-size: 0.7rem; line-height: 1.35; }
 .finance-accounts-active-context strong { color: var(--ink); }
-.finance-accounts-apply-button { grid-column: 3; width: 100%; min-height: 2.35rem; padding-inline: 0.55rem; font-size: 0.76rem; }
-.finance-accounts-filter-disclosure { grid-column: 5; min-width: 0; }
-.finance-accounts-filter-disclosure > summary { display: flex; min-height: 2.35rem; align-items: center; gap: 0.35rem; padding: 0.2rem 0.55rem; color: var(--accent); background: #f7f9f9; border: 1px solid var(--line-strong); border-radius: var(--radius-control); cursor: pointer; font-size: 0.76rem; font-weight: 750; }
+.finance-accounts-apply-button { grid-column: 3; width: 100%; min-height: 44px; align-self: end; padding: 0 0.55rem; font-size: 0.76rem; }
+.finance-accounts-filter-disclosure { grid-column: 5; min-width: 0; align-self: end; }
+.finance-accounts-filter-disclosure > summary { display: flex; min-height: 44px; align-items: center; gap: 0.35rem; padding: 0.2rem 0.55rem; color: var(--accent); background: #f7f9f9; border: 1px solid var(--line-strong); border-radius: var(--radius-control); cursor: pointer; font-size: 0.76rem; font-weight: 750; }
 .finance-accounts-filter-disclosure > summary:focus-visible,
 .finance-accounts-expand:focus-visible,
 .finance-accounts-installment:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
@@ -3778,4 +3782,21 @@ details > summary { min-height: 2.75rem; }
 .requirement-student-instructions {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.annual-management-page > .dashboard-heading { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; }
+.annual-management-page > .dashboard-heading > div:first-child { min-width: 0; }
+.annual-management-page > .dashboard-heading .admin-heading-actions { display: flex; flex-wrap: wrap; justify-content: flex-start; align-items: center; gap: 0.65rem; }
+.annual-management-page > .dashboard-heading .admin-heading-actions .button { min-height: 44px; }
+.finance-assessment-tabs, .finance-assessment-pages { display: flex; align-items: center; flex-wrap: wrap; gap: 0.65rem; margin-block: 1rem; }
+.finance-assessment-tabs .button { display: inline-flex; align-items: center; gap: 0.5rem; min-height: 44px; }
+.finance-assessment-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 0.7rem; margin-bottom: 1rem; }
+.finance-assessment-filters .field { min-width: min(100%, 14rem); margin: 0; }
+.finance-assessment-filters .button { min-height: 44px; }
+.finance-assessment-queue th small { display: block; margin-top: 0.2rem; font-weight: 500; }
+@media (max-width: 480px) {
+  .annual-management-page > .dashboard-heading .admin-heading-actions, .finance-assessment-filters { width: 100%; }
+  .annual-management-page > .dashboard-heading .admin-heading-actions .button { width: 100%; justify-content: center; }
+  .finance-assessment-tabs .button { flex: 1 1 10rem; justify-content: center; }
+  .finance-assessment-filters .field { flex: 1 1 100%; }
 }

@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page teacher-assignment-page" id="main-content">
-  <a class="context-back" href="/registrar">Back to registrar workspace</a>
+  <a class="context-back" href="/registrar" aria-label="Back to registrar workspace" title="Back to registrar workspace">&#8592;</a>
   <section class="dashboard-heading"><div><h1>Teacher assignments</h1><p>Choose a term, section, teacher, and subject to connect a class. Class times are added after assignment.</p></div><nav class="admin-heading-actions" aria-label="Academic setup tasks"><a class="button button--secondary" href="/registrar/records?view=setup">Academic setup</a><a class="button button--secondary" href="/registrar/records/subjects?openForm=1#subject-code">Add subject</a></nav></section>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>

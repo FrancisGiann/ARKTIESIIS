@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page readmissions-page" id="main-content">
-  <a class="context-back" href="/registrar/records">Back to student records</a>
+  <a class="context-back" href="/registrar/records" aria-label="Back to student records" title="Back to student records">&#8592;</a>
   <header class="dashboard-heading">
     <div><h1><%= evaluation ? 'Return evaluation' : 'Evaluate return' %></h1><p>Use this review only for an applicant returning after a break. Continuing students follow the usual enrollment path. Saving this review does not create a student profile, account, or enrollment.</p></div>
     <% if (evaluation) { %><p class="status-pill"><%= ({under_review:'Under review',accepted:'Accepted',not_accepted:'Not accepted'})[evaluation.status] || evaluation.status %> · revision <%= evaluation.version %></p><% } %>

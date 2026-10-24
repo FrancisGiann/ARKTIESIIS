@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page records-page" id="main-content">
-  <a class="context-back" href="/admin">Back to admin overview</a>
+  <a class="context-back" href="/admin" aria-label="Back to admin overview" title="Back to admin overview">&#8592;</a>
   <header class="page-heading"><div><p class="eyebrow">Database administration</p><h1>Enrollment requirement catalog</h1>
     <p>Custom labels and student instructions are saved as versioned snapshots on new assignments. Deactivation prevents future assignment and does not remove existing work.</p></div></header>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>

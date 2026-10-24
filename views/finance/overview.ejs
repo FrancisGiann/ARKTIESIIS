@@ -57,6 +57,7 @@
   <section class="finance-other-tasks" aria-labelledby="finance-other-tasks-heading">
     <h2 id="finance-other-tasks-heading">Other finance tasks</h2>
     <ul class="finance-other-tasks__list">
+      <li><a href="/finance/assessments"><span>Assessments</span><strong>→</strong><small>Open pending approvals directly; reviewed assessments remain available in Approved.</small></a></li>
       <li><a href="/finance/departures"><span>Departure fee reviews</span><strong><%= Number(overview.queueCounts?.departureReview || 0).toLocaleString('en-US') %></strong><small>Review recorded departure cases. Check each effective date and placement status; scheduled cases have not changed enrollment status.</small></a></li>
       <li><a href="/finance/document-clearance"><span>Document request fee review</span><strong><%= Number(overview.queueCounts?.documentClearance || 0).toLocaleString('en-US') %></strong><small>Check account fees before document processing begins.</small></a></li>
       <li><a href="/finance/review-drafts"><span>Unfinished reviews</span><strong><%= Number(overview.queueCounts?.savedReviews || 0).toLocaleString('en-US') %></strong><small>Your saved changes that still need review.</small></a></li>

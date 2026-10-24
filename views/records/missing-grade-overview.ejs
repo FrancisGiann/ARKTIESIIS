@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page records-page" id="main-content">
-  <a class="context-back" href="/registrar/records">Back to student records</a>
+  <a class="context-back" href="/registrar/records" aria-label="Back to student records" title="Back to student records">&#8592;</a>
   <header class="dashboard-heading records-heading"><div><h1>Grade completion overview</h1><p>Published grades remain authoritative while a newer teacher workbook is under review.</p></div></header>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <section class="admin-section" aria-labelledby="grade-overview-filter-title">

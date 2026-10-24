@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-departures-page" id="main-content">
-  <a class="context-back" href="/finance">Back to student accounts</a>
+  <a class="context-back" href="/finance" aria-label="Back to student accounts" title="Back to student accounts">&#8592;</a>
   <header class="dashboard-heading"><div><h1>Departure fee reviews</h1><p>Finance reviews the recorded case, effective date, fees, and balances. A scheduled future case does not change enrollment status before its effective date. Academic history and any remaining account debt stay on record.</p></div></header>
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>

@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page records-page teacher-class-page" id="main-content">
-  <a class="context-back" href="/teacher">Back to my classes</a>
+  <a class="context-back" href="/teacher" aria-label="Back to my classes" title="Back to my classes">&#8592;</a>
   <header class="dashboard-heading">
     <div><h1>Class overview</h1><p><%= assignment.subject_code %> · <%= assignment.subject_name %> · <%= assignment.school_year %> · <%= assignment.term %> · <%= formatStudentPlacement(assignment.grade_level, assignment.section_name) %></p></div>
   </header>

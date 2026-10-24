@@ -1,7 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-report-details-page" id="main-content">
   <% const reportTitle = ({collections:'Payments received',allocations:'Payments applied',corrections:'Payment corrections'})[detail.kind]; const reportLabel = ({collections:'payments received',allocations:'payments applied',corrections:'corrections'})[detail.kind]; %>
-  <a class="context-back" href="/finance/reports?<%= new URLSearchParams({ view: detail.kind, fromDate: detail.fromDate, toDate: detail.toDate }).toString() %>">Back to <%= reportLabel %> report</a>
+  <a class="context-back" href="/finance/reports?<%= new URLSearchParams({ view: detail.kind, fromDate: detail.fromDate, toDate: detail.toDate }).toString() %>" aria-label="Back to <%= reportLabel %> report" title="Back to <%= reportLabel %> report">&#8592;</a>
   <header class="dashboard-heading"><div><h1><%= reportTitle %></h1><p><%= detail.fromDate %> through <%= detail.toDate %> · <%= detail.pagination.totalRecords %> matching record<%= detail.pagination.totalRecords === 1 ? '' : 's' %></p></div></header>
   <% const pages = detail.pagination; const pageParams = new URLSearchParams({ kind: detail.kind, fromDate: detail.fromDate, toDate: detail.toDate }); const pageHref = (page) => { const params = new URLSearchParams(pageParams); params.set('page', String(page)); return `/finance/reports/details?${params.toString()}`; }; %>
   <section class="finance-panel" aria-label="Report records">

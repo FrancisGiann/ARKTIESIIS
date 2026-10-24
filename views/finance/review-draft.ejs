@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page finance-review-page" id="main-content">
-  <a class="context-back" href="/finance/review-drafts">Back to unfinished reviews</a>
+  <a class="context-back" href="/finance/review-drafts" aria-label="Back to unfinished reviews" title="Back to unfinished reviews">&#8592;</a>
   <header class="dashboard-heading">
     <div><p class="eyebrow">Finance · Review before saving</p><h1><%= actionLabel %></h1><p>Check the complete update below. Saving applies it once and records the reviewed result together.</p></div>
   </header>
@@ -297,10 +297,11 @@
       <input type="hidden" name="revision" value="<%= draft.revision %>">
       <input type="hidden" name="dependencyFingerprint" value="<%= draft.dependencyFingerprint %>">
       <% if (draft.actionType === 'annual_assessment' && draft.preview.annualHandoffRequired) { %>
-        <label class="field"><span><input type="checkbox" name="financeAssessmentAttestation" value="1" required> I reviewed the approved fee schedule, selected options, and exact annual assessment shown above.</span></label>
+        <input type="hidden" name="financeAssessmentAttestation" value="1">
+        <p class="finance-review-attestation">Approving confirms that you reviewed the approved fee schedule, selected options, and exact annual assessment shown above. Finance approval is recorded; Registrar confirms enrollment separately.</p>
         <label class="field"><span><input type="checkbox" name="zeroDpApproval" value="1"> If this entry-term DP is zero after approved waivers, I explicitly approve the zero-DP case.</span></label>
       <% } %>
-      <button class="button button--primary" type="submit" <%= previewUnavailable || (draft.actionType === 'departure_review' && draft.preview.departureReviewReady !== true) ? 'disabled' : '' %>><%= draft.actionType === 'retake_item_decision' ? 'Save Finance decision' : 'Review complete · Save update' %></button>
+      <button class="button button--primary" type="submit" <%= previewUnavailable || (draft.actionType === 'departure_review' && draft.preview.departureReviewReady !== true) ? 'disabled' : '' %>><%= draft.actionType === 'annual_assessment' ? (draft.preview.annualHandoffRequired ? 'Approve Finance assessment' : 'Post annual assessment') : draft.actionType === 'retake_item_decision' ? 'Save Finance decision' : 'Review complete · Save update' %></button>
     </form>
     <form method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/discard">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">

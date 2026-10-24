@@ -1,14 +1,15 @@
 <%- include('../partials/head', { title }) %>
+<% const awaitingFinance = Boolean(record && financeReadiness && !confirmationComplete && financeReadiness.status !== 'ready_for_registrar'); %>
 <main class="page-shell dashboard-page admin-page records-page annual-intake-review" id="main-content">
-  <a class="context-back" href="/registrar/intake">Back to enrollments</a>
+  <a class="context-back" href="/registrar/intake" aria-label="Back to enrollments" title="Back to enrollments">&#8592;</a>
   <header class="dashboard-heading">
     <div>
-      <h1>Review enrollment details</h1>
-      <p>Check the saved student, placement, paper checklist, and Finance readiness before finalizing enrollment.</p>
+      <h1><%= awaitingFinance ? 'Awaiting Finance readiness' : 'Review enrollment details' %></h1>
+      <p><%= awaitingFinance ? 'The Registrar saved the student and paper review. Finance must finish the assessment and any required entry-term DP before final review can begin.' : 'Check the saved student, placement, paper checklist, and Finance readiness before finalizing enrollment.' %></p>
     </div>
   </header>
   <nav class="intake-progress" aria-label="Enrollment steps">
-    <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Paper document review</span><span class="intake-step-label--short">Papers</span></li><li><span class="intake-step-label--full">Finance assessment</span><span class="intake-step-label--short">Finance</span></li><li aria-current="step"><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li></ol>
+    <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Paper document review</span><span class="intake-step-label--short">Papers</span></li><li<% if (awaitingFinance) { %> aria-current="step"<% } %>><span class="intake-step-label--full">Finance assessment</span><span class="intake-step-label--short">Finance</span></li><li<% if (!awaitingFinance) { %> aria-current="step"<% } %>><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li></ol>
   </nav>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% if (sourceReviewRecovery?.formUnavailable) { %>
@@ -20,6 +21,7 @@
   <% if (!record || !checklist || !financeReadiness) { %>
     <section class="admin-section"><p>The final review could not be loaded. Return to enrollments to try again.</p><a class="button button--secondary" href="/registrar/intake">Return to enrollments</a></section>
   <% } else { %>
+    <% if (awaitingFinance) { %><section class="notice-panel" aria-labelledby="finance-handoff-heading"><h2 id="finance-handoff-heading">Finance handoff is next</h2><p>The saved intake is waiting for Finance. Finance reviews and posts the current assessment; any required entry-term tuition DP is recorded through the payment workflow. Return here for final Registrar review when the status is Ready for Registrar.</p><p><a class="button button--secondary" href="/registrar/intake/<%= annualId %>/manage">View saved enrollment</a></p></section><% } %>
     <% const parent = record.parent; const birthDate = parent.birth_date ? (parent.birth_date instanceof Date ? parent.birth_date.toISOString().slice(0, 10) : String(parent.birth_date).slice(0, 10)) : 'Not recorded'; const startDate = parent.enrollment_start_date ? (parent.enrollment_start_date instanceof Date ? parent.enrollment_start_date.toISOString().slice(0, 10) : String(parent.enrollment_start_date).slice(0, 10)) : 'Not recorded'; %>
     <% const statusLabel = (value) => {
       const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -147,6 +149,8 @@
       <% if (confirmationComplete) { %>
         <div class="admin-section__heading"><div><h2 id="review-confirm-title">Enrollment already confirmed</h2><p>This annual enrollment has a registrar confirmation on record.</p></div></div>
         <a class="button button--secondary" href="/registrar/intake/<%= annualId %>/manage">Open student record</a>
+      <% } else if (awaitingFinance) { %>
+        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Final review waits for Finance</h2><p>Finance readiness is shown above. No Registrar confirmation is available until the required assessment and entry-term DP checks pass.</p></div></div>
       <% } else { %>
         <div class="admin-section__heading"><div><h2 id="review-confirm-title">Finalize enrollment</h2><p>Confirming reuses Finance’s reviewed assessment and activates the entry term after its full tuition DP is settled.</p></div></div>
         <% if (!prerequisiteReview?.ready) { %><p class="form-alert" role="alert">Resolve each earlier-term paper form item above before confirming enrollment.</p><% } %>

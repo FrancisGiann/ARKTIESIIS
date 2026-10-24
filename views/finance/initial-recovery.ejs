@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page" id="main-content">
-  <a class="context-back" href="<%= returnHref %>">Return to the finance task</a>
+  <a class="context-back" href="<%= returnHref %>" aria-label="Return to the finance task" title="Return to the finance task">&#8592;</a>
   <header class="dashboard-heading"><div><p class="eyebrow">Finance · <%= actionLabel %></p><h1>Keep these details while you correct the form</h1><p>No review was saved. Your submitted values are shown below so you can refer to them when you reopen the task.</p></div></header>
   <p class="form-alert" role="alert"><%= error %></p>
   <% if (preservedValues.length) { %>

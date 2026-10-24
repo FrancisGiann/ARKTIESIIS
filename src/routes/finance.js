@@ -9,6 +9,7 @@ const {
 } = require('../services/annualFinanceReportsService');
 const { FinanceDashboardError, createFinanceDashboardService } = require('../services/financeDashboardService');
 const { FinanceMasterlistError, createFinanceMasterlistService } = require('../services/financeMasterlistService');
+const { FinanceAssessmentQueueError, createFinanceAssessmentQueueService } = require('../services/financeAssessmentQueueService');
 const { createCsvColumns, csvHeader, csvRow } = require('../utils/financeMasterlistCsv');
 const {
   StudentDocumentFinanceClearanceError,
@@ -86,13 +87,16 @@ function recoveryFields(input = {}) {
     .filter((field) => field.value !== '');
 }
 
-function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, documentClearanceService, financeReviewActionService, retakeReferralService, sessionSecret = '', logger = console } = {}) {
+function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, financeAssessmentQueueService, documentClearanceService, financeReviewActionService, retakeReferralService, sessionSecret = '', logger = console } = {}) {
   const router = express.Router();
   const annual = annualFinanceService || createAnnualFinanceService({ getPool, sql });
   const cases = financeCasesService || createAnnualFinanceCasesService({ getPool, sql });
   const reports = financeReportsService || createAnnualFinanceReportsService({ getPool, sql });
   const dashboard = financeDashboardService || createFinanceDashboardService({ getPool, sql });
   const masterlist = financeMasterlistService || createFinanceMasterlistService({ getPool, sql });
+  const assessmentQueue = financeAssessmentQueueService || createFinanceAssessmentQueueService({
+    getPool, sql, getReadiness: (actorId, annualId) => annual.getAnnualEntryFinanceReadinessForFinance(actorId, annualId)
+  });
   const documentClearance = documentClearanceService || createStudentDocumentFinanceClearanceService({ getPool, sql });
   const reviewActions = financeReviewActionService || createFinanceReviewActionService({ getPool, sql });
   const retakeReferrals = retakeReferralService || createRetakeReferralService({ getPool, sql, annualFinanceService: annual });
@@ -877,6 +881,21 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         return res.status(error.status).render('error', { title: 'Finance overview', message: error.message });
       }
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The finance overview could not be loaded.' });
+    }
+  });
+
+  router.get('/assessments', async (req, res) => {
+    try {
+      const queue = await assessmentQueue.list(req.authUser.id, req.query);
+      return res.set('Cache-Control', 'private, no-store').render('finance/assessments', {
+        title: 'Assessments', currentUser: req.authUser, queue, csrfToken: ensureCsrfToken(req), notice: req.query.notice
+      });
+    } catch (error) {
+      if (error instanceof FinanceAssessmentQueueError && error.status < 500) {
+        return res.status(error.status).render('error', { title: 'Assessments', message: error.message });
+      }
+      logger.error?.('Finance assessment queue failed.', { operation: 'finance.assessments.load', ...safeErrorDiagnostics(error) });
+      return res.status(503).render('error', { title: 'Service Unavailable', message: 'Assessments could not be loaded.' });
     }
   });
   router.get('/masterlist', (req, res) => redirectLegacyMasterlist(req, res, '/finance'));

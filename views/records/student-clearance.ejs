@@ -4,7 +4,7 @@
     const nextTerm = terms.find((term) => !term.future && !term.beforeEntry && term.state !== 'complete'
       && term.state !== 'not_attended' && term.enrollment_id);
   %>
-  <a class="context-back" href="/registrar/records/clearance">Back to paper clearance</a>
+  <a class="context-back" href="/registrar/records/clearance" aria-label="Back to paper clearance" title="Back to paper clearance">&#8592;</a>
   <section class="dashboard-heading">
     <div><h1>Paper clearance</h1><p><strong><%= clearanceStudentName %></strong><% if (student.student_no) { %> · Student no. <%= student.student_no %><% } %></p>
       <p>After checking the returned paper form, the registrar records one completion for each applicable term.</p></div>

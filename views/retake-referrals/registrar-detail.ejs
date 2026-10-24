@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page finance-page retake-page" id="main-content">
-  <a class="context-back" href="/registrar/retake-referrals">Back to retake referrals</a>
+  <a class="context-back" href="/registrar/retake-referrals" aria-label="Back to retake referrals" title="Back to retake referrals">&#8592;</a>
   <header class="dashboard-heading">
     <div><p class="eyebrow">Registrar · Revision <%= referral.revision_no %></p><h1><%= referral.student_name %></h1>
       <p><%= referral.student_no || 'Student number unavailable' %> · <%= referral.school_year %> · <%= referral.grade_level %> · <%= referral.intake_kind %></p></div>

@@ -1,0 +1,28 @@
+<%- include('../partials/head', { title }) %>
+<main class="page-shell dashboard-page finance-page" id="main-content">
+  <header class="dashboard-heading"><div><h1>Assessments</h1><p>Review annual fee assessments waiting for Finance. Payment recording is a separate task.</p></div></header>
+  <% if (notice === 'assessmentSaved') { %><p class="form-success" role="status"><strong>Finance assessment saved.</strong> Check entry-term payment readiness separately; Registrar confirms the enrollment.</p><% } %>
+  <% const scope = queue.filters.schoolYear ? `&schoolYear=${encodeURIComponent(queue.filters.schoolYear)}` : ''; %>
+  <nav class="finance-assessment-tabs" aria-label="Assessment status">
+    <a class="button <%= queue.filters.view === 'pending' ? 'button--primary' : 'button--secondary' %>" href="/finance/assessments?view=pending<%= scope %>"<% if (queue.filters.view === 'pending') { %> aria-current="page"<% } %>>Pending approval <strong><%= queue.counts.pending %></strong></a>
+    <a class="button <%= queue.filters.view === 'approved' ? 'button--primary' : 'button--secondary' %>" href="/finance/assessments?view=approved<%= scope %>"<% if (queue.filters.view === 'approved') { %> aria-current="page"<% } %>>Approved <strong><%= queue.counts.approved %></strong></a>
+  </nav>
+  <section class="admin-section" aria-labelledby="assessment-list-heading">
+    <div class="admin-section__heading"><div><h2 id="assessment-list-heading"><%= queue.filters.view === 'pending' ? 'Pending approval' : 'Approved assessments' %></h2><p><%= queue.pagination.total %> matching annual enrollment<%= queue.pagination.total === 1 ? '' : 's' %>. Assessment status is independent of payment status.</p></div></div>
+    <form method="get" action="/finance/assessments" class="finance-assessment-filters">
+      <input type="hidden" name="view" value="<%= queue.filters.view %>">
+      <label class="field"><span>School year</span><select name="schoolYear"><option value="">All school years</option><% for (const year of queue.schoolYears) { %><option value="<%= year %>" <%= queue.filters.schoolYear === year ? 'selected' : '' %>><%= year %></option><% } %></select></label>
+      <button class="button button--secondary" type="submit">Apply</button>
+    </form>
+    <% if (!queue.rows.length) { %><p class="empty-state" role="status"><%= queue.filters.view === 'pending' ? 'No pending assessments match this school year. New pending enrollments appear here after Registrar saves the intake.' : 'No approved assessments match this school year.' %></p><% } else { %>
+      <div class="table-scroll finance-assessment-queue" tabindex="0" aria-label="Finance assessment queue"><table class="admin-table">
+        <thead><tr><th scope="col">Student</th><th scope="col">School year and grade</th><th scope="col">Assessment state</th><th scope="col">Action</th></tr></thead>
+        <tbody><% for (const row of queue.rows) { const pending = queue.filters.view === 'pending'; const reason = !row.assessment_id ? 'Assessment not posted' : row.voucher_review_required ? 'Voucher review required' : 'Finance review required'; const anchor = !row.assessment_id ? `assessment-${row.annual_enrollment_id}` : row.voucher_review_required ? `placements-${row.annual_enrollment_id}` : `assessment-review-${row.annual_enrollment_id}`; const accountHref = `/finance/students/${encodeURIComponent(row.student_id)}/annual?schoolYear=${encodeURIComponent(row.school_year)}&view=charges#${anchor}`; %>
+          <tr><th scope="row" data-label="Student"><%= row.student_name || 'Name unavailable' %><small><%= row.student_no || 'Student number unavailable' %></small></th><td data-label="School year and grade"><%= row.school_year %> · <%= row.grade_level %><small><%= row.voucher_code || 'Voucher not recorded' %></small></td><td data-label="Assessment state"><span class="status-chip <%= pending ? 'status-chip--pending' : 'status-chip--good' %>"><%= pending ? reason : 'Finance reviewed' %></span></td><td data-label="Action"><% if (pending && row.assessment_id && !row.voucher_review_required) { %><form method="post" action="/finance/annual/<%= row.annual_enrollment_id %>/assessment"><input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="scheduleId" value="<%= row.schedule_id %>"><input type="hidden" name="scheduleVersion" value="<%= row.schedule_version %>"><input type="hidden" name="voucherCode" value="<%= row.assessed_voucher_code %>"><button class="button button--primary" type="submit">Review assessment</button></form><% } else { %><a class="button <%= pending ? 'button--primary' : 'button--secondary' %>" href="<%= accountHref %>"><%= pending ? 'Review assessment' : 'View assessment' %></a><% } %></td></tr>
+        <% } %></tbody>
+      </table></div>
+    <% } %>
+    <% if (queue.pagination.totalPages > 1) { const pageHref = (page) => `/finance/assessments?view=${queue.filters.view}${scope}&page=${page}`; %><nav class="finance-assessment-pages" aria-label="Assessment pages"><% if (queue.pagination.page > 1) { %><a class="button button--secondary" href="<%= pageHref(queue.pagination.page - 1) %>">Previous</a><% } %><span>Page <%= queue.pagination.page %> of <%= queue.pagination.totalPages %></span><% if (queue.pagination.page < queue.pagination.totalPages) { %><a class="button button--secondary" href="<%= pageHref(queue.pagination.page + 1) %>">Next</a><% } %></nav><% } %>
+  </section>
+</main>
+<%- include('../partials/foot') %>

@@ -1,6 +1,6 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page admin-page records-page" id="main-content">
-  <a class="context-back" href="/registrar/intake">Back to enrollments</a>
+  <a class="context-back" href="/registrar/intake" aria-label="Back to enrollments" title="Back to enrollments">&#8592;</a>
   <section class="dashboard-heading"><div><h1>Enroll a student</h1><p>Create a student profile, inactive login, and pending enrollment for an existing term and section.</p></div></section>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <section class="admin-form-section" aria-labelledby="intake-form-title">

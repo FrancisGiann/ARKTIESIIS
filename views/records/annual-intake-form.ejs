@@ -9,12 +9,13 @@
 <% const modalityLabel = (value, subtype) => value === 'modular' && subtype ? `Modular · ${String(subtype).replaceAll('_', ' ')}` : ({ 'face-to-face': 'Face-to-face', face_to_face: 'Face-to-face', distance: 'Distance', online: 'Online', modular: 'Modular', hybrid: 'Hybrid' })[value] || String(value || '').replaceAll('_', ' '); %>
 <% const envelopeReceiptLabel = (receipt) => { if (receipt.requirement_code !== 'long_brown_envelopes') return `original ${receipt.original_received ? `received${receipt.original_pieces ? ` (${receipt.original_pieces})` : ''}` : 'not recorded'}; photocopy ${receipt.photocopy_received ? `received${receipt.photocopy_pieces ? ` (${receipt.photocopy_pieces})` : ''}` : 'not recorded'}`; if (receipt.original_received && Number(receipt.original_pieces) === 3 && !receipt.photocopy_received && receipt.photocopy_pieces == null) return 'All three received'; if (!receipt.original_received && receipt.original_pieces == null && !receipt.photocopy_received && receipt.photocopy_pieces == null) return 'Not recorded'; return `Legacy receipt: original ${receipt.original_received ? 'received' : 'not received'}${receipt.original_pieces == null ? ' (quantity unknown)' : ` (${receipt.original_pieces})`}; photocopy ${receipt.photocopy_received ? 'received' : 'not received'}${receipt.photocopy_pieces == null ? '' : ` (${receipt.photocopy_pieces})`}`; }; %>
 <main class="page-shell dashboard-page admin-page records-page registrar-intake" id="main-content">
-  <a class="context-back" href="/registrar/intake">Back to annual enrollment</a>
+  <a class="context-back" href="/registrar/intake" aria-label="Back to annual enrollment" title="Back to annual enrollment">&#8592;</a>
   <header class="dashboard-heading">
     <div><h1><%= preEnrollmentSource ? 'Review saved paper enrollment' : 'Enroll a student' %></h1>
       <p><%= preEnrollmentSource ? 'Review the saved profile and applicant history, choose annual placement and voucher from the school documents, then save the pending intake for Finance review.' : 'Review the student information, placement, and voucher from the school documents, record papers received, then save the pending intake for Finance review.' %></p></div>
   </header>
   <% if (error) { %><p class="form-alert" role="alert" tabindex="-1" data-wizard-error><%= error %></p><% } %>
+  <% if (preEnrollmentNeedsFirstLoginIdentity && !error) { %><p class="notice-panel" role="status">Before saving this intake, correct the saved paper record: a surname and valid past birth date are required for the student’s first login. The values must be saved on the paper record, not only entered in this enrollment form. <a href="/pre-enrollments/<%= encodeURIComponent(preEnrollmentSource.id) %>/edit">Correct paper record</a></p><% } %>
   <ol class="intake-steps" aria-label="Enrollment steps">
     <li data-step-indicator="1" aria-label="Step 1 of 5: Student"><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li>
     <li data-step-indicator="2" aria-label="Step 2 of 5: Enrollment"><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li>
@@ -39,7 +40,11 @@
           <dl class="pre-enrollment-summary pre-enrollment-summary--compact">
             <% for (const [label,value] of [['Paper revision',preEnrollmentSource.version],['Applicant',applicantKindLabel],['School year',preEnrollmentSource.school_year],['Target grade',preEnrollmentSource.target_grade_level],['Preferred track',preEnrollmentSource.preferred_track],['Preferred cluster',preEnrollmentSource.preferred_cluster]]) { %><div><dt><%= label %></dt><dd><%= value || '—' %></dd></div><% } %>
           </dl>
-          <a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(preEnrollmentSource.id) %>">Open paper record to correct details</a>
+          <% if (preEnrollmentSource.status === 'enrollment_started') { %>
+            <a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(preEnrollmentSource.id) %>">View paper record</a>
+          <% } else { %>
+            <a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(preEnrollmentSource.id) %>/edit">Correct paper record</a>
+          <% } %>
         </div>
         <details class="pre-enrollment-handoff__details" data-pre-enrollment-profile-details <%= Number(activeStep || 1) === 1 ? 'open' : '' %>>
           <summary>Review the complete saved paper profile</summary>

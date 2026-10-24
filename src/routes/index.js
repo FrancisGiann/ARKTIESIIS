@@ -172,7 +172,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     emailChanged: 'Your sign-in and verification email was changed. Sign in with the new address.',
     accountSetup: 'Your password is set. Sign in with your new account.'
   };
-  const renderLogin = (req, res, error, status = 200) => res.status(status).render('auth/login', {
+  const renderLogin = (req, res, error, status = 200) => res.status(status).set('Cache-Control', 'private, no-store').render('auth/login', {
     title: 'Login',
     csrfToken: ensureCsrfToken(req),
     developmentPasswordLoginEnabled: isDevelopmentPasswordLoginEnabled(environment),

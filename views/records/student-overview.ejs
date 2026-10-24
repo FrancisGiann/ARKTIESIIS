@@ -1,7 +1,7 @@
 <%- include('../partials/head', { title }) %>
 <main class="page-shell dashboard-page records-page student-record-overview" id="main-content">
   <% const readableStatus = (value) => String(value || '').replaceAll('_', ' ').replace(/(^|\s)\S/g, (letter) => letter.toUpperCase()); %>
-  <a class="context-back" href="/registrar/records">Back to student search</a>
+  <a class="context-back" href="/registrar/records" aria-label="Back to student search" title="Back to student search">&#8592;</a>
   <%- include('../partials/student-record-navigation', { student, activeStudentView: studentView }) %>
   <h2 class="student-record-view-title"><%= ({ overview: 'Overview', history: 'Profile revision history', requests: 'Document requests', 'return-evaluation': 'Return evaluation' })[studentView] %></h2>
 
@@ -30,15 +30,15 @@
       <% if (student.status === 'archived') { %><p class="muted-copy">This student record is archived. Annual and academic history is read-only.</p>
       <% } else if (needsConfirmation.length) { %>
         <h3>Review for confirmation</h3>
-        <ul class="student-next-actions"><% for (const record of needsConfirmation) { %><li><a class="text-link" href="/registrar/intake/<%= record.annual_enrollment_id %>/review">Review for confirmation · <%= record.school_year %> · <%= record.grade_level %></a></li><% } %></ul>
+        <ul class="student-next-actions"><% for (const record of needsConfirmation) { %><li><a class="table-action" href="/registrar/intake/<%= record.annual_enrollment_id %>/review">Review for confirmation · <%= record.school_year %> · <%= record.grade_level %></a></li><% } %></ul>
       <% } else if (annualRecords.length) { %>
         <h3>Annual enrollment records</h3>
-        <ul class="student-next-actions"><% for (const record of annualRecords) { %><li><a class="text-link" href="/registrar/intake/<%= record.annual_enrollment_id %>/manage">Open enrollment · <%= record.school_year %> · <%= record.grade_level %></a></li><% } %></ul>
+        <ul class="student-next-actions"><% for (const record of annualRecords) { %><li><a class="table-action" href="/registrar/intake/<%= record.annual_enrollment_id %>/manage">Open enrollment · <%= record.school_year %> · <%= record.grade_level %></a></li><% } %></ul>
       <% } else { %>
         <p>No current annual enrollment is linked to front-desk paper intake. Existing term and grade history remains available under Academics.</p>
-        <a class="text-link" href="/pre-enrollments<%= student.lrn ? `?search=${encodeURIComponent(student.lrn)}` : '' %>">Review front-desk paper intake</a>
+        <a class="table-action" href="/pre-enrollments<%= student.lrn ? `?search=${encodeURIComponent(student.lrn)}` : '' %>">Review front-desk paper intake</a>
       <% } %>
-      <p><a class="text-link" href="/registrar/records/students/<%= student.id %>/academic">Open academic history</a></p>
+      <p><a class="table-action" href="/registrar/records/students/<%= student.id %>/academic">Open academic history</a></p>
     </article>
     <article class="admin-section" aria-labelledby="document-status-title">
       <h2 id="document-status-title">Required document status</h2>
@@ -48,9 +48,9 @@
       <dl class="student-record-document-list student-record-document-list--clearance">
         <div><dt>Good Moral Certificate</dt><dd><span class="record-document-status"><%= documentLabel(student.good_moral_status) %></span></dd></div>
         <div><dt>PSA birth certificate</dt><dd><span class="record-document-status"><%= documentLabel(student.psa_status) %></span></dd></div>
-        <div><dt>Previous-school report card · digital scan</dt><dd><span class="record-document-status"><%= previousReportCardLabel(student.previous_report_card_status, student.previous_report_card_latest_decision_type) %></span><a class="text-link" href="/documents/students/<%= student.id %>">Review digital scan</a></dd></div>
-        <div><dt>Previous-school report card · paper copy <span class="muted-copy">Staff only</span></dt><dd><span class="record-document-status"><%= previousReportCardPaperLabel(student.previous_school_report_card_physical_status) %></span><a class="text-link" href="/documents/students/<%= student.id %>#previous-school-report-card-status-title">Record paper-copy status</a></dd></div>
-        <div><dt>Form 137 · paper record <span class="muted-copy">Staff only</span></dt><dd><span class="record-document-status"><%= student.form137_status ? student.form137_status.replaceAll('_', ' ') : 'Not recorded' %></span><a class="text-link" href="/documents/students/<%= student.id %>#form137-status-title">Open Form 137 record</a></dd></div>
+        <div><dt>Previous-school report card · digital scan</dt><dd><span class="record-document-status"><%= previousReportCardLabel(student.previous_report_card_status, student.previous_report_card_latest_decision_type) %></span><a class="table-action" href="/documents/students/<%= student.id %>">Review digital scan</a></dd></div>
+        <div><dt>Previous-school report card · paper copy <span class="muted-copy">Staff only</span></dt><dd><span class="record-document-status"><%= previousReportCardPaperLabel(student.previous_school_report_card_physical_status) %></span><a class="table-action" href="/documents/students/<%= student.id %>#previous-school-report-card-status-title">Record paper-copy status</a></dd></div>
+        <div><dt>Form 137 · paper record <span class="muted-copy">Staff only</span></dt><dd><span class="record-document-status"><%= student.form137_status ? student.form137_status.replaceAll('_', ' ') : 'Not recorded' %></span><a class="table-action" href="/documents/students/<%= student.id %>#form137-status-title">Open Form 137 record</a></dd></div>
       </dl>
       <p class="muted-copy">The digital scan and paper-copy status are separate records. Neither writes grades. Form 137 has its own staff-only paper-record history.</p>
     </article>
@@ -60,13 +60,13 @@
       <% if (clearanceOverview.totalRecords) { %><p><strong>Not completed:</strong> <%= clearanceOverview.pending %> · <strong>Completed:</strong> <%= clearanceOverview.completed %></p>
         <p class="muted-copy">Not completed means the registrar has not confirmed a completed paper form. <%= clearanceOverview.notAttended %> term<%= clearanceOverview.notAttended === 1 ? '' : 's' %> not attended · <%= clearanceOverview.notApplicable %> outside required terms. A term not attended means no attendance for the entire term; excluded terms are not completed.</p>
       <% } else { %><p class="empty-state">No term entries are available for clearance review.</p><% } %>
-      <a class="text-link" href="/registrar/records/students/<%= student.id %>/clearance">Open paper clearance</a>
+      <a class="table-action" href="/registrar/records/students/<%= student.id %>/clearance">Open paper clearance</a>
     </article>
   </section><% } %>
   <% if (clearanceOverviewUnavailable) { %><section class="student-record-status-grid student-record-clearance-summary" aria-label="Paper clearance status">
     <article class="admin-section"><h2>Paper clearance status</h2>
       <p class="empty-state" role="status">Paper-clearance status is temporarily unavailable. No completion status is inferred.</p>
-      <a class="text-link" href="/registrar/records/students/<%= student.id %>/clearance">Open paper clearance</a>
+      <a class="table-action" href="/registrar/records/students/<%= student.id %>/clearance">Open paper clearance</a>
     </article>
   </section><% } %>
   <section class="student-record-status-grid" aria-label="Document request finance summary">
@@ -74,7 +74,7 @@
       <p><strong><%= financeSummary.status %></strong></p>
       <p>Outstanding across school years: <strong><%= financeSummary.outstanding === null ? 'Pending finance review' : `₱${financeSummary.outstanding}` %></strong></p>
       <p class="muted-copy">This summary covers balances recorded for the student across school years. Finance notes and payment arrangements remain private.</p>
-      <a class="text-link" href="/registrar/records/students/<%= student.id %>?view=requests">Review document requests</a>
+      <a class="table-action" href="/registrar/records/students/<%= student.id %>?view=requests">Review document requests</a>
     </article>
   </section>
   <% if (returnEligibility?.eligible || returnEvaluations.length) { %><section class="admin-section" aria-labelledby="return-evaluations-title">
@@ -91,7 +91,7 @@
     <section class="admin-section" aria-labelledby="return-review-context-title">
       <h3 id="return-review-context-title">Current academic record context</h3>
       <p>This is the student's live saved academic history and may include enrollment after this evaluation. The evaluation's prior-progress findings and revision history remain separate.</p>
-      <p><a class="text-link" href="/registrar/records/students/<%= student.id %>/academic">Open full academic history and grades</a></p>
+      <p><a class="table-action" href="/registrar/records/students/<%= student.id %>/academic">Open full academic history and grades</a></p>
       <% if (returnEligibility?.departure) { const departureDate = returnEligibility.departure.effectiveDate instanceof Date ? returnEligibility.departure.effectiveDate.toISOString().slice(0, 10) : String(returnEligibility.departure.effectiveDate || '').slice(0, 10); %>
         <p><strong>Recorded departure on file:</strong> <%= returnEligibility.departure.departureType === 'transferred' ? 'Transferred' : returnEligibility.departure.departureType === 'dropped' ? 'Dropped' : String(returnEligibility.departure.departureType || 'Departure recorded').replaceAll('_', ' ') %><% if (returnEligibility.departure.schoolYear) { %> during <%= returnEligibility.departure.schoolYear %><% } %><% if (returnEligibility.departure.term) { %>, <%= returnEligibility.departure.term %><% } %><% if (departureDate) { %> · effective <%= departureDate %><% } %>.</p>
       <% } else if (returnEligibility?.basis === 'school_year_gap') { %>

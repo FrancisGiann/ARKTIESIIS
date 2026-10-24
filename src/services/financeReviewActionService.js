@@ -20,7 +20,7 @@ const RETIRED_ACTION_TYPES = new Set(['legacy_account_create', 'legacy_transacti
 const SAFE_ACTIONS = Object.freeze([
   { type: 'document_clearance_decision', label: 'Document request fee review', pattern: /^\/document-clearance\/([0-9a-f-]{36})\/decision$/, ids: ['requestId'] },
   { type: 'schedule_create', label: 'Create fee schedule version', pattern: /^\/schedules$/, ids: [] },
-  { type: 'annual_assessment', label: 'Post annual assessment', pattern: /^\/annual\/(\d{1,10})\/assessment$/, ids: ['annualId'] },
+  { type: 'annual_assessment', label: 'Review Finance assessment', pattern: /^\/annual\/(\d{1,10})\/assessment$/, ids: ['annualId'] },
   { type: 'annual_payment', label: 'Review payment', pattern: /^\/students\/(\d{1,10})\/annual\/payments$/, ids: ['studentId'] },
   { type: 'annual_credit_allocation', label: 'Apply unused payment credit', pattern: /^\/students\/(\d{1,10})\/annual\/credits\/(\d{1,18})\/allocate$/, ids: ['studentId', 'paymentId'] },
   { type: 'annual_adjustment', label: 'Adjust an assessed charge', pattern: /^\/students\/(\d{1,10})\/annual\/charges\/(\d{1,18})\/adjustments$/, ids: ['studentId', 'chargeId'] },
@@ -1418,7 +1418,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
         case 'annual_allocation_release':
         case 'legacy_reconciliation_release':
         case 'annual_handbook_reference': return accountPath('history');
-        case 'annual_assessment':
+        case 'annual_assessment': return '/finance/assessments?notice=assessmentSaved';
         case 'term_finance_approval':
         case 'term_clearance':
         case 'voucher_review_resolution': return accountPath('clearance');
