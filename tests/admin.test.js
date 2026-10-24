@@ -254,10 +254,36 @@ test('administrator create and edit forms expose the front-desk role', async () 
     const cookie = await signIn(baseUrl, 'database_admin@example.edu');
     const newResponse = await fetch(`${baseUrl}/admin/users/new?role=front_desk`, { headers: { cookie } });
     assert.equal(newResponse.status, 200);
-    assert.match(await newResponse.text(), /<option value="front_desk" selected>Front Desk<\/option>/);
+    const newHtml = await newResponse.text();
+    assert.match(newHtml, /<option value="front_desk" selected>Front Desk<\/option>/);
+    assert.match(newHtml, /data-student-profile hidden>[\s\S]*?name="studentNo"[^>]*disabled/);
+    assert.match(newHtml, /data-staff-profile\s*>[\s\S]*?name="firstName"/);
+    assert.match(newHtml, /admin-user-role-fields\.js/);
     const editResponse = await fetch(`${baseUrl}/admin/users/19/edit`, { headers: { cookie } });
     assert.equal(editResponse.status, 200);
-    assert.match(await editResponse.text(), /<option value="front_desk" selected>Front Desk<\/option>/);
+    const editHtml = await editResponse.text();
+    assert.match(editHtml, /<option value="front_desk" selected>Front Desk<\/option>/);
+    assert.match(editHtml, /data-student-profile hidden>[\s\S]*?name="studentNo"[^>]*disabled/);
+    assert.match(editHtml, /data-staff-profile\s*>[\s\S]*?name="firstName"/);
+  });
+});
+
+test('student account form shows only existing-student link and ignores stale staff fields', async () => {
+  const adminService = {
+    async getUser() { return { id: 19, email: 'student@example.edu', role: 'student', is_active: true, student_no: 'SHS-2026-0001' }; }
+  };
+  await withServer(createApp({ databasePool: createAuthPool('database_admin'), environment: testEnvironment, adminService }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'database_admin@example.edu');
+    const edit = await fetch(`${baseUrl}/admin/users/19/edit`, { headers: { cookie } });
+    const html = await edit.text();
+    assert.match(html, /data-staff-profile hidden>[\s\S]*?name="firstName"[^>]*disabled/);
+    assert.match(html, /data-student-profile\s*>[\s\S]*?name="studentNo"/);
+  });
+  assert.deepEqual(validateCreateUser({ email: 'staff@example.edu', role: 'front_desk', firstName: 'A', lastName: 'B', studentNo: 'SHS-2026-0001' }), {
+    email: 'staff@example.edu', role: 'front_desk', firstName: 'A', lastName: 'B', department: null
+  });
+  assert.deepEqual(validateUpdateUser({ email: 'student@example.edu', role: 'student', isActive: '1', studentNo: 'SHS-2026-0001', firstName: 'Stale', lastName: 'Value' }), {
+    email: 'student@example.edu', role: 'student', isActive: true, studentNo: 'SHS-2026-0001'
   });
 });
 

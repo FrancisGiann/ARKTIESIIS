@@ -13,7 +13,7 @@
 
   <section class="admin-form-section admin-account-form-section" aria-labelledby="account-details-title">
     <h2 id="account-details-title">Account details</h2>
-    <form class="form-stack admin-form admin-user-form" method="post" action="/admin/users" data-submitting-message="Creating the account and preparing its setup invitation. Please wait.">
+    <form class="form-stack admin-form admin-user-form" method="post" action="/admin/users" data-account-role-form data-submitting-message="Creating the account and preparing its setup invitation. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="admin-form-grid">
         <div class="field">
@@ -32,23 +32,24 @@
       </div>
       <fieldset class="admin-fieldset admin-user-profile">
         <legend>Profile information</legend>
-        <p class="field-help admin-user-profile__help">Staff roles use these name and department fields. A student login must link to an existing student record by student number.</p>
+        <p class="field-help admin-user-profile__help" data-staff-profile <%= values.role === 'student' ? 'hidden' : '' %>>Enter the staff member's name and optional department.</p>
+        <p class="field-help admin-user-profile__help" data-student-profile <%= values.role === 'student' ? '' : 'hidden' %>>Link this login to an existing student record. Student numbers are assigned when student records are created.</p>
         <div class="admin-form-grid">
-          <div class="field">
+          <div class="field" data-staff-profile <%= values.role === 'student' ? 'hidden' : '' %>>
             <label for="first-name">First name (staff)</label>
-            <input id="first-name" name="firstName" type="text" maxlength="100" autocomplete="given-name" value="<%= values.first_name || '' %>">
+            <input id="first-name" name="firstName" type="text" maxlength="100" autocomplete="given-name" <%= values.role === 'student' ? 'disabled' : '' %> value="<%= values.first_name || '' %>">
           </div>
-          <div class="field">
+          <div class="field" data-staff-profile <%= values.role === 'student' ? 'hidden' : '' %>>
             <label for="last-name">Last name (staff)</label>
-            <input id="last-name" name="lastName" type="text" maxlength="100" autocomplete="family-name" value="<%= values.last_name || '' %>">
+            <input id="last-name" name="lastName" type="text" maxlength="100" autocomplete="family-name" <%= values.role === 'student' ? 'disabled' : '' %> value="<%= values.last_name || '' %>">
           </div>
-          <div class="field">
+          <div class="field" data-staff-profile <%= values.role === 'student' ? 'hidden' : '' %>>
             <label for="department">Department (staff, optional)</label>
-            <input id="department" name="department" type="text" maxlength="100" value="<%= values.department || '' %>">
+            <input id="department" name="department" type="text" maxlength="100" <%= values.role === 'student' ? 'disabled' : '' %> value="<%= values.department || '' %>">
           </div>
-          <div class="field">
-          <label for="student-number">Student number (student logins only)</label>
-            <input id="student-number" name="studentNo" type="text" maxlength="50" value="<%= values.student_no || '' %>">
+          <div class="field" data-student-profile <%= values.role === 'student' ? '' : 'hidden' %>>
+            <label for="student-number">Existing student number</label>
+            <input id="student-number" name="studentNo" type="text" maxlength="50" <%= values.role === 'student' ? '' : 'disabled' %> value="<%= values.student_no || '' %>">
           </div>
         </div>
       </fieldset>
@@ -60,4 +61,5 @@
     </form>
   </section>
 </main>
+<script src="/js/admin-user-role-fields.js" defer></script>
 <%- include('../partials/foot') %>

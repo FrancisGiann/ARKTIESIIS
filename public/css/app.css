@@ -195,6 +195,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-colo
 .account-page .account-password-change > h2 { margin-bottom: 0.9rem; }
 .account-page .account-password-change > .admin-form { width: 100%; }
 .admin-account-form-page .admin-user-profile legend { padding: 0 0.35rem; font-weight: 700; }
+.admin-account-form-page [data-staff-profile][hidden],
+.admin-account-form-page [data-student-profile][hidden] { display: none !important; }
 .admin-account-form-page .admin-user-profile__help { max-width: 68ch; margin: 0.15rem 0 0.85rem; }
 .admin-account-form-page .admin-user-active { align-items: flex-start; }
 .admin-account-form-page .admin-user-active__copy { display: grid; gap: 0.12rem; min-width: 0; }
