@@ -263,6 +263,7 @@ test('only the public home advertises indexing while private routes and API resp
     assert.doesNotMatch(sitemapXml, /<loc>https:\/\/arklucena\.com\/(?:login|finance|student|admin)/);
     const manifest = await fetch(`${baseUrl}/site.webmanifest`);
     assert.equal(manifest.status, 200);
+    assert.match(manifest.headers.get('content-type'), /application\/manifest\+json/);
     const manifestJson = await manifest.json();
     assert.equal(manifestJson.icons[0].src, '/images/arktiesiis-school-seal.png');
     assert.equal(manifestJson.icons[0].sizes, '447x447');

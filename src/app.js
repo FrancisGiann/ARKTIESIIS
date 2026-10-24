@@ -36,6 +36,7 @@ function createApp({ databasePool = getPool, environment = env, twoFactorService
   app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 500 }));
   app.use(express.urlencoded({ extended: false, parameterLimit: 1200, limit: '300kb' }));
   app.use(express.json());
+  app.get('/site.webmanifest', (req, res) => res.type('application/manifest+json').sendFile(path.join(projectRoot, 'public', 'site.webmanifest')));
   app.use(express.static(path.join(projectRoot, 'public')));
 
   app.use(session({
