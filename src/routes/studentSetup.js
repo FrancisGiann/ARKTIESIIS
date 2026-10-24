@@ -641,11 +641,15 @@ function createAnnualStudentIntakeRouter({ getPool, sql, annualEnrollmentService
         service.loadIntakeOptions(req.authUser.id),
         checklistService?.listIntakeRequirements ? checklistService.listIntakeRequirements(req.authUser.id) : Promise.resolve([])
       ]);
+      const existingStudentId = Number(preEnrollmentSource?.existingStudent?.id);
+      const existingPaperChecklist = Number.isSafeInteger(existingStudentId) && existingStudentId > 0
+        && checklistService?.getStudentChecklist
+        ? await checklistService.getStudentChecklist(req.authUser.id, existingStudentId) : null;
       return setPrivateHeaders(res).status(status).render('records/annual-intake-form', {
         title: 'New Annual Enrollment', csrfToken: ensureCsrfToken(req),
         idempotencyKey: values.idempotencyKey || values.preEnrollmentId || preEnrollmentSource?.id || crypto.randomUUID(),
         ...options, maxBirthDate: latestBirthDate(), values: { ...values, enrollmentStartDate: values.enrollmentStartDate || schoolLocalDate() }, error, activeStep,
-        paperRequirements, preEnrollmentSource, preEnrollmentReceiptRequirements: RECEIPT_REQUIREMENTS, recovered,
+        paperRequirements, existingPaperChecklist, preEnrollmentSource, preEnrollmentReceiptRequirements: RECEIPT_REQUIREMENTS, recovered,
         profileReviewFields: preEnrollmentSource?.existingStudent?.profile
           ? comparePreEnrollmentProfile(preEnrollmentSource, preEnrollmentSource.existingStudent.profile).filter((item) => item.differs) : [],
         paperTokens: Object.fromEntries((paperRequirements || []).map((item) => [item.requirement_code,

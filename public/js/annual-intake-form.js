@@ -20,6 +20,8 @@
   const commonSection = document.getElementById('annual-common-section');
   const preview = document.getElementById('annual-section-plan-preview');
   const termSelects = [...form.querySelectorAll('[data-term-select]')];
+  const selectAllPaper = form.querySelector('[data-select-all-paper]');
+  const selectedPaperCount = form.querySelector('[data-paper-selected-count]');
   const overrideInputFor = (termNumber) => document.getElementById(`annual-section-${termNumber}-override`);
   let activeStep = Math.max(1, Math.min(3, Number(form.dataset.activeStep || 1)));
 
@@ -148,6 +150,28 @@
     }));
   };
 
+  const eligiblePaperRows = () => [...document.querySelectorAll('[data-requirement-applicability]')].filter((row) => {
+    const applicability = row.dataset.requirementApplicability;
+    if (applicability === 'all') return !row.hidden;
+    return ((applicability === 'grade11' && grade.value === 'Grade 11')
+      || (applicability === 'grade12' && grade.value === 'Grade 12')) && !row.hidden;
+  }).filter((row) => {
+    const record = row.querySelector('[data-paper-record]');
+    return record && !record.disabled;
+  });
+  const syncSelectAllPaper = () => {
+    if (!selectAllPaper) return;
+    const rows = eligiblePaperRows();
+    const checked = rows.filter((row) => row.querySelector('[data-paper-record]').checked).length;
+    if (selectedPaperCount) selectedPaperCount.textContent = `${form.querySelectorAll('[data-paper-record]:checked:not(:disabled)').length} selected today`;
+    form.querySelectorAll('[data-requirement-applicability]').forEach((row) => {
+      const status = row.querySelector('[data-paper-row-status]');
+      if (status) status.textContent = row.querySelector('[data-paper-record]').checked && !row.hidden ? 'Selected today' : 'Not selected today';
+    });
+    selectAllPaper.disabled = rows.length === 0;
+    selectAllPaper.checked = rows.length > 0 && checked === rows.length;
+    selectAllPaper.indeterminate = checked > 0 && checked < rows.length;
+  };
   const updatePaperRows = () => {
     document.querySelectorAll('[data-requirement-applicability]').forEach((row) => {
       const applicability = row.dataset.requirementApplicability;
@@ -167,6 +191,7 @@
         control.required = false;
       });
     });
+    syncSelectAllPaper();
   };
 
   const showStep = (number, focus = false) => {
@@ -227,6 +252,16 @@
     if (checkbox.checked) prefillPaperCounts(checkbox);
     updatePaperRows();
   }));
+  selectAllPaper?.addEventListener('change', () => {
+    const checked = selectAllPaper.checked;
+    for (const row of eligiblePaperRows()) {
+      const record = row.querySelector('[data-paper-record]');
+      if (record.checked === checked) continue;
+      record.checked = checked;
+      if (checked) prefillPaperCounts(record);
+    }
+    updatePaperRows();
+  });
   form.querySelectorAll('[data-paper-count]').forEach((input) => {
     input.addEventListener('input', () => { input.dataset.paperCountTouched = 'true'; });
     input.addEventListener('change', () => { input.dataset.paperCountTouched = 'true'; });

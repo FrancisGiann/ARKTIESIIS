@@ -1034,15 +1034,24 @@ label { font-size: 0.84rem; }
 .intake-section-choice > p { margin-bottom: 0.75rem; }
 .intake-term-sections { margin-top: 0.65rem; }
 .section-plan { display: grid; gap: 0.25rem; padding-left: 1.2rem; margin: 0.75rem 0; color: var(--ink-soft); font-size: 0.84rem; }
+.paper-checklist-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem 1rem; margin: 0.75rem 0; }
+.paper-checklist-toolbar > [data-paper-selected-count] { color: var(--ink-soft); font-size: 0.88rem; font-weight: 700; }
+.paper-checklist-help { margin: 0 0 0.75rem; }
+.paper-checklist-help summary { width: fit-content; color: var(--accent); cursor: pointer; font-weight: 700; }
+.paper-checklist-help p { max-width: 72ch; }
 .paper-checklist-rows { min-width: 0; }
 .paper-checklist-row { padding: 0.65rem 0; border-top: 1px solid var(--line); }
 .paper-checklist-row__main { min-width: 0; }
+.paper-checklist-row__status { display: block; margin: 0.2rem 0 0 1.75rem; color: var(--ink-soft); font-size: 0.78rem; font-weight: 650; }
+.paper-checklist-row__prior { display: block; margin: 0.1rem 0 0 1.75rem; color: var(--muted); font-size: 0.78rem; }
 .paper-checklist-row__check { display: flex; align-items: flex-start; gap: 0.65rem; cursor: pointer; }
 .paper-checklist-row__check input { flex: 0 0 auto; width: 1.1rem; height: 1.1rem; margin: 0.15rem 0 0; accent-color: var(--accent); }
 .paper-checklist-row__check span { display: grid; min-width: 0; gap: 0.12rem; }
 .paper-checklist-row__check small { color: var(--muted); font-size: 0.8rem; font-weight: 500; }
 .paper-checklist-row__details { margin: 0.45rem 0 0 1.75rem; }
 .paper-checklist-row__details summary { width: fit-content; color: var(--accent); cursor: pointer; font-size: 0.81rem; font-weight: 700; }
+.paper-checklist-row__guidance { margin-top: 0.45rem; }
+.paper-checklist-row__guidance > summary { font-size: 0.78rem; }
 .paper-checklist-row__fields, .paper-counts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; margin-top: 0.6rem; }
 .paper-applicability { align-self: end; padding-bottom: 0.75rem; color: var(--muted); font-size: 0.8rem; }
 .paper-note { grid-column: 1 / -1; }

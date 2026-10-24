@@ -623,6 +623,7 @@ test('finance annual roster separates page data, classification, and balances in
       { view: 'history', label: 'History' }
     ],
     backHref: '/finance?schoolYear=2026-2027&termId=1',
+    financeReadiness: new Map(),
     schedules: [], tokens: { payment: 'test-payment-token', assessment: 'test-assessment-token', 'adjustment:81': 'test-adjustment-token', 'feeComment:81': 'test-comment-token' },
     csrfToken: 'test-csrf-token', notice: null, error: null, preview: null, openingPreview: null
   };
@@ -779,12 +780,19 @@ test('finance annual roster separates page data, classification, and balances in
     annual_enrollment_id: 21, intake_status: 'pending', assessment_id: 221, schedule_version: 4,
     paymentClassification: { finance_status: 'needs_review', whole_status: 'needs_review', assessment_id: 221 }
   });
+  pendingReviewLocals.financeReadiness.set(21, { status: 'finance_review_required', reviewed: false });
   const pendingReviewHtml = await renderFinanceView('annual-student', pendingReviewLocals);
   assert.match(pendingReviewHtml, /Finance review for pending intake · 2026-2027/);
   assert.match(pendingReviewHtml, /Review current assessment for enrollment/);
   assert.match(pendingReviewHtml, /action="\/finance\/annual\/21\/assessment-preview"/);
   assert.match(pendingReviewHtml, /data-assessment-preview-form data-annual-id="21"/);
   assert.match(pendingReviewHtml, /this review does not post charges or change payment history/i);
+  const completedReviewLocals = structuredClone(pendingReviewLocals);
+  completedReviewLocals.financeReadiness.set(21, { status: 'awaiting_down_payment', reviewed: true });
+  const completedReviewHtml = await renderFinanceView('annual-student', completedReviewLocals);
+  assert.match(completedReviewHtml, /Finance assessment review saved/);
+  assert.match(completedReviewHtml, /Record payment/);
+  assert.doesNotMatch(completedReviewHtml, /Review current assessment for enrollment/);
   const existingAssessmentPreviewHtml = await renderFinanceView('annual-student', {
     ...pendingReviewLocals,
     preview: { parent: { id: 21, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC' },

@@ -810,10 +810,11 @@ function createAnnualFinanceService({
     return { reviewId: generatedId(inserted, 'Finance assessment review'), ...review };
   }
 
-  async function getAnnualEntryFinanceReadinessForRegistrar(actorInput, annualEnrollmentInput) {
+  async function getAnnualEntryFinanceReadiness(actorInput, annualEnrollmentInput, role) {
     const annualEnrollmentId = id(annualEnrollmentInput, 'annual enrollment');
     const pool = await getPool();
-    await requireRegistrarActor(pool.request(), actorInput);
+    if (role === 'finance') await requireFinanceActor(pool.request(), actorInput);
+    else await requireRegistrarActor(pool.request(), actorInput);
     return withRosterReadSnapshot(pool, async (snapshot) => {
       const state = await annualFinanceEvidenceSnapshot(snapshot, annualEnrollmentId);
       if (!state.parent) throw new AnnualFinanceError('Annual enrollment not found.', 404);
@@ -834,6 +835,14 @@ function createAnnualFinanceService({
         downPaymentSettled: state.dp.status === 'settled' || state.dp.status === 'zero_due',
         zeroDownPaymentApproved: Boolean(matchingReview && flag(state.latestReview.zero_dp_attested)) };
     });
+  }
+
+  function getAnnualEntryFinanceReadinessForRegistrar(actorInput, annualEnrollmentInput) {
+    return getAnnualEntryFinanceReadiness(actorInput, annualEnrollmentInput, 'registrar');
+  }
+
+  function getAnnualEntryFinanceReadinessForFinance(actorInput, annualEnrollmentInput) {
+    return getAnnualEntryFinanceReadiness(actorInput, annualEnrollmentInput, 'finance');
   }
 
   async function assertAnnualEntryDownPaymentReadyInTransaction(transaction, annualEnrollmentInput) {
@@ -3744,7 +3753,7 @@ function createAnnualFinanceService({
 
   return {
     listSchedules, createSchedule, annualAssessmentPreview,
-    annualConfirmationAssessmentSnapshotForStaff, getAnnualEntryFinanceReadinessForRegistrar,
+    annualConfirmationAssessmentSnapshotForStaff, getAnnualEntryFinanceReadinessForRegistrar, getAnnualEntryFinanceReadinessForFinance,
     assertAnnualEntryDownPaymentReadyInTransaction,
     confirmAnnualAssessment, confirmAnnualAssessmentInTransaction, addSupplementaryCharge,
     recordPayment, updatePaymentMetadata, previewLegacyOpeningLiability, transferLegacyOpeningLiability,

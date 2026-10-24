@@ -240,6 +240,7 @@ function buildMasterlistProjection({ annualRows = [], chargeRows = [], configure
         confirmationId: source.confirmation_id == null ? null : Number(source.confirmation_id),
         anyConfirmationId: source.any_confirmation_id == null ? null : Number(source.any_confirmation_id),
         voucherReviewRequired: truthyDb(source.voucher_review_required),
+        hasFinanceReview: truthyDb(source.has_finance_review),
         voucherReviewReason: source.voucher_review_reason || null,
         assessmentSelectionJson: source.selection_json || '{}', terms: new Map(), charges: [], configs: new Map()
       };
@@ -726,6 +727,7 @@ function createFinanceMasterlistService({ getPool = defaultGetPool, sql = defaul
         confirmation.id AS confirmation_id, any_confirmation.id AS any_confirmation_id,
         CASE WHEN voucher_event.event_type = 'voucher_review_flagged' THEN 1 ELSE 0 END AS voucher_review_required,
         voucher_event.reason AS voucher_review_reason,
+        CASE WHEN finance_review.id IS NULL THEN 0 ELSE 1 END AS has_finance_review,
         enrollment.id AS enrollment_id, enrollment.annual_term_number, enrollment.academic_term_id AS term_id,
         term.term AS term_label, section.id AS section_id, section.name AS section_name,
         section.cluster AS section_cluster, section.strand AS section_strand, section.adviser AS section_adviser,
@@ -743,6 +745,10 @@ function createFinanceMasterlistService({ getPool = defaultGetPool, sql = defaul
         AND confirmation.assessment_id = annual_assessment.id AND confirmation.confirmation_rank = 1
       LEFT JOIN LatestAnnualConfirmation AS any_confirmation ON any_confirmation.annual_enrollment_id = annual.annual_enrollment_id
         AND any_confirmation.confirmation_rank = 1
+      LEFT JOIN annual_finance_assessment_reviews AS finance_review ON finance_review.id = (
+        SELECT MAX(review.id) FROM annual_finance_assessment_reviews AS review
+        WHERE review.annual_enrollment_id = annual.annual_enrollment_id
+          AND review.assessment_id = annual_assessment.id)
       LEFT JOIN LatestVoucherReviewEvent AS voucher_event ON voucher_event.annual_enrollment_id = annual.annual_enrollment_id
         AND voucher_event.event_rank = 1
       LEFT JOIN finance_assessment_restatement_annuals AS restatement ON restatement.annual_enrollment_id = annual.annual_enrollment_id

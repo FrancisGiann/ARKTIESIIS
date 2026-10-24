@@ -490,10 +490,10 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     student: { id: 41 }, summary: { completeCount: 1, requiredCount: 2 }, history: [], additionalItems: [],
     requirements: [
       { requirement_code: 'birth_certificate', requirement_name: 'Birth Certificate', is_optional: 0,
-        is_applicable: 1, status: 'received', originals_required: 0, copies_required: 3, pieces_required: 0,
+        is_applicable: 1, status: 'received', latest_event_id: 801, originals_required: 0, copies_required: 3, pieces_required: 0,
         originals_received: 0, copies_received: 3, pieces_received: 0, note: 'Staff checked all copies.' },
       { requirement_code: 'good_moral', requirement_name: 'Good Moral Certificate', is_optional: 0,
-        is_applicable: 1, status: 'pending', originals_required: 1, copies_required: 1, pieces_required: 0,
+        is_applicable: 1, status: 'pending', latest_event_id: 802, originals_required: 1, copies_required: 1, pieces_required: 0,
         originals_received: 0, copies_received: 0, pieces_received: 0, note: null },
       { requirement_code: 'grade11_card', requirement_name: 'Grade 11 Card', is_optional: 0,
         is_applicable: 0, status: 'verified', originals_required: 0, copies_required: 0, pieces_required: 0,
@@ -583,8 +583,12 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(html, /Step 4 of 5: Finance handoff/);
     assert.match(html, /Step 5 of 5: Review details/);
     assert.match(html, /missing papers do not block enrollment/i);
-    assert.match(html, /Select a paper only after staff has received and checked it/i);
-    assert.match(html, /long brown envelope; the separate paper receipt note is informational and does not create a physical-checklist event/i);
+    assert.match(html, /Select only documents you have received and checked/i);
+    assert.match(html, /Front Desk receipt quantities are a separate record/i);
+    assert.match(html, /Front Desk receipt details/);
+    assert.match(html, /data-paper-selected-count/);
+    assert.match(html, /Save pending intake and document review/);
+    assert.doesNotMatch(html, /With JavaScript on a new form/);
     assert.match(html, /name="paper_birth_certificate_copies"/);
     assert.doesNotMatch(html, /name="paper_birth_certificate_(?:originals|pieces)"/);
     assert.match(html, /name="paper_good_moral_originals"/);
@@ -716,6 +720,13 @@ test('registrar intake opens the guided annual form and links the roster to fee 
       'the shared tuition installment table is reset from the narrow-screen clipped header rules when printed');
     assert.match(confirmationCss, /\.annual-confirmation-document \.admin-table td::before \{ display: none !important;/);
     assert.match(confirmationCss, /\.fee-approved-tuition \.admin-table td:nth-child\(n\+2\) \{ text-align: right;/);
+    preEnrollmentRecord.existingStudent = { id: 41, studentNo: 'SHS-2026-0321', profile: null };
+    const linkedResponse = await fetch(`${baseUrl}/registrar/intake/new?preEnrollmentId=${preEnrollmentId}`);
+    const linkedHtml = await linkedResponse.text();
+    assert.equal(linkedResponse.status, 200);
+    assert.match(linkedHtml, /Previous review: received/);
+    assert.match(linkedHtml, /Previous review: pending/);
+    assert.match(linkedHtml, /Not selected today/);
   });
 });
 

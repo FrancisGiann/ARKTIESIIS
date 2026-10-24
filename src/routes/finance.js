@@ -733,6 +733,10 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         load('fee_schedules', () => annual.listSchedules(req.authUser.id)),
         load('finance_cases', () => cases.getStudentCases(req.authUser.id, studentId))
       ]);
+      const pendingAnnualIds = [...new Set(ledger.terms.filter((term) => term.intake_status === 'pending' && term.assessment_id != null)
+        .map((term) => Number(term.annual_enrollment_id)))];
+      const financeReadiness = new Map(await Promise.all(pendingAnnualIds.map(async (annualId) =>
+        [annualId, await annual.getAnnualEntryFinanceReadinessForFinance(req.authUser.id, annualId)])));
       const accountProjection = createStatementProjection(ledger, { includeStaffFeeApplications: true });
       const tokens = { payment: crypto.randomUUID(), assessment: crypto.randomUUID(), ...tokenOverrides };
       for (const payment of ledger.availablePayments) tokens[`allocation:${payment.payment_id}`] = crypto.randomUUID();
@@ -775,7 +779,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         chargeBreakdown: accountProjection.charges, chargeGroups: accountProjection.chargeGroups,
         feeBreakdownYears: accountProjection.feeBreakdownYears,
         feeApplicationsByCharge: accountProjection.staffFeeApplicationsByCharge, schedules,
-        financeCases, preview, openingPreview, tokens, error, paymentValues, preservedValues, failedAction, notice: req.query.notice || null,
+        financeCases, financeReadiness, preview, openingPreview, tokens, error, paymentValues, preservedValues, failedAction, notice: req.query.notice || null,
         paymentStatusPresentation,
         accountView, accountTabs, backHref: `/finance${backParams.size ? `?${backParams.toString()}` : ''}`
       });
@@ -1101,7 +1105,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         idempotencyKey: req.body?.idempotencyKey, scheduleId: req.body?.scheduleId,
         scheduleVersion: req.body?.scheduleVersion, voucherCode: req.body?.voucherCode
       });
-      return res.redirect(303, `/finance/students/${preview.parent.student_id}/annual?notice=assessmentPosted`);
+      return res.redirect(303, `/finance/students/${preview.parent.student_id}/annual?view=overview&notice=${preview.parent.intake_status === 'pending' ? 'assessmentReviewed' : 'assessmentPosted'}`);
     } catch (error) {
       if (error instanceof AnnualFinanceError || error instanceof FinanceCasesError) return res.status(error.status).render('error', { title: 'Annual assessment', message: error.message });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The annual assessment could not be posted.' });

@@ -175,3 +175,80 @@ test('paper count defaults only fill pristine configured fields and survive edit
   assert.deepEqual(invalidDefinitions.countInputs.map((input) => input.value), ['', '', ''],
     'invalid configured quantities are ignored rather than guessed or coerced');
 });
+
+test('Registrar select all uses visible grade-applicable papers and preserves corrected counts', () => {
+  const listeners = new Map();
+  const control = (id, value = '') => ({ id, value, dataset: {}, options: [], selectedOptions: [],
+    checked: false, disabled: false, hidden: false,
+    addEventListener(type, handler) { listeners.set(`${id}:${type}`, handler); },
+    querySelectorAll() { return []; }, setCustomValidity() {} });
+  const rowFor = (id, applicability, configured, checked = false) => {
+    const record = control(`${id}-record`);
+    record.checked = checked;
+    const count = control(`${id}-count`, checked ? '1' : '');
+    count.dataset.defaultCount = configured;
+    const details = { open: checked };
+    const row = { hidden: false, dataset: { requirementApplicability: applicability },
+      querySelector(selector) { return selector === '[data-paper-record]' ? record : selector === '[data-paper-details]' ? details : null; },
+      querySelectorAll(selector) { return ['[data-paper-count]', '.paper-checklist-row__details input'].includes(selector) ? [count] : []; } };
+    record.closest = () => row;
+    return { row, record, count };
+  };
+  const common = rowFor('common', 'all', '1', true);
+  const grade11 = rowFor('grade11', 'grade11', '2');
+  const grade12 = rowFor('grade12', 'grade12', '3');
+  const optional = rowFor('optional', 'optional', '4');
+  const rows = [common, grade11, grade12, optional];
+  const selectAll = control('select-all-paper');
+  const mode = control('annual-student-mode', 'new');
+  const grade = control('annual-grade', 'Grade 11');
+  const commonSection = control('annual-common-section');
+  commonSection.options = [{ value: '', dataset: {} }];
+  commonSection.selectedOptions = [commonSection.options[0]];
+  const elements = new Map([
+    [mode.id, mode], ['returning-student-field', { hidden: true }],
+    ['new-student-fields', { hidden: false, querySelectorAll() { return []; } }],
+    ['annual-student-no', control('annual-student-no')], ['annual-birth-date', control('annual-birth-date')],
+    ['annual-birth-date-requirement', { textContent: '' }], ['annual-birth-date-help', { textContent: '' }],
+    ['annual-school-year', control('annual-school-year')], [grade.id, grade],
+    ['annual-entry-term', control('annual-entry-term', '1')], ['annual-section-mode', control('annual-section-mode', 'separate')],
+    ['annual-common-section-field', { hidden: false }], [commonSection.id, commonSection],
+    ['annual-section-plan-preview', { replaceChildren() {} }]
+  ]);
+  const form = { dataset: { activeStep: '3', paperPrefill: '1' }, noValidate: false,
+    querySelector(selector) { return selector === '[data-select-all-paper]' ? selectAll : null; },
+    querySelectorAll(selector) {
+      if (selector === '[data-paper-record]') return rows.map((item) => item.record);
+      if (selector === '[data-paper-count]') return rows.map((item) => item.count);
+      return [];
+    }, addEventListener() {} };
+  const document = { querySelector(selector) { return selector === '[data-intake-wizard]' ? form : null; },
+    querySelectorAll(selector) { return selector === '[data-requirement-applicability]' ? rows.map((item) => item.row) : []; },
+    getElementById(id) { return elements.get(id) || null; }, createElement() { return { textContent: '' }; } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/js/annual-intake-form.js'), 'utf8'), {
+    document, window: { ARKTIESIISProfileValidation: {
+      validateControl() {}, firstInvalidControl() { return null; }, focusInvalidControl() {}
+    } }
+  });
+  assert.equal(selectAll.indeterminate, true);
+  selectAll.checked = true;
+  listeners.get('select-all-paper:change')();
+  assert.equal(grade11.record.checked, true);
+  assert.equal(grade11.count.value, '2');
+  assert.equal(grade12.record.checked, false, 'other grade stays untouched');
+  assert.equal(optional.record.checked, false, 'manual applicability stays individual');
+  grade11.count.value = '1';
+  listeners.get('grade11-count:input')();
+  selectAll.checked = false;
+  listeners.get('select-all-paper:change')();
+  selectAll.checked = true;
+  listeners.get('select-all-paper:change')();
+  assert.equal(grade11.count.value, '1', 'correction survives a bulk toggle');
+  grade.value = 'Grade 12';
+  listeners.get('annual-grade:change')();
+  assert.equal(selectAll.indeterminate, true);
+  selectAll.checked = true;
+  listeners.get('select-all-paper:change')();
+  assert.equal(grade12.count.value, '3');
+  assert.equal(grade11.record.disabled, true, 'other grade is not submitted');
+});

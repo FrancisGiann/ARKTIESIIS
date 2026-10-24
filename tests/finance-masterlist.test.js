@@ -282,7 +282,7 @@ test('rendered Student accounts page exposes compact installment cells and targe
   const unassessedRow = unassessedHtml.match(/<tr class="finance-accounts-row">[\s\S]*?<\/tr>/)?.[0] || '';
   assert.match(unassessedRow, /class="button button--primary" href="\/finance\/students\/3\/annual\?backSchoolYear=2026-2027&amp;backPlacementTerm=1&amp;backPage=1&amp;view=charges#assessment-3">Review assessment<\/a>/);
   assert.doesNotMatch(unassessedRow, /Record payment/);
-  assert.match(unassessedRow, /<span>Applied —<\/span><span>Balance —<\/span>/,
+  assert.match(unassessedRow, /<span class="finance-accounts-installment__applied">Applied —<\/span><span class="finance-accounts-installment__balance">Balance —<\/span>/,
     'a missing assessment displays unavailable amounts instead of zeros');
   assert.match(unassessedRow, /class="finance-accounts-term-balance"[^>]*><strong>—<\/strong>/);
 
@@ -301,6 +301,20 @@ test('rendered Student accounts page exposes compact installment cells and targe
   assert.match(pendingAssessmentRow, /class="button button--primary" href="\/finance\/students\/4\/annual\?backSchoolYear=2026-2027&amp;backPlacementTerm=1&amp;backPage=1&amp;view=charges#assessment-review-4">Review assessment<\/a>/);
   assert.match(pendingAssessmentRow, /class="button button--secondary" href="\/finance\/students\/4\/annual\?backSchoolYear=2026-2027&amp;backPlacementTerm=1&amp;backPage=1&amp;view=payments#payment-record-title">Record payment<\/a>/,
     'pending entry-term DP remains reachable before Registrar confirmation, while assessment review stays primary');
+
+  const reviewedProjection = projection([annualRow(4, {
+    intake_status: 'pending', confirmation_id: null, has_finance_review: 1
+  })], [charge(401, 4)]);
+  const reviewedHtml = await ejs.renderFile(path.join(__dirname, '../views/finance/masterlist.ejs'), {
+    title: 'Student accounts', currentUser: { id: 7, role: 'finance' }, csrfToken: '',
+    navigationItems: [], navigationGroups: [], masterlist: {
+      ...reviewedProjection, options: { schoolYears: ['2026-2027'], grades: ['Grade 10'], sections: [], placementTerms: [1, 2, 3] }
+    }
+  });
+  const reviewedRow = reviewedHtml.match(/<tr class="finance-accounts-row">[\s\S]*?<\/tr>/)?.[0] || '';
+  assert.match(reviewedRow, /class="button button--primary"[^>]*view=payments#payment-record-title">Record payment<\/a>/,
+    'a saved Finance review leads to payment rather than repeating assessment review');
+  assert.doesNotMatch(reviewedRow, /Review assessment<\/a>/);
 
   const mixedResult = projection([annualRow(2)], [
     charge(201, 2, { applied_amount: '10.00', balance_amount: '80.00' }),
