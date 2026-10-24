@@ -25,7 +25,7 @@
   <% } %>
   <link rel="icon" type="image/png" sizes="447x447" href="/images/arktiesiis-school-seal.png">
   <link rel="apple-touch-icon" href="/images/arktiesiis-school-seal.png">
-  <link rel="manifest" href="/site.webmanifest">
+  <link rel="manifest" href="/site-manifest.json">
   <% const stylesheetUrl = typeof assetVersion === 'undefined' ? '/css/app.css' : `/css/app.css?v=${assetVersion}`; %>
   <link rel="stylesheet" href="<%= stylesheetUrl %>">
   <% if (typeof pageStylesheet === 'string' && /^\/css\/[a-z0-9-]+\.css$/.test(pageStylesheet)) { %><link rel="stylesheet" href="<%= typeof assetVersion === 'undefined' ? pageStylesheet : `${pageStylesheet}?v=${assetVersion}` %>"><% } %>
