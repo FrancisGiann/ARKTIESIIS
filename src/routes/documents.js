@@ -600,6 +600,24 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
     }
   });
 
+  router.post('/:id/replace', parseUpload, async (req, res) => {
+    try {
+      if (!hasValidCsrfToken(req)) {
+        return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
+      }
+      const result = await service.replaceUpload(req.authUser.id, req.params.id, req.file);
+      if (result.status === 'pending') processingService.schedulePendingProcessing();
+      if (req.authUser.role === 'student' && result.documentType === 'report_card') {
+        return res.redirect(303, '/documents?notice=uploaded');
+      }
+      return res.redirect(303, `/documents/${result.id}?notice=uploaded`);
+    } catch (error) {
+      return renderError(res, error, 'The replacement file could not be uploaded.');
+    } finally {
+      clearUploadBuffer(req.file);
+    }
+  });
+
   return router;
 }
 

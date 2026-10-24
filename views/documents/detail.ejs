@@ -52,7 +52,7 @@
       <div><dt>File name</dt><dd><%= document.original_filename %></dd></div>
       <div><dt>File type</dt><dd><%= document.mime_type %></dd></div>
       <div><dt>File size</dt><dd><%= Number.isFinite(Number(document.file_size_bytes)) && Number(document.file_size_bytes) >= 0 ? `${(Number(document.file_size_bytes) / 1048576).toFixed(2)} MB` : 'Not recorded' %></dd></div>
-      <div><dt>Status</dt><dd><%= document.requirement_assignment_id && document.assignment_status === 'withdrawn' ? 'Requirement withdrawn · history retained' : documentStatusLabel(document.status, latestDecision?.decision_type, document.reviewEvents?.[0]?.action_type, document.document_type, document.is_legacy_archive) %></dd></div>
+      <div><dt>Status</dt><dd><span class="document-submission-status"><%= document.requirement_assignment_id && document.assignment_status === 'withdrawn' ? 'Requirement withdrawn · history retained' : documentStatusLabel(document.status, latestDecision?.decision_type, document.reviewEvents?.[0]?.action_type, document.document_type, document.is_legacy_archive) %></span></dd></div>
       <div><dt>Uploaded</dt><dd><%= document.created_at ? new Date(document.created_at).toLocaleString() : '—' %></dd></div>
       <div><dt>Submission version</dt><dd><%= document.supersedes_document_id ? `Corrected from submission #${document.supersedes_document_id}` : 'Original submission' %></dd></div>
     </dl>
@@ -194,14 +194,14 @@
           <div class="field"><label for="verify-reason">Verification reason <%= document.validation?.requiresOverrideReason ? '(required for a check warning or unavailable precheck)' : '(optional)' %></label><textarea id="verify-reason" name="reason" rows="3" maxlength="1000" <%= document.validation?.requiresOverrideReason ? 'required' : '' %>></textarea></div>
           <button class="button button--primary button--align-start" type="submit">Record staff verification</button>
         </form>
-        <details class="document-review-disclosure"><summary>Request a correction</summary>
+        <details class="document-review-disclosure document-review-disclosure--correction"><summary>Request a correction</summary>
         <form class="form-stack document-review-action document-review-action--correction" method="post" action="/documents/<%= document.id %>/correction" data-submitting-message="Sending the correction instruction. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <div class="field"><label for="correction-instruction">Correction instruction <%= document.requirement_assignment_id ? '(shown to the student)' : (document.document_type === 'report_card' || document.document_type === 'psa_birth_certificate') && document.upload_source !== 'student' ? 'for staff' : 'for the student' %></label><textarea id="correction-instruction" name="instruction" rows="4" maxlength="1000" required></textarea></div>
           <button class="button button--secondary button--align-start" type="submit">Request correction</button>
         </form>
         </details>
-        <details class="document-review-disclosure"><summary>Reject this submission</summary>
+        <details class="document-review-disclosure document-review-disclosure--rejection"><summary>Reject this submission</summary>
         <form class="form-stack document-review-action document-review-action--rejection" method="post" action="/documents/<%= document.id %>/decision" data-submitting-message="Recording the staff decision. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="decision" value="rejected">
           <div class="field"><label for="rejection-reason">Rejection reason</label><textarea id="rejection-reason" name="reason" rows="3" maxlength="1000" required></textarea></div>
@@ -213,6 +213,16 @@
   <% } %>
 
   <div class="document-secondary-actions">
+    <% if (!correctionRequested && !hasCorrectedSubmission && !document.isArchivedReportCard && !['form_137', 'report_card'].includes(document.document_type) && (!document.requirement_assignment_id || document.assignment_status === 'active') && (isStaff ? !document.requirement_assignment_id : document.upload_source === 'student')) { %>
+      <section class="admin-section" aria-labelledby="replace-upload-title">
+        <div class="admin-section__heading"><div><h2 id="replace-upload-title">Replace uploaded file</h2><p>The earlier file and staff decision stay in history. The new file becomes a separate submission requiring a new staff review.</p></div></div>
+        <form class="form-stack document-upload-form" method="post" action="/documents/<%= document.id %>/replace" enctype="multipart/form-data" data-submitting-message="Uploading the replacement document. Please wait.">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <div class="field"><label for="voluntary-replacement-file">Replacement PDF, JPEG, or PNG</label><input id="voluntary-replacement-file" name="document" type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" aria-describedby="voluntary-replacement-help" required><small id="voluntary-replacement-help" class="field-help">Maximum <%= uploadMaxMb %> MB. Staff must inspect the replacement; previous verification does not transfer.</small></div>
+          <button class="button button--secondary button--align-start" type="submit">Replace uploaded file</button>
+        </form>
+      </section>
+    <% } %>
     <% if (isStaff && correctionRequested && !document.isArchivedReportCard && !document.requirement_assignment_id && document.document_type !== 'report_card') { %>
       <section class="admin-section" aria-labelledby="staff-correction-title">
         <div class="admin-section__heading"><div><h2 id="staff-correction-title">Submit corrected file</h2><p>Upload a new linked submission while preserving this original.</p></div></div>
@@ -312,4 +322,5 @@
     <% } else { %><p class="empty-state">No review events have been recorded.</p><% } %>
   </details><% } %>
 </main>
+<script src="/js/document-upload-validation.js" defer></script>
 <%- include('../partials/foot') %>

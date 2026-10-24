@@ -227,6 +227,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-colo
 .auth-form-section h2 { margin-bottom: 1rem; }
 .auth-form-section .form-stack { margin-top: 1rem; }
 .context-back { display: inline-flex; min-height: 2.75rem; align-items: center; margin-bottom: 0.7rem; font-size: 0.87rem; font-weight: 700; }
+.context-back[href^="/finance"] { gap: 0.45rem; }
+.context-back[href^="/finance"]::before { content: "←"; font-size: 1.15em; line-height: 1; }
+input:not([type=checkbox]):not([type=radio])[type="search"] { padding-left: 2.5rem; background-image: url('/icons/search.svg'); background-repeat: no-repeat; background-size: 1rem 1rem; background-position: 0.85rem center; }
 .resend-form { margin-top: 0.85rem; }
 .account-switch-form { margin-top: 1rem; }
 .account-switch-form .text-button { min-height: 2.75rem; padding: 0.35rem 0.15rem; }
@@ -341,6 +344,13 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-colo
 .document-review-disclosure { padding-top: 0.35rem; border-top: 1px solid var(--line); }
 .document-review-disclosure > summary, .document-history-disclosure > summary { min-height: 2.75rem; display: flex; align-items: center; color: var(--accent); cursor: pointer; font-weight: 700; text-underline-offset: 0.16em; }
 .document-review-disclosure > summary:focus-visible, .document-history-disclosure > summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 0.2rem; }
+.document-review-disclosure--correction > summary, .document-review-disclosure--rejection > summary { box-sizing: border-box; display: inline-flex; gap: 0.55rem; width: fit-content; max-width: 100%; min-height: 2.75rem; padding: 0.55rem 0.8rem; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); line-height: 1.3; list-style: none; }
+.document-review-disclosure--correction > summary::-webkit-details-marker, .document-review-disclosure--rejection > summary::-webkit-details-marker { display: none; }
+.document-review-disclosure--correction > summary::before, .document-review-disclosure--rejection > summary::before { content: "▸"; flex: none; }
+.document-review-disclosure--correction[open] > summary::before, .document-review-disclosure--rejection[open] > summary::before { content: "▾"; }
+.document-review-disclosure--correction > summary:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.document-review-disclosure--rejection > summary { color: var(--danger); border-color: #dcb7bf; background: #fff; }
+.document-review-disclosure--rejection > summary:hover { background: var(--danger-soft); }
 .document-history-disclosure { grid-area: versions; }
 .document-history-disclosure[aria-labelledby="review-history-title"] { grid-area: review-history; }
 .document-detail-heading { grid-area: document-heading; }
@@ -537,6 +547,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline-colo
 .document-precheck-facts > div { display: grid; min-width: 0; align-content: start; gap: 0.18rem; }
 .document-precheck-facts dt { color: var(--muted); font-size: 0.8rem; }
 .document-precheck-facts dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.document-submission-facts .document-submission-status { display: inline-flex; width: fit-content; max-width: 100%; padding: 0.25rem 0.6rem; color: var(--ink); background: var(--surface-soft); border: 1px solid var(--line); border-radius: var(--radius-control); font-weight: 700; line-height: 1.3; }
 
 @media (max-width: 850px) {
   .schedule-controls { grid-template-columns: 1fr; }

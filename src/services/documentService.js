@@ -734,7 +734,7 @@ function createDocumentService({
     });
   }
 
-  async function reupload(actorInput, documentInput, file) {
+  async function reupload(actorInput, documentInput, file, { replacement = false } = {}) {
     const documentId = normalizeId(documentInput);
     if (!documentId) throw new DocumentServiceError('Document not found.', 404);
     const metadata = validateUpload(file, maxUploadBytes);
@@ -783,7 +783,10 @@ function createDocumentService({
         if (actor.role !== 'student' || previous.upload_source !== 'student' || previous.student_user_id !== actor.id) {
           throw new DocumentServiceError('Document not found.', 404);
         }
-        if (!['needs_review', 'failed'].includes(previous.status)) {
+        if (replacement) {
+          throw new DocumentServiceError('A report-card scan can be replaced only after staff requests a correction.', 409);
+        }
+        if (!replacement && !['needs_review', 'failed'].includes(previous.status)) {
           throw new DocumentServiceError('A corrected upload is available only while staff review remains open.', 409);
         }
       }
@@ -800,8 +803,22 @@ function createDocumentService({
             WHERE document_id = @documentId ORDER BY created_at DESC, id DESC LIMIT 1`);
         correctionRequested = legacyReviewResult.recordset?.[0]?.action_type === 'correction_requested';
       }
-      if (!correctionRequested) {
+      if (!replacement && !correctionRequested) {
         throw new DocumentServiceError('A corrected upload has not been requested for this document.', 409);
+      }
+      if (replacement) {
+        if (actor.role === 'student' && previous.upload_source !== 'student') throw new DocumentServiceError('Document not found.', 404);
+        const latestResult = await transaction.request()
+          .input('studentId', sql.Int, previous.student_id)
+          .input('documentType', sql.NVarChar(50), previous.document_type)
+          .input('requirementAssignmentId', sql.Int, previous.requirement_assignment_id || null)
+          .query(`SELECT id FROM documents WHERE student_id = @studentId AND document_type = @documentType
+            AND requirement_assignment_id <=> @requirementAssignmentId
+            AND (@documentType <> 'report_card' OR is_legacy_archive = 0)
+            ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE`);
+        if (Number(latestResult.recordset?.[0]?.id) !== documentId) {
+          throw new DocumentServiceError('A newer submission already exists. Open the latest version before replacing its file.', 409);
+        }
       }
       const revisionResult = await transaction.request()
         .input('documentId', sql.Int, documentId)
@@ -1816,6 +1833,7 @@ function createDocumentService({
   return {
     upload,
     reupload,
+    replaceUpload: (actorInput, documentInput, file) => reupload(actorInput, documentInput, file, { replacement: true }),
     listDocuments,
     countAwaitingStaffReview,
     listPhysicalRequirements,

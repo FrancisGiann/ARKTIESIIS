@@ -96,7 +96,7 @@ test('shared student document tabs preserve staff Requests context without expos
   assert.match(stylesheet, /\.student-document-sections a \{ min-height: 2\.75rem;/);
 });
 
-function transactionHarness({ actorRole = 'student', ownStudentId = 44, previousOwnerId = 7, previousDocumentType = 'good_moral', previousUploadSource = actorRole === 'student' ? 'student' : 'registrar', previousIsLegacyArchive = false, failAt = null, correctionAction = 'correction_requested', hasRevision = false, hasCorrectedSubmission = false, hasNewerReportCard = false, originalSubmissionExists = false, latestSubmissionStatus = originalSubmissionExists ? 'needs_review' : null, latestSubmissionRows = null, documentStatus = 'needs_review', ocrResultStatus = 'needs_review', validationJson = JSON.stringify({ advisoryChecks: [{ key: 'linked_student_name', found: true }] }), originalFilename = 'report.pdf', storedFilename = '5dd677e1-87fb-4214-a7c1-27aca233ae1f.pdf', previousDecision = null, id = 90, fileSystem } = {}) {
+function transactionHarness({ actorRole = 'student', ownStudentId = 44, previousOwnerId = 7, previousDocumentType = 'good_moral', previousUploadSource = actorRole === 'student' ? 'student' : 'registrar', previousIsLegacyArchive = false, failAt = null, correctionAction = 'correction_requested', hasRevision = false, hasCorrectedSubmission = false, hasNewerReportCard = false, originalSubmissionExists = false, latestSubmissionStatus = originalSubmissionExists ? 'needs_review' : null, latestSubmissionRows = null, latestReplacementId = 12, documentStatus = 'needs_review', ocrResultStatus = 'needs_review', validationJson = JSON.stringify({ advisoryChecks: [{ key: 'linked_student_name', found: true }] }), originalFilename = 'report.pdf', storedFilename = '5dd677e1-87fb-4214-a7c1-27aca233ae1f.pdf', previousDecision = null, id = 90, fileSystem } = {}) {
   const state = { queries: [], inserted: [], events: [], decisions: [], form137Statuses: [], previousSchoolReportCardStatuses: [], deletedRows: [], documentExists: true, committed: false, rolledBack: false, id, documentStatus, previousDecision };
   const transactionFactory = () => ({
     async begin(isolation) {
@@ -134,6 +134,7 @@ function transactionHarness({ actorRole = 'student', ownStudentId = 44, previous
           if (statement.includes('WHERE supersedes_document_id = @documentId') && statement.includes('FOR UPDATE')) return { recordset: hasCorrectedSubmission ? [{ id: 91 }] : [] };
           if (statement.includes('v_document_latest_validation')) return { recordset: [{ id: values.documentId, student_id: 44, document_type: previousDocumentType, is_legacy_archive: previousIsLegacyArchive ? 1 : 0, status: state.documentStatus, original_filename: originalFilename, mime_type: 'application/pdf', result_status: ocrResultStatus, validation_json: validationJson, precheck_attempt_count: 1 }] };
           if (statement.includes('SELECT id FROM documents') && statement.includes('supersedes_document_id')) return { recordset: hasRevision ? [{ id: 91 }] : [] };
+          if (statement.includes('SELECT id FROM documents WHERE student_id = @studentId') && statement.includes('requirement_assignment_id <=>')) return { recordset: [{ id: latestReplacementId }] };
           if (statement.includes("AND document_type = 'report_card' AND is_legacy_archive = 0")) return { recordset: hasNewerReportCard ? [{ id: 92 }] : [] };
           if (statement.includes('FROM students') && statement.includes('WHERE user_id = @actorId')) return { recordset: ownStudentId ? [{ id: ownStudentId }] : [] };
           if (statement.includes('FROM students') && statement.includes('WHERE id = @studentId')) return { recordset: [{ id: values.studentId }] };
@@ -446,6 +447,35 @@ test('student re-upload creates a linked immutable submission only after a corre
     const staffPsa = transactionHarness({ previousDocumentType: 'psa_birth_certificate', previousUploadSource: 'registrar' });
     await assert.rejects(serviceWithStorage(staffPsa, directory).reupload(7, '12', makeFile()), /Document not found/);
     assert.equal(staffPsa.state.inserted.length, 0, 'student cannot replace a staff-uploaded PSA even after a correction request');
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('replacing the latest uploaded file preserves the prior decision and starts a new review', async () => {
+  const directory = await temporaryDirectory();
+  try {
+    const verified = transactionHarness({ correctionAction: null, previousDecision: 'verified', documentStatus: 'valid' });
+    const replacement = await serviceWithStorage(verified, directory).replaceUpload(7, '12', makeFile({ name: 'replacement.pdf' }));
+    assert.equal(replacement.status, 'pending');
+    assert.equal(verified.state.inserted[0].values.supersedesDocumentId, 12);
+    assert.equal(verified.state.inserted[0].values.initialStatus, 'pending');
+    assert.equal(verified.state.queries.some(({ statement }) => statement.startsWith('UPDATE documents')), false);
+    assert.equal(verified.state.audit.values.action, 'student.document_reuploaded');
+
+    const stale = transactionHarness({ correctionAction: null, latestReplacementId: 13 });
+    await assert.rejects(serviceWithStorage(stale, directory).replaceUpload(7, '12', makeFile()), /newer submission already exists/);
+    assert.equal(stale.state.inserted.length, 0);
+    const duplicate = transactionHarness({ correctionAction: null, hasRevision: true });
+    await assert.rejects(serviceWithStorage(duplicate, directory).replaceUpload(7, '12', makeFile()), /already been submitted/);
+    const staffOrigin = transactionHarness({ correctionAction: null, previousUploadSource: 'registrar' });
+    await assert.rejects(serviceWithStorage(staffOrigin, directory).replaceUpload(7, '12', makeFile()), /Document not found/);
+    const protectedReportCard = transactionHarness({ correctionAction: null, previousDocumentType: 'report_card' });
+    await assert.rejects(serviceWithStorage(protectedReportCard, directory).replaceUpload(7, '12', makeFile()), /only after staff requests a correction/);
+    assert.equal(protectedReportCard.state.inserted.length, 0);
+    const invalid = transactionHarness({ correctionAction: null });
+    await assert.rejects(serviceWithStorage(invalid, directory).replaceUpload(7, '12', makeFile({ name: 'fake.png' })), /extension and declared file type/);
+    assert.equal(invalid.state.inserted.length, 0);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -1687,6 +1717,11 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
       if (documentId === '28') return { id: 29, documentType: 'report_card', status: 'pending' };
       return { id: actorId === 1 ? 17 : 19, documentType: documentId === '23' ? 'psa_birth_certificate' : 'good_moral', status: 'pending' };
     },
+    async replaceUpload(actorId, documentId, file) {
+      if (documentId === '24') throw new DocumentServiceError('Document not found.', 404);
+      calls.push(['replace', actorId, documentId, file?.originalname]);
+      return { id: documentId === '28' ? 30 : 31, documentType: documentId === '28' ? 'report_card' : 'good_moral', status: 'pending' };
+    },
     async decideDocument(...args) {
       decisionCalls.push(args);
       return { id: Number(args[1]), decision: args[2], status: args[2] === 'verified' ? 'valid' : 'rejected' };
@@ -2001,6 +2036,22 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
     assert.doesNotMatch(studentDetailHtml, /precheck-retry/);
     assert.doesNotMatch(studentDetailHtml, /Required source-inspection checklist|Staff source-inspection checklist/);
     assert.doesNotMatch(studentDetailHtml, /opaque-stored-name|extracted text|OCR output|img src=x onerror/i);
+
+    const verifiedDetail = await fetch(`${baseUrl}/documents/21`, { headers: { cookie: studentCookie } });
+    const verifiedDetailHtml = await verifiedDetail.text();
+    assert.match(verifiedDetailHtml, /action="\/documents\/21\/replace"/);
+    const replacementForm = new FormData();
+    replacementForm.set('_csrf', csrfFromHtml(verifiedDetailHtml));
+    replacementForm.set('document', new Blob([Buffer.from('%PDF-1.7\nreplacement')], { type: 'application/pdf' }), 'replacement.pdf');
+    const replaced = await fetch(`${baseUrl}/documents/21/replace`, { method: 'POST', headers: { cookie: studentCookie }, body: replacementForm, redirect: 'manual' });
+    assert.equal(replaced.status, 303);
+    assert.equal(replaced.headers.get('location'), '/documents/31?notice=uploaded');
+    assert.equal(calls.some(([action, actorId, id, name]) => action === 'replace' && actorId === 1 && id === '21' && name === 'replacement.pdf'), true);
+    const missingReplaceCsrf = new FormData();
+    missingReplaceCsrf.set('_csrf', 'wrong');
+    missingReplaceCsrf.set('document', new Blob([Buffer.from('%PDF-1.7\nreplacement')], { type: 'application/pdf' }), 'replacement.pdf');
+    assert.equal((await fetch(`${baseUrl}/documents/21/replace`, { method: 'POST', headers: { cookie: studentCookie }, body: missingReplaceCsrf })).status, 403);
+    assert.equal(calls.filter(([action]) => action === 'replace').length, 1);
 
     const historicalReportCardDetail = await fetch(`${baseUrl}/documents/24?notice=correctionRequested`, { headers: { cookie: studentCookie } });
     const historicalReportCardHtml = await historicalReportCardDetail.text();
@@ -2586,7 +2637,7 @@ test('document detail pairs source with findings, keeps notices and secondary ac
   assert.match(template, /<div class="document-detail-notices">[\s\S]*document-rejection-callout/);
   assert.match(template, /<div class="document-secondary-actions">[\s\S]*delete-submission-title/);
   assert.match(template, /if \(isStaff\) \{ %><p>Inspect the submitted pages before recording a staff decision/);
-  assert.match(styles, /\.document-detail-page\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.05fr\)\s+minmax\(0,\s*0\.95fr\)/s);
+  assert.match(styles, /\.document-detail-page\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/s);
   assert.match(styles, /@media \(max-width: 880px\)\s*\{[^}]*\.document-detail-page\s*\{\s*display:\s*block;/s);
   assert.match(styles, /\.document-precheck-scope\s*\{[^}]*max-width:\s*74ch;/s);
   assert.match(template, /do not establish authenticity or acceptance/);
