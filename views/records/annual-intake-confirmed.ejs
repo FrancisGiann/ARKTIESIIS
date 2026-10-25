@@ -39,6 +39,13 @@
       <% if (parent.registrar_confirmation_id) { %><p>Confirmation ID <strong><%= parent.registrar_confirmation_id %></strong></p><% } %>
       <p>Printed <%= confirmationDate(printedAt) %> Philippine time</p>
     </div>
+    <% if (enrollment.temporaryPassword) { %>
+      <aside class="confirmation-secret" aria-labelledby="temporary-password-title">
+        <h2 id="temporary-password-title">One-time temporary password</h2>
+        <p class="confirmation-secret__value"><strong><%= enrollment.temporaryPassword %></strong></p>
+        <p>Give this password to the student privately. It appears only on this initial confirmation and is not emailed. The student must complete email verification and change it at sign-in. If it is lost, use the existing password reset flow.</p>
+      </aside>
+    <% } %>
   </header>
 
   <% if (summaryUnavailable) { %>
@@ -114,14 +121,6 @@
         </div>
       </details>
     </section>
-  <% } %>
-
-  <% if (enrollment.temporaryPassword) { %>
-    <footer class="confirmation-secret" aria-labelledby="temporary-password-title">
-      <h2 id="temporary-password-title">One-time temporary password</h2>
-      <p class="confirmation-secret__value"><strong><%= enrollment.temporaryPassword %></strong></p>
-      <p>Give this password to the student privately. It appears only on this initial confirmation and is not emailed. The student must complete email verification and change it at sign-in. If it is lost, use the existing password reset flow.</p>
-    </footer>
   <% } %>
 
   <div class="admin-form-actions confirmation-actions" aria-label="Confirmation actions">

@@ -688,7 +688,9 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(confirmedHtml, /Tour/);
     assert.match(confirmedHtml, /synthetic&lt;&amp;&#34;credential/);
     assert.doesNotMatch(confirmedHtml, /synthetic<&"credential/);
-    assert.match(confirmedHtml, /<footer class="confirmation-secret"/);
+    assert.match(confirmedHtml, /<header class="confirmation-document-header">[\s\S]*?<aside class="confirmation-secret"[\s\S]*?<\/aside>[\s\S]*?<\/header>/);
+    assert.equal((confirmedHtml.match(/<aside class="confirmation-secret"/g) || []).length, 1,
+      'the one-time credential appears once in the print header');
     assert.match(confirmedHtml, /initial confirmation and is not emailed/);
     assert.match(confirmedHtml, /complete email verification and change it at sign-in/);
     assert.match(confirmedHtml, /Print \/ save as PDF/);
