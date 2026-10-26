@@ -6,6 +6,7 @@ const { requireRole } = require('../middleware/roles');
 const { DocumentServiceError, createDocumentService, normalizeId, verificationChecklistItems } = require('../services/documentService');
 const { createDocumentProcessingService } = require('../services/documentProcessingService');
 const { createGeminiFieldExtractionService } = require('../services/geminiFieldExtractionService');
+const { createStudentDocumentPrecheckService } = require('../services/studentDocumentPrecheckService');
 const { Form137ScanError, createForm137ScanService } = require('../services/form137ScanService');
 const { PhysicalChecklistError, createPhysicalChecklistService } = require('../services/physicalChecklistService');
 const { safeErrorDiagnostics } = require('../utils/safeErrorDiagnostics');
@@ -81,7 +82,7 @@ function clearUploadBuffer(file) {
   if (Buffer.isBuffer(file?.buffer)) file.buffer.fill(0);
 }
 
-function createDocumentsRouter({ getPool, sql, environment, documentService, documentProcessingService, form137ScanService, physicalChecklistService, logger = console } = {}) {
+function createDocumentsRouter({ getPool, sql, environment, documentService, documentProcessingService, form137ScanService, physicalChecklistService, studentDocumentPrecheckService, logger = console } = {}) {
   const router = express.Router();
   const maxUploadBytes = configuredMaxBytes(environment);
   const uploadMaxMb = configuredMaxMegabytes(environment);
@@ -90,7 +91,8 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
     sql,
     sessionSecret: environment?.sessionSecret,
     storageDirectory: environment?.upload?.storageDirectory,
-    maxUploadBytes: configuredMaxBytes(environment)
+    maxUploadBytes: configuredMaxBytes(environment),
+    earlyPrecheckModel: environment?.gemini?.model
   });
   const processingService = documentProcessingService || createDocumentProcessingService({
     getPool,
@@ -99,6 +101,7 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
     storageDirectory: environment?.upload?.storageDirectory,
     maxFileBytes: configuredMaxBytes(environment),
     geminiConfig: environment?.gemini,
+    earlyPrecheckEnabled: environment?.studentDocumentPrecheckEnabled === true,
     timeoutMs: environment?.gemini?.timeoutMs,
     concurrency: environment?.documentProcessing?.concurrency
   });
@@ -115,6 +118,15 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
     concurrency: environment?.documentProcessing?.concurrency
   });
   const checklistService = physicalChecklistService || createPhysicalChecklistService({ getPool, sql });
+  const studentPrecheck = studentDocumentPrecheckService || createStudentDocumentPrecheckService({
+    getPool: getPool || require('../config/database').getPool,
+    sql: sql || require('../config/database').sql,
+    secret: environment?.sessionSecret || 'dev-only-change-me', maxUploadBytes,
+    geminiConfig: environment?.gemini, enabled: environment?.studentDocumentPrecheckEnabled === true,
+    maxChecksPerHour: environment?.studentDocumentAiQuota?.maxChecksPerHour,
+    cooldownSeconds: environment?.studentDocumentAiQuota?.cooldownSeconds,
+    getDocument: service.getDocument
+  });
   const parseSingleUpload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: maxUploadBytes, files: 1, fields: 5, fieldSize: 2048 }
@@ -298,12 +310,48 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
 
   router.get('/physical', requireRole(...STAFF_ROLES), renderPhysicalRequirements);
 
+  router.post('/precheck', requireRole('student'), parseUpload, async (req, res) => {
+    res.set({ 'Cache-Control': 'private, no-store', Pragma: 'no-cache' });
+    try {
+      if (!hasValidCsrfToken(req)) return res.status(403).json({ error: 'The form session expired. Reload and try again.' });
+      const result = await studentPrecheck.check(req.authUser.id, req.body.documentType, req.body.requirementAssignmentId, req.file, req.body.documentId);
+      return res.json(result);
+    } catch (error) {
+      if (error instanceof DocumentServiceError) return res.status(error.status).json({ error: error.message });
+      return res.status(503).json({ error: 'The early check is unavailable. You may still submit for staff review.' });
+    } finally { clearUploadBuffer(req.file); }
+  });
+
+  function checkBoundPrecheck(req, assignmentId = null) {
+    if (!req.body.precheckToken) return true; // Existing no-JavaScript uploads remain reviewable.
+    return studentPrecheck.matchesToken(req.body.precheckToken, req.authUser.id,
+      req.body.documentType, assignmentId, req.file);
+  }
+
+  async function checkBoundRevision(req) {
+    if (!req.body.precheckToken || req.authUser.role !== 'student') return { valid: true, evidenceId: null };
+    const document = await service.getDocument(req.authUser.id, req.params.id);
+    if (!document) return { valid: false, evidenceId: null };
+    const assignmentId = document.requirement_assignment_id || null;
+    const documentId = normalizeId(req.params.id);
+    const valid = studentPrecheck.matchesToken(req.body.precheckToken, req.authUser.id,
+      document.document_type, assignmentId, req.file, documentId);
+    return { valid, evidenceId: valid ? studentPrecheck.evidenceIdFor?.(req.body.precheckToken,
+      req.authUser.id, document.document_type, assignmentId, req.file, documentId) || null : null };
+  }
+
   router.post('/', parseUpload, async (req, res) => {
     try {
       if (!hasValidCsrfToken(req)) {
         return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
       }
-      const result = await service.upload(req.authUser.id, req.body, req.file);
+      if (req.authUser.role === 'student' && !checkBoundPrecheck(req)) {
+        return res.status(409).render('error', { title: 'Document changed', message: 'The file or document type changed after the early check. Select the file and check it again.' });
+      }
+      const earlyEvidenceId = req.authUser.role === 'student' && req.body.precheckToken
+        ? studentPrecheck.evidenceIdFor?.(req.body.precheckToken, req.authUser.id, req.body.documentType, null, req.file) || null
+        : null;
+      const result = await service.upload(req.authUser.id, { ...req.body, earlyEvidenceId }, req.file);
       if (result.status === 'pending') processingService.schedulePendingProcessing();
       if (req.authUser.role === 'student' && result.documentType === 'report_card') {
         return res.redirect(303, '/documents?notice=uploaded');
@@ -320,7 +368,14 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
     try {
       if (!hasValidCsrfToken(req)) return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
       if (req.authUser.role !== 'student') return res.status(403).render('error', { title: 'Forbidden', message: 'Custom requirement uploads are available through the assigned student account.' });
-      const result = await service.upload(req.authUser.id, { ...req.body, requirementAssignmentId: req.params.assignmentId }, req.file);
+      if (!checkBoundPrecheck(req, normalizeId(req.params.assignmentId))) {
+        return res.status(409).render('error', { title: 'Document changed', message: 'The file changed after the early check. Select the file and check it again.' });
+      }
+      const earlyEvidenceId = req.body.precheckToken
+        ? studentPrecheck.evidenceIdFor?.(req.body.precheckToken, req.authUser.id,
+          req.body.documentType, normalizeId(req.params.assignmentId), req.file) || null
+        : null;
+      const result = await service.upload(req.authUser.id, { ...req.body, requirementAssignmentId: req.params.assignmentId, earlyEvidenceId }, req.file);
       if (result.status === 'pending') processingService.schedulePendingProcessing();
       return res.redirect(303, `/student/enrollment?schoolYear=${encodeURIComponent(req.body.schoolYear || '')}&notice=customUploaded`);
     } catch (error) {
@@ -587,7 +642,11 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       if (!hasValidCsrfToken(req)) {
         return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
       }
-      const result = await service.reupload(req.authUser.id, req.params.id, req.file);
+      const revisionPrecheck = await checkBoundRevision(req);
+      if (!revisionPrecheck.valid) {
+        return res.status(409).render('error', { title: 'Document changed', message: 'The file changed after the early check. Select it and check it again.' });
+      }
+      const result = await service.reupload(req.authUser.id, req.params.id, req.file, { earlyEvidenceId: revisionPrecheck.evidenceId });
       if (result.status === 'pending') processingService.schedulePendingProcessing();
       if (req.authUser.role === 'student' && result.documentType === 'report_card') {
         return res.redirect(303, '/documents?notice=uploaded');
@@ -605,7 +664,11 @@ function createDocumentsRouter({ getPool, sql, environment, documentService, doc
       if (!hasValidCsrfToken(req)) {
         return res.status(403).render('error', { title: 'Forbidden', message: 'The form session expired. Reload the page and try again.' });
       }
-      const result = await service.replaceUpload(req.authUser.id, req.params.id, req.file);
+      const revisionPrecheck = await checkBoundRevision(req);
+      if (!revisionPrecheck.valid) {
+        return res.status(409).render('error', { title: 'Document changed', message: 'The file changed after the early check. Select it and check it again.' });
+      }
+      const result = await service.replaceUpload(req.authUser.id, req.params.id, req.file, { earlyEvidenceId: revisionPrecheck.evidenceId });
       if (result.status === 'pending') processingService.schedulePendingProcessing();
       if (req.authUser.role === 'student' && result.documentType === 'report_card') {
         return res.redirect(303, '/documents?notice=uploaded');

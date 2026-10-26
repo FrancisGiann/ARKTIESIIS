@@ -9,7 +9,7 @@ const BASELINE_VERSION = 'v2.001';
 const BASELINE_PATH = path.resolve(__dirname, '../database/mariadb/schema.sql');
 const MIGRATIONS_DIRECTORY = path.resolve(__dirname, '../database/mariadb/migrations');
 const APPLICATION_LOCK = 'ARKTIESIIS MariaDB schema setup';
-const KNOWN_VERSIONS = new Set(Array.from({ length: 25 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const KNOWN_VERSIONS = new Set(Array.from({ length: 27 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 const RESTATEMENT_MIGRATION = '024_finance_assessment_restatement.sql';
 const RESTATEMENT_TRIGGER_SPECS = Object.freeze([
   ['trg_finance_restatement_operations_no_update', 'UPDATE', 'finance_assessment_restatement_operations'],
@@ -224,7 +224,7 @@ function validateAppliedVersions(versions) {
   }
   const unknown = [...versions].filter((version) => !KNOWN_VERSIONS.has(version));
   if (unknown.length) throw new SetupError(`Unknown migration version(s): ${unknown.sort().join(', ')}.`);
-  for (let sequence = 2; sequence <= 25; sequence += 1) {
+  for (let sequence = 2; sequence <= 27; sequence += 1) {
     const version = `v2.${String(sequence).padStart(3, '0')}`;
     const prior = `v2.${String(sequence - 1).padStart(3, '0')}`;
     if (versions.has(version) && !versions.has(prior)) {

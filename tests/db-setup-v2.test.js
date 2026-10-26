@@ -28,14 +28,14 @@ test('V2 setup targets the existing MariaDB baseline and ordered forward migrati
   assert.ok(baseline.every((statement) => !/\b(?:CREATE|DROP)\s+DATABASE\b/i.test(statement)));
   const migrations = readForwardMigrations();
   assert.deepEqual(migrations.map(({ version }) => version),
-    Array.from({ length: 24 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
-  assert.deepEqual(migrations.slice(-2).map(({ version }) => version), ['v2.024', 'v2.025']);
+    Array.from({ length: 26 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
+  assert.deepEqual(migrations.slice(-2).map(({ version }) => version), ['v2.026', 'v2.027']);
   assert.ok(migrations.every(({ statements }) => statements.length > 0));
   const authMigration = migrations.find(({ version }) => version === 'v2.023');
   assert.ok(authMigration?.statements.some((statement) => /ALTER TABLE users[\s\S]+invitation_required/i.test(statement)));
   assert.ok(authMigration?.statements.some((statement) => /CREATE TABLE account_setup_tokens/i.test(statement)));
   assert.ok(authMigration?.statements.some((statement) => /delivery_status IN \('pending', 'sent', 'failed', 'unknown'\)/i.test(statement)));
-  assert.deepEqual(dbCheck.EXPECTED_VERSIONS.slice(-2), ['v2.024', 'v2.025']);
+  assert.deepEqual(dbCheck.EXPECTED_VERSIONS.slice(-2), ['v2.026', 'v2.027']);
   assert.ok(dbCheck.REQUIRED_COLUMNS.users.includes('invitation_required'));
   assert.ok(dbCheck.REQUIRED_COLUMNS.account_setup_tokens.includes('token_hash'));
   assert.ok(dbCheck.REQUIRED_INDEXES.some((item) => item.indexName === 'UX_account_setup_token_hash'));
@@ -139,11 +139,17 @@ test('V2 setup refuses unknown or discontinuous migration history', () => {
   assert.doesNotThrow(() => validateAppliedVersions(new Set(
     Array.from({ length: 25 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
   )));
+  assert.doesNotThrow(() => validateAppliedVersions(new Set(
+    Array.from({ length: 26 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
+  )));
+  assert.doesNotThrow(() => validateAppliedVersions(new Set(
+    Array.from({ length: 27 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`)
+  )));
   assert.throws(() => validateAppliedVersions(new Set([
     ...Array.from({ length: 22 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`),
     'v2.024'
   ])), /v2\.024 is recorded while v2\.023 is missing/);
-  assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.026'])), /Unknown migration/);
+  assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.028'])), /Unknown migration/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.017', 'v2.018'])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.013'])), /history is inconsistent/);
   assert.throws(() => validateAppliedVersions(new Set(['v2.001', 'v2.003'])), /history is inconsistent/);

@@ -90,8 +90,8 @@ test('isolated MariaDB upgrades v2.024 history and verifies enrollment exports a
   try {
     await executeStatements(setup, readSqlFile(path.join(projectRoot, 'database/mariadb/schema.sql')));
     const migrations = readForwardMigrations();
-    assert.equal(migrations.at(-1).version, 'v2.025');
-    for (const migration of migrations.slice(0, -1)) {
+    assert.equal(migrations.at(-1).version, 'v2.027');
+    for (const migration of migrations.filter(({ version }) => version < 'v2.025')) {
       await executeStatements(setup, migration.statements);
       await setup.execute('INSERT INTO schema_migrations (version) VALUES (?)', [migration.version]);
     }
@@ -119,11 +119,17 @@ test('isolated MariaDB upgrades v2.024 history and verifies enrollment exports a
     VALUES (?, 'report_card', 'historical-synthetic.pdf', ?, 'application/pdf', ?, ?, 'student', 'needs_review', 0)`,
   [ownerStudentId, legacyFilename, PDF.length, ownerId]);
   const legacyDocumentId = Number(legacyDocumentResult.insertId);
-  const v025 = readForwardMigrations().at(-1);
+  const v025 = readForwardMigrations().find(({ version }) => version === 'v2.025');
   const migrate = await rawPool.getConnection();
   try {
     await executeStatements(migrate, v025.statements);
     await migrate.execute('INSERT INTO schema_migrations (version) VALUES (?)', [v025.version]);
+    const v026 = readForwardMigrations().find(({ version }) => version === 'v2.026');
+    await executeStatements(migrate, v026.statements);
+    await migrate.execute('INSERT INTO schema_migrations (version) VALUES (?)', [v026.version]);
+    const v027 = readForwardMigrations().find(({ version }) => version === 'v2.027');
+    await executeStatements(migrate, v027.statements);
+    await migrate.execute('INSERT INTO schema_migrations (version) VALUES (?)', [v027.version]);
   } finally {
     migrate.release();
   }

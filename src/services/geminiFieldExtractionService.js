@@ -1,4 +1,7 @@
+const { createHash } = require('node:crypto');
 const DEFAULT_MODEL = 'gemini-3.8-flash';
+// Bump when structured-field parsing changes in a way that changes reusable evidence.
+const EXTRACTION_FIELD_CONTRACT_VERSION = 1;
 const MAX_INLINE_FILE_BYTES = 14 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 32 * 1024;
 const MAX_FIELD_LENGTH = 240;
@@ -80,6 +83,12 @@ function promptFor(documentType) {
     'Do not extract birthplace, sex, parent information, or any other PSA information. The saved student profile is not provided to you.',
     'Do not classify authenticity, detect forgery, verify signatures or seals, or make an acceptance decision.'
   ].join(' ');
+}
+
+function extractionContractFingerprint(documentType) {
+  if (!DOCUMENT_TYPES.has(documentType)) return null;
+  return createHash('sha256').update(JSON.stringify({ parserVersion: EXTRACTION_FIELD_CONTRACT_VERSION,
+    prompt: promptFor(documentType), schema: schemaFor(documentType) })).digest('hex');
 }
 
 async function readBoundedResponse(response, maxBytes) {
@@ -250,6 +259,7 @@ module.exports = {
   DEFAULT_MODEL,
   MAX_INLINE_FILE_BYTES,
   createGeminiFieldExtractionService,
+  extractionContractFingerprint,
   parseStructuredFields,
   promptFor,
   schemaFor

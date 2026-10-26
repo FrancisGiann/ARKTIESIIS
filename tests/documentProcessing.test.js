@@ -17,7 +17,7 @@ const VALID_GOOD_MORAL_FIELDS = {
 
 function fakeSql() {
   return {
-    MAX: 'MAX', Int: 'Int',
+    MAX: 'MAX', Int: 'Int', BigInt: 'BigInt', Char: (length) => `Char(${length})`,
     ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE', READ_COMMITTED: 'READ_COMMITTED' },
     NVarChar: (length) => `NVarChar(${length})`
   };
@@ -62,6 +62,7 @@ function makeHarness({ documentType = 'good_moral', status = 'pending', isLegacy
               transaction.validations.push({ ...values });
               return { recordset: [] };
             }
+            if (statement.includes('DELETE FROM student_document_early_evidence')) return { rowsAffected: [1] };
             throw new Error(`Unexpected SQL: ${statement}`);
           }
         };
@@ -73,6 +74,50 @@ function makeHarness({ documentType = 'good_moral', status = 'pending', isLegacy
   };
   return { state, transactionFactory };
 }
+
+test('valid server-held extraction skips the second provider call and records its source', async () => {
+  const storageDirectory = await temporaryStorage();
+  const harness = makeHarness();
+  const bytes = Buffer.from('%PDF-1.7\nsynthetic early evidence');
+  await fs.writeFile(path.join(storageDirectory, STORED_PDF), bytes);
+  const evidenceId = '32131649-0d53-4bd4-80bb-581369893734';
+  const pool = { request() { return { input() { return this; }, async query(statement) {
+    assert.match(statement, /evidence\.file_sha256 = @digest/);
+    return { recordset: [{ id: evidenceId, fields_json: JSON.stringify(VALID_GOOD_MORAL_FIELDS) }] };
+  } }; } };
+  try {
+    const service = createService(harness, storageDirectory, async () => {
+      assert.fail('unchanged eligible evidence must avoid a second provider call');
+    }, { getPool: async () => pool, earlyPrecheckEnabled: true });
+    const result = await service.processPendingDocument(84);
+    assert.equal(result.code, 'precheck_pass');
+    const summary = JSON.parse(harness.state.validations[0].validationJson);
+    assert.equal(summary.extractionSource, 'student_early_evidence');
+    assert.equal(summary.earlyEvidenceId, evidenceId);
+    assert.equal(summary.earlyEvidenceProvider, 'google_gemini');
+    assert.equal(summary.earlyEvidenceModel, 'gemini-3.8-flash');
+    assert.match(summary.earlyEvidenceSchemaFingerprint, /^[a-f0-9]{64}$/);
+    assert.ok(harness.state.queries.some((query) => query.includes('DELETE FROM student_document_early_evidence')));
+  } finally { await fs.rm(storageDirectory, { recursive: true, force: true }); }
+});
+
+test('missing or stale early evidence falls back to the ordinary worker scan', async () => {
+  const storageDirectory = await temporaryStorage();
+  const harness = makeHarness();
+  await fs.writeFile(path.join(storageDirectory, STORED_PDF), Buffer.from('%PDF-1.7\nchanged synthetic bytes'));
+  let calls = 0;
+  const pool = { request() { return { input() { return this; }, async query() { return { recordset: [] }; } }; } };
+  try {
+    const service = createService(harness, storageDirectory, async () => {
+      calls += 1;
+      return { status: 'extracted', fields: VALID_GOOD_MORAL_FIELDS };
+    }, { getPool: async () => pool, earlyPrecheckEnabled: true });
+    const result = await service.processPendingDocument(84);
+    assert.equal(result.code, 'precheck_pass');
+    assert.equal(calls, 1);
+    assert.equal(JSON.parse(harness.state.validations[0].validationJson).extractionSource, 'post_submission_worker');
+  } finally { await fs.rm(storageDirectory, { recursive: true, force: true }); }
+});
 
 async function temporaryStorage() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'ark-gemini-precheck-'));

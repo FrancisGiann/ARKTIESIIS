@@ -27,6 +27,7 @@ function fakeSql() {
     MAX: 'MAX',
     Int: 'Int',
     BigInt: 'BigInt',
+    Char: (length) => `Char(${length})`,
     Bit: 'Bit',
     ISOLATION_LEVEL: { SERIALIZABLE: 'SERIALIZABLE' },
     NVarChar: (length) => `NVarChar(${length})`
@@ -154,6 +155,7 @@ function transactionHarness({ actorRole = 'student', ownStudentId = 44, previous
             state.inserted.push(call);
             return { insertId: state.id++ };
           }
+          if (statement.includes('UPDATE student_document_early_evidence')) return { rowsAffected: [1] };
           if (statement.includes('INSERT INTO document_review_events')) { state.events.push(call); return { recordset: [] }; }
           if (statement.includes('INSERT INTO document_decision_events')) { state.decisions.push(call); return { recordset: [] }; }
           if (statement.includes('INSERT INTO form137_status_events')) { state.form137Statuses.push(call); return { recordset: [] }; }
@@ -249,6 +251,24 @@ test('Good Moral upload derives the linked student record, checks private storag
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
+});
+
+test('student upload binds eligible early evidence inside the document transaction', async () => {
+  const directory = await temporaryDirectory();
+  try {
+    const harness = transactionHarness();
+    const service = serviceWithStorage(harness, directory);
+    const evidenceId = '32131649-0d53-4bd4-80bb-581369893734';
+    await service.upload(7, { documentType: 'good_moral', earlyEvidenceId: evidenceId }, makeFile());
+    const bind = harness.state.queries.find(({ statement }) => statement.includes('UPDATE student_document_early_evidence'));
+    assert.ok(bind);
+    assert.equal(bind.values.evidenceId, evidenceId);
+    assert.equal(bind.values.actorId, 7);
+    assert.equal(bind.values.studentId, 44);
+    assert.equal(bind.values.documentId, harness.state.inserted[0].values.documentId || 90);
+    assert.match(bind.values.digest, /^[a-f0-9]{64}$/);
+    assert.equal(harness.state.committed, true);
+  } finally { await fs.rm(directory, { recursive: true, force: true }); }
 });
 
 test('a student and staff cannot create a second original submission for the same student and type', async () => {

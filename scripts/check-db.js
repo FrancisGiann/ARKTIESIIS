@@ -35,7 +35,9 @@ const REQUIRED_OBJECTS = Object.freeze([
   'finance_departure_cutoff_reviews', 'finance_departure_charge_reviews',
   'registrar_retake_referrals', 'registrar_retake_item_keys', 'registrar_retake_referral_items',
   'finance_retake_item_decisions', 'registrar_retake_referral_events', 'finance_departure_application_events',
-  'requirement_catalog', 'requirement_assignments', 'requirement_assignment_events'
+  'requirement_catalog', 'requirement_assignments', 'requirement_assignment_events',
+  'student_document_early_evidence', 'student_document_ai_rate_scopes',
+  'student_document_ai_attempts', 'student_document_ai_correction_uses'
 ]);
 
 const REQUIRED_COLUMNS = Object.freeze({
@@ -52,6 +54,12 @@ const REQUIRED_COLUMNS = Object.freeze({
   requirement_assignments: ['requirement_id', 'requirement_code', 'student_id', 'school_year', 'display_name_snapshot',
     'student_instructions_snapshot', 'channel_snapshot', 'catalog_version_snapshot', 'is_required', 'status', 'withdrawal_reason', 'version_no'],
   requirement_assignment_events: ['assignment_id', 'actor_id', 'event_type', 'version_no', 'details_json'],
+  student_document_early_evidence: ['id', 'actor_id', 'student_id', 'document_type', 'source_document_id',
+    'file_sha256', 'model', 'schema_fingerprint', 'fields_json', 'expires_at', 'consumed_document_id'],
+  student_document_ai_rate_scopes: ['actor_id', 'requirement_key'],
+  student_document_ai_attempts: ['id', 'actor_id', 'requirement_key', 'source_document_id', 'file_sha256',
+    'correction_bonus', 'started_at', 'finished_at'],
+  student_document_ai_correction_uses: ['actor_id', 'source_document_id', 'used_at'],
   enrollments: ['finalized_at', 'annual_enrollment_id', 'term_scope_status'],
   annual_enrollments: ['esc_id', 'eform_status', 'finance_handbook_number', 'pre_enrollment_id', 'intake_kind',
     'readmission_evaluation_id', 'readmission_evaluation_version', 'continuity_source_annual_enrollment_id'],
@@ -177,6 +185,10 @@ const REQUIRED_INDEXES = Object.freeze([
   { tableName: 'requirement_assignment_events', indexName: 'IX_requirement_assignment_event_history', columns: ['assignment_id', 'created_at', 'id'], unique: false },
   { tableName: 'student_physical_checklist_events', indexName: 'IX_physical_event_requirement_assignment', columns: ['requirement_assignment_id', 'created_at', 'id'], unique: false },
   { tableName: 'documents', indexName: 'IX_documents_requirement_assignment', columns: ['requirement_assignment_id', 'created_at', 'id'], unique: false },
+  { tableName: 'student_document_early_evidence', indexName: 'UQ_student_early_consumed', columns: ['consumed_document_id'] },
+  { tableName: 'student_document_early_evidence', indexName: 'IX_student_early_expiry', columns: ['expires_at'], unique: false },
+  { tableName: 'student_document_ai_attempts', indexName: 'IX_student_ai_attempt_window', columns: ['actor_id', 'requirement_key', 'started_at'], unique: false },
+  { tableName: 'student_document_ai_attempts', indexName: 'IX_student_ai_attempt_cleanup', columns: ['started_at'], unique: false },
 ]);
 const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'annual_finance_assessment_reviews', constraintName: 'FK_annual_finance_assessment_review_annual',
@@ -271,8 +283,17 @@ const REQUIRED_FOREIGN_KEYS = Object.freeze([
   { tableName: 'documents', constraintName: 'FK_document_requirement_assignment', columnName: 'student_id', referencedTable: 'requirement_assignments', referencedColumn: 'student_id' },
   { tableName: 'documents', constraintName: 'FK_document_requirement_assignment', columnName: 'document_type', referencedTable: 'requirement_assignments', referencedColumn: 'requirement_code' },
   { tableName: 'documents', constraintName: 'FK_documents_requirement_type', columnName: 'document_type', referencedTable: 'requirement_catalog', referencedColumn: 'requirement_code' },
+  { tableName: 'student_document_early_evidence', constraintName: 'FK_student_early_actor', columnName: 'actor_id', referencedTable: 'users', referencedColumn: 'id' },
+  { tableName: 'student_document_early_evidence', constraintName: 'FK_student_early_student', columnName: 'student_id', referencedTable: 'students', referencedColumn: 'id' },
+  { tableName: 'student_document_early_evidence', constraintName: 'FK_student_early_source', columnName: 'source_document_id', referencedTable: 'documents', referencedColumn: 'id' },
+  { tableName: 'student_document_early_evidence', constraintName: 'FK_student_early_consumed', columnName: 'consumed_document_id', referencedTable: 'documents', referencedColumn: 'id' },
+  { tableName: 'student_document_ai_rate_scopes', constraintName: 'FK_student_ai_scope_actor', columnName: 'actor_id', referencedTable: 'users', referencedColumn: 'id' },
+  { tableName: 'student_document_ai_attempts', constraintName: 'FK_student_ai_attempt_scope', columnName: 'actor_id', referencedTable: 'student_document_ai_rate_scopes', referencedColumn: 'actor_id' },
+  { tableName: 'student_document_ai_attempts', constraintName: 'FK_student_ai_attempt_scope', columnName: 'requirement_key', referencedTable: 'student_document_ai_rate_scopes', referencedColumn: 'requirement_key' },
+  { tableName: 'student_document_ai_correction_uses', constraintName: 'FK_student_ai_correction_actor', columnName: 'actor_id', referencedTable: 'users', referencedColumn: 'id' },
+  { tableName: 'student_document_ai_correction_uses', constraintName: 'FK_student_ai_correction_source', columnName: 'source_document_id', referencedTable: 'documents', referencedColumn: 'id' },
 ]);
-const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 25 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
+const EXPECTED_VERSIONS = Object.freeze(Array.from({ length: 27 }, (_, index) => `v2.${String(index + 1).padStart(3, '0')}`));
 
 function bindInList(request, values, prefix) {
   return values.map((value, index) => {
@@ -393,7 +414,7 @@ async function checkDatabase({ getDatabasePool = getPool, closeDatabasePool = cl
       process.exitCode = 1;
       return;
     }
-    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.025.`);
+    logger.log(`MariaDB connectivity and schema in ${databaseName} are verified through v2.027.`);
   } catch {
     logger.error('MariaDB database check failed. Confirm DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD, then run npm run db:setup.');
     process.exitCode = 1;

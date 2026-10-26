@@ -5,6 +5,8 @@ const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database
 const defaultEnvironment = require('../config/environment');
 const { createGeminiFieldExtractionService, MAX_INLINE_FILE_BYTES } = require('./geminiFieldExtractionService');
 const { evaluateExtractedFields } = require('./documentValidationService');
+const { createHash } = require('node:crypto');
+const { loadEarlyEvidence, deleteEvidenceForDocument } = require('./studentEarlyEvidence');
 
 const MIME_BY_EXTENSION = new Map([
   ['.pdf', 'application/pdf'],
@@ -50,6 +52,7 @@ function createDocumentProcessingService({
   transactionFactory = (pool) => new sql.Transaction(pool),
   geminiFieldExtractor,
   geminiConfig = defaultEnvironment.gemini,
+  earlyPrecheckEnabled = defaultEnvironment.studentDocumentPrecheckEnabled,
   sessionSecret = defaultEnvironment.sessionSecret,
   storageDirectory = defaultEnvironment.upload.storageDirectory,
   maxFileBytes = Math.floor(defaultEnvironment.upload.maxMb * 1024 * 1024),
@@ -272,7 +275,12 @@ function createDocumentProcessingService({
         message: outcome.message,
         fileFormatPassed: outcome.fileFormatPassed === true,
         gemini: outcome.gemini || { status: 'unavailable', code: 'not_run', fields: null },
-        advisoryChecks: outcome.advisoryChecks || []
+        advisoryChecks: outcome.advisoryChecks || [],
+        extractionSource: outcome.earlyEvidenceId ? 'student_early_evidence' : 'post_submission_worker',
+        earlyEvidenceId: outcome.earlyEvidenceId || null,
+        earlyEvidenceProvider: outcome.earlyEvidence?.provider || null,
+        earlyEvidenceModel: outcome.earlyEvidence?.model || null,
+        earlyEvidenceSchemaFingerprint: outcome.earlyEvidence?.schemaFingerprint || null
       });
       await transaction.request()
         .input('documentId', sql.Int, documentId)
@@ -284,6 +292,7 @@ function createDocumentProcessingService({
           (document_id, processor, extracted_text, validation_json,
             completeness_passed, format_passed, result_status)
           VALUES (@documentId, @processor, @extractedText, @validationJson, NULL, NULL, @resultStatus)`);
+      if (outcome.earlyEvidenceId) await deleteEvidenceForDocument(transaction, sql, documentId);
       return true;
     });
   }
@@ -378,8 +387,21 @@ function createDocumentProcessingService({
         code: !fileFormatPassed ? 'invalid_file_format' : fileBuffer ? 'missing_api_key' : 'file_too_large',
         fields: null
       };
+      let earlyEvidence = null;
+      if (earlyPrecheckEnabled && fileFormatPassed && fileBuffer) {
+        try {
+          earlyEvidence = await loadEarlyEvidence(await getPool(), sql, {
+            document, digest: createHash('sha256').update(fileBuffer).digest('hex'),
+            fileSizeBytes: fileBuffer.length, model: geminiConfig?.model
+          });
+        } catch {
+          // Missing, expired, or unavailable handoff falls back to the ordinary worker scan.
+        }
+      }
       if (fileFormatPassed) {
-        const extractionPromise = fileBuffer
+        const extractionPromise = earlyEvidence
+          ? Promise.resolve().then(() => { extraction = { status: 'extracted', fields: earlyEvidence.fields }; })
+          : fileBuffer
           ? withTimeout(
             (signal) => geminiEngine.extractDocument({
               buffer: fileBuffer,
@@ -413,7 +435,9 @@ function createDocumentProcessingService({
         message,
         advisoryChecks: [],
         fileFormatPassed,
-        gemini
+        gemini,
+        earlyEvidenceId: earlyEvidence?.id || null,
+        earlyEvidence
       };
     } catch (error) {
       const failure = safeProcessingFailureFor(error);

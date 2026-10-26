@@ -11,11 +11,11 @@ const { splitSqlStatements, readSqlFile, readForwardMigrations, validateAppliedV
   assert.match(statements[1], /\`semi;colon\`/);
 });
 
-test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.025 migrations', () => {
+test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.027 migrations', () => {
   const baseline = readSqlFile(path.resolve('database/mariadb/schema.sql'));
   assert.ok(baseline.some((statement) => /v2\.001/.test(statement)));
   const migrations = readForwardMigrations();
-  assert.deepEqual(migrations.map(({ version }) => version), Array.from({ length: 24 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
+  assert.deepEqual(migrations.map(({ version }) => version), Array.from({ length: 26 }, (_, index) => `v2.${String(index + 2).padStart(3, '0')}`));
   assert.ok(migrations.every(({ statements }) => statements.length > 0));
   const wholePaper = migrations.find(({ version }) => version === 'v2.018');
   assert.equal(wholePaper.statements[0].match(/\bALTER\s+TABLE\s+student_term_clearances\b/gi)?.length, 1);
@@ -48,6 +48,10 @@ test('MariaDB setup reads a v2.001 baseline and the numbered v2.002-v2.025 migra
   assert.match(customRequirements.statements.join('\n'), /CREATE TABLE requirement_catalog/i);
   assert.match(customRequirements.statements.join('\n'), /CREATE TABLE requirement_assignments/i);
   assert.match(customRequirements.statements.join('\n'), /ADD requirement_assignment_id INT NULL/i);
+  const earlyEvidence = migrations.find(({ version }) => version === 'v2.026');
+  assert.match(earlyEvidence.statements.join('\n'), /CREATE TABLE student_document_early_evidence/i);
+  assert.match(migrations.find(({ version }) => version === 'v2.027').statements.join('\n'),
+    /CREATE TABLE student_document_ai_attempts/i);
   const restatement = migrations.find(({ version }) => version === 'v2.024');
   assert.equal(restatement.statements.filter((statement) => /^CREATE TRIGGER\b/i.test(statement)).length, 6);
   const exactTriggers = restatement.statements.filter((statement) => /^CREATE TRIGGER\b/i.test(statement));

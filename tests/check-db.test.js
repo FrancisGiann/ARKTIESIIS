@@ -69,8 +69,8 @@ test('MariaDB database check verifies migration versions, required tables, views
   assert.equal(state.exitCode, undefined);
   assert.equal(state.closed, 1);
   assert.match(state.logs[0], /MariaDB connectivity/);
-  assert.match(state.logs[0], /v2\.025/);
-  assert.deepEqual(EXPECTED_VERSIONS.slice(-2), ['v2.024', 'v2.025']);
+  assert.match(state.logs[0], /v2\.027/);
+  assert.deepEqual(EXPECTED_VERSIONS.slice(-2), ['v2.026', 'v2.027']);
   assert.ok(state.queries.some((statement) => statement.includes('information_schema.tables')));
   assert.ok(state.queries.some((statement) => statement.includes('information_schema.columns')));
   assert.ok(state.queries.every((statement) => !/\b(?:DB_NAME|OBJECT_ID|dbo\.|sys\.tables|TRIGGER)\b/i.test(statement)));

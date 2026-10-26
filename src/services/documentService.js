@@ -4,6 +4,8 @@ const path = require('node:path');
 const { constants: fsConstants } = require('node:fs');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 const { formatFinanceDateTime } = require('../utils/financeDateTime');
+const defaultEnvironment = require('../config/environment');
+const { bindEarlyEvidence } = require('./studentEarlyEvidence');
 const {
   MAX_GEMINI_PRECHECK_ATTEMPTS,
   canRetryGeminiPrecheck,
@@ -410,6 +412,7 @@ function createDocumentService({
   sessionSecret,
   storageDirectory,
   maxUploadBytes = 10 * 1024 * 1024,
+  earlyPrecheckModel = defaultEnvironment.gemini.model,
   fileSystem = fs,
   logger = console
 } = {}) {
@@ -621,7 +624,7 @@ function createDocumentService({
       : UPLOAD_DOCUMENT_TYPES.has(documentType);
   }
 
-  async function insertSubmission({ actor, studentId, documentType, requirementAssignmentId = null, file, metadata, supersedesDocumentId = null, onFileSaved }) {
+  async function insertSubmission({ actor, studentId, documentType, requirementAssignmentId = null, file, metadata, supersedesDocumentId = null, earlyEvidenceId = null, onFileSaved }) {
     const storedFilename = `${crypto.randomUUID()}${metadata.extension}`;
     const initialStatus = requirementAssignmentId ? 'needs_review' : 'pending';
     const filePath = await savePrivateFile(file.buffer, storedFilename);
@@ -648,6 +651,18 @@ function createDocumentService({
     if (!Number.isSafeInteger(documentId) || documentId < 1) throw new Error('Document insert returned no identifier.');
     if (supersedesDocumentId !== null && Number(supersedesDocumentId) === documentId) {
       throw new DocumentServiceError('A document cannot supersede itself.', 400);
+    }
+    if (actor.role === 'student' && earlyEvidenceId && GEMINI_PRECHECK_DOCUMENT_TYPES.has(documentType)) {
+      try {
+        await bindEarlyEvidence(actor.transaction, sql, {
+          evidenceId: earlyEvidenceId, actorId: actor.id, studentId, documentId,
+          type: documentType, assignmentId: requirementAssignmentId, sourceDocumentId: supersedesDocumentId,
+          digest: crypto.createHash('sha256').update(file.buffer).digest('hex'),
+          mimeType: metadata.mimeType, fileSizeBytes: metadata.fileSizeBytes, model: earlyPrecheckModel
+        });
+      } catch {
+        // A missing or stale early result never blocks the ordinary staff-review worker.
+      }
     }
     await writeAudit(actor.transaction, {
       actor,
@@ -730,11 +745,12 @@ function createDocumentService({
       await ensureLatestSubmissionAllowsNewOriginal(transaction, studentId, documentType, requirementAssignmentId);
 
       const scopedActor = { ...actor, transaction };
-      return insertSubmission({ actor: scopedActor, studentId, documentType, requirementAssignmentId, file, metadata, onFileSaved });
+      return insertSubmission({ actor: scopedActor, studentId, documentType, requirementAssignmentId, file, metadata,
+        earlyEvidenceId: values.earlyEvidenceId, onFileSaved });
     });
   }
 
-  async function reupload(actorInput, documentInput, file, { replacement = false } = {}) {
+  async function reupload(actorInput, documentInput, file, { replacement = false, earlyEvidenceId = null } = {}) {
     const documentId = normalizeId(documentInput);
     if (!documentId) throw new DocumentServiceError('Document not found.', 404);
     const metadata = validateUpload(file, maxUploadBytes);
@@ -846,6 +862,7 @@ function createDocumentService({
         file,
         metadata,
         supersedesDocumentId: previous.id,
+        earlyEvidenceId,
         onFileSaved
       });
     });
@@ -1833,7 +1850,7 @@ function createDocumentService({
   return {
     upload,
     reupload,
-    replaceUpload: (actorInput, documentInput, file) => reupload(actorInput, documentInput, file, { replacement: true }),
+    replaceUpload: (actorInput, documentInput, file, options = {}) => reupload(actorInput, documentInput, file, { ...options, replacement: true }),
     listDocuments,
     countAwaitingStaffReview,
     listPhysicalRequirements,

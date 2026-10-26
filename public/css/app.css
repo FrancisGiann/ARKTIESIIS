@@ -334,6 +334,11 @@ input:not([type=checkbox]):not([type=radio])[type="search"] { padding-left: 2.5r
 
 /* Documents, review and account administration */
 .document-upload-form, .document-review-actions, .document-review-action { display: grid; gap: 0.8rem; }
+.document-precheck-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.document-precheck-actions [hidden] { display: none; }
+.document-precheck-result:not(:empty) { padding: 0.75rem 0.9rem; border: 1px solid var(--line); border-radius: var(--radius-control); background: #f7f9f9; }
+.document-precheck-result p { margin: 0; }
+.document-precheck-result ul { margin: 0.5rem 0 0; padding-left: 1.35rem; }
 .document-precheck-scope, .document-precheck-status, .document-field-findings, .document-precheck-list, .document-review-history, .document-review-action { padding: 1rem; margin: 0.8rem 0; background: #f7f9f9; border: 1px solid var(--line); border-radius: var(--radius-control); }
 .document-review-layout { display: contents; }
 .document-source-pane { grid-area: source; min-width: 0; align-self: start; }

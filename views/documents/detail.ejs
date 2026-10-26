@@ -216,10 +216,12 @@
     <% if (!correctionRequested && !hasCorrectedSubmission && !document.isArchivedReportCard && !['form_137', 'report_card'].includes(document.document_type) && (!document.requirement_assignment_id || document.assignment_status === 'active') && (isStaff ? !document.requirement_assignment_id : document.upload_source === 'student')) { %>
       <section class="admin-section" aria-labelledby="replace-upload-title">
         <div class="admin-section__heading"><div><h2 id="replace-upload-title">Replace uploaded file</h2><p>The earlier file and staff decision stay in history. The new file becomes a separate submission requiring a new staff review.</p></div></div>
-        <form class="form-stack document-upload-form" method="post" action="/documents/<%= document.id %>/replace" enctype="multipart/form-data" data-submitting-message="Uploading the replacement document. Please wait.">
+        <form class="form-stack document-upload-form" method="post" action="/documents/<%= document.id %>/replace" enctype="multipart/form-data" <%- !isStaff ? `data-student-precheck data-document-id="${document.id}" ${document.requirement_assignment_id ? `data-assignment-id="${document.requirement_assignment_id}"` : ''}` : '' %> data-submitting-message="Uploading the replacement document. Please wait.">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+          <% if (!isStaff) { %><input type="hidden" name="documentType" value="<%= document.document_type %>"><input type="hidden" name="precheckToken" value=""><% } %>
           <div class="field"><label for="voluntary-replacement-file">Replacement PDF, JPEG, or PNG</label><input id="voluntary-replacement-file" name="document" type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" aria-describedby="voluntary-replacement-help" required><small id="voluntary-replacement-help" class="field-help">Maximum <%= uploadMaxMb %> MB. Staff must inspect the replacement; previous verification does not transfer.</small></div>
-          <button class="button button--secondary button--align-start" type="submit">Replace uploaded file</button>
+          <% if (!isStaff) { %><p class="muted-copy">Optional Check document sends supported selected files to Google Gemini before final submission when early AI checking is enabled. The file may contain personal information. You can instead submit directly for manual staff review. Staff make the final decision.</p><% } %>
+          <% if (!isStaff) { %><div class="document-precheck-actions"><button class="button button--secondary" type="button" data-check-document hidden>Check document</button><button class="button button--secondary" type="button" data-replace-document hidden>Choose another file</button><button class="button button--primary" type="submit" data-proceed-document>Submit for manual review</button></div><div class="document-precheck-result" data-precheck-result role="status" aria-live="polite"></div><% } else { %><button class="button button--secondary button--align-start" type="submit">Replace uploaded file</button><% } %>
         </form>
       </section>
     <% } %>
@@ -239,11 +241,13 @@
     <section class="admin-section" aria-labelledby="correction-title">
       <div class="admin-section__heading"><div><h2 id="correction-title">Correction requested</h2><p>Follow the instruction from staff, then upload the corrected file as a new submission.</p></div></div>
       <p class="form-alert" role="status"><%= latestDecision?.reason || document.reviewEvents[0]?.instruction %></p>
-      <form class="form-stack document-upload-form" method="post" action="/documents/<%= document.id %>/reupload" enctype="multipart/form-data" data-submitting-message="Uploading the corrected document. Please wait.">
+      <form class="form-stack document-upload-form" method="post" action="/documents/<%= document.id %>/reupload" enctype="multipart/form-data" data-student-precheck data-document-id="<%= document.id %>" <%- document.requirement_assignment_id ? `data-assignment-id="${document.requirement_assignment_id}"` : '' %> data-submitting-message="Uploading the corrected document. Please wait.">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+        <input type="hidden" name="documentType" value="<%= document.document_type %>"><input type="hidden" name="precheckToken" value="">
         <p class="muted-copy" id="correction-file-help">The app checks file size and configured PDF, JPEG, or PNG format on the server; maximum size: <%= uploadMaxMb %> MB. <% if (document.document_type === 'psa_birth_certificate') { %>Google Gemini receives this file to suggest the visible student name and copy visible birth-date text as written. The birth date is compared locally with the current saved profile; profile data is not sent to Gemini. This birth-date comparison is advisory only.<% } else if (document.document_type === 'good_moral') { %>Google Gemini receives this file to suggest the visible student name, issuing-school text, and certificate-context clues. The issuing-school text is compared locally with the saved last-school value; profile data is not sent to Gemini. This school-name comparison is advisory only.<% } else if (document.document_type === 'report_card') { %>Google Gemini suggests only the visible student name; it does not extract grades or other academic results. Staff review the source after the limited name and server-side file-format checks.<% } %> Staff inspect the source and make the final decision.</p>
         <div class="field"><label for="replacement-file">Corrected file</label><input id="replacement-file" name="document" type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" aria-describedby="correction-file-help" required></div>
-        <button class="button button--primary button--align-start" type="submit">Upload corrected document</button>
+        <p class="muted-copy">Optional Check document sends supported selected files to Google Gemini before final submission when early AI checking is enabled. The file may contain personal information. You can instead submit directly for manual staff review. Staff make the final decision.</p>
+        <div class="document-precheck-actions"><button class="button button--secondary" type="button" data-check-document hidden>Check document</button><button class="button button--secondary" type="button" data-replace-document hidden>Choose another file</button><button class="button button--primary" type="submit" data-proceed-document>Submit for manual review</button></div><div class="document-precheck-result" data-precheck-result role="status" aria-live="polite"></div>
       </form>
     </section>
   <% } %>
@@ -323,4 +327,5 @@
   </details><% } %>
 </main>
 <script src="/js/document-upload-validation.js" defer></script>
+<script src="/js/student-document-precheck.js" defer></script>
 <%- include('../partials/foot') %>

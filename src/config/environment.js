@@ -52,6 +52,14 @@ function parseDocumentProcessingConcurrency(value) {
   return Number(rawValue);
 }
 
+function parseEarlyAiLimit(name, value, fallback, minimum, maximum) {
+  const raw = value === undefined || value === '' ? String(fallback) : String(value);
+  if (!/^\d+$/.test(raw) || Number(raw) < minimum || Number(raw) > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return Number(raw);
+}
+
 function configuredGeminiModel(value) {
   const model = value === undefined || value.trim() === '' ? 'gemini-3.8-flash' : value.trim();
   if (!/^gemini-[a-z0-9]+(?:[.-][a-z0-9]+){1,5}$/.test(model)) {
@@ -172,6 +180,13 @@ module.exports = {
     apiKey: configuredGeminiApiKey(process.env.GEMINI_API_KEY),
     model: configuredGeminiModel(process.env.GEMINI_MODEL),
     timeoutMs: parseGeminiTimeout(process.env.GEMINI_TIMEOUT_MS)
+  },
+  studentDocumentPrecheckEnabled: process.env.STUDENT_DOCUMENT_PRECHECK_ENABLED === 'true',
+  studentDocumentAiQuota: {
+    maxChecksPerHour: parseEarlyAiLimit('STUDENT_DOCUMENT_AI_CHECKS_PER_HOUR',
+      process.env.STUDENT_DOCUMENT_AI_CHECKS_PER_HOUR, 3, 1, 10),
+    cooldownSeconds: parseEarlyAiLimit('STUDENT_DOCUMENT_AI_COOLDOWN_SECONDS',
+      process.env.STUDENT_DOCUMENT_AI_COOLDOWN_SECONDS, 30, 5, 300)
   },
   upload: {
     maxMb: parseUploadMegabytes(process.env.MAX_UPLOAD_MB),

@@ -35,7 +35,7 @@
     <section class="admin-section" aria-labelledby="upload-title">
       <div class="admin-section__heading"><div><h2 id="upload-title">Upload a document</h2><p id="upload-format-help">PDF, JPEG, or PNG; up to <%= uploadMaxMb %> MB. Gemini receives Good Moral, PSA, and report-card files. It suggests student name; PSA birth-date text; Good Moral issuer/context; and report-card name only. Comparisons with saved records are local. Staff decide; report-card checks never read grades.</p><details class="document-precheck-help"><summary>Precheck details and limits</summary><p>For Good Moral and PSA, Gemini suggests the visible student name. PSA birth-date text and Good Moral issuing-school text and certificate-context clues are also suggested; comparisons with saved records happen locally, and profile data is not sent to Gemini. For a report-card scan, Gemini suggests only the visible student name; it does not read grades or other academic results. Birth-date and school-name comparisons are advisory. These checks do not verify authenticity, signatures, or seals.</p><p>Upload a correction when staff requests one. If staff rejects the latest submission, you can start a new original submission; earlier submissions stay in your history.</p></details></div></div>
       <% if (availableDocumentTypes.length) { %>
-      <form class="form-stack document-upload-form" method="post" action="/documents" enctype="multipart/form-data" data-submitting-message="Uploading your document. Please wait.">
+      <form class="form-stack document-upload-form" method="post" action="/documents" enctype="multipart/form-data" data-student-precheck data-submitting-message="Uploading your document. Please wait.">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>">
         <div class="admin-form-grid">
           <div class="field">
@@ -50,7 +50,10 @@
             <input id="document-file" name="document" type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" aria-describedby="upload-format-help" required>
           </div>
         </div>
-        <button class="button button--primary button--align-start" type="submit">Upload document</button>
+        <input type="hidden" name="precheckToken" value="">
+        <p class="muted-copy">Optional Check document sends the selected file to Google Gemini before final submission when early AI checking is enabled. The file may contain personal information. You can instead submit directly for manual staff review. AI suggestions never decide acceptance.</p>
+        <div class="document-precheck-actions"><button class="button button--secondary" type="button" data-check-document hidden>Check document</button><button class="button button--secondary" type="button" data-replace-document hidden>Choose another file</button><button class="button button--primary" type="submit" data-proceed-document>Submit for manual review</button></div>
+        <div class="document-precheck-result" data-precheck-result role="status" aria-live="polite"></div>
       </form>
       <% } else { %>
         <p class="empty-state">Each allowed document type has a latest submission that was not rejected. Open it to review its status or upload a correction requested by staff.</p>
@@ -131,4 +134,5 @@
   </section>
 </main>
 <script src="/js/document-upload-validation.js" defer></script>
+<script src="/js/student-document-precheck.js" defer></script>
 <%- include('../partials/foot') %>
