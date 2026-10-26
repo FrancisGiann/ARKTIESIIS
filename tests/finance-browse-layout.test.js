@@ -204,6 +204,24 @@ test('annual account route passes authoritative fee projection values to the fin
   assert.equal(confirmationResponse.locals.backHref, '/finance?search=Ari+Kim&termId=41&status=enrolled');
 });
 
+test('direct assessment confirmation keeps the pending student for the payment handoff', async () => {
+  const confirmed = [];
+  const router = createFinanceRouter({ annualFinanceService: {
+    async annualAssessmentPreview() { return { parent: { student_id: 22, intake_status: 'pending' } }; },
+    async confirmAnnualAssessment(_actorId, annualId) { confirmed.push(annualId); }
+  } });
+  const handler = router.stack.find((layer) => layer.route?.path === '/annual/:annualId/assessment').route.stack[0].handle;
+  const response = { statusCode: 200, status(code) { this.statusCode = code; return this; },
+    redirect(code, location) { this.redirectCode = code; this.location = location; return this; },
+    render(view, locals) { this.view = view; this.locals = locals; return this; } };
+  await handler({ params: { annualId: '21' }, body: { _csrf: 'test-token' },
+    session: { csrfToken: 'test-token' }, authUser: { id: 7 } }, response);
+  assert.deepEqual(confirmed, [21]);
+  assert.equal(response.redirectCode, 303);
+  assert.equal(response.location,
+    '/finance/students/22/annual?view=payments&notice=assessmentReviewed&annualId=21#assessment-payment-handoff');
+});
+
 test('finance ledger returns authoritative student status for archived read-only account rendering', async () => {
   const statements = [];
   const studentIdentityQueries = [];
@@ -792,8 +810,27 @@ test('finance annual roster separates page data, classification, and balances in
   completedReviewLocals.financeReadiness.set(21, { status: 'awaiting_down_payment', reviewed: true });
   const completedReviewHtml = await renderFinanceView('annual-student', completedReviewLocals);
   assert.match(completedReviewHtml, /Finance assessment review saved/);
-  assert.match(completedReviewHtml, /Record payment/);
+  assert.match(completedReviewHtml, /Record down payment/);
   assert.doesNotMatch(completedReviewHtml, /Finance review for pending intake/);
+  const paymentHandoffHtml = await renderFinanceView('annual-student', {
+    ...completedReviewLocals, accountView: 'payments', notice: 'assessmentReviewed', paymentValues: null,
+    assessmentPaymentHandoff: { annualId: 21, schoolYear: '2026-2027', entryTermNumber: 1,
+      status: 'awaiting_down_payment', reviewed: true, downPaymentDue: '875.00', targetChargeId: 81 }
+  });
+  assert.match(paymentHandoffHtml, /id="assessment-payment-handoff"/);
+  assert.match(paymentHandoffHtml, /tuition down payment still due: <strong>₱875\.00/);
+  assert.match(paymentHandoffHtml, /<option value="charge:81"[^>]*selected/);
+  assert.match(paymentHandoffHtml, /name="amount"[^>]*value=""/,
+    'handoff must not invent a received payment amount');
+  const readyHandoffLocals = structuredClone(completedReviewLocals);
+  readyHandoffLocals.financeReadiness.set(21, { status: 'ready_for_registrar', reviewed: true });
+  const readyHandoffHtml = await renderFinanceView('annual-student', {
+    ...readyHandoffLocals, accountView: 'payments', paymentValues: null,
+    assessmentPaymentHandoff: { annualId: 21, schoolYear: '2026-2027', entryTermNumber: 1,
+      status: 'ready_for_registrar', reviewed: true, downPaymentDue: '0.00', targetChargeId: null }
+  });
+  assert.match(readyHandoffHtml, /pending intake back to Registrar/);
+  assert.doesNotMatch(readyHandoffHtml, /Record down payment/);
   const existingAssessmentPreviewHtml = await renderFinanceView('annual-student', {
     ...pendingReviewLocals,
     preview: { parent: { id: 21, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC' },

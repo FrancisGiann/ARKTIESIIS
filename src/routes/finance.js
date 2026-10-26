@@ -10,6 +10,7 @@ const {
 const { FinanceDashboardError, createFinanceDashboardService } = require('../services/financeDashboardService');
 const { FinanceMasterlistError, createFinanceMasterlistService } = require('../services/financeMasterlistService');
 const { FinanceAssessmentQueueError, createFinanceAssessmentQueueService } = require('../services/financeAssessmentQueueService');
+const { buildAssessmentPaymentHandoff } = require('../services/financeAssessmentPaymentHandoff');
 const { createCsvColumns, csvHeader, csvRow } = require('../utils/financeMasterlistCsv');
 const {
   StudentDocumentFinanceClearanceError,
@@ -775,6 +776,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         if (typeof req.query[`back${key}`] === 'string' && req.query[`back${key}`]) backParams.set(key[0].toLowerCase() + key.slice(1), req.query[`back${key}`]);
       }
       const accountTabs = accountViews.map((view) => ({ view, label: ({ overview: 'Overview', payments: 'Payments', charges: 'Fees', clearance: 'Term account clearance', history: 'History' })[view] }));
+      const assessmentPaymentHandoff = buildAssessmentPaymentHandoff(ledger, financeReadiness, req.query.annualId);
       return res.status(status).set('Cache-Control', 'private, no-store').render('finance/annual-student', {
         title: 'Student account', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), ledger,
         annualFeeBalance: accountProjection.summary.annualFeeBalance,
@@ -783,7 +785,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         chargeBreakdown: accountProjection.charges, chargeGroups: accountProjection.chargeGroups,
         feeBreakdownYears: accountProjection.feeBreakdownYears,
         feeApplicationsByCharge: accountProjection.staffFeeApplicationsByCharge, schedules,
-        financeCases, financeReadiness, preview, openingPreview, tokens, error, paymentValues, preservedValues, failedAction, notice: req.query.notice || null,
+        financeCases, financeReadiness, assessmentPaymentHandoff, preview, openingPreview, tokens, error, paymentValues, preservedValues, failedAction, notice: req.query.notice || null,
         paymentStatusPresentation,
         accountView, accountTabs, backHref: `/finance${backParams.size ? `?${backParams.toString()}` : ''}`
       });
@@ -1124,7 +1126,9 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         idempotencyKey: req.body?.idempotencyKey, scheduleId: req.body?.scheduleId,
         scheduleVersion: req.body?.scheduleVersion, voucherCode: req.body?.voucherCode
       });
-      return res.redirect(303, `/finance/students/${preview.parent.student_id}/annual?view=overview&notice=${preview.parent.intake_status === 'pending' ? 'assessmentReviewed' : 'assessmentPosted'}`);
+      return res.redirect(303, preview.parent.intake_status === 'pending'
+        ? `/finance/students/${preview.parent.student_id}/annual?view=payments&notice=assessmentReviewed&annualId=${annualId}#assessment-payment-handoff`
+        : `/finance/students/${preview.parent.student_id}/annual?view=overview&notice=assessmentPosted`);
     } catch (error) {
       if (error instanceof AnnualFinanceError || error instanceof FinanceCasesError) return res.status(error.status).render('error', { title: 'Annual assessment', message: error.message });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The annual assessment could not be posted.' });

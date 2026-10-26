@@ -1454,7 +1454,12 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
         case 'annual_allocation_release':
         case 'legacy_reconciliation_release':
         case 'annual_handbook_reference': return accountPath('history');
-        case 'annual_assessment': return '/finance/assessments?notice=assessmentSaved';
+        case 'annual_assessment': {
+          const annualId = safeIntegerId(draft.entityContext?.annualId);
+          return studentId && annualId
+            ? `/finance/students/${studentId}/annual?view=payments&notice=assessmentReviewed&annualId=${annualId}#assessment-payment-handoff`
+            : '/finance/assessments?notice=assessmentSaved';
+        }
         case 'term_finance_approval':
         case 'term_clearance':
         case 'voucher_review_resolution': return accountPath('clearance');

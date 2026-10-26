@@ -12,7 +12,7 @@
       <a href="/finance/students/<%= ledger.student.id %>/annual?<%= query.toString() %>"<% if (accountView === tab.view) { %> aria-current="page"<% } %>><%= tab.label %></a>
     <% } %>
   </nav>
-  <% if (notice) { %><p class="form-success" role="status"><%= ({assessmentPosted:'Annual assessment posted.', assessmentReviewed:'Assessment and Finance review saved. Record the entry-term payment when due; Registrar confirms enrollment after Finance readiness.', paymentRecorded:'Payment recorded.', creditAllocated:'Unused payment credit applied.', allocationReleased:'Payment application removed; the amount is available as unused credit.', legacyReconciliationReleased:'Earlier payment application removed; the amount returned to its source.', legacyOpeningTransferred:'Confirmed previous balance recorded.', paymentMetadataUpdated:'Payment details updated.', adjustmentRecorded:'Adjustment recorded.', supplementaryChargeAdded:'Supplementary charge recorded.', specialSubjectBilled:'Special-subject charge recorded.', exemptionApproved:'Finance exemption approved.', paymentReversed:'Payment reversal recorded.', adjustmentReversed:'Adjustment reversal recorded.', legacyPaymentReconciled:'Earlier payment applied to a balance.', termClearanceSigned:'Term account clearance recorded.', voucherReviewResolved:'Voucher review resolution recorded.', handbookNumberUpdated:'Finance handbook reference saved.', feeCommentAdded:'Fee comment appended to history.'})[notice] || 'Finance update saved.' %></p><% } %>
+  <% if (notice) { %><p class="form-success" role="status"><%= ({assessmentPosted:'Annual assessment posted.', assessmentReviewed:'Assessment and Finance review saved. Check the current down-payment status below; Registrar confirms enrollment after Finance readiness.', paymentRecorded:'Payment recorded.', creditAllocated:'Unused payment credit applied.', allocationReleased:'Payment application removed; the amount is available as unused credit.', legacyReconciliationReleased:'Earlier payment application removed; the amount returned to its source.', legacyOpeningTransferred:'Confirmed previous balance recorded.', paymentMetadataUpdated:'Payment details updated.', adjustmentRecorded:'Adjustment recorded.', supplementaryChargeAdded:'Supplementary charge recorded.', specialSubjectBilled:'Special-subject charge recorded.', exemptionApproved:'Finance exemption approved.', paymentReversed:'Payment reversal recorded.', adjustmentReversed:'Adjustment reversal recorded.', legacyPaymentReconciled:'Earlier payment applied to a balance.', termClearanceSigned:'Term account clearance recorded.', voucherReviewResolved:'Voucher review resolution recorded.', handbookNumberUpdated:'Finance handbook reference saved.', feeCommentAdded:'Fee comment appended to history.'})[notice] || 'Finance update saved.' %></p><% } %>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% if (preservedValues?.length) { %><details class="finance-form-recovery" open><summary>Values from your previous submission</summary><p>The form values are still available below or here while you correct the highlighted information.</p><dl class="finance-review-fields"><% for (const field of preservedValues) { %><div><dt><%= field.name %></dt><dd><%= field.value %></dd></div><% } %></dl></details><% } %>
   <% const failedInputFor = (path) => failedAction?.path === path ? (failedAction.input || {}) : {}; %>
@@ -54,6 +54,35 @@
   <section class="finance-account-quick-summary" aria-label="Account balance and unused credit" data-finance-view="payments charges clearance history">
     <p><strong>Account balance:</strong> ₱<%= formatMoney(ledger.summary.totalBalance) %> <span>· School-year fees due: ₱<%= formatMoney(annualFeesDue) %></span><% if (Number(ledger.summary.availableCredit) > 0) { %> <span>· Unused credit: ₱<%= formatMoney(ledger.summary.availableCredit) %></span><% } %></p>
   </section>
+
+  <% const pendingFinanceTerms = ledger.terms.filter((term, index, all) => term.intake_status === 'pending' && term.assessment_id != null && all.findIndex((other) => Number(other.annual_enrollment_id) === Number(term.annual_enrollment_id)) === index); %>
+  <% if (pendingFinanceTerms.length && accountView === 'payments') { %>
+    <section class="finance-panel" id="finance-readiness" data-finance-view="payments" aria-labelledby="finance-readiness-title">
+      <h2 id="finance-readiness-title">Enrollment payment readiness</h2>
+      <% for (const term of pendingFinanceTerms) { const readiness = financeReadiness.get(Number(term.annual_enrollment_id)); %>
+        <p><strong><%= term.school_year %> · Entry term <%= readiness?.entryTermNumber || term.entry_term_number || 1 %>:</strong>
+          <%= readiness?.status === 'ready_for_registrar' ? 'Down payment ready. Registrar can review and confirm enrollment.' : readiness?.status === 'awaiting_down_payment' ? 'Down payment still due. Record and apply only money actually received.' : 'Assessment or Finance review needs attention before Registrar confirmation.' %>
+        </p>
+      <% } %>
+      <p class="muted-copy">Payment confirmation does not itself confirm enrollment. This status is checked from the latest assessment and payment records each time the account opens.</p>
+    </section>
+  <% } %>
+
+  <% if (typeof assessmentPaymentHandoff !== 'undefined' && assessmentPaymentHandoff && accountView === 'payments') { %>
+    <section class="finance-panel" id="assessment-payment-handoff" data-finance-view="payments" aria-labelledby="assessment-payment-handoff-title">
+      <h2 id="assessment-payment-handoff-title">Next for this intake · <%= assessmentPaymentHandoff.schoolYear %></h2>
+      <% if (assessmentPaymentHandoff.status === 'awaiting_down_payment') { %>
+        <p>Finance review is saved. Entry-term <%= assessmentPaymentHandoff.entryTermNumber %> tuition down payment <%= assessmentPaymentHandoff.downPaymentDue === null ? 'needs Finance review before enrollment can proceed.' : 'still due:' %> <% if (assessmentPaymentHandoff.downPaymentDue !== null) { %><strong>₱<%= formatMoney(assessmentPaymentHandoff.downPaymentDue) %></strong>.<% } %> Record only money actually received, then review its allocation. The amount and available balances are loaded from the current account.</p>
+        <a class="button button--primary" href="#payment-record-title">Record down payment</a>
+        <p class="muted-copy">Payment can be recorded later; Registrar confirmation waits until the scheduled down payment is settled.</p>
+      <% } else if (assessmentPaymentHandoff.status === 'ready_for_registrar') { %>
+        <p class="form-success" role="status">Entry-term down payment is ready. Send this pending intake back to Registrar for final enrollment confirmation. Finance does not confirm enrollment.</p>
+      <% } else { %>
+        <p class="form-alert" role="status">The assessment or Finance review needs attention before Registrar can confirm enrollment. Review the current assessment before recording an enrollment down payment.</p>
+        <a class="button button--secondary" href="<%= financeAccountHref('charges') %>#assessment-review-<%= assessmentPaymentHandoff.annualId %>">Review current assessment</a>
+      <% } %>
+    </section>
+  <% } %>
 
   <% if (preview && !archivedStudent) { %>
     <dialog class="finance-assessment-dialog" open data-assessment-preview-dialog data-annual-id="<%= preview.parent.id %>" aria-labelledby="assessment-preview-title">
@@ -134,7 +163,7 @@
         <% if (annualRecord.intake_status === 'pending' && !archivedStudent && entryReadiness?.reviewed) { %>
           <section class="finance-panel" data-finance-view="overview charges" aria-label="Finance assessment review status">
             <p class="form-success" role="status"><strong>Finance assessment review saved.</strong> <%= entryReadiness.status === 'awaiting_down_payment' ? 'Record the entry-term down payment next. Registrar confirms enrollment after Finance readiness.' : 'Finance entry readiness is complete. Return the pending intake to Registrar for enrollment confirmation.' %></p>
-            <% if (entryReadiness.status === 'awaiting_down_payment') { %><a class="button button--primary" href="<%= financeAccountHref('payments') %>#payment-record-title">Record payment</a><% } %>
+          <% if (entryReadiness.status === 'awaiting_down_payment') { %><a class="button button--primary" href="<%= financeAccountHref('payments') %>&annualId=<%= annualRecord.annual_enrollment_id %>#assessment-payment-handoff">Record down payment</a><% } %>
           </section>
         <% } %>
         <section class="finance-panel" aria-labelledby="placements-<%= annualRecord.annual_enrollment_id %>" data-finance-view="overview clearance charges">
@@ -281,8 +310,8 @@
         <h3 id="payment-allocations-title" tabindex="-1">2. Apply payment</h3><p class="muted-copy">Choose a fee or confirmed previous balance, then enter how much of the received payment will pay it. You can split one payment across several fees, terms, or school years. Any amount not assigned stays as unused payment credit for later use.</p>
         <div class="finance-allocation-suggestion"><button class="button button--secondary" type="button" data-suggest-oldest>Suggest oldest balances</button><p class="muted-copy">This fills the allocation rows below in the existing oldest-balance order and replaces their current values. Review every suggested target and amount before continuing.</p></div>
         <div data-allocation-rows>
-          <% const allocationRowCount = Math.max(3, paymentValues?.allocations?.length || 0); const hasRecoveredAllocations = (paymentValues?.allocations || []).some((allocation) => allocation.target || allocation.amount); const renderPaymentAllocation = (index) => { const priorAllocation = paymentValues?.allocations?.[index] || {}; const targetAvailable = allocationTargets.some((target) => target.value === priorAllocation.target); %><div class="admin-form-grid allocation-row">
-            <label class="field"><span>Fee or balance to pay</span><select name="allocationTarget"><option value="" <%= !priorAllocation.target ? 'selected' : '' %>>Leave unapplied</option><% if (priorAllocation.target && !targetAvailable) { %><option value="<%= priorAllocation.target %>" selected>Previously selected balance is no longer available</option><% } %><%- include('_allocation-options', { allocationTargets, selectedTarget: priorAllocation.target, formatMoney }) %></select></label>
+          <% const allocationRowCount = Math.max(3, paymentValues?.allocations?.length || 0); const hasRecoveredAllocations = (paymentValues?.allocations || []).some((allocation) => allocation.target || allocation.amount); const renderPaymentAllocation = (index) => { const priorAllocation = paymentValues?.allocations?.[index] || {}; const handoff = typeof assessmentPaymentHandoff === 'undefined' ? null : assessmentPaymentHandoff; const selectedTarget = paymentValues == null && index === 0 && handoff?.status === 'awaiting_down_payment' && handoff.targetChargeId ? `charge:${handoff.targetChargeId}` : (priorAllocation.target || ''); const targetAvailable = allocationTargets.some((target) => target.value === selectedTarget); %><div class="admin-form-grid allocation-row">
+            <label class="field"><span>Fee or balance to pay</span><select name="allocationTarget"><option value="" <%= !selectedTarget ? 'selected' : '' %>>Leave unapplied</option><% if (selectedTarget && !targetAvailable) { %><option value="<%= selectedTarget %>" selected>Previously selected balance is no longer available</option><% } %><%- include('_allocation-options', { allocationTargets, selectedTarget, formatMoney }) %></select></label>
             <label class="field"><span>Amount for this fee or balance (PHP)</span><input name="allocationAmount" value="<%= priorAllocation.amount || '' %>" inputmode="decimal" maxlength="14"></label>
           </div><% }; renderPaymentAllocation(0); %>
           <details class="finance-allocation-extra-details" data-allocation-extra-details <%= hasRecoveredAllocations ? 'open' : '' %>>
