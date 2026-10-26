@@ -44,12 +44,12 @@
           <p><strong>Registrar reason:</strong> <%= departure.reason %></p>
           <form class="form-stack" method="post" action="/finance/departure-cases/<%= departure.departure_case_id %>/review"<% if (failedAction?.path === recoveryPath) { %> data-unsaved-initially-dirty="true"<% } %>>
             <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= departure.idempotencyKey %>">
-            <div class="admin-section__heading"><div><h3>Saved departure and fee basis</h3><p>The saved Registrar effective placement determines the departure term. This first step opens a Finance review draft with proposed reductions for later recorded tuition installments; Finance then decides and records every fee individually.</p></div></div>
+            <div class="admin-section__heading"><div><h3>Saved departure and fee basis</h3><p>The saved Registrar placement sets the last attended term. Finance keeps that term payable by default and prepares cancellation of later recorded tuition with no applied payment. Review all amounts before saving; other fees need individual decisions.</p></div></div>
             <label class="field"><span>Last payable tuition installment in Term <%= effectiveTermNumber || 'unavailable' %></span><select name="cutoffInstallment" required>
               <option value="">Choose the last payable installment</option>
               <% for (const option of [{ value: 'none', label: 'None payable' }, { value: 'dp', label: 'DP' }, { value: 'prelim', label: 'Prelim' }, { value: 'midterm', label: 'Midterm' }, { value: 'finals', label: 'Finals' }]) { %><option value="<%= option.value %>" <%= recovered.cutoffInstallment === option.value ? 'selected' : '' %>><%= option.label %></option><% } %>
             </select></label>
-            <p class="muted-copy">Exemptions and previous adjustments are already reflected in the current payable amount. Tuition is classified only by its fee category and recorded tuition installment; whole-term tuition is never split or estimated. Miscellaneous and named fees receive separate Finance keep/reduce decisions.</p>
+            <p class="muted-copy">Exemptions and previous adjustments are already reflected in the current payable amount. Whole-term tuition is never split or estimated. Paid, miscellaneous, and named fees require an individual Finance decision.</p>
             <div class="finance-departure-terms">
               <% for (const term of departure.terms) { %>
                 <% if (!term.charges.length) { %>

@@ -3,7 +3,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  LAST_PAYABLE_OPTIONS, normalizeLastPayableInstallment, classifyDepartureCharge, proposedDepartureReduction
+  LAST_PAYABLE_OPTIONS, normalizeLastPayableInstallment, classifyDepartureCharge, proposedDepartureReduction,
+  safeDepartureDefault, wouldCancelPaidFutureTuition
 } = require('../src/services/departureFinanceReview');
 const { FinanceCasesError, createAnnualFinanceCasesService } = require('../src/services/annualFinanceCasesService');
 
@@ -52,6 +53,28 @@ test('nonpositive saved payable basis stays signed but cannot produce a reductio
     assert.equal(proposedDepartureReduction({ charge, termNumber: 2, departureTermNumber: 1,
       lastPayableInstallment: 'none', payableBasisCents }), 0n);
   }
+});
+
+test('only wholly unpaid canonical tuition receives an automatic departure decision', () => {
+  const row = { reviewCategory: 'canonical_tuition', payableBasisCents: 87500n };
+  assert.deepEqual(safeDepartureDefault({ ...row, proposedReductionCents: 87500n, appliedCents: 0n }),
+    { decision: 'reduce', reductionCents: 87500n });
+  assert.deepEqual(safeDepartureDefault({ ...row, proposedReductionCents: 0n, appliedCents: 0n }),
+    { decision: 'retain', reductionCents: 0n });
+  assert.equal(safeDepartureDefault({ ...row, proposedReductionCents: 87500n, appliedCents: 10000n }), null);
+  assert.equal(safeDepartureDefault({ ...row, proposedReductionCents: 0n, appliedCents: 10000n }), null);
+  assert.equal(safeDepartureDefault({ ...row, proposedReductionCents: 87500n, appliedCents: null }), null);
+  assert.equal(safeDepartureDefault({ ...row, reviewCategory: 'individual_fee',
+    proposedReductionCents: 87500n, appliedCents: 0n }), null);
+});
+
+test('a stale or manual full cancellation cannot erase paid future tuition', () => {
+  const future = { reviewCategory: 'canonical_tuition', termNumber: 2, departureTermNumber: 1,
+    reductionCents: 87500n, payableBasisCents: 87500n };
+  assert.equal(wouldCancelPaidFutureTuition({ ...future, appliedCents: 10000n }), true);
+  assert.equal(wouldCancelPaidFutureTuition({ ...future, appliedCents: 0n }), false);
+  assert.equal(wouldCancelPaidFutureTuition({ ...future, reductionCents: 50000n, appliedCents: 10000n }), false);
+  assert.equal(wouldCancelPaidFutureTuition({ ...future, termNumber: 1, appliedCents: 10000n }), false);
 });
 
 test('Finance departure review accepts newline and tab in its reason only', async () => {

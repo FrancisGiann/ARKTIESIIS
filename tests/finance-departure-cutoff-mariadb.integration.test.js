@@ -48,7 +48,7 @@ test('Finance departure cutoff migration and reviewed writes preserve payable ba
     } finally { setupConnection.release(); }
 
     const [versions] = await appPool.execute('SELECT version FROM schema_migrations ORDER BY version');
-    assert.equal(versions.at(-1)?.version, 'v2.022', 'the disposable database applies the complete forward sequence through migration 022');
+    assert.equal(versions.at(-1)?.version, 'v2.025', 'the disposable database applies the complete forward sequence through migration 025');
     const [migrationTables] = await appPool.execute(`SELECT table_name FROM information_schema.tables
       WHERE table_schema = ? AND table_name IN ('finance_departure_cutoff_reviews', 'finance_departure_charge_reviews') ORDER BY table_name`, [databaseName]);
     assert.deepEqual(migrationTables.map((row) => row.table_name), ['finance_departure_charge_reviews', 'finance_departure_cutoff_reviews']);
@@ -326,6 +326,32 @@ test('Finance departure cutoff migration and reviewed writes preserve payable ba
       WHERE id = ?`, [staleCase.caseId]);
     const draftService = createFinanceReviewDraftService({ getPool: async () => new PoolFacade(appPool), sql });
     const reviewActions = createFinanceReviewActionService({ getPool: async () => new PoolFacade(appPool), sql, draftService });
+    const autoCase = await createDeparture({ label: 'auto-unpaid', effectiveTerm: 1, affectedTerms: [1, 2, 3], charges: [
+      { term: 1, installment: 'Finals', amount: '100.00' },
+      { term: 2, installment: 'DP', amount: '75.00' },
+      { term: 3, installment: 'Finals', amount: '40.00' },
+      { term: 3, category: 'miscellaneous', name: 'Named fee', installment: 'One-time', amount: '30.00' }
+    ] });
+    const partlyPaidFuture = autoCase.charges.find((charge) => charge.term === 3 && charge.installment === 'Finals');
+    await addAnnualAllocation(autoCase, partlyPaidFuture.id, '20.00');
+    const autoDraftIdentity = await reviewActions.startDraft(financeId, 'd'.repeat(64),
+      `/departure-cases/${autoCase.caseId}/review`, { reason: 'Synthetic future-term cancellation' });
+    const autoDraft = await reviewActions.getDraft(financeId, autoDraftIdentity.id);
+    assert.equal(autoDraft.preview.departureTermNumber, 1, 'the saved Registrar placement supplies the departure term');
+    assert.equal(autoDraft.preview.departureLastPayableInstallment, 'finals', 'an untouched new review keeps the attended term payable');
+    assert.deepEqual(autoDraft.preview.departureChargeReviews.map((row) => [row.termNumber, row.decision, row.reductionAmount]), [
+      [1, 'retain', '0.00'], [2, 'reduce', '75.00'], [3, '', ''], [3, '', '']
+    ], 'only unpaid canonical future tuition is prefilled; paid and named charges stay for individual review');
+    assert.equal(autoDraft.preview.departureReviewReady, false);
+    const unsafeFullCancel = { cutoffInstallment: 'finals', reason: 'Synthetic paid-charge guard', idempotencyKey: uuid(),
+      chargeReviews: autoCase.charges.map((charge) => ({ chargeId: String(charge.id),
+        decision: charge.term > 1 && (charge.category || 'tuition') === 'tuition' ? 'reduce' : 'retain',
+        reductionAmount: charge.term > 1 && (charge.category || 'tuition') === 'tuition' ? charge.amount : '0.00', reason: '' })) };
+    await assert.rejects(cases.reviewDepartureCase(financeId, autoCase.caseId, unsafeFullCancel),
+      (error) => error instanceof FinanceCasesError && error.status === 409 && /payment was applied/.test(error.message),
+      'a payment added before the locked final write blocks full future-term cancellation');
+    const [autoState] = await appPool.execute('SELECT finance_status FROM finance_departure_cases WHERE id = ?', [autoCase.caseId]);
+    assert.equal(autoState[0].finance_status, 'pending', 'the rejected review rolls back every proposed adjustment');
     const staleDraftIdentity = await reviewActions.startDraft(financeId, 'a'.repeat(64), `/departure-cases/${staleCase.caseId}/review`, {
       cutoffInstallment: 'midterm', reason: 'Synthetic stale-preview test',
       chargeReviews: makeReviews(staleCase.charges, { reduce: () => true })

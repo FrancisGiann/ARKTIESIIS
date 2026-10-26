@@ -12,7 +12,7 @@ const { CONFLICT_MESSAGES: DEPARTURE_CONFLICT_MESSAGES } = require('./departureL
 const { formatFeePurpose } = require('../utils/paymentPurpose');
 const {
   LAST_PAYABLE_OPTIONS, normalizeLastPayableInstallment, classifyDepartureCharge,
-  proposedDepartureReduction
+  proposedDepartureReduction, safeDepartureDefault
 } = require('./departureFinanceReview');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -1080,7 +1080,12 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       const departureCharges = departureCase ? await tx.request().input('caseId', sql.BigInt, context.caseId)
         .query(`SELECT charge.id, charge.enrollment_id, enrollment.annual_term_number,
             charge.fee_category, charge.line_name, charge.installment,
-            CAST(charge.amount + COALESCE(adjustments.total, 0) AS CHAR(40)) AS payable_basis
+            CAST(charge.amount + COALESCE(adjustments.total, 0) AS CHAR(40)) AS payable_basis,
+            CAST(COALESCE((SELECT SUM(net.net_amount) FROM v_finance_net_payment_allocations AS net
+              INNER JOIN finance_payments AS payment ON payment.id = net.payment_id
+              WHERE net.charge_id = charge.id AND payment.is_reversed = 0 AND net.net_amount > 0), 0)
+              + COALESCE((SELECT SUM(net.net_amount) FROM v_finance_net_legacy_reconciliations AS net
+                WHERE net.charge_id = charge.id AND net.net_amount > 0), 0) AS CHAR(40)) AS applied_amount
           FROM finance_departure_case_terms AS case_term
           INNER JOIN enrollments AS enrollment ON enrollment.id = case_term.enrollment_id
           INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.enrollment_id = enrollment.id
@@ -1088,12 +1093,14 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
             ON adjustments.charge_id = charge.id
           WHERE case_term.departure_case_id = @caseId
           ORDER BY enrollment.annual_term_number, charge.id`) : { recordset: [] };
-      const cutoffInstallment = normalizeLastPayableInstallment(input.cutoffInstallment);
-      const departureTermNumber = Number(departureCase?.departure_term_number || 0);
       const existingRows = Array.isArray(input.chargeReviews) ? input.chargeReviews : [];
+      const cutoffInstallment = normalizeLastPayableInstallment(input.cutoffInstallment)
+        || (existingRows.length === 0 ? 'finals' : '');
+      input.cutoffInstallment = cutoffInstallment;
+      const departureTermNumber = Number(departureCase?.departure_term_number || 0);
       const submittedById = new Map(existingRows.filter((row) => row && /^\d{1,18}$/.test(String(row.chargeId || '')))
         .map((row) => [String(row.chargeId), row]));
-      const allTargetsCovered = existingRows.length === (departureCharges.recordset || []).length
+      let allTargetsCovered = existingRows.length === (departureCharges.recordset || []).length
         && submittedById.size === existingRows.length
         && (departureCharges.recordset || []).every((charge) => submittedById.has(String(charge.id)));
       const chargeReviews = (departureCharges.recordset || []).map((charge) => {
@@ -1104,10 +1111,16 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           termNumber: Number(charge.annual_term_number), departureTermNumber,
           lastPayableInstallment: cutoffInstallment, payableBasisCents: basisCents });
         const supplied = submittedById.get(chargeId);
+        const appliedCents = charge.applied_amount == null ? null
+          : parseMoneyCents(String(charge.applied_amount), { allowZero: true });
+        const safeDefault = safeDepartureDefault({ reviewCategory, proposedReductionCents: proposedCents,
+          appliedCents, payableBasisCents: basisCents });
         const submittedDecision = allTargetsCovered ? String(supplied?.decision || '').toLowerCase() : '';
+        const decision = ['retain', 'reduce'].includes(submittedDecision) ? submittedDecision
+          : safeDefault?.decision || '';
         const submittedReduction = supplied?.reductionAmount == null ? '' : String(supplied.reductionAmount);
         const reductionAmount = submittedDecision === 'retain' && submittedReduction.trim() === ''
-          ? '0.00' : submittedReduction;
+          ? '0.00' : !submittedDecision && safeDefault ? formatMoneyCents(safeDefault.reductionCents) : submittedReduction;
         return {
           chargeId,
           termNumber: Number(charge.annual_term_number),
@@ -1117,7 +1130,9 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           reviewCategory,
           payableBefore: formatMoneyCents(basisCents),
           proposedReduction: formatMoneyCents(proposedCents),
-          decision: ['retain', 'reduce'].includes(submittedDecision) ? submittedDecision : '',
+          appliedAmount: appliedCents == null ? null : formatMoneyCents(appliedCents),
+          automaticSuggestion: !submittedDecision && Boolean(safeDefault),
+          decision,
           reductionAmount,
           keepAmountNeedsCorrection: submittedDecision === 'retain' && reductionAmount !== '' && (() => {
             try { return parseMoneyCents(reductionAmount, { allowZero: true }) !== 0n; }
@@ -1126,6 +1141,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           reason: allTargetsCovered && typeof supplied?.reason === 'string' ? supplied.reason : ''
         };
       });
+      if (existingRows.length === 0) allTargetsCovered = true;
       input.chargeReviews = chargeReviews.map(({ chargeId, decision, reductionAmount, reason }) => ({ chargeId, decision, reductionAmount, reason }));
       const reviewDecisionReady = (row) => {
         if (!['retain', 'reduce'].includes(row.decision) || typeof row.reason !== 'string' || row.reason.length > 1000

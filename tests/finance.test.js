@@ -1164,7 +1164,7 @@ test('departure draft edits can save incomplete decisions without hidden browser
     assert.doesNotMatch(firstHtml, /data-unsaved-initially-dirty="true"/,
       'a normal draft editor starts clean');
     assert.match(firstHtml, /<dt>Current payable<\/dt><dd>₱100\.00<\/dd>/);
-    assert.match(firstHtml, /<dt>Proposed reduction<\/dt><dd>₱100\.00<\/dd>/);
+    assert.match(firstHtml, /<dt>Suggested amount to cancel or adjust<\/dt><dd>₱100\.00<\/dd>/);
     assert.doesNotMatch(firstHtml, /tuition · Tuition/i, 'a tuition category and its Tuition line name are shown once');
     assert.match(firstHtml, /Overall Finance reason: Synthetic overall review reason/,
       'the reason from the initial case form is visible as per-charge evidence');

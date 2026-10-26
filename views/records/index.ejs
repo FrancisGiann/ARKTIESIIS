@@ -65,7 +65,7 @@
     <% if (students.length) { %>
       <% const firstStudentNumber = (page - 1) * pageSize + 1; const lastStudentNumber = Math.min(page * pageSize, totalStudents); %>
       <p class="records-list-count" role="status">Showing <%= firstStudentNumber %>–<%= lastStudentNumber %> of <%= totalStudents %> students</p>
-      <p class="records-status-help">The badge shows student-record status. It is separate from a term placement status such as Dropped and from the login account status.</p>
+      <p class="records-status-help">“File available” means the student record is kept for history and future authorized use. Enrollment status appears separately; a transferred or stopped student is not currently enrolled because the file remains available. Login access is separate.</p>
       <ul class="records-student-list" aria-label="Student records">
         <% for (const student of students) { %>
           <li class="records-student-list__item">
@@ -79,7 +79,7 @@
                 <span><%= student.enrollment_status ? student.enrollment_status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Enrollment status unavailable' %></span>
               <% } else { %><span>No enrollment</span><% } %>
             </div>
-            <span class="record-status <%= student.status === 'active' ? 'record-status--active' : student.status === 'archived' ? 'record-status--archived' : '' %>" aria-label="Student-record status: <%= student.status ? student.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Unknown' %>">Record: <%= student.status ? student.status.replaceAll('_', ' ').replace(/^\w/, (letter) => letter.toUpperCase()) : 'Unknown' %></span>
+            <span class="record-status <%= student.status === 'archived' ? 'record-status--archived' : '' %>" aria-label="Student file: <%= student.status === 'active' ? 'Available' : student.status === 'archived' ? 'Archived' : 'Unknown' %>">File: <%= student.status === 'active' ? 'Available' : student.status === 'archived' ? 'Archived' : 'Unknown' %></span>
             <a class="button button--primary records-student-open" href="/registrar/records/students/<%= student.id %>">Open record</a>
             <details class="records-student-details">
               <summary>Document details and other actions</summary>

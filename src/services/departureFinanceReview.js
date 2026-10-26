@@ -37,11 +37,32 @@ function suggestedDepartureDecision({ reviewCategory, proposedReductionCents }) 
   return BigInt(proposedReductionCents) > 0n ? 'reduce' : 'retain';
 }
 
+function safeDepartureDefault({ reviewCategory, proposedReductionCents, appliedCents, payableBasisCents }) {
+  if (reviewCategory !== 'canonical_tuition') return null;
+  if (appliedCents == null) return null;
+  const proposal = BigInt(proposedReductionCents);
+  const applied = BigInt(appliedCents);
+  const payable = BigInt(payableBasisCents);
+  if (applied !== 0n) return null;
+  if (proposal > 0n && applied === 0n) return { decision: 'reduce', reductionCents: proposal };
+  if (proposal === 0n && payable >= 0n) return { decision: 'retain', reductionCents: 0n };
+  return null;
+}
+
+function wouldCancelPaidFutureTuition({ reviewCategory, termNumber, departureTermNumber,
+  reductionCents, payableBasisCents, appliedCents }) {
+  const payable = BigInt(payableBasisCents);
+  return reviewCategory === 'canonical_tuition' && Number(termNumber) > Number(departureTermNumber)
+    && payable > 0n && BigInt(reductionCents) === payable && BigInt(appliedCents) > 0n;
+}
+
 module.exports = {
   TUITION_INSTALLMENTS,
   LAST_PAYABLE_OPTIONS,
   normalizeLastPayableInstallment,
   classifyDepartureCharge,
   proposedDepartureReduction,
-  suggestedDepartureDecision
+  suggestedDepartureDecision,
+  safeDepartureDefault,
+  wouldCancelPaidFutureTuition
 };

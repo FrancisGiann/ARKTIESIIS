@@ -47,4 +47,17 @@
     });
     updateAmountVisibility();
   }
+
+  const cutoff = document.querySelector('[name="field_cutoffInstallment"]');
+  cutoff?.addEventListener('change', () => {
+    for (const row of rows) {
+      if (row.dataset?.canonicalTuition !== 'true') continue;
+      const choices = row.querySelectorAll('input[type="radio"][name$="_decision"]');
+      for (const choice of choices) choice.checked = false;
+      const amount = row.querySelector('[name$="_reductionAmount"]');
+      if (amount) amount.value = '';
+      choices[0]?.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    // The refreshed preview recalculates suggestions for the newly selected cutoff.
+  });
 })();

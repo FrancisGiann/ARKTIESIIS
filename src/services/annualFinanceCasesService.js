@@ -3,7 +3,8 @@ const { getPool: defaultGetPool, sql: defaultSql, isDuplicateKeyError } = requir
 const { parseMoneyCents, formatMoneyCents } = require('./financeService');
 const { createFinanceDebtRevisionService } = require('./financeDebtRevisionService');
 const { runSerializableTransaction } = require('./transactionRetry');
-const { normalizeLastPayableInstallment, classifyDepartureCharge, proposedDepartureReduction, LAST_PAYABLE_OPTIONS } = require('./departureFinanceReview');
+const { normalizeLastPayableInstallment, classifyDepartureCharge, proposedDepartureReduction,
+  wouldCancelPaidFutureTuition, LAST_PAYABLE_OPTIONS } = require('./departureFinanceReview');
 const { CONFLICT_MESSAGES: DEPARTURE_CONFLICT_MESSAGES } = require('./departureLifecycleService');
 
 const ID = /^\d{1,10}$/;
@@ -571,7 +572,12 @@ function createAnnualFinanceCasesService({
       const chargeResult = await tx.request().input('caseId', sql.BigInt, departureCaseId)
         .query(`SELECT charge.id, charge.enrollment_id, charge.annual_enrollment_id, enrollment.annual_term_number,
             charge.fee_category, charge.line_name, charge.installment,
-            CAST(charge.amount + COALESCE(adjustments.total, 0) AS CHAR(40)) AS payable_basis
+            CAST(charge.amount + COALESCE(adjustments.total, 0) AS CHAR(40)) AS payable_basis,
+            CAST(COALESCE((SELECT SUM(net.net_amount) FROM v_finance_net_payment_allocations AS net
+              INNER JOIN finance_payments AS payment ON payment.id = net.payment_id
+              WHERE net.charge_id = charge.id AND payment.is_reversed = 0 AND net.net_amount > 0), 0)
+              + COALESCE((SELECT SUM(net.net_amount) FROM v_finance_net_legacy_reconciliations AS net
+                WHERE net.charge_id = charge.id AND net.net_amount > 0), 0) AS CHAR(40)) AS applied_amount
           FROM finance_departure_case_terms AS terms
           INNER JOIN v_finance_effective_assessed_charges AS charge ON charge.enrollment_id = terms.enrollment_id
           INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
@@ -600,8 +606,14 @@ function createAnnualFinanceCasesService({
         const reviewCategory = classifyDepartureCharge(charge);
         const proposedCents = proposedDepartureReduction({ charge, termNumber: Number(charge.annual_term_number),
           departureTermNumber: effectiveTermNumber, lastPayableInstallment, payableBasisCents: payableBeforeCents });
+        const appliedCents = parseMoneyCents(String(charge.applied_amount ?? ''), { allowZero: true });
         const availableCents = payableBeforeCents > 0n ? payableBeforeCents : 0n;
         if (review.reductionCents > availableCents) throw new FinanceCasesError('A departure reduction cannot exceed the current payable fee basis.', 409);
+        if (wouldCancelPaidFutureTuition({ reviewCategory, termNumber: charge.annual_term_number,
+          departureTermNumber: effectiveTermNumber, reductionCents: review.reductionCents,
+          payableBasisCents: availableCents, appliedCents })) {
+          throw new FinanceCasesError('A later-term tuition payment was applied during review. Reload and review this fee individually; its paid amount cannot be automatically cancelled.', 409);
+        }
         if (review.decision === 'retain' && review.reductionCents !== 0n) throw new FinanceCasesError('A fee kept at its full payable amount must have a zero reduction.', 400);
         if (review.decision === 'reduce' && review.reductionCents <= 0n) throw new FinanceCasesError('Enter a positive reviewed amount for each fee marked for reduction.', 400);
         evidenceRows.push({ charge, review, reviewCategory, proposedCents, payableBeforeCents,

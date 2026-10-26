@@ -1065,7 +1065,7 @@ test('records mutations reject missing CSRF tokens before calling the service', 
     assert.match(masterListHtml, /Good Moral <strong>Review needed/);
     assert.match(masterListHtml, /Form 137 paper record \(staff only\) <strong>received/);
     assert.match(masterListHtml, /records-context-strip--term/);
-    assert.match(masterListHtml, /record-status--active">Active/);
+    assert.match(masterListHtml, /File: Available/);
     assert.match(masterListHtml, />Edit profile<\/a>/);
     assert.match(masterListHtml, /Open record/);
     assert.match(masterListHtml, /<details class="records-student-details">/);

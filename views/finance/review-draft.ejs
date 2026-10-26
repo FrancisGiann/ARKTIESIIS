@@ -120,10 +120,11 @@
         <h2>Departure tuition cutoff</h2>
         <p>The departure term comes from the saved Registrar placement: <strong><%= draft.preview.departureTermNumber ? `Term ${draft.preview.departureTermNumber}` : 'Placement unavailable' %></strong>. The cutoff records the last tuition installment payable in that term.</p>
         <p><strong>Last payable tuition installment:</strong> <%= ({ dp: 'DP', prelim: 'Prelim', midterm: 'Midterm', finals: 'Finals', none: 'None payable' })[String(draft.preview.departureLastPayableInstallment || '').toLowerCase()] || 'Not recorded' %></p>
-        <% if (!draft.preview.departureReviewReady) { %><p class="form-alert" role="status">Complete the cutoff, choose keep or reduce for every affected fee, and enter a valid reviewed amount. The overall Finance reason is saved for any fee without a specific note.</p><% } %>
+        <p>Full departure-term tuition is kept by default. Later recorded tuition installments with no applied payment are proposed for cancellation. Check the amounts before saving; other fees and charges with payment history need an individual decision.</p>
+        <% if (!draft.preview.departureReviewReady) { %><p class="form-alert" role="status">Review fees still needing a decision and enter an overall Finance reason. Saving records the confirmed amounts once.</p><% } %>
       </section>
       <% if (draft.preview.departureChargeReviews?.length) { %>
-        <div class="finance-review-departure-preview" aria-label="Reviewed fees and proposed departure reductions">
+        <div class="finance-review-departure-preview" aria-label="Reviewed fees and proposed departure charge changes">
           <% for (const termNumber of [1, 2, 3]) { const termItems = draft.preview.departureChargeReviews.filter((item) => Number(item.termNumber) === termNumber); if (!termItems.length) continue; const pendingDecisions = termItems.filter((item) => !['retain', 'reduce'].includes(item.decision)).length; %>
             <% const termNeedsCorrection = termItems.some((item) => item.keepAmountNeedsCorrection || (item.decision === 'reduce' && !item.reviewedReductionReady)); %>
             <details class="finance-review-departure-term" <%= (termNeedsCorrection || (draft.preview.departureReviewReady === true && termNumber === Number(draft.preview.departureTermNumber))) ? 'open' : '' %>>
@@ -135,12 +136,12 @@
                     <h3><%= itemTitle %><% if (item.installment) { %> · <%= item.installment %><% } %></h3>
                     <dl class="finance-review-departure-amounts">
                       <div><dt>Current payable</dt><dd>₱<%= item.payableBefore %></dd></div>
-                      <div class="finance-review-departure-amounts__proposal"><dt>Proposed reduction</dt><dd>₱<%= item.proposedReduction %></dd></div>
+                      <div class="finance-review-departure-amounts__proposal"><dt>Suggested amount to cancel or adjust</dt><dd>₱<%= item.proposedReduction %></dd></div>
                     </dl>
                     <dl class="finance-review-fields">
                       <% if (item.reviewCategory !== 'canonical_tuition' && !(item.reviewCategory == null && itemCategory.toLowerCase() === 'tuition' && itemLineName.toLowerCase() === 'tuition')) { %><div><dt>Classification</dt><dd><%= item.reviewCategory === 'manual_tuition' ? 'Whole-term / noncanonical · manual review' : item.categoryLabel %></dd></div><% } %>
-                      <div><dt>Finance decision</dt><dd><%= item.decision === 'retain' ? 'Keep fee' : item.decision === 'reduce' ? 'Reduce fee' : 'Pending' %></dd></div>
-                      <div><dt>Reviewed reduction</dt><dd><%= item.reviewedReductionReady ? `₱${item.reductionAmount}` : 'Pending' %></dd></div>
+                      <div><dt>Finance decision</dt><dd><%= item.decision === 'retain' ? 'Keep payable amount' : item.decision === 'reduce' ? 'Cancel or adjust charge' : 'Needs individual review' %></dd></div>
+                      <div><dt>Reviewed change to charge</dt><dd><%= item.reviewedReductionReady ? `₱${item.reductionAmount}` : 'Pending' %></dd></div>
                       <div><dt>Payable after review</dt><dd><%= !item.reviewedReductionReady || item.payableAfter == null ? 'Review required' : `₱${item.payableAfter}` %></dd></div>
                       <div><dt>Finance reason</dt><dd><%= item.reason || 'Overall reason required' %></dd></div>
                     </dl>
@@ -218,7 +219,7 @@
             </fieldset>
           <% } else if (field.kind === 'departure-charges') { %>
             <fieldset class="finance-review-row-editor finance-review-departure-editor"><legend><%= field.label %></legend>
-              <p>Choose keep or reduce for every fee. Keep records no reduction; Reduce requires a reviewed amount. Suggested amounts are for reference only. Recorded tuition-installment proposals use current payable amounts after existing adjustments and exemptions. Whole-term tuition has no automatic split; miscellaneous and named fees are reviewed individually.</p>
+              <p>Later unpaid tuition installments are prefilled for cancellation; attended-term tuition stays payable. Other fees and charges with applied payments require an individual decision. Confirm every amount before saving. No payment or receipt is deleted.</p>
               <% for (const termNumber of [1, 2, 3]) { const termRows = field.rows.filter((row) => Number(row.termNumber) === termNumber); if (!termRows.length) continue; %>
                 <% const termNeedsCorrection = termRows.some((row) => row.keepAmountNeedsCorrection
                   || (row.decision === 'reduce' && !row.reviewedReductionReady)
@@ -226,20 +227,22 @@
                 <details class="finance-review-term-editor" <%= termNumber === Number(draft.preview.departureTermNumber) || termNeedsCorrection ? 'open' : '' %>><summary>Term <%= termNumber %> · <%= termRows.length %> fee<%= termRows.length === 1 ? '' : 's' %></summary>
                   <% for (const row of termRows) { %>
                     <% const rowCategory = String(row.feeCategory || '').trim(); const rowLineName = String(row.lineName || '').trim(); const rowTitle = rowLineName && rowCategory.toLowerCase() === rowLineName.toLowerCase() ? rowLineName : [rowCategory, rowLineName].filter(Boolean).join(' · '); %>
-                    <div class="finance-review-fee-line" data-departure-charge-review data-keep-amount-needs-correction="<%= row.keepAmountNeedsCorrection ? 'true' : 'false' %>">
+                    <div class="finance-review-fee-line" data-departure-charge-review data-canonical-tuition="<%= row.reviewCategory === 'canonical_tuition' ? 'true' : 'false' %>" data-keep-amount-needs-correction="<%= row.keepAmountNeedsCorrection ? 'true' : 'false' %>">
                       <h3><%= rowTitle || 'Fee' %><% if (row.installment) { %> · <%= row.installment %><% } %></h3>
                       <% if (row.reviewCategory !== 'canonical_tuition' && !(row.reviewCategory == null && rowCategory.toLowerCase() === 'tuition' && rowLineName.toLowerCase() === 'tuition')) { %><p class="finance-review-departure-classification"><%= row.reviewCategory === 'manual_tuition' ? 'Whole-term / noncanonical · manual review' : row.categoryLabel %></p><% } %>
                       <dl class="finance-review-departure-amounts">
                         <div><dt>Current payable</dt><dd>₱<%= row.payableBefore %></dd></div>
-                        <div class="finance-review-departure-amounts__proposal"><dt>Proposed reduction</dt><dd>₱<%= row.proposedReduction %></dd></div>
+                        <div class="finance-review-departure-amounts__proposal"><dt>Suggested amount to cancel or adjust</dt><dd>₱<%= row.proposedReduction %></dd></div>
                       </dl>
+                      <% if (row.automaticSuggestion) { %><p class="finance-review-departure-classification">Prefilled from the saved departure term and current unpaid tuition; confirm before saving.</p><% }
+                         else if (row.reviewCategory !== 'canonical_tuition' || row.appliedAmount == null || Number(row.appliedAmount) > 0) { %><p class="finance-review-departure-classification">Individual review required<% if (row.appliedAmount != null && Number(row.appliedAmount) > 0) { %> · ₱<%= row.appliedAmount %> already applied<% } %>.</p><% } %>
                       <fieldset class="finance-review-decision"><legend>Finance decision</legend>
-                        <label><input type="radio" name="item_chargeReviews_<%= row.index %>_decision" value="retain" <%= row.decision === 'retain' ? 'checked' : '' %>> Keep fee</label>
-                        <label><input type="radio" name="item_chargeReviews_<%= row.index %>_decision" value="reduce" <%= row.decision === 'reduce' ? 'checked' : '' %>> Reduce fee</label>
+                        <label><input type="radio" name="item_chargeReviews_<%= row.index %>_decision" value="retain" <%= row.decision === 'retain' ? 'checked' : '' %>> Keep payable amount</label>
+                        <label><input type="radio" name="item_chargeReviews_<%= row.index %>_decision" value="reduce" <%= row.decision === 'reduce' ? 'checked' : '' %>> Cancel or adjust charge</label>
                       </fieldset>
                       <div class="finance-review-reduction" data-departure-reduction-field>
-                        <label class="field"><span>Reduction amount (PHP)</span><input name="item_chargeReviews_<%= row.index %>_reductionAmount" value="<%= row.reductionAmount ?? '' %>" inputmode="decimal" maxlength="14" aria-describedby="departure-reduction-help-<%= row.index %> departure-reduction-error-<%= row.index %>"></label>
-                        <p id="departure-reduction-help-<%= row.index %>" class="finance-review-reduction-help">Required for Reduce. Keep uses 0.00; clear any entered amount or enter 0.00.</p>
+                        <label class="field"><span>Amount to cancel or adjust (PHP)</span><input name="item_chargeReviews_<%= row.index %>_reductionAmount" value="<%= row.reductionAmount ?? '' %>" inputmode="decimal" maxlength="14" aria-describedby="departure-reduction-help-<%= row.index %> departure-reduction-error-<%= row.index %>"></label>
+                        <p id="departure-reduction-help-<%= row.index %>" class="finance-review-reduction-help">Required when adjusting. Keep uses 0.00; clear any entered amount or enter 0.00.</p>
                         <p id="departure-reduction-error-<%= row.index %>" class="finance-review-reduction-error" data-keep-amount-error <%= row.keepAmountNeedsCorrection ? '' : 'hidden' %>>A Keep decision must have a blank amount or 0.00.</p>
                       </div>
                       <details class="finance-review-specific-reason" <%= row.reason ? 'open' : '' %>>
