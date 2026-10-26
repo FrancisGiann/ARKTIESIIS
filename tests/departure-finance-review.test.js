@@ -55,7 +55,7 @@ test('nonpositive saved payable basis stays signed but cannot produce a reductio
   }
 });
 
-test('only wholly unpaid canonical tuition receives an automatic departure decision', () => {
+test('ordinary tuition is automatic, other fees stay payable, and paid tuition requires review', () => {
   const row = { reviewCategory: 'canonical_tuition', payableBasisCents: 87500n };
   assert.deepEqual(safeDepartureDefault({ ...row, proposedReductionCents: 87500n, appliedCents: 0n }),
     { decision: 'reduce', reductionCents: 87500n });
@@ -64,8 +64,12 @@ test('only wholly unpaid canonical tuition receives an automatic departure decis
   assert.equal(safeDepartureDefault({ ...row, proposedReductionCents: 87500n, appliedCents: 10000n }), null);
   assert.equal(safeDepartureDefault({ ...row, proposedReductionCents: 0n, appliedCents: 10000n }), null);
   assert.equal(safeDepartureDefault({ ...row, proposedReductionCents: 87500n, appliedCents: null }), null);
-  assert.equal(safeDepartureDefault({ ...row, reviewCategory: 'individual_fee',
-    proposedReductionCents: 87500n, appliedCents: 0n }), null);
+  assert.deepEqual(safeDepartureDefault({ ...row, reviewCategory: 'individual_fee',
+    proposedReductionCents: 87500n, appliedCents: 0n }),
+  { decision: 'retain', reductionCents: 0n });
+  assert.deepEqual(safeDepartureDefault({ ...row, reviewCategory: 'manual_tuition',
+    proposedReductionCents: 87500n, appliedCents: 10000n }),
+  { decision: 'retain', reductionCents: 0n });
 });
 
 test('a stale or manual full cancellation cannot erase paid future tuition', () => {

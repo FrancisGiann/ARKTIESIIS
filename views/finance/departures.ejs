@@ -44,12 +44,13 @@
           <p><strong>Registrar reason:</strong> <%= departure.reason %></p>
           <form class="form-stack" method="post" action="/finance/departure-cases/<%= departure.departure_case_id %>/review"<% if (failedAction?.path === recoveryPath) { %> data-unsaved-initially-dirty="true"<% } %>>
             <input type="hidden" name="_csrf" value="<%= csrfToken %>"><input type="hidden" name="idempotencyKey" value="<%= departure.idempotencyKey %>">
-            <div class="admin-section__heading"><div><h3>Saved departure and fee basis</h3><p>The saved Registrar placement sets the last attended term. Finance keeps that term payable by default and prepares cancellation of later recorded tuition with no applied payment. Review all amounts before saving; other fees need individual decisions.</p></div></div>
-            <label class="field"><span>Last payable tuition installment in Term <%= effectiveTermNumber || 'unavailable' %></span><select name="cutoffInstallment" required>
+            <div class="admin-section__heading"><div><h3>Review departure charges</h3><p>Registrar recorded the last attended term as <strong>Term <%= effectiveTermNumber || 'unavailable' %></strong>. Finance keeps that term's tuition and proposes cancelling unpaid tuition in later terms. Other fees stay payable unless you change them in the details.</p></div></div>
+            <details class="finance-departure-options" <%= recovered.cutoffInstallment && recovered.cutoffInstallment !== 'finals' ? 'open' : '' %>><summary>Change the last payable installment within Term <%= effectiveTermNumber || 'unavailable' %></summary>
+            <label class="field"><span>Last payable tuition installment</span><select name="cutoffInstallment" required>
               <option value="">Choose the last payable installment</option>
-              <% for (const option of [{ value: 'none', label: 'None payable' }, { value: 'dp', label: 'DP' }, { value: 'prelim', label: 'Prelim' }, { value: 'midterm', label: 'Midterm' }, { value: 'finals', label: 'Finals' }]) { %><option value="<%= option.value %>" <%= recovered.cutoffInstallment === option.value ? 'selected' : '' %>><%= option.label %></option><% } %>
-            </select></label>
-            <p class="muted-copy">Exemptions and previous adjustments are already reflected in the current payable amount. Whole-term tuition is never split or estimated. Paid, miscellaneous, and named fees require an individual Finance decision.</p>
+              <% for (const option of [{ value: 'none', label: 'None payable' }, { value: 'dp', label: 'DP' }, { value: 'prelim', label: 'Prelim' }, { value: 'midterm', label: 'Midterm' }, { value: 'finals', label: 'Finals' }]) { %><option value="<%= option.value %>" <%= (recovered.cutoffInstallment || 'finals') === option.value ? 'selected' : '' %>><%= option.label %></option><% } %>
+            </select></label></details>
+            <details class="finance-departure-options"><summary>View recorded fees and payments</summary><p>Exemptions and adjustments are included in current payable amounts. Paid tuition needs individual review; no payment is deleted or refunded here.</p>
             <div class="finance-departure-terms">
               <% for (const term of departure.terms) { %>
                 <% if (!term.charges.length) { %>
@@ -73,9 +74,9 @@
                   </details>
                 <% } %>
               <% } %>
-            </div>
+            </div></details>
             <label class="field"><span>Finance review reason</span><textarea name="reason" rows="3" maxlength="1000" required><%= recovered.reason || '' %></textarea></label>
-            <button class="button button--primary" type="submit">Review cutoff and open Finance draft</button>
+            <button class="button button--primary" type="submit">Review departure summary</button>
           </form>
         </div>
       </details>

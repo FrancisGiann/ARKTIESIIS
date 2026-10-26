@@ -1175,6 +1175,26 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           } catch { return null; }
         })()
       }));
+      const departureSummary = { keptTuitionCents: 0n, cancelledTuitionCents: 0n,
+        otherFeesCents: 0n, exceptions: 0 };
+      for (const row of preview.departureChargeReviews) {
+        const payable = parseMoneyCents(row.payableBefore, { allowNegative: true, allowZero: true });
+        const reduction = row.reviewedReductionReady
+          ? parseMoneyCents(row.reductionAmount, { allowZero: true }) : 0n;
+        if (!row.reviewedReductionReady) departureSummary.exceptions += 1;
+        if (row.reviewCategory === 'canonical_tuition') {
+          departureSummary.keptTuitionCents += payable - reduction;
+          departureSummary.cancelledTuitionCents += reduction;
+        } else {
+          departureSummary.otherFeesCents += payable - reduction;
+        }
+      }
+      preview.departureSummary = {
+        keptTuition: formatMoneyCents(departureSummary.keptTuitionCents),
+        cancelledTuition: formatMoneyCents(departureSummary.cancelledTuitionCents),
+        otherFees: formatMoneyCents(departureSummary.otherFeesCents),
+        exceptions: departureSummary.exceptions
+      };
       preview.departureReviewReady = Boolean(departureCase && cutoffInstallment && LAST_PAYABLE_OPTIONS.includes(cutoffInstallment)
         && departureTermNumber >= 1 && departureTermNumber <= 3 && allTargetsCovered && decisionsReady);
       preview.departureHasChargeRows = chargeReviews.length > 0;

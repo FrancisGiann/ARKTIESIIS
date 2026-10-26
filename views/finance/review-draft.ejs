@@ -2,7 +2,7 @@
 <main class="page-shell dashboard-page finance-page finance-review-page" id="main-content">
   <a class="context-back" href="/finance/review-drafts" aria-label="Back to unfinished reviews" title="Back to unfinished reviews">&#8592;</a>
   <header class="dashboard-heading">
-    <div><p class="eyebrow">Finance · Review before saving</p><h1><%= actionLabel %></h1><p>Check the complete update below. Saving applies it once and records the reviewed result together.</p></div>
+    <div><p class="eyebrow">Finance · Review before saving</p><h1><%= draft.actionType === 'departure_review' ? 'Departure charge summary' : actionLabel %></h1><p><%= draft.actionType === 'departure_review' ? 'Check the automatic tuition change, then confirm once. Payments and other charges remain as recorded.' : 'Check the complete update below. Saving applies it once and records the reviewed result together.' %></p></div>
   </header>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
   <% if (previewUnavailable) { %>
@@ -13,7 +13,7 @@
 
   <section class="finance-review-summary finance-panel" aria-labelledby="review-summary-title">
     <div class="finance-review-summary__heading">
-    <div><h2 id="review-summary-title">Review details</h2><p>Check the saved record, every fee decision, and each amount before saving.</p></div>
+    <div><h2 id="review-summary-title"><%= draft.actionType === 'departure_review' ? 'Proposed result' : 'Review details' %></h2><p><%= draft.actionType === 'departure_review' ? 'The saved Registrar term determines which tuition can be cancelled.' : 'Check the saved record, every fee decision, and each amount before saving.' %></p></div>
       <% if (draft.preview.student) { %>
         <div class="finance-review-student"><strong><%= draft.preview.student.name %></strong><span><%= draft.preview.student.studentNumber || 'Student number unavailable' %></span></div>
       <% } %>
@@ -25,11 +25,12 @@
     <% if (draft.preview.activeSchedule) { %>
       <p class="finance-review-context">Active schedule version at review: <strong><%= draft.preview.activeSchedule.version %></strong></p>
     <% } %>
-    <% if (draft.preview.targetDetails?.length) { %>
+    <% if (draft.preview.targetDetails?.length && draft.actionType !== 'departure_review') { %>
       <dl class="finance-review-fields finance-review-targets" aria-label="Current record being updated">
         <% for (const target of draft.preview.targetDetails) { %><div><dt><%= target.label %></dt><dd><%= target.label === 'Stopped or transferred review' ? String(target.value).replace(/\bdropped\b/gi, 'stopped') : target.value %></dd></div><% } %>
       </dl>
     <% } %>
+    <% if (draft.preview.targetDetails?.length && draft.actionType === 'departure_review') { %><details class="finance-review-targets"><summary>Saved record and status details</summary><dl class="finance-review-fields" aria-label="Current record being updated"><% for (const target of draft.preview.targetDetails) { %><div><dt><%= target.label %></dt><dd><%= target.label === 'Stopped or transferred review' ? String(target.value).replace(/\bdropped\b/gi, 'stopped') : target.value %></dd></div><% } %></dl></details><% } %>
     <% if (draft.preview.feeAdjustment) { const correction = draft.preview.feeAdjustment; %>
       <section class="finance-review-fields" aria-label="Projected fee correction">
         <h2>Fee basis and credit release</h2>
@@ -117,17 +118,23 @@
 
     <% if (draft.actionType === 'departure_review') { %>
       <section class="finance-review-fields" aria-label="Tuition cutoff evidence">
-        <h2>Departure tuition cutoff</h2>
-        <p>The departure term comes from the saved Registrar placement: <strong><%= draft.preview.departureTermNumber ? `Term ${draft.preview.departureTermNumber}` : 'Placement unavailable' %></strong>. The cutoff records the last tuition installment payable in that term.</p>
-        <p><strong>Last payable tuition installment:</strong> <%= ({ dp: 'DP', prelim: 'Prelim', midterm: 'Midterm', finals: 'Finals', none: 'None payable' })[String(draft.preview.departureLastPayableInstallment || '').toLowerCase()] || 'Not recorded' %></p>
-        <p>Full departure-term tuition is kept by default. Later recorded tuition installments with no applied payment are proposed for cancellation. Check the amounts before saving; other fees and charges with payment history need an individual decision.</p>
-        <% if (!draft.preview.departureReviewReady) { %><p class="form-alert" role="status">Review fees still needing a decision and enter an overall Finance reason. Saving records the confirmed amounts once.</p><% } %>
+        <h2>Confirm departure charges</h2>
+        <p>Last attended: <strong><%= draft.preview.departureTermNumber ? `Term ${draft.preview.departureTermNumber}` : 'Placement unavailable' %></strong>. Tuition through <strong><%= ({ dp: 'DP', prelim: 'Prelim', midterm: 'Midterm', finals: 'Finals', none: 'None' })[String(draft.preview.departureLastPayableInstallment || '').toLowerCase()] || 'unrecorded' %></strong> in that term remains payable.</p>
+        <% if (draft.preview.departureSummary) { %><dl class="finance-review-departure-amounts">
+          <div><dt>Tuition kept payable</dt><dd>₱<%= draft.preview.departureSummary.keptTuition %></dd></div>
+          <div class="finance-review-departure-amounts__proposal"><dt>Unpaid tuition to cancel</dt><dd>₱<%= draft.preview.departureSummary.cancelledTuition %></dd></div>
+          <div><dt>Other charges still payable</dt><dd>₱<%= draft.preview.departureSummary.otherFees %></dd></div>
+        </dl><% } %>
+        <p>Only eligible unpaid tuition is cancelled automatically. Other charges remain as recorded; payments and history stay intact.</p>
+        <% if (draft.input.reason) { %><p><strong>Finance note:</strong> <%= draft.input.reason %></p><% } %>
+        <% if (draft.preview.departureSummary?.exceptions) { %><p class="form-alert" role="status"><%= draft.preview.departureSummary.exceptions %> paid or unclear charge<%= draft.preview.departureSummary.exceptions === 1 ? '' : 's' %> need individual review in Details below.</p><% } %>
+        <% if (!draft.preview.departureReviewReasonReady) { %><p class="form-alert" role="status">Add the Finance reason in Details before confirming.</p><% } %>
       </section>
       <% if (draft.preview.departureChargeReviews?.length) { %>
-        <div class="finance-review-departure-preview" aria-label="Reviewed fees and proposed departure charge changes">
+        <details class="finance-review-departure-preview" aria-label="Reviewed fees and proposed departure charge changes"><summary>Charge-by-charge details and exceptions</summary>
           <% for (const termNumber of [1, 2, 3]) { const termItems = draft.preview.departureChargeReviews.filter((item) => Number(item.termNumber) === termNumber); if (!termItems.length) continue; const pendingDecisions = termItems.filter((item) => !['retain', 'reduce'].includes(item.decision)).length; %>
             <% const termNeedsCorrection = termItems.some((item) => item.keepAmountNeedsCorrection || (item.decision === 'reduce' && !item.reviewedReductionReady)); %>
-            <details class="finance-review-departure-term" <%= (termNeedsCorrection || (draft.preview.departureReviewReady === true && termNumber === Number(draft.preview.departureTermNumber))) ? 'open' : '' %>>
+            <details class="finance-review-departure-term" <%= termNeedsCorrection || pendingDecisions ? 'open' : '' %>>
               <summary><strong>Term <%= termNumber %> · <%= termItems.length %> fee<%= termItems.length === 1 ? '' : 's' %></strong><span><%= pendingDecisions ? `${pendingDecisions} decision${pendingDecisions === 1 ? '' : 's'} pending` : 'All decisions recorded' %></span></summary>
               <div class="finance-review-departure-term__fees">
                 <% for (const item of termItems) { %>
@@ -150,17 +157,17 @@
               </div>
             </details>
           <% } %>
-        </div>
+        </details>
       <% } else { %><p class="finance-review-empty-note">No assessed charges are linked to the saved departure placements. The Finance review still records the explicit tuition cutoff.</p><% } %>
     <% } %>
 
-    <% if (previewFields.length) { %>
+    <% if (previewFields.length && draft.actionType !== 'departure_review') { %>
       <dl class="finance-review-fields"><% for (const field of previewFields) { %><div><dt><%= field.name %></dt><dd><%= Array.isArray(field.value) ? field.value.join(', ') : field.value %></dd></div><% } %></dl>
     <% } %>
   </section>
 
   <details class="finance-review-edit finance-panel" <%= draft.actionType === 'departure_review' && draft.preview.departureReviewReady !== true ? 'open' : '' %>>
-    <summary>Edit saved details</summary>
+    <summary><%= draft.actionType === 'departure_review' ? (draft.preview.departureSummary?.exceptions ? 'Resolve exceptions or change charges' : 'Details: change charges or Finance note') : 'Edit saved details' %></summary>
     <div class="finance-review-edit__body">
       <p>Changing a value saves an updated draft. Review the summary again before saving.</p>
       <form class="form-stack" method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/update"<% if (recoveredForm) { %> data-unsaved-initially-dirty="true"<% } %>>
@@ -304,7 +311,7 @@
         <p class="finance-review-attestation">Approving confirms that you reviewed the approved fee schedule, selected options, and exact annual assessment shown above. Finance approval is recorded; Registrar confirms enrollment separately.</p>
         <label class="field"><span><input type="checkbox" name="zeroDpApproval" value="1"> If this entry-term DP is zero after approved waivers, I explicitly approve the zero-DP case.</span></label>
       <% } %>
-      <button class="button button--primary" type="submit" <%= previewUnavailable || (draft.actionType === 'departure_review' && draft.preview.departureReviewReady !== true) ? 'disabled' : '' %>><%= draft.actionType === 'annual_assessment' ? (draft.preview.annualHandoffRequired ? 'Approve Finance assessment' : 'Post annual assessment') : draft.actionType === 'retake_item_decision' ? 'Save Finance decision' : 'Review complete · Save update' %></button>
+      <button class="button button--primary" type="submit" <%= previewUnavailable || (draft.actionType === 'departure_review' && draft.preview.departureReviewReady !== true) ? 'disabled' : '' %>><%= draft.actionType === 'annual_assessment' ? (draft.preview.annualHandoffRequired ? 'Approve Finance assessment' : 'Post annual assessment') : draft.actionType === 'retake_item_decision' ? 'Save Finance decision' : draft.actionType === 'departure_review' ? 'Confirm departure fee update' : 'Review complete · Save update' %></button>
     </form>
     <form method="post" action="/finance/review-drafts/<%= encodeURIComponent(draft.id) %>/discard">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">

@@ -1128,7 +1128,7 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
   assert.match(departureHtml, /name="reason"[^>]*required/);
   assert.match(departureHtml, /name="_csrf" value="csrf-token"/);
   assert.match(departureHtml, /name="idempotencyKey" value="41111111-1111-4111-8111-111111111111"/);
-  assert.match(departureHtml, /Review cutoff and open Finance draft/);
+  assert.match(departureHtml, /Review departure summary/);
   assert.doesNotMatch(departureHtml, /<fieldset/);
 
   const recoveredDepartureHtml = await renderFinanceView('departures', {
@@ -1149,7 +1149,7 @@ test('finance disclosures keep report, schedule, and zero-charge departure detai
   assert.match(recoveredDepartureHtml, /<details class="finance-departure-term"\s*>\s*<summary><strong>Term 2<\/strong><span>2 fees · ₱35\.50 due/);
   assert.doesNotMatch(recoveredDepartureHtml, /name="departureChargeId"|name="departureAdjustmentAmount"|name="departureAdjustmentReason"/,
     'the departure queue opens a reviewed Finance draft instead of exposing direct charge-adjustment controls');
-  assert.match(recoveredDepartureHtml, /Review cutoff and open Finance draft/);
+  assert.match(recoveredDepartureHtml, /Review departure summary/);
 });
 
 test('schedule validation reopens the form with submitted fee lines and idempotency key', async () => {

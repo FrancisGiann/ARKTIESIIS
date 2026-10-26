@@ -2622,7 +2622,7 @@ test('HTTP document routes enforce role matrix and CSRF before writes', async ()
   });
 });
 
-test('document detail pairs source with findings, keeps notices and secondary actions distinct, and stacks on narrow screens', async () => {
+test('document detail follows one column until wide desktop and avoids a blank column under the source', async () => {
   const styles = await fs.readFile(path.join(__dirname, '../public/css/app.css'), 'utf8');
   const template = await fs.readFile(path.join(__dirname, '../views/documents/detail.ejs'), 'utf8');
   const overviewStart = template.indexOf('<div class="document-review-layout">');
@@ -2637,7 +2637,10 @@ test('document detail pairs source with findings, keeps notices and secondary ac
   assert.match(template, /<div class="document-detail-notices">[\s\S]*document-rejection-callout/);
   assert.match(template, /<div class="document-secondary-actions">[\s\S]*delete-submission-title/);
   assert.match(template, /if \(isStaff\) \{ %><p>Inspect the submitted pages before recording a staff decision/);
-  assert.match(styles, /\.document-detail-page\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(0,\s*1fr\)/s);
+  assert.match(styles, /\.document-detail-page\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/s);
+  assert.match(styles, /@media \(min-width: 1700px\)\s*\{[^}]*\.document-detail-page\s*\{[^}]*"source findings"\s+"decision decision"/s);
+  assert.doesNotMatch(styles, /\.document-detail-page \.document-source-pane\s*\{\s*position:\s*sticky/);
+  assert.doesNotMatch(styles, /\.document-detail-page \.document-image-thumbnail__viewport\s*\{[^}]*min-height:/s);
   assert.match(styles, /@media \(max-width: 880px\)\s*\{[^}]*\.document-detail-page\s*\{\s*display:\s*block;/s);
   assert.match(styles, /\.document-precheck-scope\s*\{[^}]*max-width:\s*74ch;/s);
   assert.match(template, /do not establish authenticity or acceptance/);

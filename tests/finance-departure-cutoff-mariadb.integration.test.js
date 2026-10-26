@@ -340,9 +340,32 @@ test('Finance departure cutoff migration and reviewed writes preserve payable ba
     assert.equal(autoDraft.preview.departureTermNumber, 1, 'the saved Registrar placement supplies the departure term');
     assert.equal(autoDraft.preview.departureLastPayableInstallment, 'finals', 'an untouched new review keeps the attended term payable');
     assert.deepEqual(autoDraft.preview.departureChargeReviews.map((row) => [row.termNumber, row.decision, row.reductionAmount]), [
-      [1, 'retain', '0.00'], [2, 'reduce', '75.00'], [3, '', ''], [3, '', '']
-    ], 'only unpaid canonical future tuition is prefilled; paid and named charges stay for individual review');
+      [1, 'retain', '0.00'], [2, 'reduce', '75.00'], [3, '', ''], [3, 'retain', '0.00']
+    ], 'unpaid future tuition is cancelled, other fees stay payable, and paid tuition needs individual review');
+    assert.deepEqual(autoDraft.preview.departureSummary,
+      { keptTuition: '140.00', cancelledTuition: '75.00', otherFees: '30.00', exceptions: 1 });
     assert.equal(autoDraft.preview.departureReviewReady, false);
+    const simpleCase = await createDeparture({ label: 'simple-unpaid', effectiveTerm: 1, affectedTerms: [1, 2, 3], charges: [
+      { term: 1, installment: 'Finals', amount: '100.00' },
+      { term: 2, installment: 'DP', amount: '75.00' },
+      { term: 3, installment: 'Finals', amount: '40.00' },
+      { term: 3, category: 'miscellaneous', name: 'Named fee', installment: 'One-time', amount: '30.00' }
+    ] });
+    const simpleIdentity = await reviewActions.startDraft(financeId, 'e'.repeat(64),
+      `/departure-cases/${simpleCase.caseId}/review`, { reason: 'Synthetic ordinary departure' });
+    const simpleDraft = await reviewActions.getDraft(financeId, simpleIdentity.id);
+    assert.equal(simpleDraft.preview.departureReviewReady, true, 'ordinary unpaid case needs no fee-by-fee edits');
+    assert.deepEqual(simpleDraft.preview.departureSummary,
+      { keptTuition: '100.00', cancelledTuition: '115.00', otherFees: '30.00', exceptions: 0 });
+    await reviewActions.commit(financeId, 'e'.repeat(64), simpleDraft.id,
+      simpleDraft.revision, simpleDraft.dependencyFingerprint);
+    const [simpleEvidence] = await appPool.execute(`SELECT detail.term_number, detail.review_category, detail.decision,
+        CAST(detail.reviewed_reduction_amount AS CHAR) AS reduction
+      FROM finance_departure_cutoff_reviews AS review INNER JOIN finance_departure_charge_reviews AS detail
+        ON detail.cutoff_review_id = review.id WHERE review.departure_case_id = ? ORDER BY detail.term_number, detail.charge_id`,
+    [simpleCase.caseId]);
+    assert.deepEqual(simpleEvidence.map((row) => [Number(row.term_number), row.decision, row.reduction]),
+      [[1, 'retain', '0.00'], [2, 'reduce', '75.00'], [3, 'reduce', '40.00'], [3, 'retain', '0.00']]);
     const unsafeFullCancel = { cutoffInstallment: 'finals', reason: 'Synthetic paid-charge guard', idempotencyKey: uuid(),
       chargeReviews: autoCase.charges.map((charge) => ({ chargeId: String(charge.id),
         decision: charge.term > 1 && (charge.category || 'tuition') === 'tuition' ? 'reduce' : 'retain',

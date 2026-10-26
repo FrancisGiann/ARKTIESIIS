@@ -1170,8 +1170,10 @@ test('departure draft edits can save incomplete decisions without hidden browser
       'the reason from the initial case form is visible as per-charge evidence');
     assert.match(firstHtml, /<details class="finance-review-edit finance-panel" open>/,
       'incomplete departure drafts open their editor automatically');
-    assert.match(firstHtml, /<details class="finance-review-departure-term"\s*>\s*<summary><strong>Term 2/,
-      'incomplete departure previews keep fee terms collapsed');
+    assert.match(firstHtml, /<details class="finance-review-departure-preview"[^>]*><summary>Charge-by-charge details and exceptions<\/summary>/,
+      'the charge-by-charge preview stays behind optional details');
+    assert.match(firstHtml, /<details class="finance-review-departure-term" open>\s*<summary><strong>Term 2/,
+      'a term with an unresolved charge is expanded after opening details');
     assert.match(firstHtml, /name="field_cutoffInstallment"\s*>/);
     assert.match(firstHtml, /name="field_reason" rows="3" maxlength="1000"/);
     assert.match(firstHtml, /Registrar’s recorded reason · read-only/);
@@ -1187,7 +1189,7 @@ test('departure draft edits can save incomplete decisions without hidden browser
       'the proposed amount remains reference-only and does not prefill an unreviewed amount');
     assert.match(firstHtml, /<details class="finance-review-specific-reason"/,
       'the optional per-fee reason is progressively disclosed');
-    assert.match(firstHtml, /<button[^>]*disabled[^>]*>Review complete · Save update<\/button>/);
+    assert.match(firstHtml, /<button[^>]*disabled[^>]*>Confirm departure fee update<\/button>/);
 
     const update = await fetch(`${baseUrl}/finance/review-drafts/${draftId}/update`, {
       method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
@@ -1273,7 +1275,7 @@ test('departure draft edits can save incomplete decisions without hidden browser
     const refreshedHtml = await refreshed.text();
     assert.equal(refreshed.status, 200);
     assert.match(refreshedHtml, /name="field_cutoffInstallment"\s*>/);
-    assert.match(refreshedHtml, /<button[^>]*disabled[^>]*>Review complete · Save update<\/button>/);
+    assert.match(refreshedHtml, /<button[^>]*disabled[^>]*>Confirm departure fee update<\/button>/);
 
     const reviewedInput = { cutoffInstallment: 'midterm', reason: 'Synthetic overall review reason',
       chargeReviews: [{ chargeId: '701', termNumber: 2, feeCategory: 'tuition', lineName: 'Tuition', installment: 'Finals',
@@ -1285,11 +1287,11 @@ test('departure draft edits can save incomplete decisions without hidden browser
     const complete = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
     const completeHtml = await complete.text();
     assert.equal(complete.status, 200);
-    assert.match(completeHtml, /<strong>Last payable tuition installment:<\/strong> Midterm/,
+    assert.match(completeHtml, /Tuition through <strong>Midterm<\/strong>/,
       'the selected cutoff is visible with the saved placement evidence');
     assert.match(completeHtml, /<dt>Current payable<\/dt><dd>₱100\.00<\/dd>/);
     assert.match(completeHtml, /All decisions recorded/);
-    assert.match(completeHtml, /<button class="button button--primary" type="submit"\s*>Review complete · Save update<\/button>/,
+    assert.match(completeHtml, /<button class="button button--primary" type="submit"\s*>Confirm departure fee update<\/button>/,
       'a complete review enables confirmation without this preview posting a mock finance write');
 
     draft = { ...draft, input: { ...draft.input, cutoffInstallment: 'none' },
@@ -1297,7 +1299,7 @@ test('departure draft edits can save incomplete decisions without hidden browser
     const nonePayable = await fetch(`${baseUrl}/finance/review-drafts/${draftId}`, { headers: { cookie } });
     const nonePayableHtml = await nonePayable.text();
     assert.equal(nonePayable.status, 200);
-    assert.match(nonePayableHtml, /<strong>Last payable tuition installment:<\/strong> None payable/);
+    assert.match(nonePayableHtml, /Tuition through <strong>None<\/strong>/);
 
     draft = { ...draft, actionType: 'annual_payment', input: { enrollmentId: '77' },
       preview: { student: { name: 'Synthetic Student', studentNumber: 'CUTOFF-22' }, fields: [],

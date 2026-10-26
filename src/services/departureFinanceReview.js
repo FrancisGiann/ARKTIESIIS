@@ -38,11 +38,15 @@ function suggestedDepartureDecision({ reviewCategory, proposedReductionCents }) 
 }
 
 function safeDepartureDefault({ reviewCategory, proposedReductionCents, appliedCents, payableBasisCents }) {
-  if (reviewCategory !== 'canonical_tuition') return null;
   if (appliedCents == null) return null;
   const proposal = BigInt(proposedReductionCents);
   const applied = BigInt(appliedCents);
   const payable = BigInt(payableBasisCents);
+  // A departure never silently cancels a named or noncanonical fee. Keeping it
+  // is the financially conservative default; staff may change it in Details.
+  if (reviewCategory !== 'canonical_tuition') {
+    return payable >= 0n ? { decision: 'retain', reductionCents: 0n } : null;
+  }
   if (applied !== 0n) return null;
   if (proposal > 0n && applied === 0n) return { decision: 'reduce', reductionCents: proposal };
   if (proposal === 0n && payable >= 0n) return { decision: 'retain', reductionCents: 0n };
