@@ -311,6 +311,10 @@ test('student record, term, section, and enrollment inputs are bounded and valid
   assert.throws(() => validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee', sex: 'unspecified' }), /Choose Male, Female, or Other/);
   assert.equal(latestBirthDate() < currentManilaDate(), true);
   assert.throws(() => validateTerm({ schoolYear: '2026', term: 'A'.repeat(31) }), StudentRecordsError);
+  assert.equal(validateTerm({ schoolYear: '2027-2028', term: '1' }).term, 'Term 1');
+  assert.equal(validateTerm({ schoolYear: '2027-2028', term: 'term2' }).term, 'Term 2');
+  assert.equal(validateTerm({ schoolYear: '2027-2028', term: 'Term 3' }).term, 'Term 3');
+  assert.equal(validateTerm({ schoolYear: '2027-2028', term: 'Summer' }).term, 'Summer');
   assert.throws(() => validateSection({ name: 'Grade 7', academicTermId: '3x' }), /valid academic term/);
   assert.deepEqual(validateSection({ name: '11-A', gradeLevel: 'Grade 11', academicTermId: '3',
     track: 'Academic Track', cluster: 'ASSH (Arts, Social Science, and Humanities)' }), {
@@ -325,6 +329,19 @@ test('student record, term, section, and enrollment inputs are bounded and valid
   }
   assert.throws(() => validateEnrollment({ studentId: '0', academicTermId: '4' }), /valid student/);
   assert.deepEqual(validateEnrollment({ studentId: '5', academicTermId: '4', sectionId: '' }), { studentId: 5, academicTermId: 4, sectionId: null });
+});
+
+test('term creation rejects a legacy numeric alias before changing the current term', async () => {
+  const { service, log } = transactionalService(({ statement }) => {
+    if (statement.includes('FROM users')) return { recordset: [{ id: 7, role: 'registrar' }] };
+    if (statement.includes('FROM academic_terms')) return { recordset: [{ term: '1' }] };
+    throw new Error(`Unexpected query: ${statement}`);
+  });
+  await assert.rejects(service.createTerm(7, { schoolYear: '2027-2028', term: 'Term 1', isCurrent: '1' }),
+    (error) => error instanceof StudentRecordsError && error.status === 409);
+  assert.equal(log.rolledBack, true);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('UPDATE academic_terms')), false);
+  assert.equal(log.queries.some(({ statement }) => statement.includes('INSERT INTO academic_terms')), false);
 });
 
 test('empty, whitespace-only, and placeholder student and return-evaluation submissions are rejected', () => {

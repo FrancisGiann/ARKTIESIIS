@@ -248,10 +248,16 @@ function normalizeBoolean(value, label) {
   throw new StudentRecordsError(`Choose whether this ${label} is current.`);
 }
 
+function normalizeTermLabel(value) {
+  const text = requiredText(value, 'Term', 30);
+  const numberedTerm = /^(?:term\s*)?([1-3])$/i.exec(text);
+  return numberedTerm ? `Term ${numberedTerm[1]}` : text;
+}
+
 function validateTerm(input = {}) {
   return {
     schoolYear: requiredText(input.schoolYear, 'School year', 20),
-    term: requiredText(input.term, 'Term', 30),
+    term: normalizeTermLabel(input.term),
     isCurrent: normalizeBoolean(input.isCurrent, 'term')
   };
 }
@@ -950,6 +956,12 @@ function createStudentRecordsService({
     const term = validateTerm(input);
     return runTransaction(async (transaction) => {
       const actor = await requireAcademicActor(transaction, actorId);
+      const existing = await transaction.request()
+        .input('schoolYear', sql.NVarChar(20), term.schoolYear)
+        .query('SELECT term FROM academic_terms WHERE school_year = @schoolYear FOR UPDATE');
+      if ((existing.recordset || []).some((row) => normalizeTermLabel(row.term) === term.term)) {
+        throw new StudentRecordsError('That academic term already exists.', 409);
+      }
       if (term.isCurrent) {
         await transaction.request().query('UPDATE academic_terms SET is_current = 0 WHERE is_current = 1');
       }
