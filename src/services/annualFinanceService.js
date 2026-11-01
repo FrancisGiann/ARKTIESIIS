@@ -305,6 +305,14 @@ async function loadVoucherReviewState(request, sqlTypes, {
           OR @voucherAssessedCode <> @voucherCurrentCode)
       ORDER BY created_at DESC, id DESC LIMIT 1${lock ? ' FOR UPDATE' : ''}`);
   const event = latestResult.recordset?.[0];
+  return buildVoucherReviewState(event, {
+    annualEnrollmentId, assessmentId, scheduleId, scheduleVersion, assessedVoucherCode, currentVoucherCode
+  });
+}
+
+function buildVoucherReviewState(event, {
+  annualEnrollmentId, assessmentId, scheduleId, scheduleVersion, assessedVoucherCode, currentVoucherCode
+}) {
   if (!event) return null;
   const assessmentBound = Number(event.finance_assessment_id) === Number(assessmentId);
   const state = { eventId: Number(event.id), eventType: event.event_type, assessmentBound,
@@ -370,6 +378,10 @@ async function loadAnnualRestatement(request, sqlTypes, annualEnrollmentId, asse
       ${assessmentId == null ? '' : 'AND archive.assessment_id = @restatementAssessmentId'}
     LIMIT 1`);
   const row = result.recordset?.[0];
+  return buildAnnualRestatementState(row);
+}
+
+function buildAnnualRestatementState(row) {
   if (!row) return null;
   validateRestatementRow(row);
   const isActive = row.reversed_event_id == null;
@@ -420,6 +432,91 @@ function activeRestatementFingerprint(restatement) {
     beforeImageSha256: restatement.beforeImageSha256,
     appliedImageSha256: restatement.appliedImageSha256
   };
+}
+
+function buildAnnualFinanceFingerprintState({
+  parent, restatement, voucherReview, optionalLineIds, scheduleLines, charges, adjustments
+}) {
+  const assessedComposition = canonicalAssessmentSnapshot(charges.map((charge) => ({
+    scheduleLineId: charge.schedule_line_id == null ? null : Number(charge.schedule_line_id),
+    termNumber: Number(charge.term_number), category: charge.fee_category, lineName: charge.line_name,
+    installment: charge.installment, grossAmount: String(charge.amount), waivedAmount: String(charge.waived_amount || '0.00')
+  })));
+  const assessmentFingerprint = assessedComposition.fingerprint;
+  const assessmentSnapshotState = { assessmentId: Number(parent.assessment_id),
+    scheduleId: Number(parent.schedule_id), scheduleVersion: Number(parent.schedule_version),
+    voucherCode: parent.voucher_code_snapshot, payableTotal: assessedComposition.total,
+    optionalLineIds, postedComposition: assessmentFingerprint };
+  const activeRestatement = activeRestatementFingerprint(restatement);
+  if (activeRestatement) assessmentSnapshotState.restatement = activeRestatement;
+  const assessmentSnapshotFingerprint = requestFingerprint(assessmentSnapshotState);
+  const dependencyState = {
+    annualEnrollmentId: Number(parent.id), studentId: Number(parent.student_id), schoolYear: parent.school_year,
+    gradeLevel: parent.grade_level, voucherCode: parent.voucher_code, entryTermNumber: Number(parent.entry_term_number || 1),
+    assessmentId: Number(parent.assessment_id), scheduleId: Number(parent.schedule_id),
+    scheduleVersion: Number(parent.schedule_version), assessedVoucher: parent.voucher_code_snapshot,
+    currentVoucher: parent.voucher_code, voucherReview, optionalLineIds, scheduleLines,
+    charges: charges.map((charge) => ({
+      id: Number(charge.id), termNumber: Number(charge.term_number),
+      scheduleLineId: charge.schedule_line_id == null ? null : Number(charge.schedule_line_id),
+      category: charge.fee_category, lineName: charge.line_name, installment: charge.installment,
+      isManual: flag(charge.is_manual), amount: String(charge.amount), waivedAmount: String(charge.waived_amount || '0.00')
+    })),
+    adjustments
+  };
+  if (activeRestatement) dependencyState.restatement = activeRestatement;
+  return {
+    assessedComposition, assessmentFingerprint, assessmentSnapshotFingerprint,
+    dependencyFingerprint: requestFingerprint(dependencyState)
+  };
+}
+
+function normalizeAnnualOptionalLineIds(parent) {
+  let selection;
+  try {
+    selection = JSON.parse(parent.selection_json || '{}');
+  } catch {
+    throw new AnnualFinanceError('The saved assessment selection needs Finance review.', 409);
+  }
+  return [...normalizeSelections(selection.optionalLineIds || [])].sort((left, right) => left - right);
+}
+
+function normalizeFinanceScheduleLines(rows = []) {
+  return rows.map((line) => ({
+    id: Number(line.id), termNumber: Number(line.term_number), category: String(line.fee_category),
+    lineName: String(line.line_name), installment: String(line.installment), amount: String(line.amount),
+    isOptional: flag(line.is_optional)
+  }));
+}
+
+function applyRestatementTuitionLines(scheduleLines, targetTuitionLines, restatement) {
+  if (restatement?.status !== 'active') return scheduleLines.map((line) => ({ ...line }));
+  if (targetTuitionLines.length !== 12) throw new AnnualFinanceError('The bound tuition installment schedule is incomplete.', 409);
+  return [...scheduleLines.filter((line) => line.category.trim().toLowerCase() !== 'tuition'),
+    ...targetTuitionLines].map((line) => ({ ...line }))
+    .sort((left, right) => left.termNumber - right.termNumber || left.id - right.id);
+}
+
+function isCurrentFinanceSchedule(parent, schedule) {
+  return Boolean(schedule && Number(schedule.version_no) === Number(parent.schedule_version)
+    && schedule.voucher_code === parent.voucher_code_snapshot
+    && schedule.school_year === parent.school_year && schedule.grade_level === parent.grade_level);
+}
+
+function bindFinanceQueueIds(request, prefix, values, sqlType) {
+  const uniqueValues = [...new Set(values.map((value) => Number(value)).filter(Number.isSafeInteger))];
+  const names = uniqueValues.map((value, index) => {
+    const name = `${prefix}${index}`;
+    request.input(name, sqlType, value);
+    return `@${name}`;
+  });
+  return { values: uniqueValues, sql: names.join(', ') };
+}
+
+function chunks(values, size) {
+  const result = [];
+  for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size));
+  return result;
 }
 
 function archiveTimestamp(value, label) {
@@ -576,20 +673,12 @@ function createAnnualFinanceService({
         dependencyFingerprint: null, dp: { status: 'missing_assessment' }, latestReview: null };
     }
     const restatement = await loadAnnualRestatement(transaction.request(), sql, annualEnrollmentId, Number(parent.assessment_id));
-    let selection;
-    try {
-      selection = JSON.parse(parent.selection_json || '{}');
-    } catch {
-      throw new AnnualFinanceError('The saved assessment selection needs Finance review.', 409);
-    }
-    const optionalLineIds = [...normalizeSelections(selection.optionalLineIds || [])].sort((left, right) => left - right);
+    const optionalLineIds = normalizeAnnualOptionalLineIds(parent);
     const scheduleResult = await transaction.request().input('scheduleId', sql.Int, parent.schedule_id)
       .query(`SELECT id, school_year, grade_level, voucher_code, version_no
         FROM finance_schedules WHERE id = @scheduleId${lockClause}`);
     const schedule = scheduleResult.recordset?.[0];
-    if (!schedule || Number(schedule.version_no) !== Number(parent.schedule_version)
-      || schedule.voucher_code !== parent.voucher_code_snapshot
-      || schedule.school_year !== parent.school_year || schedule.grade_level !== parent.grade_level) {
+    if (!isCurrentFinanceSchedule(parent, schedule)) {
       return { parent, assessment: { id: Number(parent.assessment_id) }, assessmentFingerprint: null,
         dependencyFingerprint: null, dp: { status: 'invalid_schedule' }, latestReview: null };
     }
@@ -602,25 +691,15 @@ function createAnnualFinanceService({
       .query(`SELECT id, term_number, fee_category, line_name, installment,
           CAST(amount AS CHAR(40)) AS amount, is_optional
         FROM finance_schedule_lines WHERE schedule_id = @scheduleId ORDER BY term_number, id${lock ? ' FOR UPDATE' : ''}`);
-    let scheduleLines = (scheduleLinesResult.recordset || []).map((line) => ({
-      id: Number(line.id), termNumber: Number(line.term_number), category: String(line.fee_category),
-      lineName: String(line.line_name), installment: String(line.installment), amount: String(line.amount),
-      isOptional: flag(line.is_optional)
-    }));
+    let scheduleLines = normalizeFinanceScheduleLines(scheduleLinesResult.recordset || []);
     if (restatement?.status === 'active') {
       const targetLinesResult = await transaction.request().input('targetScheduleId', sql.Int, restatement.targetTuitionScheduleId)
         .query(`SELECT id, term_number, fee_category, line_name, installment,
             CAST(amount AS CHAR(40)) AS amount, is_optional
           FROM finance_schedule_lines WHERE schedule_id = @targetScheduleId
             AND LOWER(TRIM(fee_category)) = 'tuition' ORDER BY term_number, id${lock ? ' FOR UPDATE' : ''}`);
-      const targetTuitionLines = (targetLinesResult.recordset || []).map((line) => ({
-        id: Number(line.id), termNumber: Number(line.term_number), category: String(line.fee_category),
-        lineName: String(line.line_name), installment: String(line.installment), amount: String(line.amount),
-        isOptional: flag(line.is_optional)
-      }));
-      if (targetTuitionLines.length !== 12) throw new AnnualFinanceError('The bound tuition installment schedule is incomplete.', 409);
-      scheduleLines = [...scheduleLines.filter((line) => line.category.trim().toLowerCase() !== 'tuition'), ...targetTuitionLines]
-        .sort((left, right) => left.termNumber - right.termNumber || left.id - right.id);
+      const targetTuitionLines = normalizeFinanceScheduleLines(targetLinesResult.recordset || []);
+      scheduleLines = applyRestatementTuitionLines(scheduleLines, targetTuitionLines, restatement);
     }
     const chargeResult = await transaction.request().input('assessmentId', sql.Int, parent.assessment_id)
       .query(`SELECT charge.id, charge.annual_enrollment_id, charge.enrollment_id, charge.schedule_line_id,
@@ -652,34 +731,10 @@ function createAnnualFinanceService({
         amount: String(row.amount)
       }));
     }
-    const assessedComposition = canonicalAssessmentSnapshot(charges.map((charge) => ({
-      scheduleLineId: charge.schedule_line_id == null ? null : Number(charge.schedule_line_id),
-      termNumber: Number(charge.term_number), category: charge.fee_category, lineName: charge.line_name,
-      installment: charge.installment, grossAmount: String(charge.amount), waivedAmount: String(charge.waived_amount || '0.00')
-    })));
-    const assessmentFingerprint = assessedComposition.fingerprint;
-    const assessmentSnapshotState = { assessmentId: Number(parent.assessment_id),
-      scheduleId: Number(parent.schedule_id), scheduleVersion: Number(parent.schedule_version),
-      voucherCode: parent.voucher_code_snapshot, payableTotal: assessedComposition.total,
-      optionalLineIds, postedComposition: assessmentFingerprint };
-    const activeRestatement = activeRestatementFingerprint(restatement);
-    if (activeRestatement) assessmentSnapshotState.restatement = activeRestatement;
-    const assessmentSnapshotFingerprint = requestFingerprint(assessmentSnapshotState);
-    const dependencyState = {
-      annualEnrollmentId: Number(parent.id), studentId: Number(parent.student_id), schoolYear: parent.school_year,
-      gradeLevel: parent.grade_level, voucherCode: parent.voucher_code, entryTermNumber: Number(parent.entry_term_number || 1),
-      assessmentId: Number(parent.assessment_id), scheduleId: Number(parent.schedule_id),
-      scheduleVersion: Number(parent.schedule_version), assessedVoucher: parent.voucher_code_snapshot,
-      currentVoucher: parent.voucher_code, voucherReview, optionalLineIds, scheduleLines,
-      charges: charges.map((charge) => ({
-        id: Number(charge.id), termNumber: Number(charge.term_number), scheduleLineId: charge.schedule_line_id == null ? null : Number(charge.schedule_line_id),
-        category: charge.fee_category, lineName: charge.line_name, installment: charge.installment,
-        isManual: flag(charge.is_manual), amount: String(charge.amount), waivedAmount: String(charge.waived_amount || '0.00')
-      })),
-      adjustments
-    };
-    if (activeRestatement) dependencyState.restatement = activeRestatement;
-    const dependencyFingerprint = requestFingerprint(dependencyState);
+    const fingerprintState = buildAnnualFinanceFingerprintState({
+      parent, restatement, voucherReview, optionalLineIds, scheduleLines, charges, adjustments
+    });
+    const { assessedComposition, assessmentFingerprint, assessmentSnapshotFingerprint, dependencyFingerprint } = fingerprintState;
     const selectedOptional = new Set(optionalLineIds);
     const expectedDpLines = scheduleLines.filter((line) => line.termNumber === Number(parent.entry_term_number || 1)
       && line.category.trim().toLowerCase() === 'tuition' && line.installment.trim().toUpperCase() === 'DP'
@@ -905,6 +960,229 @@ function createAnnualFinanceService({
       if (started) await snapshot.rollback().catch(() => {});
       throw error;
     }
+  }
+
+  async function loadFinanceQueueEvidenceChunk(snapshot, annualIds) {
+    const annualRequest = snapshot.request();
+    const annualBinding = bindFinanceQueueIds(annualRequest, 'queueAnnual', annualIds, sql.Int);
+    const parentResult = await annualRequest.query(`SELECT annual.id, annual.student_id, annual.school_year,
+        annual.grade_level, annual.voucher_code, annual.entry_term_number, annual.intake_status,
+        assessment.id AS assessment_id, assessment.schedule_id, assessment.schedule_version,
+        assessment.voucher_code_snapshot, assessment.selection_json, assessment.assessed_at
+      FROM annual_enrollments AS annual
+      LEFT JOIN annual_assessments AS assessment ON assessment.id = (
+        SELECT MAX(current_assessment.id) FROM annual_assessments AS current_assessment
+        WHERE current_assessment.annual_enrollment_id = annual.id)
+      WHERE annual.id IN (${annualBinding.sql})`);
+    const parents = new Map((parentResult.recordset || []).map((row) => [Number(row.id), row]));
+    const assessedParents = annualIds.map((annualId) => parents.get(Number(annualId)))
+      .filter((parent) => parent && parent.assessment_id != null);
+    if (!assessedParents.length) return { parents, restatements: new Map(), schedules: new Map(), scheduleLines: new Map(),
+      voucherEvents: new Map(), charges: new Map(), adjustments: new Map(), reviews: new Map() };
+
+    const restatementRequest = snapshot.request();
+    const restatementIds = bindFinanceQueueIds(restatementRequest, 'queueRestatementAnnual',
+      assessedParents.map((parent) => parent.id), sql.Int);
+    const restatementResult = await restatementRequest.query(`SELECT archive.operation_id, archive.annual_enrollment_id,
+        archive.assessment_id, archive.source_schedule_id, archive.source_schedule_version,
+        archive.target_tuition_schedule_id, archive.target_tuition_schedule_version,
+        archive.before_image_sha256, archive.applied_image_sha256, operation.operation_kind,
+        operation.manifest_sha256, applied.id AS applied_event_id,
+        applied.manifest_sha256 AS applied_manifest_sha256,
+        applied.resulting_state_sha256 AS applied_state_sha256, reversed.id AS reversed_event_id,
+        reversed.manifest_sha256 AS reversed_manifest_sha256,
+        reversed.resulting_state_sha256 AS reversed_state_sha256
+      FROM finance_assessment_restatement_annuals AS archive
+      INNER JOIN finance_assessment_restatement_operations AS operation ON operation.operation_id = archive.operation_id
+      LEFT JOIN finance_assessment_restatement_events AS applied
+        ON applied.operation_id = archive.operation_id AND applied.event_type = 'applied'
+      LEFT JOIN finance_assessment_restatement_events AS reversed
+        ON reversed.operation_id = archive.operation_id AND reversed.event_type = 'reversed'
+      WHERE archive.annual_enrollment_id IN (${restatementIds.sql})`);
+    const restatements = new Map();
+    for (const row of restatementResult.recordset || []) {
+      const parent = parents.get(Number(row.annual_enrollment_id));
+      if (parent && Number(parent.assessment_id) === Number(row.assessment_id)) {
+        restatements.set(Number(row.annual_enrollment_id), buildAnnualRestatementState(row));
+      }
+    }
+
+    const voucherRequest = snapshot.request();
+    const voucherIds = bindFinanceQueueIds(voucherRequest, 'queueVoucherAnnual',
+      assessedParents.map((parent) => parent.id), sql.Int);
+    const voucherResult = await voucherRequest.query(`WITH RankedVoucherEvents AS (
+        SELECT event.annual_enrollment_id, event.id, event.finance_assessment_id, event.event_type,
+          event.reason, event.request_fingerprint,
+          ROW_NUMBER() OVER (PARTITION BY event.annual_enrollment_id ORDER BY event.created_at DESC, event.id DESC) AS event_rank
+        FROM annual_enrollment_events AS event
+        INNER JOIN annual_enrollments AS annual ON annual.id = event.annual_enrollment_id
+        INNER JOIN annual_assessments AS assessment ON assessment.id = (
+          SELECT MAX(current_assessment.id) FROM annual_assessments AS current_assessment
+          WHERE current_assessment.annual_enrollment_id = annual.id)
+        WHERE annual.id IN (${voucherIds.sql}) AND assessment.assessed_at IS NOT NULL
+          AND event.event_type IN ('voucher_review_flagged', 'voucher_review_resolved')
+          AND (event.created_at > assessment.assessed_at OR event.finance_assessment_id = assessment.id
+            OR assessment.voucher_code_snapshot <> annual.voucher_code)
+      ) SELECT annual_enrollment_id, id, finance_assessment_id, event_type, reason, request_fingerprint
+        FROM RankedVoucherEvents WHERE event_rank = 1`);
+    const voucherEvents = new Map((voucherResult.recordset || []).map((row) => [Number(row.annual_enrollment_id), row]));
+
+    const scheduleIds = [...new Set(assessedParents.map((parent) => Number(parent.schedule_id))
+      .concat([...restatements.values()].filter((item) => item.status === 'active')
+        .map((item) => Number(item.targetTuitionScheduleId))))]
+      .filter((value) => Number.isSafeInteger(value) && value > 0);
+    const schedules = new Map();
+    const scheduleLines = new Map();
+    for (const scheduleChunk of chunks(scheduleIds, 80)) {
+      if (!scheduleChunk.length) continue;
+      const scheduleRequest = snapshot.request();
+      const binding = bindFinanceQueueIds(scheduleRequest, 'queueSchedule', scheduleChunk, sql.Int);
+      const scheduleResult = await scheduleRequest.query(`SELECT id, school_year, grade_level, voucher_code, version_no
+        FROM finance_schedules WHERE id IN (${binding.sql})`);
+      for (const schedule of scheduleResult.recordset || []) schedules.set(Number(schedule.id), schedule);
+
+      const linesRequest = snapshot.request();
+      const lineBinding = bindFinanceQueueIds(linesRequest, 'queueScheduleLine', scheduleChunk, sql.Int);
+      const linesResult = await linesRequest.query(`SELECT id, schedule_id, term_number, fee_category,
+          line_name, installment, CAST(amount AS CHAR(40)) AS amount, is_optional
+        FROM finance_schedule_lines WHERE schedule_id IN (${lineBinding.sql})
+        ORDER BY schedule_id, term_number, id`);
+      for (const line of linesResult.recordset || []) {
+        const key = Number(line.schedule_id);
+        if (!scheduleLines.has(key)) scheduleLines.set(key, []);
+        scheduleLines.get(key).push(line);
+      }
+    }
+
+    const assessmentIds = assessedParents.map((parent) => Number(parent.assessment_id));
+    const charges = new Map();
+    const adjustments = new Map();
+    const reviews = new Map();
+    for (const assessmentChunk of chunks(assessmentIds, 80)) {
+      if (!assessmentChunk.length) continue;
+      const chargeRequest = snapshot.request();
+      const chargeBinding = bindFinanceQueueIds(chargeRequest, 'queueAssessment', assessmentChunk, sql.Int);
+      const chargeResult = await chargeRequest.query(`SELECT charge.id, charge.annual_enrollment_id,
+          charge.assessment_id, charge.enrollment_id, charge.schedule_line_id, charge.fee_category,
+          charge.line_name, charge.installment, charge.is_manual,
+          CAST(charge.amount AS CHAR(40)) AS amount, CAST(charge.waived_amount AS CHAR(40)) AS waived_amount,
+          enrollment.annual_term_number AS term_number
+        FROM assessed_charges AS charge
+        INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
+        WHERE charge.assessment_id IN (${chargeBinding.sql})
+          AND EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS effective WHERE effective.id = charge.id)
+        ORDER BY charge.assessment_id, charge.id`);
+      for (const charge of chargeResult.recordset || []) {
+        const key = Number(charge.assessment_id);
+        if (!charges.has(key)) charges.set(key, []);
+        charges.get(key).push(charge);
+      }
+
+      const adjustmentRequest = snapshot.request();
+      const adjustmentBinding = bindFinanceQueueIds(adjustmentRequest, 'queueAdjustmentAssessment', assessmentChunk, sql.Int);
+      const adjustmentResult = await adjustmentRequest.query(`SELECT adjustment.id, charge.assessment_id,
+          adjustment.charge_id, adjustment.reverses_adjustment_id,
+          CAST(adjustment.amount AS CHAR(40)) AS amount
+        FROM finance_charge_adjustments AS adjustment
+        INNER JOIN assessed_charges AS charge ON charge.id = adjustment.charge_id
+        WHERE charge.assessment_id IN (${adjustmentBinding.sql})
+          AND EXISTS (SELECT 1 FROM v_finance_effective_assessed_charges AS effective WHERE effective.id = charge.id)
+        ORDER BY charge.assessment_id, adjustment.id`);
+      for (const adjustment of adjustmentResult.recordset || []) {
+        const key = Number(adjustment.assessment_id);
+        if (!adjustments.has(key)) adjustments.set(key, []);
+        adjustments.get(key).push({ id: Number(adjustment.id), chargeId: Number(adjustment.charge_id),
+          reversesAdjustmentId: adjustment.reverses_adjustment_id == null
+            ? null : Number(adjustment.reverses_adjustment_id), amount: String(adjustment.amount) });
+      }
+
+      const reviewRequest = snapshot.request();
+      const selectedAssessmentParents = assessedParents
+        .filter((parent) => assessmentChunk.includes(Number(parent.assessment_id)));
+      const reviewPairs = selectedAssessmentParents.map((parent, index) => {
+        const annualName = `queueReviewAnnual${index}`;
+        const assessmentName = `queueReviewAssessment${index}`;
+        reviewRequest.input(annualName, sql.Int, Number(parent.id));
+        reviewRequest.input(assessmentName, sql.Int, Number(parent.assessment_id));
+        return `(annual_enrollment_id = @${annualName} AND assessment_id = @${assessmentName})`;
+      });
+      const reviewResult = await reviewRequest.query(`SELECT review.id, review.annual_enrollment_id,
+          review.assessment_id, review.assessment_fingerprint, review.dependency_fingerprint,
+          review.zero_dp_attested, review.reviewed_by, review.reviewed_by_role, review.reviewed_at,
+          review.current_voucher_code_snapshot, review.voucher_review_event_id
+        FROM annual_finance_assessment_reviews AS review
+        INNER JOIN (SELECT annual_enrollment_id, assessment_id, MAX(id) AS id
+          FROM annual_finance_assessment_reviews
+          WHERE ${reviewPairs.join(' OR ')}
+          GROUP BY annual_enrollment_id, assessment_id) AS latest ON latest.id = review.id`);
+      for (const review of reviewResult.recordset || []) reviews.set(Number(review.annual_enrollment_id), review);
+    }
+
+    return { parents, restatements, schedules, scheduleLines, voucherEvents, charges, adjustments, reviews };
+  }
+
+  async function classifyFinanceAssessmentQueueReadiness(snapshot, rows) {
+    const reviewedByAnnualId = new Map();
+    const eligibleRows = (rows || []).filter((row) => row?.intake_status === 'pending'
+      && row?.annual_enrollment_id != null
+      && row.assessment_id != null && Number(row.has_finance_review) === 1
+      && Number(row.voucher_review_required) !== 1);
+    for (const rowChunk of chunks(eligibleRows, 80)) {
+      const annualIds = [...new Set(rowChunk.map((row) => Number(row.annual_enrollment_id)))];
+      const evidence = await loadFinanceQueueEvidenceChunk(snapshot, annualIds);
+      for (const row of rowChunk) {
+        const annualId = Number(row.annual_enrollment_id);
+        const parent = evidence.parents.get(annualId);
+        if (!parent || Number(parent.assessment_id) !== Number(row.assessment_id)) {
+          reviewedByAnnualId.set(annualId, false);
+          continue;
+        }
+        const optionalLineIds = normalizeAnnualOptionalLineIds(parent);
+        const restatement = evidence.restatements.get(annualId) || null;
+        const schedule = evidence.schedules.get(Number(parent.schedule_id));
+        if (!isCurrentFinanceSchedule(parent, schedule)) {
+          reviewedByAnnualId.set(annualId, false);
+          continue;
+        }
+        const voucherReview = buildVoucherReviewState(evidence.voucherEvents.get(annualId), {
+          annualEnrollmentId: annualId, assessmentId: Number(parent.assessment_id),
+          scheduleId: Number(parent.schedule_id), scheduleVersion: Number(parent.schedule_version),
+          assessedVoucherCode: parent.voucher_code_snapshot, currentVoucherCode: parent.voucher_code
+        });
+        const originalLines = normalizeFinanceScheduleLines(evidence.scheduleLines.get(Number(parent.schedule_id)) || []);
+        const targetLines = restatement?.status === 'active'
+          ? normalizeFinanceScheduleLines(evidence.scheduleLines.get(Number(restatement.targetTuitionScheduleId)) || [])
+            .filter((line) => line.category.trim().toLowerCase() === 'tuition')
+          : [];
+        const scheduleLines = applyRestatementTuitionLines(originalLines, targetLines, restatement);
+        const charges = evidence.charges.get(Number(parent.assessment_id)) || [];
+        const adjustments = evidence.adjustments.get(Number(parent.assessment_id)) || [];
+        const fingerprints = buildAnnualFinanceFingerprintState({
+          parent, restatement, voucherReview, optionalLineIds, scheduleLines, charges, adjustments
+        });
+        const review = evidence.reviews.get(annualId);
+        const voucherEvidenceMatches = review
+          && String(review.current_voucher_code_snapshot || '') === String(parent.voucher_code || '')
+          && (review.voucher_review_event_id == null ? voucherReview == null
+            : Number(review.voucher_review_event_id) === Number(voucherReview?.eventId));
+        const matchingReview = Boolean(review && voucherEvidenceMatches
+          && review.assessment_fingerprint === fingerprints.assessmentFingerprint
+          && review.dependency_fingerprint === fingerprints.dependencyFingerprint);
+        reviewedByAnnualId.set(annualId, matchingReview);
+      }
+    }
+    return reviewedByAnnualId;
+  }
+
+  async function withFinanceAssessmentQueueSnapshot(actorInput, callback) {
+    if (typeof callback !== 'function') throw new TypeError('A Finance queue snapshot callback is required.');
+    const actorId = id(actorInput, 'user');
+    const pool = await getPool();
+    return withRosterReadSnapshot(pool, async (snapshot) => {
+      const actor = await requireFinanceActorForRoster(snapshot.request(), actorId);
+      return callback({ transaction: snapshot, actor,
+        classifyReadiness: (rows) => classifyFinanceAssessmentQueueReadiness(snapshot, rows) });
+    });
   }
 
   async function requireFinanceActor(request, actorInput) {
@@ -3754,6 +4032,7 @@ function createAnnualFinanceService({
   return {
     listSchedules, createSchedule, annualAssessmentPreview,
     annualConfirmationAssessmentSnapshotForStaff, getAnnualEntryFinanceReadinessForRegistrar, getAnnualEntryFinanceReadinessForFinance,
+    withFinanceAssessmentQueueSnapshot,
     assertAnnualEntryDownPaymentReadyInTransaction,
     confirmAnnualAssessment, confirmAnnualAssessmentInTransaction, addSupplementaryCharge,
     recordPayment, updatePaymentMetadata, previewLegacyOpeningLiability, transferLegacyOpeningLiability,
@@ -3777,6 +4056,10 @@ module.exports = {
   parsePaymentDate,
   cleanText,
   canonicalAssessmentSnapshot,
+  buildAnnualFinanceFingerprintState,
+  normalizeAnnualOptionalLineIds,
+  applyRestatementTuitionLines,
+  isCurrentFinanceSchedule,
   applyExemptionPreview,
   assessmentTermTotals,
   tuitionTermTotals,

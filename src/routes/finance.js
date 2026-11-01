@@ -96,7 +96,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
   const dashboard = financeDashboardService || createFinanceDashboardService({ getPool, sql });
   const masterlist = financeMasterlistService || createFinanceMasterlistService({ getPool, sql });
   const assessmentQueue = financeAssessmentQueueService || createFinanceAssessmentQueueService({
-    getPool, sql, getReadiness: (actorId, annualId) => annual.getAnnualEntryFinanceReadinessForFinance(actorId, annualId)
+    sql, withFinanceQueueSnapshot: (actorId, callback) => annual.withFinanceAssessmentQueueSnapshot(actorId, callback)
   });
   const documentClearance = documentClearanceService || createStudentDocumentFinanceClearanceService({ getPool, sql });
   const reviewActions = financeReviewActionService || createFinanceReviewActionService({ getPool, sql });

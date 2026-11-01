@@ -1,6 +1,6 @@
 'use strict';
 
-const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
+const { sql: defaultSql } = require('../config/database');
 
 const PAGE_SIZE = 20;
 
@@ -55,55 +55,53 @@ const ASSESSMENT_QUEUE_CTE = `WITH LatestAssessment AS (
     WHERE annual.intake_status <> 'legacy'
   )`;
 
-function createFinanceAssessmentQueueService({ getPool = defaultGetPool, sql = defaultSql, getReadiness } = {}) {
+function createFinanceAssessmentQueueService({
+  sql = defaultSql, withFinanceQueueSnapshot
+} = {}) {
   async function list(actorId, rawFilters = {}) {
     const filters = parseAssessmentQueueFilters(rawFilters);
     if (!Number.isSafeInteger(Number(actorId)) || Number(actorId) < 1) {
       throw new FinanceAssessmentQueueError('Finance access is required.', 403);
     }
-    const pool = await getPool();
-    const actor = await pool.request().input('actorId', sql.Int, Number(actorId))
-      .query(`SELECT id FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin')`);
-    if (!actor.recordset?.length) throw new FinanceAssessmentQueueError('Your Finance access is no longer active. Sign in again.', 403);
-    const schoolYearRows = await pool.request().query(`SELECT DISTINCT school_year FROM annual_enrollments
-      WHERE intake_status <> 'legacy' ORDER BY school_year DESC`);
-    const schoolYears = (schoolYearRows.recordset || []).map((row) => String(row.school_year));
-    if (filters.schoolYear && !schoolYears.includes(filters.schoolYear)) {
-      throw new FinanceAssessmentQueueError('Choose a school year with saved enrollments.');
-    }
-    const candidates = await pool.request().input('schoolYear', sql.NVarChar(20), filters.schoolYear)
-      .query(`${ASSESSMENT_QUEUE_CTE} SELECT annual_enrollment_id, student_id, school_year, grade_level,
-        voucher_code, intake_status, student_no, student_name, assessment_id, schedule_id, schedule_version,
-        assessed_voucher_code, has_finance_review, voucher_review_required
-        FROM AssessmentQueue WHERE (@schoolYear = '' OR school_year = @schoolYear)
-        ORDER BY school_year DESC, student_name, student_no, annual_enrollment_id`);
-    if (typeof getReadiness !== 'function') throw new Error('Finance assessment readiness is unavailable.');
-    const allRows = candidates.recordset || [];
-    // A saved review can become stale after an adjustment, exemption, or new fee.
-    // Use the same authoritative fingerprint check as Registrar before classifying
-    // a pending intake as approved. Bound concurrency to avoid a query burst.
-    for (let index = 0; index < allRows.length; index += 4) {
-      await Promise.all(allRows.slice(index, index + 4).map(async (row) => {
-        if (row.intake_status !== 'pending' || !row.assessment_id || !row.has_finance_review
-          || row.voucher_review_required) return;
-        const readiness = await getReadiness(Number(actorId), Number(row.annual_enrollment_id));
-        row.has_finance_review = readiness.reviewed ? 1 : 0;
-      }));
-    }
-    const pendingRows = allRows.filter((row) => row.intake_status === 'pending'
-      && (!row.assessment_id || !row.has_finance_review || row.voucher_review_required));
-    const approvedRows = allRows.filter((row) => row.assessment_id && row.has_finance_review
-      && !row.voucher_review_required);
-    const pendingCount = pendingRows.length;
-    const approvedCount = approvedRows.length;
-    const selectedRows = filters.view === 'pending' ? pendingRows : approvedRows;
-    const total = selectedRows.length;
-    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    const page = Math.min(filters.page, totalPages);
-    const rows = selectedRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-    return { filters: { ...filters, page }, schoolYears, counts: { pending: pendingCount, approved: approvedCount },
-      rows, pagination: { page, totalPages, total, from: total ? (page - 1) * PAGE_SIZE + 1 : 0,
-        to: Math.min(page * PAGE_SIZE, total) } };
+    if (typeof withFinanceQueueSnapshot !== 'function') throw new Error('Finance assessment queue snapshot is unavailable.');
+    return withFinanceQueueSnapshot(Number(actorId), async ({ transaction, classifyReadiness }) => {
+      if (!transaction?.request || typeof classifyReadiness !== 'function') {
+        throw new Error('Finance assessment queue snapshot is incomplete.');
+      }
+      const schoolYearRows = await transaction.request().query(`SELECT DISTINCT school_year FROM annual_enrollments
+        WHERE intake_status <> 'legacy' ORDER BY school_year DESC`);
+      const schoolYears = (schoolYearRows.recordset || []).map((row) => String(row.school_year));
+      if (filters.schoolYear && !schoolYears.includes(filters.schoolYear)) {
+        throw new FinanceAssessmentQueueError('Choose a school year with saved enrollments.');
+      }
+      const candidates = await transaction.request().input('schoolYear', sql.NVarChar(20), filters.schoolYear)
+        .query(`${ASSESSMENT_QUEUE_CTE} SELECT annual_enrollment_id, student_id, school_year, grade_level,
+          voucher_code, intake_status, student_no, student_name, assessment_id, schedule_id, schedule_version,
+          assessed_voucher_code, has_finance_review, voucher_review_required
+          FROM AssessmentQueue WHERE (@schoolYear = '' OR school_year = @schoolYear)
+          ORDER BY school_year DESC, student_name, student_no, annual_enrollment_id`);
+      const allRows = candidates.recordset || [];
+      const readinessRows = allRows.filter((row) => row.intake_status === 'pending' && row.assessment_id
+        && Number(row.has_finance_review) === 1 && !row.voucher_review_required);
+      const reviewedById = await classifyReadiness(readinessRows);
+      for (const row of readinessRows) {
+        row.has_finance_review = reviewedById.get(Number(row.annual_enrollment_id)) ? 1 : 0;
+      }
+      const pendingRows = allRows.filter((row) => row.intake_status === 'pending'
+        && (!row.assessment_id || !row.has_finance_review || row.voucher_review_required));
+      const approvedRows = allRows.filter((row) => row.assessment_id && row.has_finance_review
+        && !row.voucher_review_required);
+      const pendingCount = pendingRows.length;
+      const approvedCount = approvedRows.length;
+      const selectedRows = filters.view === 'pending' ? pendingRows : approvedRows;
+      const total = selectedRows.length;
+      const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      const page = Math.min(filters.page, totalPages);
+      const rows = selectedRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+      return { filters: { ...filters, page }, schoolYears, counts: { pending: pendingCount, approved: approvedCount },
+        rows, pagination: { page, totalPages, total, from: total ? (page - 1) * PAGE_SIZE + 1 : 0,
+          to: Math.min(page * PAGE_SIZE, total) } };
+    });
   }
   return { list };
 }
