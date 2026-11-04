@@ -204,7 +204,14 @@
       indicator.setAttribute('aria-current', current ? 'step' : 'false');
     });
     form.dataset.activeStep = String(activeStep);
-    if (focus) panels.find((panel) => Number(panel.dataset.stepPanel) === activeStep)?.querySelector('h2')?.focus();
+    if (focus) {
+      const heading = panels.find((panel) => Number(panel.dataset.stepPanel) === activeStep)?.querySelector('h2');
+      if (heading) {
+        heading.setAttribute('tabindex', '-1');
+        heading.focus({ preventScroll: true });
+        heading.scrollIntoView({ block: 'start', behavior: 'instant' });
+      }
+    }
   };
 
   form.querySelectorAll('[data-step-next]').forEach((button) => button.addEventListener('click', () => {

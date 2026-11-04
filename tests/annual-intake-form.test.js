@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-test('birth date is required only for new annual intake and stays required after new/returning toggles', () => {
+function setupWizard() {
   const listeners = new Map();
   const control = (id, value = '') => ({
     id, value, required: false, disabled: false, dataset: {}, options: [], selectedOptions: [],
@@ -38,12 +38,31 @@ test('birth date is required only for new annual intake and stays required after
     ['annual-common-section-field', { hidden: false }], [commonSection.id, commonSection],
     ['annual-section-plan-preview', { replaceChildren() {} }]
   ]);
+  const calls = [];
+  let invalid = null;
+  const panels = [1, 2, 3].map((number) => ({
+    dataset: { stepPanel: String(number) }, hidden: false,
+    querySelector() { return this.heading; },
+    heading: {
+      setAttribute(name, value) { calls.push(['attribute', number, name, value]); },
+      focus(options) { calls.push(['focus', number, { ...options }]); },
+      scrollIntoView(options) { calls.push(['scroll', number, { ...options }]); }
+    }
+  }));
+  const buttons = (name, panelList) => panelList.map((panel) => ({
+    closest() { return panel; },
+    addEventListener(type, handler) { listeners.set(`${name}:${panel.dataset.stepPanel}`, handler); }
+  }));
+  const next = buttons('next', panels.slice(0, 2));
+  const back = buttons('back', panels.slice(1));
   const form = {
     dataset: { activeStep: '1' },
     noValidate: false,
     querySelector: () => null,
-    querySelectorAll: () => [],
-    addEventListener() {}
+    querySelectorAll(selector) {
+      return ({ '[data-step-panel]': panels, '[data-step-next]': next, '[data-step-back]': back })[selector] || [];
+    },
+    addEventListener(type, handler) { listeners.set(`form:${type}`, handler); }
   };
   const document = {
     querySelector(selector) { return selector === '[data-intake-wizard]' ? form : null; },
@@ -55,10 +74,15 @@ test('birth date is required only for new annual intake and stays required after
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/js/annual-intake-form.js'), 'utf8'), {
     document,
     window: { ARKTIESIISProfileValidation: {
-      validateControl() {}, firstInvalidControl() { return null; }, focusInvalidControl() {}
+      validateControl() {}, firstInvalidControl() { return invalid; }, focusInvalidControl(field) { calls.push(['invalid', field]); }
     } }
   });
 
+  return { birthDate, elements, mode, listeners, calls, panels, form, setInvalid(value) { invalid = value; } };
+}
+
+test('birth date is required only for new annual intake and stays required after new/returning toggles', () => {
+  const { birthDate, elements, mode, listeners } = setupWizard();
   assert.equal(birthDate.required, true);
   assert.match(elements.get('annual-birth-date-requirement').textContent, /required for first account activation/i);
   mode.value = 'returning';
@@ -68,6 +92,32 @@ test('birth date is required only for new annual intake and stays required after
   mode.value = 'new';
   listeners.get('annual-student-mode:change')();
   assert.equal(birthDate.required, true);
+});
+
+
+test('valid next and back transitions focus and immediately scroll to the new step heading', () => {
+  const { calls, listeners, panels, form } = setupWizard();
+  assert.deepEqual(calls, [], 'initial render leaves the scroll position alone');
+  for (const [button, step] of [['next:1', 2], ['next:2', 3], ['back:3', 2], ['back:2', 1]]) {
+    calls.length = 0;
+    listeners.get(button)();
+    assert.equal(form.dataset.activeStep, String(step));
+    assert.deepEqual(panels.map(panel => panel.hidden), [1, 2, 3].map(number => number !== step));
+    assert.deepEqual(calls, [
+      ['attribute', step, 'tabindex', '-1'],
+      ['focus', step, { preventScroll: true }],
+      ['scroll', step, { block: 'start', behavior: 'instant' }]
+    ], 'immediate scrolling works without animation under reduced motion too');
+  }
+});
+
+test('invalid Continue keeps the current step and focuses its validation error', () => {
+  const { calls, listeners, form, setInvalid } = setupWizard();
+  const field = { id: 'invalid-field' };
+  setInvalid(field);
+  listeners.get('next:1')();
+  assert.equal(form.dataset.activeStep, '1');
+  assert.deepEqual(calls, [['invalid', field]]);
 });
 
 test('paper count defaults only fill pristine configured fields and survive edits, zero, toggles, and recovered forms', () => {
