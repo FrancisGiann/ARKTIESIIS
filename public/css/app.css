@@ -1131,9 +1131,13 @@ label { font-size: 0.84rem; }
 .home-hero { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); }
 .home-visual { grid-area: 1 / 1; position: relative; width: 100%; height: min(clamp(25rem, 47vw, 39rem), 66vh); min-height: 25rem; margin: 0; overflow: hidden; background: #243b46; }
 .home-visual img { display: block; width: 100%; max-width: none; height: 100%; object-fit: cover; object-position: center 54%; }
-.home-hero__copy { z-index: 1; grid-area: 1 / 1; align-self: end; width: min(40rem, calc(100% - 3rem)); padding: clamp(1.4rem, 3.5vw, 2.5rem); margin: 0 0 clamp(1rem, 3.6vw, 3rem) max(1.5rem, calc((100vw - var(--content-width)) / 2)); background: var(--surface); border-top: 0.25rem solid var(--accent); }
-.home-hero h1 { max-width: 13ch; margin-bottom: 0.75rem; font-size: clamp(2.4rem, 4.2vw, 3.6rem); font-weight: 790; line-height: 1.03; letter-spacing: -0.035em; }
-.home-hero__copy > p:first-of-type { max-width: 46ch; margin-bottom: 0; line-height: 1.6; }
+.home-hero__copy { z-index: 1; grid-area: 1 / 1; align-self: end; width: min(38rem, calc(100% - 3rem)); padding: clamp(1.5rem, 3vw, 2rem); margin: 0 0 clamp(1rem, 3.6vw, 3rem) max(1.5rem, calc((100vw - var(--content-width)) / 2)); background: var(--surface); border-top: 0.25rem solid var(--accent); }
+.home-hero h1 { max-width: none; margin: 0; font-size: clamp(1.75rem, 3vw, 2.6rem); font-weight: 760; line-height: 1.12; letter-spacing: -0.025em; }
+.home-hero__school { display: block; max-width: 22ch; text-wrap: balance; }
+.home-hero__identity { display: block; margin-top: 0.5rem; font-size: clamp(1rem, 1.5vw, 1.2rem); font-weight: 550; line-height: 1.4; letter-spacing: 0; }
+.home-hero__copy > .home-hero__eyebrow { margin: 0 0 0.65rem; color: var(--accent); font-size: 0.85rem; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; }
+.home-hero__copy > .home-hero__branch { margin: 0.65rem 0 1.1rem; color: var(--muted); font-size: 0.85rem; font-weight: 650; }
+.home-hero__copy > p:not([class]) { max-width: 48ch; margin: 0; line-height: 1.6; }
 .home-hero__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1.15rem; margin-top: 1.15rem; }
 .home-sign-in { min-height: 3rem; margin: 0; padding-inline: 1.2rem; }
 .home-hero__secondary { display: inline-flex; min-height: 2.8rem; align-items: center; font-weight: 700; }
@@ -1480,7 +1484,7 @@ label { font-size: 0.84rem; }
   .home-hero { grid-template-rows: auto auto; }
   .home-visual { grid-column: 1; grid-row: 1; height: min(38svh, 24rem); min-height: 15rem; }
   .home-hero__copy { grid-column: 1; grid-row: 2; align-self: start; width: calc(100% - 2rem); padding: 1.3rem; margin: -2rem auto 0; }
-  .home-hero h1 { max-width: 17ch; font-size: clamp(2.25rem, 7vw, 3.15rem); }
+  .home-hero h1 { max-width: none; font-size: clamp(1.75rem, 5.5vw, 2.4rem); }
   .home-hero__actions { gap: 0.35rem 0.85rem; }
   .home-moment, .home-documents__copy { grid-template-columns: 1fr; gap: 1rem; }
   .home-school-day { padding-block: 3.2rem; }
@@ -3813,4 +3817,16 @@ details > summary { min-height: 2.75rem; }
   .annual-management-page > .dashboard-heading .admin-heading-actions .button { width: 100%; justify-content: center; }
   .finance-assessment-tabs .button { flex: 1 1 10rem; justify-content: center; }
   .finance-assessment-filters .field { flex: 1 1 100%; }
+}
+
+/* Keep the school identity compact without obscuring the campus at narrower widths. */
+@media (max-width: 900px) {
+  .home-hero { grid-template-rows: auto auto; }
+  .home-visual { grid-column: 1; grid-row: 1; height: clamp(15rem, 38vw, 20rem); min-height: 15rem; }
+  .home-hero__copy { grid-column: 1; grid-row: 2; align-self: start; width: min(38rem, calc(100% - 2rem)); padding: 1.5rem; margin: -1.5rem auto 0; }
+  .home-hero h1 { max-width: none; font-size: clamp(1.65rem, 5.5vw, 2.1rem); }
+}
+@media (max-width: 420px) {
+  .home-hero__copy { padding: 1.2rem; }
+  .home-hero__identity { font-size: 1rem; }
 }
