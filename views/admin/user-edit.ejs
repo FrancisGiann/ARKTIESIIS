@@ -42,7 +42,7 @@
 
   <section class="admin-form-section admin-account-form-section" aria-labelledby="account-settings-title">
     <h2 id="account-settings-title">Account settings</h2>
-    <form class="form-stack admin-form admin-user-form" method="post" action="/admin/users/<%= user.id %>" data-account-role-form data-submitting-message="Saving the account. Please wait.">
+    <form class="form-stack admin-form admin-user-form" method="post" action="/admin/users/<%= user.id %>" data-account-role-form data-profile-validation data-submitting-message="Saving the account. Please wait.">
       <input type="hidden" name="_csrf" value="<%= csrfToken %>">
       <div class="admin-form-grid">
         <div class="field">
@@ -65,11 +65,11 @@
         <div class="admin-form-grid">
           <div class="field" data-staff-profile <%= user.role === 'student' ? 'hidden' : '' %>>
             <label for="first-name">First name (staff)</label>
-            <input id="first-name" name="firstName" type="text" maxlength="100" autocomplete="given-name" <%= user.role === 'student' ? 'disabled' : '' %> value="<%= user.first_name || '' %>">
+            <input id="first-name" name="firstName" type="text" autocomplete="given-name" pattern="\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?(?:\s+\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?)*" title="Use letters; spaces, hyphens, apostrophes, and initials are allowed." required <%= user.role === 'student' ? 'disabled' : '' %> value="<%= user.first_name || '' %>">
           </div>
           <div class="field" data-staff-profile <%= user.role === 'student' ? 'hidden' : '' %>>
             <label for="last-name">Last name (staff)</label>
-            <input id="last-name" name="lastName" type="text" maxlength="100" autocomplete="family-name" <%= user.role === 'student' ? 'disabled' : '' %> value="<%= user.last_name || '' %>">
+            <input id="last-name" name="lastName" type="text" autocomplete="family-name" pattern="\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?(?:\s+\p{L}[\p{L}\p{M}]*(?:[.\x2d'’][\p{L}\p{M}]+)*\.?)*" title="Use letters; spaces, hyphens, apostrophes, and initials are allowed." required <%= user.role === 'student' ? 'disabled' : '' %> value="<%= user.last_name || '' %>">
           </div>
           <div class="field" data-staff-profile <%= user.role === 'student' ? 'hidden' : '' %>>
             <label for="department">Department (staff, optional)</label>
@@ -117,4 +117,5 @@
   </section><% } else { %><p class="field-help">An administrator password reset is available after the recipient finishes account setup.</p><% } %>
 </main>
 <script src="/js/admin-user-role-fields.js" defer></script>
+<script src="/js/student-profile-validation.js" defer></script>
 <%- include('../partials/foot') %>

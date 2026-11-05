@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const bcrypt = require('bcrypt');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
+const { validateName, StudentRecordsError } = require('./studentRecordsService');
 
 const PASSWORD_HASH_ROUNDS = 12;
 const STAFF_ROLES = new Set(['database_admin', 'registrar', 'front_desk', 'finance', 'teacher']);
@@ -31,6 +32,15 @@ function textValue(value, maxLength) {
   if (typeof value !== 'string') return '';
   const text = value.trim();
   return text.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(text) ? text : null;
+}
+
+function staffName(value, label) {
+  try {
+    return validateName(value, label, { required: true, maxLength: 100 });
+  } catch (error) {
+    if (error instanceof StudentRecordsError) throw new AdminServiceError(error.message);
+    throw error;
+  }
 }
 
 function normalizeUserId(value) {
@@ -119,12 +129,10 @@ function validateCreateUser(input = {}) {
     return { email, role, studentNo };
   }
 
-  const firstName = textValue(input.firstName, 100);
-  const lastName = textValue(input.lastName, 100);
+  const firstName = staffName(input.firstName, 'First name');
+  const lastName = staffName(input.lastName, 'Last name');
   const department = textValue(input.department, 100);
-  if (!firstName || !lastName || department === null) {
-    throw new AdminServiceError('First and last names are required. Department must be 100 characters or fewer.');
-  }
+  if (department === null) throw new AdminServiceError('Department must be 100 characters or fewer.');
   return { email, role, firstName, lastName, department: department || null };
 }
 
@@ -149,12 +157,10 @@ function validateUpdateUser(input = {}) {
     return { email, role, isActive, studentNo };
   }
 
-  const firstName = textValue(input.firstName, 100);
-  const lastName = textValue(input.lastName, 100);
+  const firstName = staffName(input.firstName, 'First name');
+  const lastName = staffName(input.lastName, 'Last name');
   const department = textValue(input.department, 100);
-  if (!firstName || !lastName || department === null) {
-    throw new AdminServiceError('First and last names are required. Department must be 100 characters or fewer.');
-  }
+  if (department === null) throw new AdminServiceError('Department must be 100 characters or fewer.');
   return { email, role, isActive, firstName, lastName, department: department || null };
 }
 

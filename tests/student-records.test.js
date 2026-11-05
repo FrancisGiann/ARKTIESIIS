@@ -288,6 +288,9 @@ test('student record, term, section, and enrollment inputs are bounded and valid
   assert.equal(validNamesAndContacts.sex, 'Male');
   assert.equal(validNamesAndContacts.phone, '+63 (917) 123-4567');
   assert.equal(validNamesAndContacts.address, '123 Main Street\nLucena City');
+  const leadingZeroLrn = validateStudent({ studentNo: 'S-ZERO', lrn: '000000000001', firstName: 'Jose\u0301', lastName: 'O’Neill' });
+  assert.equal(leadingZeroLrn.lrn, '000000000001', 'LRNs remain strings so leading zeroes are preserved');
+  assert.equal(leadingZeroLrn.firstName, 'Jose\u0301', 'decomposed Unicode accents are preserved');
   assert.equal(validateStudent({ studentNo: 'S-1', lrn: '123456789012', firstName: 'Alex', lastName: 'Lee',
     phone: '(02) 8123-4567', address: '12B, St. John Street' }).phone, '(02) 8123-4567');
   for (const [field, value, message] of [
@@ -362,6 +365,16 @@ test('empty, whitespace-only, and placeholder student and return-evaluation subm
 
   assert.throws(() => evaluationInput({}), ReadmissionError);
   assert.throws(() => evaluationInput({ applicantLrn: '  ' }), /Applicant LRN is required/);
+  assert.equal(evaluationInput({ applicantLrn: '000000000001', schoolYear: '2026-2027', targetGradeLevel: 'Grade 11',
+    firstName: 'Jose\u0301', middleName: '', lastName: 'O’Neill',
+    priorProgress: 'Synthetic progress', evidenceReviewed: 'Synthetic evidence',
+    curriculumComparison: 'Synthetic curriculum review', requiredSubjects: 'Synthetic subject review' }).applicantLrn, '000000000001');
+  assert.throws(() => evaluationInput({ applicantLrn: '000000000001', schoolYear: '2026-2027', targetGradeLevel: 'Grade 11',
+    firstName: 'Alex123', middleName: '', lastName: 'O’Neill' }), /First name.*letters/);
+  assert.throws(() => evaluationInput({ applicantLrn: '00000000001', schoolYear: '2026-2027', targetGradeLevel: 'Grade 11',
+    firstName: 'Alex', lastName: 'O’Neill' }), /exactly 12 digits/);
+  assert.throws(() => evaluationInput({ applicantLrn: '000000000001X', schoolYear: '2026-2027', targetGradeLevel: 'Grade 11',
+    firstName: 'Alex', lastName: 'O’Neill' }), /Applicant LRN is required.*12 printable characters or fewer/);
   assert.throws(() => evaluationInput({
     applicantLrn: '123456789012', schoolYear: '2026-2027', targetGradeLevel: 'Select a grade',
     firstName: 'Alex', lastName: 'Lee'

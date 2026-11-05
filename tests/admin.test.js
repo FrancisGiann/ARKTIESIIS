@@ -137,7 +137,14 @@ test('admin account input validation rejects invalid email, role, names, and stu
   assert.deepEqual(validateCreateUser({ email: 'a@example.edu', role: 'registrar', password: 'short', firstName: 'A', lastName: 'B' }), {
     email: 'a@example.edu', role: 'registrar', firstName: 'A', lastName: 'B', department: null
   });
-  assert.throws(() => validateUpdateUser({ email: 'a@example.edu', role: 'finance', isActive: '1', firstName: 'bad\nname', lastName: 'B' }), /First and last names/);
+  assert.throws(() => validateUpdateUser({ email: 'a@example.edu', role: 'finance', isActive: '1', firstName: 'bad\nname', lastName: 'B' }), /First name is required/);
+  for (const name of ['Alex123', 'Lee@#']) {
+    assert.throws(() => validateCreateUser({ email: 'a@example.edu', role: 'teacher', firstName: name, lastName: 'Lee' }), /letters/);
+    assert.throws(() => validateUpdateUser({ email: 'a@example.edu', role: 'teacher', isActive: '1', firstName: 'Alex', lastName: name }), /letters/);
+  }
+  assert.deepEqual(validateCreateUser({ email: 'a@example.edu', role: 'teacher', firstName: 'Jose\u0301', lastName: 'O’Neill', department: 'Admissions 204' }), {
+    email: 'a@example.edu', role: 'teacher', firstName: 'Jose\u0301', lastName: 'O’Neill', department: 'Admissions 204'
+  }, 'Unicode names are preserved while department strings keep their separate rules');
 });
 
 test('empty and whitespace account submissions cannot create staff or student accounts', () => {

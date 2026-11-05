@@ -16,6 +16,7 @@ const { comparePreEnrollmentProfile, PROFILE_REVIEW_GROUPS } = require('../src/u
 const { PROGRAM_CATALOG } = require('../src/utils/paperProgramCatalog');
 const { initialize: initializeAddressCopy } = require('../public/js/pre-enrollment-address-copy');
 const { initialize: initializeReadmissionEvaluation } = require('../public/js/pre-enrollment-readmission');
+const { initialize: initializeDateValidation } = require('../public/js/pre-enrollment-date-validation');
 
 function readyInput(overrides = {}) {
   return {
@@ -46,6 +47,19 @@ test('pre-enrollment validates supplied paper data, ready requirements, school y
   assert.throws(() => normalizeRecord(readyInput({ schoolYear: '2027-2029' })), /consecutive years/);
   assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'unknown' }), /Choose Draft or Ready/);
   assert.throws(() => normalizeRecord(readyInput({ studentContactNumber: '+63 (917' })), /valid phone format/);
+  const unicodeAndInternationalContact = normalizeRecord(readyInput({
+    firstName: 'Jose\u0301', middleName: '', lastName: 'O’Neill de la Cruz', lrn: '000000000001',
+    studentContactNumber: '+63 (917) 123-4567', profilePhone: '+44 20 7946 0958'
+  }));
+  assert.equal(unicodeAndInternationalContact.firstName, 'Jose\u0301');
+  assert.equal(unicodeAndInternationalContact.middleName, null, 'optional middle names remain blank');
+  assert.equal(unicodeAndInternationalContact.lastName, 'O’Neill de la Cruz');
+  assert.equal(unicodeAndInternationalContact.lrn, '000000000001');
+  assert.equal(unicodeAndInternationalContact.profilePhone, '+44 20 7946 0958');
+  assert.throws(() => normalizeRecord(readyInput({ studentContactNumber: 'Call 09171234567' })), /digits and may include/);
+  assert.throws(() => normalizeRecord(readyInput({ middleName: 'Mae2' })), /Middle name.*letters/);
+  assert.throws(() => normalizeRecord(readyInput({ lastName: 'Lee@#' })), /Last name.*letters/);
+  assert.throws(() => normalizeRecord(readyInput({ lrn: '000000000001X' })), /lrn/i);
   assert.throws(() => normalizeRecord(readyInput({ lrn: '1234' })), /12-digit LRN/);
   assert.throws(() => normalizeRecord(readyInput({ studentSignedDate: '' })), /signature date/);
   assert.throws(() => normalizeRecord(readyInput({ status: 'enrollment_started' })), /Choose Draft or Ready/);
@@ -87,6 +101,11 @@ test('drafts defer completion but validate every supplied field and Ready errors
     assert.equal(error.field, 'lrn');
     return /digits only/.test(error.message);
   });
+  assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', firstName: 'Alex123' }), (error) => {
+    assert.equal(error.field, 'firstName');
+    return /First name.*letters/.test(error.message);
+  }, 'Drafts may be incomplete but supplied names still use strict validation');
+  assert.throws(() => normalizeRecord(readyInput({ lrn: '01234567890' })), /12-digit LRN/);
   assert.throws(() => normalizeRecord(readyInput({ firstName: '', email: '' })), (error) => {
     assert.deepEqual(error.fields, ['firstName', 'email']);
     return /Complete the paper form/.test(error.message);
@@ -233,6 +252,90 @@ test('pre-enrollment optional birth date is blank or before the current Manila d
   assert.equal(normalizeRecord({ schoolYear: '2027-2028', status: 'draft', firstName: 'Ari', birthDate: priorDate }).birthDate, priorDate);
   assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', firstName: 'Ari', birthDate: today }), /Birth date must be before today/);
   assert.throws(() => normalizeRecord({ schoolYear: '2027-2028', status: 'draft', firstName: 'Ari', birthDate: nextDate }), /Birth date must be before today/);
+});
+
+test('optional pre-enrollment dates reject letters and impossible days while allowing blanks and real calendar dates', () => {
+  const base = { schoolYear: '2027-2028', status: 'draft', firstName: 'Ari' };
+  for (const field of ['studentSignedDate', 'receivedDate', 'birthDate']) {
+    for (const value of ['letters', '2026-02-30', '2023-02-29']) {
+      assert.throws(() => normalizeRecord({ ...base, [field]: value }), /valid calendar date/,
+        `${field} rejects ${value}`);
+    }
+  }
+  assert.equal(normalizeRecord({ ...base, studentSignedDate: '', receivedDate: '', birthDate: '' }).status, 'draft');
+  assert.equal(normalizeDate('2024-02-29', 'Date received'), '2024-02-29');
+  assert.equal(normalizeDate('2024-01-01', 'Date received'), '2024-01-01');
+  assert.equal(normalizeDate('2024-12-31', 'Date received'), '2024-12-31');
+  assert.throws(() => normalizeDate('2026-02-30', 'Date received'), /valid calendar date/);
+});
+
+test('pre-enrollment date UI blocks native bad input and range overflow while preserving optional blanks', () => {
+  function makeForm({ badInput = false, rangeOverflow = false, disabled = false, value = '' } = {}) {
+    const listeners = new Map();
+    const dateControl = {
+      validity: { badInput, rangeOverflow }, value, disabled, customValidity: '', focused: false, reported: false,
+      addEventListener(type, callback) { listeners.set(`date:${type}`, callback); },
+      setCustomValidity(message) { this.customValidity = message; },
+      checkValidity() {
+        return this.disabled || (!this.validity.badInput && !this.validity.rangeOverflow && !this.customValidity);
+      },
+      focus() { this.focused = true; }, reportValidity() { this.reported = true; }
+    };
+    const form = {
+      noValidate: true,
+      querySelectorAll(selector) { assert.equal(selector, 'input[type="date"]'); return [dateControl]; },
+      addEventListener(type, callback) { listeners.set(`form:${type}`, callback); }
+    };
+    initializeDateValidation(form);
+    return { form, dateControl, listeners };
+  }
+
+  const partialDate = makeForm({ badInput: true });
+  partialDate.listeners.get('date:input')();
+  assert.match(partialDate.dateControl.customValidity, /complete, valid date/);
+  const invalidSubmit = { prevented: false, preventDefault() { this.prevented = true; } };
+  partialDate.listeners.get('form:submit')(invalidSubmit);
+  assert.equal(invalidSubmit.prevented, true);
+  assert.equal(partialDate.dateControl.focused, true);
+  assert.equal(partialDate.dateControl.reported, true);
+  assert.equal(partialDate.form.noValidate, true, 'draft form keeps its custom completion flow');
+
+  partialDate.dateControl.validity.badInput = false;
+  partialDate.dateControl.value = '2024-02-29';
+  partialDate.listeners.get('date:input')();
+  assert.equal(partialDate.dateControl.customValidity, '', 'correcting a partial value clears the error');
+  const correctedSubmit = { prevented: false, preventDefault() { this.prevented = true; } };
+  partialDate.listeners.get('form:submit')(correctedSubmit);
+  assert.equal(correctedSubmit.prevented, false, 'a corrected leap-day value can submit');
+
+  const clearedPartialDate = makeForm({ badInput: true });
+  clearedPartialDate.listeners.get('date:input')();
+  clearedPartialDate.dateControl.validity.badInput = false;
+  clearedPartialDate.dateControl.value = '';
+  clearedPartialDate.listeners.get('date:change')();
+  assert.equal(clearedPartialDate.dateControl.customValidity, '', 'clearing the control removes the partial-entry error');
+  const clearedSubmit = { prevented: false, preventDefault() { this.prevented = true; } };
+  clearedPartialDate.listeners.get('form:submit')(clearedSubmit);
+  assert.equal(clearedSubmit.prevented, false, 'a truly blank optional date remains allowed on a Draft');
+
+  const maxDate = makeForm({ rangeOverflow: true, value: '2026-11-06' });
+  const overflowSubmit = { prevented: false, preventDefault() { this.prevented = true; } };
+  maxDate.listeners.get('form:submit')(overflowSubmit);
+  assert.equal(overflowSubmit.prevented, true, 'native max range remains enforced despite novalidate');
+  assert.equal(maxDate.dateControl.reported, true);
+
+  const disabledDate = makeForm({ badInput: true, disabled: true });
+  const disabledSubmit = { prevented: false, preventDefault() { this.prevented = true; } };
+  disabledDate.listeners.get('form:submit')(disabledSubmit);
+  assert.equal(disabledSubmit.prevented, false, 'disabled native controls remain barred from validation');
+
+  for (const value of ['', '2024-02-29', '1000-01-01']) {
+    const validDate = makeForm({ value });
+    const submit = { prevented: false, preventDefault() { this.prevented = true; } };
+    validDate.listeners.get('form:submit')(submit);
+    assert.equal(submit.prevented, false, `${JSON.stringify(value)} remains valid or intentionally blank`);
+    assert.equal(validDate.dateControl.customValidity, '');
+  }
 });
 
 test('return evaluation is required only for readmission and its selection survives status changes', () => {
@@ -891,6 +994,8 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.match(newFormHtml, /src="\/js\/pre-enrollment-address-copy\.js" defer/);
     assert.match(newFormHtml, /data-readmission-evaluation-field/);
     assert.match(newFormHtml, /data-pre-enrollment-form/);
+    assert.match(newFormHtml, /data-pre-enrollment-date-validation/);
+    assert.match(newFormHtml, /src="\/js\/pre-enrollment-date-validation\.js" defer/);
     assert.match(newFormHtml, /novalidate/);
     assert.match(newFormHtml, /Save an incomplete Draft after entering at least one applicant detail or marking a paper item received; an empty form cannot be saved/);
     assert.match(newFormHtml, /name="status" value="draft">Save draft/);
@@ -974,7 +1079,9 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.match(readyFailureHtml, /href="#pre-last" data-error-target="lastName">Last name/);
     assert.match(readyFailureHtml, /href="#pre-lrn" data-error-target="lrn">LRN/);
     assert.match(readyFailureHtml, /data-unsaved-initially-dirty="true"/);
-    assert.match(readyFailureHtml, /id="pre-first" name="firstName" maxlength="100" value="Recovered first name"/);
+    const recoveredFirstName = readyFailureHtml.match(/<input id="pre-first"[^>]*>/)?.[0] || '';
+    assert.match(recoveredFirstName, /value="Recovered first name"/);
+    assert.doesNotMatch(recoveredFirstName, /\bmaxlength=/, 'invalid name text is shown intact instead of being truncated');
     assert.match(readyFailureHtml, /<details class="pre-enrollment-optional-details" data-pre-enrollment-optional-profile>/,
       'required-field Ready errors do not expand unrelated optional details');
     assert.match(readyFailureHtml, /<details class="pre-enrollment-optional-details" data-pre-enrollment-receipts>/,
@@ -989,8 +1096,9 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.match(invalidOptionalProfileHtml, /href="#pre-profile-phone" data-error-target="profilePhone">Phone/);
     assert.match(invalidOptionalProfileHtml, /data-pre-enrollment-optional-profile open/,
       'a format error in optional profile data expands the section containing the error');
-    assert.match(invalidOptionalProfileHtml, /id="pre-profile-phone" name="profilePhone" type="tel" maxlength="50" value="not a phone"/,
-      'failed optional profile input remains available for correction');
+    const recoveredProfilePhone = invalidOptionalProfileHtml.match(/<input id="pre-profile-phone"[^>]*>/)?.[0] || '';
+    assert.match(recoveredProfilePhone, /value="not a phone"/, 'failed optional profile input remains available for correction');
+    assert.doesNotMatch(recoveredProfilePhone, /\bmaxlength=/, 'invalid phone text remains intact instead of being truncated');
     assert.match(invalidOptionalProfileHtml, /<details class="pre-enrollment-optional-details" data-pre-enrollment-receipts>/,
       'a profile error does not expand the neighboring receipt checklist');
     const invalidOptionalReceipt = await fetch(`${origin}/pre-enrollments`, {
@@ -1116,8 +1224,9 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.match(staleCorrectionHtml, /href="\/pre-enrollments\/a342bc01-2a68-4f19-a7fd-4d5bb1d83261\/edit">Reload latest record/);
     assert.match(staleCorrectionHtml, /name="version" value="1"/,
       'stale recovery retains the version that was submitted instead of silently rebasing to the latest record');
-    assert.match(staleCorrectionHtml, /id="pre-last" name="lastName" maxlength="100" value="stale-version"/,
-      'stale recovery retains the unsaved correction for staff review');
+    const staleLastName = staleCorrectionHtml.match(/<input id="pre-last"[^>]*>/)?.[0] || '';
+    assert.match(staleLastName, /value="stale-version"/, 'stale recovery retains the unsaved correction for staff review');
+    assert.doesNotMatch(staleLastName, /\bmaxlength=/);
     assert.match(staleCorrectionHtml, /data-unsaved-initially-dirty="true"/);
     assert.match(staleCorrectionHtml, /data-pre-enrollment-optional-profile open/,
       'a stale conflict without field links opens optional-profile details so recovered inputs are visible');

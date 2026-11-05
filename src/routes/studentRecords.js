@@ -45,11 +45,11 @@ const CLEARANCE_SCHEMA_UNAVAILABLE_MESSAGE = 'Paper-clearance status cannot be r
 function studentValues(input = {}) {
   return {
     studentNo: typeof input.studentNo === 'string' ? input.studentNo.slice(0, 50) : '',
-    lrn: typeof input.lrn === 'string' ? input.lrn.slice(0, 12) : '',
-    firstName: typeof input.firstName === 'string' ? input.firstName.slice(0, 100) : '',
-    middleName: typeof input.middleName === 'string' ? input.middleName.slice(0, 100) : '',
-    lastName: typeof input.lastName === 'string' ? input.lastName.slice(0, 100) : '',
-    suffix: typeof input.suffix === 'string' ? input.suffix.slice(0, 20) : '',
+    lrn: typeof input.lrn === 'string' ? input.lrn : '',
+    firstName: typeof input.firstName === 'string' ? input.firstName : '',
+    middleName: typeof input.middleName === 'string' ? input.middleName : '',
+    lastName: typeof input.lastName === 'string' ? input.lastName : '',
+    suffix: typeof input.suffix === 'string' ? input.suffix : '',
     birthDate: typeof input.birthDate === 'string' ? input.birthDate.slice(0, 10) : '',
     sex: typeof input.sex === 'string' ? input.sex.slice(0, 20) : '',
     address: typeof input.address === 'string' ? input.address.slice(0, 500) : '',
@@ -59,12 +59,12 @@ function studentValues(input = {}) {
     addressCity: typeof input.addressCity === 'string' ? input.addressCity.slice(0, 100) : '',
     addressProvince: typeof input.addressProvince === 'string' ? input.addressProvince.slice(0, 100) : '',
     addressZip: typeof input.addressZip === 'string' ? input.addressZip.slice(0, 4) : '',
-    phone: typeof input.phone === 'string' ? input.phone.slice(0, 50) : '',
+    phone: typeof input.phone === 'string' ? input.phone : '',
     birthplace: typeof input.birthplace === 'string' ? input.birthplace.slice(0, 160) : '',
     facebookName: typeof input.facebookName === 'string' ? input.facebookName.slice(0, 120) : '',
-    emergencyContactPerson: typeof input.emergencyContactPerson === 'string' ? input.emergencyContactPerson.slice(0, 160) : '',
+    emergencyContactPerson: typeof input.emergencyContactPerson === 'string' ? input.emergencyContactPerson : '',
     emergencyContactRelationship: typeof input.emergencyContactRelationship === 'string' ? input.emergencyContactRelationship.slice(0, 80) : '',
-    emergencyContactPhone: typeof input.emergencyContactPhone === 'string' ? input.emergencyContactPhone.slice(0, 50) : '',
+    emergencyContactPhone: typeof input.emergencyContactPhone === 'string' ? input.emergencyContactPhone : '',
     emergencyContactAddress: typeof input.emergencyContactAddress === 'string' ? input.emergencyContactAddress.slice(0, 500) : '',
     emergencyContactAddressMode: input.emergencyContactAddressMode === 'replace' ? 'replace' : 'preserve',
     emergencyContactAddressBlockLotStreetPurok: typeof input.emergencyContactAddressBlockLotStreetPurok === 'string' ? input.emergencyContactAddressBlockLotStreetPurok.slice(0, 200) : '',
@@ -72,10 +72,10 @@ function studentValues(input = {}) {
     emergencyContactAddressCity: typeof input.emergencyContactAddressCity === 'string' ? input.emergencyContactAddressCity.slice(0, 100) : '',
     emergencyContactAddressProvince: typeof input.emergencyContactAddressProvince === 'string' ? input.emergencyContactAddressProvince.slice(0, 100) : '',
     emergencyContactAddressZip: typeof input.emergencyContactAddressZip === 'string' ? input.emergencyContactAddressZip.slice(0, 4) : '',
-    motherName: typeof input.motherName === 'string' ? input.motherName.slice(0, 160) : '',
-    motherPhone: typeof input.motherPhone === 'string' ? input.motherPhone.slice(0, 50) : '',
-    fatherName: typeof input.fatherName === 'string' ? input.fatherName.slice(0, 160) : '',
-    fatherPhone: typeof input.fatherPhone === 'string' ? input.fatherPhone.slice(0, 50) : ''
+    motherName: typeof input.motherName === 'string' ? input.motherName : '',
+    motherPhone: typeof input.motherPhone === 'string' ? input.motherPhone : '',
+    fatherName: typeof input.fatherName === 'string' ? input.fatherName : '',
+    fatherPhone: typeof input.fatherPhone === 'string' ? input.fatherPhone : ''
   };
 }
 

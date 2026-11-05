@@ -21,12 +21,16 @@ function inputText(body, key, maxLength = 255) {
   return typeof body?.[key] === 'string' ? body[key].slice(0, maxLength) : '';
 }
 
+function inputName(body, key) {
+  return typeof body?.[key] === 'string' ? body[key] : '';
+}
+
 function formValues(body = {}) {
   return {
     email: inputText(body, 'email'),
     role: inputText(body, 'role', 30),
-    first_name: inputText(body, 'firstName', 100),
-    last_name: inputText(body, 'lastName', 100),
+    first_name: inputName(body, 'firstName'),
+    last_name: inputName(body, 'lastName'),
     department: inputText(body, 'department', 100),
     student_no: inputText(body, 'studentNo', 50),
     is_active: body.isActive === '1' || body.isActive === 'true'

@@ -73,3 +73,13 @@ The test suite uses mocked SQL/HTTP services for authorization and transaction f
 ## Database history
 
 `database/schema.sql`, `database/v2/`, and their SQL Server migrations are retained as inert history. For this MariaDB prototype, use only `database/mariadb/schema.sql`, `database/mariadb/migrations/`, `scripts/db-setup-v2.js`, and `scripts/check-db.js`. Never edit or rerun applied baselines/migrations to update an initialized database.
+
+## Password clipboard behavior
+
+Password inputs prevent native copy and cut, including while revealed. Paste,
+autofill, selection, focus, and context menus remain available. This is a UI
+deterrent, not a security boundary. New password visibility controls must retain
+`data-password-field` (or the existing `data-password-toggle`) when changing
+an input to text. The shared document listeners also cover dynamically added inputs.
+
+Run the clipboard regression tests with `node tests/password-clipboard.test.js`.
