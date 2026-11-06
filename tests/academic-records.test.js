@@ -313,6 +313,30 @@ test('own grades query is scoped through the authenticated account-to-student li
   assert.doesNotMatch(calls[0].statement, /studentId/);
 });
 
+test('academic student record query includes birthplace from the saved student profile', async () => {
+  const calls = [];
+  const student = { id: 10, student_no: 'S-10', first_name: 'Ari', birth_date: '2012-03-04', sex: 'Female', birthplace: 'Lucena City' };
+  const pool = {
+    request() {
+      const values = {};
+      return {
+        input(name, _type, value) { values[name] = value; return this; },
+        async query(statement) {
+          calls.push({ statement, values: { ...values } });
+          if (statement.includes('FROM students')) return { recordset: [student] };
+          return { recordset: [] };
+        }
+      };
+    }
+  };
+  const service = createAcademicRecordsService({ getPool: async () => pool, sql: fakeSql() });
+
+  const result = await service.getStudentAcademicRecord('10');
+
+  assert.equal(result.student.birthplace, 'Lucena City');
+  assert.match(calls.find(({ statement }) => statement.includes('FROM students')).statement, /birth_date, sex, birthplace, address/);
+});
+
 test('catalog reads follow role rules, mutations require CSRF, and rendered catalog values are escaped', async () => {
   let listReads = 0;
   const writes = [];
@@ -593,7 +617,7 @@ test('academic student view shows read-only grades and permits enrollment subjec
   const academicRecordsService = {
     async getStudentAcademicRecord() {
       return {
-        student: { id: 10, student_no: 'S-10', first_name: 'Ari', last_name: 'Lee', status: 'active' },
+        student: { id: 10, student_no: 'S-10', first_name: 'Ari', last_name: 'Lee', birth_date: '2012-03-04', sex: 'Female', birthplace: 'Lucena City', status: 'active' },
         subjects: [{ id: 4, subject_code: 'CS1', subject_name: 'Computer Science', units: 3 }],
         enrollments: [{
           id: 22, school_year: '2026-2027', term: 'Registrar label', is_current: true,
@@ -610,6 +634,9 @@ test('academic student view shows read-only grades and permits enrollment subjec
     const page = await fetch(`${baseUrl}/registrar/records/students/10/academic`, { headers: { cookie } });
     assert.equal(page.status, 200);
     const html = await page.text();
+    assert.match(html, /<dt>Birth date<\/dt><dd>2012-03-04<\/dd>/);
+    assert.match(html, /<dt>Gender<\/dt><dd>Female<\/dd>/);
+    assert.match(html, /<dt>Birthplace<\/dt><dd>Lucena City<\/dd>/);
     assert.match(html, /Enrollment history/);
     assert.match(html, /CS1 · Computer Science/);
     assert.match(html, /Registrar label/);

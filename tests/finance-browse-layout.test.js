@@ -844,6 +844,20 @@ test('finance annual roster separates page data, classification, and balances in
   assert.match(existingAssessmentPreviewHtml, /Confirm Finance review · keep existing charges/);
   assert.doesNotMatch(existingAssessmentPreviewHtml, /Confirm and post annual assessment/);
 
+  const assessmentErrorHtml = await renderFinanceView('annual-student', {
+    ...pendingReviewLocals, error: 'The assessment could not be prepared.',
+    preview: { parent: { id: 21, school_year: '2026-2027', grade_level: 'Grade 11', voucher_code: 'ESC' },
+      scheduleVersion: 4, existingAssessment: false, scheduleId: 4, lines: [], total: '40.00' }
+  });
+  const assessmentDialogHtml = assessmentErrorHtml.match(/<dialog class="finance-assessment-dialog"[\s\S]*?<\/dialog>/)?.[0];
+  assert.ok(assessmentDialogHtml, 'the assessment preview remains in its dialog during recoverable errors');
+  assert.match(assessmentDialogHtml, /data-assessment-preview-error[^>]*>The assessment could not be prepared\./,
+    'the recoverable server error is visible inside the open assessment dialog');
+  assert.doesNotMatch(assessmentDialogHtml, /<script>/, 'the test message remains escaped by EJS');
+  const previewScript = readFileSync(path.join(__dirname, '../public/js/finance-assessment-preview.js'), 'utf8');
+  assert.match(previewScript, /if \(previewError\) previewError\.focus\(\); else closeLink\?\.focus\(\);/,
+    'the dialog moves focus to a recoverable error when present');
+
   for (const action of ['adjustments', 'comments']) {
     const recoveryLocals = structuredClone(chargesLocals);
     recoveryLocals.failedAction = { path: `/students/22/annual/charges/83/${action}`, input: {} };
