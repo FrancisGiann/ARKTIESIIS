@@ -183,7 +183,7 @@ function createAcademicRecordsService({
     const studentResult = await pool.request()
       .input('studentId', sql.Int, studentId)
       .query(`SELECT id, student_no, first_name, middle_name, last_name, suffix,
-        birth_date, sex, address, phone, status
+        birth_date, sex, birthplace, address, phone, status
         FROM students WHERE id = @studentId`);
     const student = studentResult.recordset?.[0];
     if (!student) return null;
