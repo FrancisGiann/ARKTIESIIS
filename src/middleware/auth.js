@@ -59,6 +59,23 @@ function hasMatchingAuthFingerprint(expected, actual) {
   return expectedBytes.length === actualBytes.length && crypto.timingSafeEqual(expectedBytes, actualBytes);
 }
 
+function createPageSessionBinding(sessionId, sessionVersion, userId, secret) {
+  if (typeof sessionId !== 'string' || !sessionId || typeof sessionVersion !== 'string'
+    || !sessionVersion || !Number.isSafeInteger(userId) || userId < 1
+    || typeof secret !== 'string' || !secret) return null;
+  return crypto.createHmac('sha256', secret)
+    .update(`page-session\u0000${sessionId}\u0000${sessionVersion}\u0000${userId}`)
+    .digest('hex');
+}
+
+function hasMatchingPageSessionBinding(expected, actual) {
+  if (typeof expected !== 'string' || !/^[a-f0-9]{64}$/.test(expected)
+    || typeof actual !== 'string' || !/^[a-f0-9]{64}$/.test(actual)) return false;
+  const expectedBytes = Buffer.from(expected, 'hex');
+  const actualBytes = Buffer.from(actual, 'hex');
+  return expectedBytes.length === actualBytes.length && crypto.timingSafeEqual(expectedBytes, actualBytes);
+}
+
 function clearSessionCookie(res, environment = defaultEnvironment) {
   res.clearCookie('connect.sid', {
     httpOnly: true,
@@ -77,19 +94,32 @@ function destroySession(req, res, environment, callback) {
 
 function createRequireAuth({ getPool = defaultGetPool, sql = defaultSql, environment = defaultEnvironment } = {}) {
   return async function requireAuth(req, res, next) {
+    const requestPath = typeof req.path === 'string' ? req.path : req.originalUrl.split('?', 1)[0];
+    const normalizedPath = requestPath.toLowerCase().replace(/\/+$/, '') || '/';
+    const sessionCheckRequest = req.method === 'GET' && normalizedPath === '/session/check';
+    const historySessionEndRequest = req.method === 'POST' && normalizedPath === '/session/end-history';
+    const guardedSessionRequest = sessionCheckRequest || historySessionEndRequest;
+    const deny = () => sessionCheckRequest
+      ? res.status(401).set('Cache-Control', 'no-store').json({ valid: false })
+      : historySessionEndRequest
+        ? res.status(401).set('Cache-Control', 'no-store').json({ ended: true })
+        : res.redirect('/login');
+    const invalidateOrDeny = () => guardedSessionRequest
+      ? deny()
+      : destroySession(req, res, environment, deny);
     const userId = req.session?.userId;
-    if (!Number.isSafeInteger(userId) || userId < 1) return res.redirect('/login');
+    if (!Number.isSafeInteger(userId) || userId < 1) return deny();
 
     const developmentLogin = req.session.authLevel === 'password_only_dev';
     const demoPasswordLogin = req.session.authLevel === 'password_only_demo';
     const emailTwoFactorLogin = req.session.authLevel === 'email_2fa';
     if (developmentLogin && !isDevelopmentPasswordLoginEnabled(environment)) {
-      return destroySession(req, res, environment, () => res.redirect('/login'));
+      return invalidateOrDeny();
     }
     if (demoPasswordLogin && !isDemoPasswordOnlyLoginEnabled(environment)) {
-      return destroySession(req, res, environment, () => res.redirect('/login'));
+      return invalidateOrDeny();
     }
-    if (!developmentLogin && !demoPasswordLogin && !emailTwoFactorLogin) return res.redirect('/login');
+    if (!developmentLogin && !demoPasswordLogin && !emailTwoFactorLogin) return deny();
 
     try {
       const pool = await getPool();
@@ -100,45 +130,47 @@ function createRequireAuth({ getPool = defaultGetPool, sql = defaultSql, environ
 
       if (!user || !(user.is_active === true || user.is_active === 1)
         || user.invitation_required === true || user.invitation_required === 1) {
-        return destroySession(req, res, environment, () => res.redirect('/login'));
+        return invalidateOrDeny();
       }
       if (demoPasswordLogin && !isDemoPasswordOnlyEmailAllowed(environment, user.email)) {
-        return destroySession(req, res, environment, () => res.redirect('/login'));
+        return invalidateOrDeny();
       }
 
       const expectedFingerprint = createAuthFingerprint(user, environment);
       if (!hasMatchingAuthFingerprint(expectedFingerprint, req.session.authFingerprint)) {
-        return destroySession(req, res, environment, () => res.redirect('/login'));
+        return invalidateOrDeny();
       }
       if ((req.session.authSessionVersion || '') !== (user.auth_session_version || '')) {
-        return destroySession(req, res, environment, () => res.redirect('/login'));
+        return invalidateOrDeny();
       }
 
       const mustChangePassword = user.must_change_password === true || user.must_change_password === 1;
       if (mustChangePassword && developmentLogin) {
-        return destroySession(req, res, environment, () => res.redirect('/login'));
+        return invalidateOrDeny();
       }
-      const requestPath = req.originalUrl.split('?', 1)[0];
       const passwordChangePath = requestPath === '/account/password/required'
         || (requestPath === '/account/password' && req.method === 'POST');
       const logoutPath = requestPath === '/logout' && req.method === 'POST';
-      if (mustChangePassword && !passwordChangePath && !logoutPath) {
+      if (mustChangePassword && !passwordChangePath && !logoutPath && !guardedSessionRequest) {
         return res.redirect(303, '/account/password/required');
       }
 
       req.authUser = { id: user.id, email: user.email, role: user.role, mustChangePassword };
       res.set('Cache-Control', 'private, no-store');
+      res.locals.pageSessionBinding = createPageSessionBinding(req.sessionID, req.session.authSessionVersion, user.id, environment.sessionSecret);
       const navigation = buildNavigation(req.authUser.role, req.originalUrl);
       res.locals.currentUser = req.authUser;
       res.locals.currentPath = req.originalUrl.split('?', 1)[0];
       res.locals.navigationItems = navigation.items;
       res.locals.navigationGroups = navigation.groups;
       res.locals.currentPage = navigation.currentPage;
-      res.locals.csrfToken = ensureCsrfToken(req);
+      if (!guardedSessionRequest) res.locals.csrfToken = ensureCsrfToken(req);
       const workspaceHomes = { database_admin: '/admin', registrar: '/registrar', front_desk: '/front-desk', teacher: '/teacher', finance: '/finance', student: '/student' };
       res.locals.errorRecovery = { href: workspaceHomes[req.authUser.role] || '/', label: 'Return to your workspace' };
       return next();
     } catch {
+      if (sessionCheckRequest) return res.status(503).set('Cache-Control', 'no-store').json({ valid: false, unavailable: true });
+      if (historySessionEndRequest) return res.status(503).set('Cache-Control', 'no-store').json({ unavailable: true });
       return res.status(503).render('error', {
         title: 'Service Unavailable',
         message: 'Authentication is temporarily unavailable.'
@@ -152,6 +184,8 @@ module.exports = {
   hasValidCsrfToken,
   createAuthFingerprint,
   hasMatchingAuthFingerprint,
+  createPageSessionBinding,
+  hasMatchingPageSessionBinding,
   isDevelopmentPasswordLoginEnabled,
   isDemoPasswordOnlyLoginEnabled,
   isDemoPasswordOnlyEmailAllowed,

@@ -33,7 +33,11 @@ function createApp({ databasePool = getPool, environment = env, twoFactorService
     }
     next();
   });
-  app.use(rateLimit({ windowMs: 15 * 60 * 1000, limit: 500 }));
+  app.use(rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 500,
+    skip: (req) => req.path.toLowerCase().replace(/\/+$/, '') === '/session/check'
+  }));
   app.use(express.urlencoded({ extended: false, parameterLimit: 1200, limit: '300kb' }));
   app.use(express.json());
   // Short-lived browser caching avoids refetching shared assets on every EJS page navigation.

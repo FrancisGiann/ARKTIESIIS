@@ -6,7 +6,7 @@
   <title><%= title %></title>
   <link rel="stylesheet" href="/css/app.css">
 </head>
-<body class="enrollment-print-page">
+<body class="enrollment-print-page"<% if (typeof pageSessionBinding === 'string' && /^[a-f0-9]{64}$/.test(pageSessionBinding)) { %> data-page-session-state="checking" data-page-session-binding="<%= pageSessionBinding %>"<% } %>>
   <main class="enrollment-print" id="main-content">
     <header class="enrollment-print__header">
       <p>ARK Technological Institute Education System Inc. · Main Branch</p>
@@ -33,6 +33,14 @@
       <a class="button button--secondary" href="/registrar/intake">Return to enrollments</a>
     </footer>
   </main>
+<% if (typeof pageSessionBinding === 'string' && /^[a-f0-9]{64}$/.test(pageSessionBinding)) { %>
+<dialog class="page-session-dialog" id="page-session-dialog" aria-labelledby="page-session-title" aria-describedby="page-session-message">
+  <h2 id="page-session-title">Checking your session</h2>
+  <p id="page-session-message">Please wait while we check your sign-in.</p>
+  <button class="button button--primary" id="page-session-action" type="button">Retry</button>
+</dialog>
+<script src="/js/page-session-guard.js" defer></script>
+<% } %>
 <script src="/js/app.js" defer></script>
 </body>
 </html>

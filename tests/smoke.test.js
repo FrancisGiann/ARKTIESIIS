@@ -629,6 +629,175 @@ test('a later successful password-only login invalidates the earlier account ses
   });
 });
 
+test('page session checks validate the original tab binding across login, account switch, and logout', async () => {
+  const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
+  const users = [
+    { id: 23, email: 'registrar@example.edu', password_hash: passwordHash, role: 'registrar', is_active: true },
+    { id: 24, email: 'teacher@example.edu', password_hash: passwordHash, role: 'teacher', is_active: true }
+  ];
+  const database = createAuthDatabase(users);
+  const registrarDashboardService = {
+    async getDashboard() {
+      return {
+        configuredTerms: [], schoolYears: [], schoolYearTerms: [], selectedSchoolYear: '', selectedTerm: null,
+        activeEnrolledCount: null, pendingActivationCount: 0, departedCount: 0, droppedCount: 0, transferredCount: 0,
+        everFinalizedCount: 0, termCounts: [], needsTermSelection: true
+      };
+    }
+  };
+  const teacherGradeSubmissionService = {
+    async listTeacherAssignments() { return []; },
+    async getTeacherAssignment() { throw new Error('synthetic assignment failure'); }
+  };
+
+  await withServer(createApp({ databasePool: database.getPool, environment: developmentEnvironment(), registrarDashboardService, teacherGradeSubmissionService }), async (baseUrl) => {
+    const registrarCookie = await loginForCookie(baseUrl, 'registrar@example.edu');
+    const registrarPage = await fetch(`${baseUrl}/registrar`, { headers: { cookie: registrarCookie } });
+    const registrarHtml = await registrarPage.text();
+    const binding = registrarHtml.match(/data-page-session-binding="([a-f0-9]{64})"/)?.[1];
+    assert.equal(registrarPage.status, 200);
+    assert.equal(registrarPage.headers.get('cache-control'), 'private, no-store');
+    assert.match(registrarHtml, /data-page-session-state="checking"/);
+    assert.ok(binding, 'rendered page includes an opaque session binding');
+    assert.match(registrarHtml, /id="page-session-dialog"/);
+
+    const activeCheck = await fetch(`${baseUrl}/session/check`, {
+      headers: { cookie: registrarCookie, 'x-page-session-binding': binding }
+    });
+    assert.equal(activeCheck.status, 200);
+    assert.equal(activeCheck.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await activeCheck.json(), { valid: true });
+    assert.equal(activeCheck.headers.get('set-cookie'), null, 'heartbeat does not reset the browser cookie expiry');
+
+    const invalidBinding = await fetch(`${baseUrl}/session/check`, {
+      headers: { cookie: registrarCookie, 'x-page-session-binding': 'a'.repeat(64) }
+    });
+    assert.equal(invalidBinding.status, 401);
+    assert.deepEqual(await invalidBinding.json(), { valid: false });
+    assert.equal(invalidBinding.headers.get('set-cookie'), null, 'a stale page check cannot clear a newer cookie');
+
+    const loginPage = await fetch(`${baseUrl}/login`, { headers: { cookie: registrarCookie } });
+    const switchedLogin = await postForm(baseUrl, '/login', registrarCookie, {
+      _csrf: csrfFromHtml(await loginPage.text()), email: 'teacher@example.edu', password: 'Correct-Horse-Battery-12'
+    });
+    assert.equal(switchedLogin.status, 303);
+    const studentCookie = getSessionCookie(switchedLogin);
+
+    const previousTabCheck = await fetch(`${baseUrl}/session/check`, {
+      headers: { cookie: studentCookie, 'x-page-session-binding': binding }, redirect: 'manual'
+    });
+    assert.equal(previousTabCheck.status, 401);
+    assert.deepEqual(await previousTabCheck.json(), { valid: false });
+    assert.equal(previousTabCheck.headers.get('set-cookie'), null);
+
+    const serverProtectedPage = await fetch(`${baseUrl}/teacher/classes/1`, { headers: { cookie: studentCookie }, redirect: 'manual' });
+    assert.equal(serverProtectedPage.status, 503, 'the authorized account reaches the protected route handler');
+    const studentErrorHtml = await serverProtectedPage.text();
+    const studentPageBinding = studentErrorHtml.match(/data-page-session-binding="([a-f0-9]{64})"/)?.[1];
+    assert.ok(studentPageBinding, 'authenticated exception pages use the same session guard');
+
+    const loggedOut = await postForm(baseUrl, '/logout', studentCookie, { _csrf: csrfFromHtml(studentErrorHtml) });
+    assert.equal(loggedOut.status, 303);
+    assert.equal(loggedOut.headers.get('location'), '/login');
+    assert.match(loggedOut.headers.get('set-cookie'), /Expires=Thu, 01 Jan 1970/);
+
+    const afterLogoutCheck = await fetch(`${baseUrl}/session/check`, {
+      headers: { cookie: studentCookie, 'x-page-session-binding': studentPageBinding }, redirect: 'manual'
+    });
+    assert.equal(afterLogoutCheck.status, 401);
+    assert.deepEqual(await afterLogoutCheck.json(), { valid: false });
+    const protectedAfterLogout = await fetch(`${baseUrl}/teacher`, { headers: { cookie: studentCookie }, redirect: 'manual' });
+    assert.equal(protectedAfterLogout.status, 302, 'the server still denies protected routes after logout');
+    assert.equal(protectedAfterLogout.headers.get('location'), '/login');
+  });
+});
+
+test('history restoration ends only its matching protected session and preserves mismatched cookies', async () => {
+  const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
+  const user = { id: 25, email: 'registrar@example.edu', password_hash: passwordHash, role: 'registrar', is_active: true };
+  const database = createAuthDatabase([user]);
+  const registrarDashboardService = {
+    async getDashboard() {
+      return {
+        configuredTerms: [], schoolYears: [], schoolYearTerms: [], selectedSchoolYear: '', selectedTerm: null,
+        activeEnrolledCount: null, pendingActivationCount: 0, departedCount: 0, droppedCount: 0, transferredCount: 0,
+        everFinalizedCount: 0, termCounts: [], needsTermSelection: true
+      };
+    }
+  };
+  await withServer(createApp({ databasePool: database.getPool, environment: developmentEnvironment(), registrarDashboardService }), async (baseUrl) => {
+    const cookie = await loginForCookie(baseUrl, user.email);
+    const page = await fetch(`${baseUrl}/registrar`, { headers: { cookie } });
+    const pageHtml = await page.text();
+    const binding = pageHtml.match(/data-page-session-binding="([a-f0-9]{64})"/)?.[1];
+    const origin = new URL(baseUrl).origin;
+    assert.ok(binding);
+
+    const withoutOrigin = await fetch(`${baseUrl}/session/end-history`, {
+      method: 'POST', headers: { cookie, 'x-page-history-restore': 'end-session', 'x-page-session-binding': binding }, redirect: 'manual'
+    });
+    assert.equal(withoutOrigin.status, 403, 'history termination rejects requests without a same-origin Origin header');
+    assert.equal(withoutOrigin.headers.get('set-cookie'), null);
+
+    const mismatched = await fetch(`${baseUrl}/session/end-history`, {
+      method: 'POST', headers: {
+        cookie, origin, 'x-page-history-restore': 'end-session', 'x-page-session-binding': 'f'.repeat(64)
+      }, redirect: 'manual'
+    });
+    assert.equal(mismatched.status, 409);
+    assert.deepEqual(await mismatched.json(), { ended: false, mismatch: true });
+    assert.equal(mismatched.headers.get('set-cookie'), null, 'a different bound session keeps its cookie intact');
+    const stillActive = await fetch(`${baseUrl}/session/check`, {
+      headers: { cookie, 'x-page-session-binding': binding }
+    });
+    assert.deepEqual(await stillActive.json(), { valid: true });
+
+    const ended = await fetch(`${baseUrl}/session/end-history`, {
+      method: 'POST', headers: {
+        cookie, origin, 'x-page-history-restore': 'end-session', 'x-page-session-binding': binding
+      }, redirect: 'manual'
+    });
+    assert.equal(ended.status, 200);
+    assert.deepEqual(await ended.json(), { ended: true });
+    assert.equal(ended.headers.get('set-cookie'), null, 'the matching old session is destroyed without a cookie-clearing race');
+
+    const protectedPage = await fetch(`${baseUrl}/registrar`, { headers: { cookie }, redirect: 'manual' });
+    assert.equal(protectedPage.status, 302);
+    assert.equal(protectedPage.headers.get('location'), '/login');
+  });
+});
+
+test('history restore leaves a pending email verification session available to continue', async () => {
+  const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
+  const user = { id: 26, email: 'registrar@example.edu', password_hash: passwordHash, role: 'registrar', is_active: true };
+  const database = createAuthDatabase([user]);
+  const twoFactorService = createTestTwoFactorService(user);
+  const environment = emailTwoFactorEnvironment({ nodeEnv: 'test', devPasswordOnlyLogin: false });
+  await withServer(createApp({ databasePool: database.getPool, environment, twoFactorService }), async (baseUrl) => {
+    const login = await startEmailLogin(baseUrl, user.email);
+    assert.equal(login.response.headers.get('location'), '/login/verify');
+    const origin = new URL(baseUrl).origin;
+    const restoreResponse = await fetch(`${baseUrl}/session/end-history`, {
+      method: 'POST',
+      headers: {
+        cookie: login.authenticatedCookie,
+        origin,
+        'x-page-history-restore': 'end-session',
+        'x-page-session-binding': 'a'.repeat(64)
+      },
+      redirect: 'manual'
+    });
+    assert.equal(restoreResponse.status, 409);
+    assert.deepEqual(await restoreResponse.json(), { ended: false, mismatch: true });
+    assert.equal(restoreResponse.headers.get('set-cookie'), null);
+
+    const verification = await fetch(`${baseUrl}/login/verify`, { headers: { cookie: login.authenticatedCookie } });
+    assert.equal(verification.status, 200);
+    assert.equal(verification.headers.get('cache-control'), 'private, no-store');
+    assert.match(await verification.text(), /Enter the latest six-digit code/);
+  });
+});
+
 test('a pending administrator-created account cannot use the development password-only login bypass', async () => {
   const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
   const user = {

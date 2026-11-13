@@ -27,6 +27,10 @@ function createAuthPool(role) {
       return {
         input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
+          if (statement.includes('UPDATE users SET auth_session_version')) {
+            user.auth_session_version = values.authSessionVersion;
+            return { affectedRows: 1, rowsAffected: [1] };
+          }
           if (statement.includes('WHERE email = @email')) return { recordset: [user] };
           if (statement.includes('WHERE id = @userId')) return { recordset: [{ ...user }] };
           throw new Error(`Unexpected auth query: ${statement}`);

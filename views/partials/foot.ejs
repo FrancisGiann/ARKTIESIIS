@@ -4,6 +4,21 @@
 <% } %>
     <footer class="site-footer"><span>Ark Technological Institute Education System Inc.</span><span>Main Branch</span></footer>
   </div>
+<% if (typeof pageSessionBinding === 'string' && /^[a-f0-9]{64}$/.test(pageSessionBinding)) { %>
+<dialog class="page-session-dialog" id="page-session-dialog" aria-labelledby="page-session-title" aria-describedby="page-session-message">
+  <h2 id="page-session-title">Checking your session</h2>
+  <p id="page-session-message">Please wait while we check your sign-in.</p>
+  <button class="button button--primary" id="page-session-action" type="button">Retry</button>
+</dialog>
+<script src="/js/page-session-guard.js" defer></script>
+<% } %>
+<% if (typeof authHistoryPage === 'boolean' && authHistoryPage) { %>
+<dialog class="page-session-dialog" id="auth-history-dialog" aria-labelledby="auth-history-title" aria-describedby="auth-history-message">
+  <h2 id="auth-history-title">Checking your previous sign-in</h2>
+  <p id="auth-history-message">Please wait while we end the sign-in from this tab.</p>
+  <button class="button button--primary" id="auth-history-action" type="button" disabled>Checking…</button>
+</dialog>
+<% } %>
 <script src="/js/app.js"></script>
 <script src="/js/app-confirm.js" defer></script>
 <script src="/js/form-unsaved-changes.js" defer></script>

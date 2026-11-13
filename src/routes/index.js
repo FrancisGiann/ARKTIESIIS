@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = rateLimit;
 const crypto = require('node:crypto');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 const defaultEnvironment = require('../config/environment');
@@ -14,6 +15,7 @@ const {
   isDemoPasswordOnlyLoginEnabled,
   isDemoPasswordOnlyEmailAllowed,
   createRequireAuth,
+  hasMatchingPageSessionBinding,
   destroySession
 } = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
@@ -81,6 +83,20 @@ function normalizeCredentials(body) {
   return { email, password };
 }
 
+function hasSameOriginRequest(req) {
+  const originHeader = req.get('Origin');
+  const requestHost = req.get('Host');
+  if (typeof originHeader !== 'string' || typeof requestHost !== 'string' || !requestHost) return false;
+  try {
+    const origin = new URL(originHeader);
+    const requestOrigin = new URL(`${req.protocol}://${requestHost}`);
+    return origin.origin === requestOrigin.origin && origin.username === '' && origin.password === ''
+      && origin.pathname === '/' && origin.search === '' && origin.hash === '';
+  } catch {
+    return false;
+  }
+}
+
 async function verifyPassword(user, password, comparePassword = bcrypt.compare) {
   const active = user && (user.is_active === true || user.is_active === 1);
   const invited = user && (user.invitation_required === true || user.invitation_required === 1);
@@ -136,6 +152,16 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       message: 'Too many login attempts. Try again later.'
     })
   });
+  const sessionCheckLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 120,
+    keyGenerator: (req) => crypto.createHmac('sha256', environment.sessionSecret)
+      .update(`session-check:${ipKeyGenerator(req.ip)}:${req.sessionID || ''}`)
+      .digest('hex'),
+    standardHeaders: false,
+    legacyHeaders: false,
+    handler: (req, res) => res.status(429).set('Cache-Control', 'no-store').json({ valid: false, unavailable: true })
+  });
   const otpLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 10,
@@ -175,6 +201,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   };
   const renderLogin = (req, res, error, status = 200) => res.status(status).set('Cache-Control', 'private, no-store').render('auth/login', {
     title: 'Login',
+    authHistoryPage: true,
     csrfToken: ensureCsrfToken(req),
     developmentPasswordLoginEnabled: isDevelopmentPasswordLoginEnabled(environment),
     demoPasswordOnlyLoginEnabled: isDemoPasswordOnlyLoginEnabled(environment),
@@ -182,8 +209,9 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
     notice: loginNotices[req.query.notice] || null,
     error
   });
-  const renderVerification = (req, res, { error = null, notice = null, status = 200, codeInvalid = false } = {}) => res.status(status).render('auth/verify', {
+  const renderVerification = (req, res, { error = null, notice = null, status = 200, codeInvalid = false } = {}) => res.status(status).set('Cache-Control', 'private, no-store').render('auth/verify', {
     title: 'Verify Sign In',
+    authHistoryPage: true,
     csrfToken: ensureCsrfToken(req),
     emailHint: req.session?.pendingEmailHint || '',
     error,
@@ -265,6 +293,43 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   router.use('/documents', requireAuth, requireRole('database_admin', 'registrar', 'teacher', 'finance', 'student'), createDocumentsRouter({ getPool, sql, environment, documentService: documentsService, documentProcessingService, form137ScanService, physicalChecklistService: physicalChecklistsService }));
   router.use('/account/setup', createAccountInvitationRouter({ accountInvitationService: invitationsService }));
   router.use('/account/email/confirm', createEmailConfirmationRouter({ accountService: accountsService }));
+  router.get('/session/check', (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    // The two-second page check verifies the session without extending its inactivity expiry.
+    if (req.session && typeof req.session.touch === 'function') {
+      req.session.touch = () => req.session;
+    }
+    next();
+  }, sessionCheckLimiter, requireAuth, (req, res) => {
+    if (!hasMatchingPageSessionBinding(res.locals.pageSessionBinding, req.get('X-Page-Session-Binding'))) {
+      return res.status(401).set('Cache-Control', 'no-store').json({ valid: false });
+    }
+    return res.set('Cache-Control', 'no-store').json({ valid: true });
+  });
+  router.post('/session/end-history', (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    if (req.get('X-Page-History-Restore') !== 'end-session' || !hasSameOriginRequest(req)) {
+      return res.status(403).json({ ended: false });
+    }
+    if (req.session && typeof req.session.touch === 'function') {
+      req.session.touch = () => req.session;
+    }
+    if (req.session?.authLevel === 'pending_2fa') {
+      return res.status(409).json({ ended: false, mismatch: true });
+    }
+    if (!Number.isSafeInteger(req.session?.userId) || req.session.userId < 1) {
+      return res.json({ ended: true });
+    }
+    next();
+  }, requireAuth, (req, res) => {
+    if (!hasMatchingPageSessionBinding(res.locals.pageSessionBinding, req.get('X-Page-Session-Binding'))) {
+      return res.status(409).set('Cache-Control', 'no-store').json({ ended: false, mismatch: true });
+    }
+    req.session.destroy((error) => {
+      if (error) return res.status(503).set('Cache-Control', 'no-store').json({ unavailable: true });
+      return res.set('Cache-Control', 'no-store').json({ ended: true });
+    });
+  });
   router.use(authRouter);
   router.use('/account', requireAuth, createAccountRouter({ accountService: accountsService, environment }));
 

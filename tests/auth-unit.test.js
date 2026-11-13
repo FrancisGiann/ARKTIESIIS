@@ -9,6 +9,8 @@ const {
   isDemoPasswordOnlyEmailAllowed,
   createAuthFingerprint,
   hasMatchingAuthFingerprint,
+  createPageSessionBinding,
+  hasMatchingPageSessionBinding,
   createRequireAuth
 } = require('../src/middleware/auth');
 const { parseDemoPasswordOnlyLogin, parseDemoPasswordOnlyEmails } = require('../src/config/environment');
@@ -67,6 +69,21 @@ test('auth fingerprints change with role, password hash, or account update times
   assert.equal(hasMatchingAuthFingerprint(createAuthFingerprint({ ...user, updated_at_fingerprint: '2026-09-23T01:02:04.0000000' }, environment), fingerprint), false);
   assert.equal(createAuthFingerprint({ role: 'registrar' }, environment), null);
   assert.equal(hasMatchingAuthFingerprint(null, fingerprint), false);
+});
+
+test('page session bindings hide session identifiers and bind the session version and account', () => {
+  const secret = 'page-session-binding-test-secret';
+  const binding = createPageSessionBinding('session-id-secret', 'version-a', 42, secret);
+  assert.match(binding, /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(binding, /session-id-secret|version-a/);
+  assert.equal(hasMatchingPageSessionBinding(binding, createPageSessionBinding('session-id-secret', 'version-a', 42, secret)), true);
+  assert.equal(hasMatchingPageSessionBinding(binding, createPageSessionBinding('session-id-secret', 'version-b', 42, secret)), false);
+  assert.equal(hasMatchingPageSessionBinding(binding, createPageSessionBinding('another-session', 'version-a', 42, secret)), false);
+  assert.equal(hasMatchingPageSessionBinding(binding, createPageSessionBinding('session-id-secret', 'version-a', 43, secret)), false);
+  assert.equal(hasMatchingPageSessionBinding(binding.toUpperCase(), binding), false);
+  assert.equal(createPageSessionBinding('', 'version-a', 42, secret), null);
+  assert.equal(createPageSessionBinding('session-id', '', 42, secret), null);
+  assert.equal(createPageSessionBinding('session-id', 'version-a', 0, secret), null);
 });
 
 test('temporary-password gate checks current database state and blocks direct protected routes until password change', async () => {
