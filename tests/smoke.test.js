@@ -46,6 +46,14 @@ function createAuthDatabase(userRows) {
           },
           async query(statement) {
             queries.push({ statement, values });
+            if (statement.includes('UPDATE users SET auth_session_version')) {
+              const user = userRows.find((row) => row.id === values.userId);
+              const active = user && (user.is_active === true || user.is_active === 1);
+              const invited = user && (user.invitation_required === true || user.invitation_required === 1);
+              if (!active || invited) return { affectedRows: 0, rowsAffected: [0] };
+              user.auth_session_version = values.authSessionVersion;
+              return { affectedRows: 1, rowsAffected: [1] };
+            }
             if (statement.includes('WHERE email = @email')) {
               const user = userRows.find((row) => row.email === values.email);
               return { recordset: user ? [{ ...user }] : [] };
@@ -57,6 +65,7 @@ function createAuthDatabase(userRows) {
                 email: user.email,
                 role: user.role,
                 is_active: user.is_active,
+                auth_session_version: user.auth_session_version || '',
                 password_hash: user.password_hash,
                 updated_at_fingerprint: user.updated_at_fingerprint || ''
               }] : [] };
@@ -151,6 +160,7 @@ function createTestTwoFactorService(user, { failDelivery = false, failDeliveryAt
         role: user.role,
         password_hash: user.password_hash,
         is_active: user.is_active,
+        auth_session_version: user.auth_session_version || '',
         updated_at_fingerprint: user.updated_at_fingerprint || ''
       } : null;
     },
@@ -585,6 +595,40 @@ test('development login regenerates the session and redirects to the database-ba
   });
 });
 
+test('a later successful password-only login invalidates the earlier account session', async () => {
+  const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
+  const user = {
+    id: 23, email: 'registrar@example.edu', password_hash: passwordHash,
+    role: 'registrar', is_active: true
+  };
+  const database = createAuthDatabase([user]);
+  const registrarDashboardService = {
+    async getDashboard() {
+      return {
+        configuredTerms: [], schoolYears: [], schoolYearTerms: [], selectedSchoolYear: '', selectedTerm: null,
+        activeEnrolledCount: null, pendingActivationCount: 0, departedCount: 0, droppedCount: 0, transferredCount: 0,
+        everFinalizedCount: 0, termCounts: [], needsTermSelection: true
+      };
+    }
+  };
+
+  await withServer(createApp({ databasePool: database.getPool, environment: developmentEnvironment(), registrarDashboardService }), async (baseUrl) => {
+    const firstCookie = await loginForCookie(baseUrl, user.email);
+    const firstAccess = await fetch(`${baseUrl}/dashboard`, { headers: { cookie: firstCookie }, redirect: 'manual' });
+    assert.equal(firstAccess.status, 303);
+
+    const secondCookie = await loginForCookie(baseUrl, user.email);
+    assert.notEqual(secondCookie, firstCookie);
+    const staleAccess = await fetch(`${baseUrl}/dashboard`, { headers: { cookie: firstCookie }, redirect: 'manual' });
+    assert.equal(staleAccess.status, 302);
+    assert.equal(staleAccess.headers.get('location'), '/login');
+
+    const currentAccess = await fetch(`${baseUrl}/dashboard`, { headers: { cookie: secondCookie }, redirect: 'manual' });
+    assert.equal(currentAccess.status, 303);
+    assert.equal(currentAccess.headers.get('location'), '/registrar');
+  });
+});
+
 test('a pending administrator-created account cannot use the development password-only login bypass', async () => {
   const passwordHash = await bcrypt.hash('Correct-Horse-Battery-12', 4);
   const user = {
@@ -639,6 +683,31 @@ test('non-development login requires OTP even when the development bypass flag i
     });
     assert.equal(dashboardAfterOtp.status, 303);
     assert.equal(dashboardAfterOtp.headers.get('location'), '/registrar');
+
+    const secondLogin = await startEmailLogin(baseUrl, user.email);
+    const secondForm = await getVerificationForm(baseUrl, secondLogin.authenticatedCookie);
+    const rejectedCode = await postForm(baseUrl, '/login/verify', secondLogin.authenticatedCookie, {
+      _csrf: secondForm.csrfToken, code: '000000'
+    });
+    assert.equal(rejectedCode.status, 401);
+    const stillCurrentAfterRejectedCode = await fetch(`${baseUrl}/dashboard`, {
+      headers: { cookie: getSessionCookie(verified) }, redirect: 'manual'
+    });
+    assert.equal(stillCurrentAfterRejectedCode.status, 303);
+    const secondVerified = await postForm(baseUrl, '/login/verify', secondLogin.authenticatedCookie, {
+      _csrf: secondForm.csrfToken, code: twoFactorService.state.deliveredCode
+    });
+    assert.equal(secondVerified.status, 303);
+    const staleAfterSecondLogin = await fetch(`${baseUrl}/dashboard`, {
+      headers: { cookie: getSessionCookie(verified) }, redirect: 'manual'
+    });
+    assert.equal(staleAfterSecondLogin.status, 302);
+    assert.equal(staleAfterSecondLogin.headers.get('location'), '/login');
+    const currentAfterSecondLogin = await fetch(`${baseUrl}/dashboard`, {
+      headers: { cookie: getSessionCookie(secondVerified) }, redirect: 'manual'
+    });
+    assert.equal(currentAfterSecondLogin.status, 303);
+    assert.equal(currentAfterSecondLogin.headers.get('location'), '/registrar');
   });
 });
 

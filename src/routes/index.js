@@ -1,6 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const rateLimit = require('express-rate-limit');
+const crypto = require('node:crypto');
 const { getPool: defaultGetPool, sql: defaultSql } = require('../config/database');
 const defaultEnvironment = require('../config/environment');
 const twoFactor = require('../services/twoFactorService');
@@ -195,6 +196,16 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   const saveSession = (req) => new Promise((resolve, reject) => {
     req.session.save((error) => error ? reject(error) : resolve());
   });
+  const rotateAuthSessionVersion = async (userId) => {
+    const authSessionVersion = crypto.randomUUID();
+    const pool = await getPool();
+    const result = await pool.request()
+      .input('userId', sql.Int, userId)
+      .input('authSessionVersion', sql.UniqueIdentifier, authSessionVersion)
+      .query('UPDATE users SET auth_session_version = @authSessionVersion WHERE id = @userId AND is_active = 1 AND invitation_required = 0');
+    const affectedRows = result.rowsAffected?.[0] ?? result.affectedRows;
+    return affectedRows === 1 ? authSessionVersion : null;
+  };
   const resetSessionAndRespond = (req, res, callback) => regenerateSession(req)
     .then(callback)
     .catch(() => res.status(500).render('error', { title: 'Error', message: 'Authentication could not be completed.' }));
@@ -385,11 +396,15 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       }
 
       if (passwordOnlyLogin || demoPasswordOnlyLogin) {
+        const authSessionVersion = await rotateAuthSessionVersion(user.id);
+        if (!authSessionVersion) {
+          return res.status(503).render('error', { title: 'Service Unavailable', message: 'Authentication is temporarily unavailable.' });
+        }
         await regenerateSession(req);
         req.session.userId = user.id;
         req.session.authLevel = demoPasswordOnlyLogin ? 'password_only_demo' : 'password_only_dev';
         req.session.authFingerprint = createAuthFingerprint(user, environment);
-        req.session.authSessionVersion = user.auth_session_version || '';
+        req.session.authSessionVersion = authSessionVersion;
         await saveSession(req);
         return res.redirect(303, dashboardViews[user.role].path);
       }
@@ -476,11 +491,15 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       const consumed = await twoFactorService.consumeOtpChallenge({ getPool, sql, userId, codeId, codeHash: challenge.code_hash });
       if (!consumed) return resetSessionAndRespond(req, res, () => renderLogin(req, res, credentialError, 401));
 
+      const authSessionVersion = await rotateAuthSessionVersion(user.id);
+      if (!authSessionVersion) {
+        return res.status(503).render('error', { title: 'Service Unavailable', message: 'Authentication is temporarily unavailable.' });
+      }
       await regenerateSession(req);
       req.session.userId = user.id;
       req.session.authLevel = 'email_2fa';
       req.session.authFingerprint = createAuthFingerprint(user, environment);
-      req.session.authSessionVersion = user.auth_session_version || '';
+      req.session.authSessionVersion = authSessionVersion;
       await saveSession(req);
       return res.redirect(303, dashboardViews[user.role].path);
     } catch {
