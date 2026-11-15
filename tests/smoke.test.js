@@ -657,8 +657,9 @@ test('page session checks validate the original tab binding across login, accoun
     const binding = registrarHtml.match(/data-page-session-binding="([a-f0-9]{64})"/)?.[1];
     assert.equal(registrarPage.status, 200);
     assert.equal(registrarPage.headers.get('cache-control'), 'private, no-store');
-    assert.match(registrarHtml, /data-page-session-state="checking"/);
+    assert.doesNotMatch(registrarHtml, /data-page-session-state="checking"/, 'fresh authenticated renders are immediately visible');
     assert.ok(binding, 'rendered page includes an opaque session binding');
+    assert.match(registrarHtml, /src="\/js\/page-session-restore-gate\.js"/, 'history restores receive an early client-side gate');
     assert.match(registrarHtml, /id="page-session-dialog"/);
 
     const activeCheck = await fetch(`${baseUrl}/session/check`, {

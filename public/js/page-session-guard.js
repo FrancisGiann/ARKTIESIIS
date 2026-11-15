@@ -14,11 +14,18 @@
   let terminal = false;
   let blockedUnavailable = false;
   let heartbeatTimer = null;
+  let pageGateActive = document.documentElement.dataset.pageSessionState === 'checking';
 
-  try { window.sessionStorage.setItem('arktiesiis:page-session-binding', binding); } catch { /* The server check remains authoritative without tab storage. */ }
+  if (!pageGateActive) {
+    try { window.sessionStorage.setItem('arktiesiis:page-session-binding', binding); } catch { /* The server check remains authoritative without tab storage. */ }
+  }
 
   function setPageState(state) {
     body.dataset.pageSessionState = state;
+  }
+
+  function clearEarlyPageGate() {
+    document.documentElement.removeAttribute('data-page-session-state');
   }
 
   function openDialog() {
@@ -33,6 +40,7 @@
   }
 
   function showChecking() {
+    pageGateActive = true;
     setPageState('checking');
     title.textContent = 'Checking your session';
     message.textContent = 'Please wait while we check your sign-in.';
@@ -45,6 +53,7 @@
     if (pageSuspended || document.hidden) return;
     terminal = true;
     if (heartbeatTimer !== null) window.clearInterval(heartbeatTimer);
+    clearEarlyPageGate();
     setPageState('revoked');
     title.textContent = 'Your session ended';
     message.textContent = 'Your session ended. Please sign in again.';
@@ -56,7 +65,9 @@
 
   function showUnavailable() {
     if (pageSuspended || document.hidden) return;
+    if (!pageGateActive) return;
     blockedUnavailable = true;
+    clearEarlyPageGate();
     setPageState('unavailable');
     title.textContent = 'Session check unavailable';
     message.textContent = "We couldn't verify your session. Retry to continue.";
@@ -72,6 +83,8 @@
   function showVerified() {
     if (pageSuspended || document.hidden || terminal) return;
     blockedUnavailable = false;
+    pageGateActive = false;
+    clearEarlyPageGate();
     setPageState('verified');
     closeDialog();
   }
@@ -144,12 +157,12 @@
       abortSessionCheck();
       return;
     }
-    setPageState('checking');
-    void checkSession(true);
+    void checkSession(pageGateActive);
   });
 
   window.addEventListener('pagehide', () => {
     pageSuspended = true;
+    pageGateActive = true;
     abortSessionCheck();
     setPageState('checking');
   });
@@ -157,8 +170,9 @@
   window.addEventListener('pageshow', (event) => {
     if (!event.persisted) return;
     pageSuspended = false;
+    pageGateActive = true;
     void checkSession(true);
   });
 
-  void checkSession(true);
+  void checkSession(pageGateActive);
 })();

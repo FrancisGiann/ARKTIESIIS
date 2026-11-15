@@ -29,12 +29,13 @@
   <% const stylesheetUrl = typeof assetVersion === 'undefined' ? '/css/app.css' : `/css/app.css?v=${assetVersion}`; %>
   <link rel="stylesheet" href="<%= stylesheetUrl %>">
   <% if (typeof pageStylesheet === 'string' && /^\/css\/[a-z0-9-]+\.css$/.test(pageStylesheet)) { %><link rel="stylesheet" href="<%= typeof assetVersion === 'undefined' ? pageStylesheet : `${pageStylesheet}?v=${assetVersion}` %>"><% } %>
+  <% const pageSessionGuardEnabled = typeof currentUser !== 'undefined' && currentUser
+    && typeof pageSessionBinding === 'string' && /^[a-f0-9]{64}$/.test(pageSessionBinding); %>
+  <% if (pageSessionGuardEnabled) { %><script src="/js/page-session-restore-gate.js" data-page-session-binding="<%= pageSessionBinding %>"></script><% } %>
   <script src="/js/password-clipboard.js" defer></script>
   <% if (typeof authHistoryPage === 'boolean' && authHistoryPage) { %><script src="/js/auth-history-session-end.js"></script><% } %>
 </head>
-<% const pageSessionGuardEnabled = typeof currentUser !== 'undefined' && currentUser
-  && typeof pageSessionBinding === 'string' && /^[a-f0-9]{64}$/.test(pageSessionBinding); %>
-<body class="<%= typeof currentUser !== 'undefined' && currentUser && typeof navigationItems !== 'undefined' ? `workspace-body${currentUser.role === 'registrar' ? ' workspace-body--registrar' : ''}${navigationItems.some((item) => item.current && item.id?.startsWith('finance-')) ? ' workspace-body--finance' : ''}` : 'public-body' %>"<% if (pageSessionGuardEnabled) { %> data-page-session-state="checking" data-page-session-binding="<%= pageSessionBinding %>"<% } %>>
+<body class="<%= typeof currentUser !== 'undefined' && currentUser && typeof navigationItems !== 'undefined' ? `workspace-body${currentUser.role === 'registrar' ? ' workspace-body--registrar' : ''}${navigationItems.some((item) => item.current && item.id?.startsWith('finance-')) ? ' workspace-body--finance' : ''}` : 'public-body' %>"<% if (pageSessionGuardEnabled) { %> data-page-session-binding="<%= pageSessionBinding %>"<% } %>>
 <a class="skip-link" href="#main-content">Skip to main content</a>
 <% if (typeof currentUser !== 'undefined' && currentUser && typeof navigationItems !== 'undefined') { %>
   <% const roleLabels = { database_admin: 'Database administrator', registrar: 'Registrar', front_desk: 'Front desk', teacher: 'Teacher', finance: 'Finance', student: 'Student' }; %>

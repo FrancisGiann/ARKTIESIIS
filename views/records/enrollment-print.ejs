@@ -5,8 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title><%= title %></title>
   <link rel="stylesheet" href="/css/app.css">
+  <% if (typeof pageSessionBinding === 'string' && /^[a-f0-9]{64}$/.test(pageSessionBinding)) { %><script src="/js/page-session-restore-gate.js" data-page-session-binding="<%= pageSessionBinding %>"></script><% } %>
 </head>
-<body class="enrollment-print-page"<% if (typeof pageSessionBinding === 'string' && /^[a-f0-9]{64}$/.test(pageSessionBinding)) { %> data-page-session-state="checking" data-page-session-binding="<%= pageSessionBinding %>"<% } %>>
+<body class="enrollment-print-page"<% if (typeof pageSessionBinding === 'string' && /^[a-f0-9]{64}$/.test(pageSessionBinding)) { %> data-page-session-binding="<%= pageSessionBinding %>"<% } %>>
   <main class="enrollment-print" id="main-content">
     <header class="enrollment-print__header">
       <p>ARK Technological Institute Education System Inc. · Main Branch</p>
