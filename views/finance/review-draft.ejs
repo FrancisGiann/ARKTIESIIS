@@ -94,7 +94,7 @@
     <% if (draft.actionType === 'annual_assessment' && draft.preview.annualHandoffRequired) { %>
       <section class="finance-review-fields" aria-label="Annual enrollment payment handoff">
         <h2>Enrollment handoff</h2>
-        <p>Entry term: <strong>Term <%= draft.preview.entryTermNumber || 1 %></strong>. The Registrar can confirm enrollment after this assessment has been reviewed and the full scheduled tuition DP for this term is settled.</p>
+        <p>Entry term: <strong>Term <%= draft.preview.entryTermNumber || 1 %></strong>. When the Registrar's saved academic handoff is current and Finance has reviewed the assessment and settled this term's exact tuition DP, this Finance update activates the entry placement automatically.</p>
         <p>Only eligible allocations to the entry-term DP count. Unallocated or unrelated account credit does not satisfy it. The full annual balance is not required here.</p>
         <p>If the entry-term tuition DP is truly zero after approved waivers, explicitly approve that zero case below. Missing DP setup or an incomplete ledger will be blocked.</p>
       </section>
@@ -308,7 +308,7 @@
       <input type="hidden" name="dependencyFingerprint" value="<%= draft.dependencyFingerprint %>">
       <% if (draft.actionType === 'annual_assessment' && draft.preview.annualHandoffRequired) { %>
         <input type="hidden" name="financeAssessmentAttestation" value="1">
-        <p class="finance-review-attestation">Approving confirms that you reviewed the approved fee schedule, selected options, and exact annual assessment shown above. Finance approval is recorded; Registrar confirms enrollment separately.</p>
+        <p class="finance-review-attestation">Approving confirms that you reviewed the approved fee schedule, selected options, and exact annual assessment shown above. This Finance approval can activate enrollment when the Registrar's saved academic handoff is current and the exact entry-term tuition DP is settled.</p>
         <label class="field"><span><input type="checkbox" name="zeroDpApproval" value="1"> If this entry-term DP is zero after approved waivers, I explicitly approve the zero-DP case.</span></label>
       <% } %>
       <button class="button button--primary" type="submit" <%= previewUnavailable || (draft.actionType === 'departure_review' && draft.preview.departureReviewReady !== true) ? 'disabled' : '' %>><%= draft.actionType === 'annual_assessment' ? (draft.preview.annualHandoffRequired ? 'Approve Finance assessment' : 'Post annual assessment') : draft.actionType === 'retake_item_decision' ? 'Save Finance decision' : draft.actionType === 'departure_review' ? 'Confirm departure fee update' : 'Review complete · Save update' %></button>

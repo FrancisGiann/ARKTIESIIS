@@ -25,14 +25,23 @@ test('missing assessment is shown before other unavailable-status reasons', () =
   assert.match(result.guidance, /Record an annual assessment/);
 });
 
-test('missing matching assessment confirmation covers a confirmation tied to another assessment', () => {
+test('historical assessment confirmation mismatch remains a review status', () => {
   const result = paymentStatusPresentation({
     ...reviewedAssessment,
     registrar_confirmation_id: 77,
     matching_assessment_confirmation_id: null
   });
-  assert.equal(result.reason, 'Awaiting registrar confirmation');
-  assert.equal(result.guidance, 'The registrar must confirm enrollment using the current fee assessment.');
+  assert.equal(result.reason, 'Assessment and confirmation mismatch');
+  assert.equal(result.guidance, 'Review the saved Finance assessment against the historical Registrar confirmation.');
+});
+
+test('pending intake payment status does not wait for a confirmation row', () => {
+  const result = paymentStatusPresentation({
+    ...reviewedAssessment, intake_status: 'pending', matching_assessment_confirmation_id: null,
+    finance_status: FINANCE_STATUS.UNPAID
+  });
+  assert.equal(result.label, 'Unpaid');
+  assert.equal(result.reason, null);
 });
 
 test('zero assessed fees gets a distinct reason after assessment and confirmation exist', () => {
@@ -77,7 +86,7 @@ test('normal payment statuses retain their existing labels without review explan
 test('missing or malformed reason evidence asks for a useful check without guessing a cause', () => {
   const absentEvidence = paymentStatusPresentation({ finance_status: FINANCE_STATUS.NEEDS_REVIEW });
   assert.equal(absentEvidence.reason, null);
-  assert.equal(absentEvidence.guidance, 'Open the account to check the fees and enrollment confirmation.');
+  assert.equal(absentEvidence.guidance, 'Open the account to check the fees and historical enrollment record.');
 
   const missingCount = paymentStatusPresentation({
     finance_status: FINANCE_STATUS.NEEDS_REVIEW,
@@ -120,5 +129,5 @@ test('missing or malformed reason evidence asks for a useful check without guess
   assert.equal(malformedAssessment.reason, null);
 
   const accountFallback = paymentStatusPresentation({ finance_status: FINANCE_STATUS.NEEDS_REVIEW }, 'whole', 'account');
-  assert.equal(accountFallback.guidance, 'Check the fee assessment and enrollment confirmation.');
+  assert.equal(accountFallback.guidance, 'Check the fee assessment and historical enrollment record.');
 });

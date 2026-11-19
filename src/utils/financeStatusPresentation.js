@@ -42,9 +42,11 @@ function paymentStatusPresentation(classification = {}, installment = 'whole', s
   const fallback = () => ({
     label: 'Payment status unavailable',
     reason: null,
-    guidance: surface === 'account'
-      ? 'Check the fee assessment and enrollment confirmation.'
-      : 'Open the account to check the fees and enrollment confirmation.'
+    guidance: classification.intake_status === 'pending'
+      ? 'Check the saved Finance assessment and Registrar handoff or entry activation.'
+      : surface === 'account'
+        ? 'Check the fee assessment and historical enrollment record.'
+        : 'Open the account to check the fees and historical enrollment record.'
   });
 
   if (classification.term_scope_status === 'not_applicable') {
@@ -70,14 +72,19 @@ function paymentStatusPresentation(classification = {}, installment = 'whole', s
   const confirmationField = Object.hasOwn(classification, 'matching_assessment_confirmation_id')
     ? 'matching_assessment_confirmation_id' : 'registrar_confirmation_id';
   const hasConfirmation = hasRecordId(classification, confirmationField);
-  if (hasConfirmation === false) {
-    return {
-      label,
-      reason: 'Awaiting registrar confirmation',
-      guidance: 'The registrar must confirm enrollment using the current fee assessment.'
-    };
+  if (hasConfirmation === false && classification.intake_status !== 'pending') {
+    const historicalConfirmation = hasRecordId(classification, 'registrar_confirmation_id');
+    if (historicalConfirmation === true) {
+      return { label, reason: 'Assessment and confirmation mismatch',
+        guidance: 'Review the saved Finance assessment against the historical Registrar confirmation.' };
+    }
+    if (historicalConfirmation === false) {
+      return { label, reason: 'Historical confirmation not recorded',
+        guidance: 'Review the historical enrollment record before interpreting this payment status.' };
+    }
+    return fallback();
   }
-  if (hasConfirmation === null) return fallback();
+  if (hasConfirmation === null && classification.intake_status !== 'pending') return fallback();
 
   const assessedChargeCount = readCount(classification, 'assessed_charge_count');
   if (assessedChargeCount === 0) {

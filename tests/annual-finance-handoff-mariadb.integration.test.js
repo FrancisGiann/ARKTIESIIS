@@ -10,6 +10,8 @@ const { readSqlFile, readForwardMigrations } = require('../scripts/db-setup-v2')
 const { PoolFacade, Transaction, sql } = require('../src/config/database');
 const { createAnnualFinanceService } = require('../src/services/annualFinanceService');
 const { createAnnualEnrollmentService } = require('../src/services/annualEnrollmentService');
+const { createFinanceReviewActionService } = require('../src/services/financeReviewActionService');
+const { runSerializableTransaction } = require('../src/services/transactionRetry');
 
 const socketPath = process.env.ANNUAL_FINANCE_HANDOFF_TEST_SOCKET;
 const ROOT = path.resolve(__dirname, '..');
@@ -85,6 +87,10 @@ test('pending annual enrollment hands off assessment, voucher resolution, and ex
       await pool.execute(`INSERT INTO school_year_term_order (school_year, term_number, academic_term_id, configured_by)
         VALUES ('2026-2027', ?, ?, ?)`, [termNumber, termId, registrarId]);
     }
+    const [alternateEntrySection] = await pool.execute(`INSERT INTO sections
+      (name, grade_level, academic_term_id, cluster, strand) VALUES (?, 'Grade 11', ?, 'Academic', 'STEM')`,
+    [`Alternate Entry ${process.pid}-${crypto.randomBytes(3).toString('hex')}`, termIds[1]]);
+    const alternateEntrySectionId = Number(alternateEntrySection.insertId);
 
     const studentNumber = `HANDOFF-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
     const lrn = String(100000000000 + Math.floor(Math.random() * 89999999999));
@@ -124,11 +130,54 @@ test('pending annual enrollment hands off assessment, voucher resolution, and ex
           error.status = 409;
           throw error;
         }
+        return { ready: true, fingerprint: CLEARANCE_FINGERPRINT };
+      },
+      async revalidateAnnualEntryHandoffInTransaction(_transaction, input) {
+        if (input.expectedFingerprint !== CLEARANCE_FINGERPRINT) {
+          const error = new Error('Academic prerequisites changed after handoff.');
+          error.status = 409;
+          throw error;
+        }
+        return { ready: true, fingerprint: CLEARANCE_FINGERPRINT };
+      },
+      async assertTermPrerequisitesInTransaction(_transaction, input) {
+        if (input.expectedFingerprint !== CLEARANCE_FINGERPRINT) {
+          const error = new Error('The term prerequisites changed.');
+          error.status = 409;
+          throw error;
+        }
+        return { ready: true, fingerprint: CLEARANCE_FINGERPRINT };
       }
     };
     const annualEnrollment = createAnnualEnrollmentService({ getPool: async () => appPool, sql,
       transactionFactory: (currentPool) => new Transaction(currentPool), hashPassword: async (value) => `integration:${value}`,
       createPassword: () => 'integration-only-password', annualFinanceService: annualFinance, termClearanceService });
+
+    async function registrarHandoffInput(annualId, idempotencyKey = uuid()) {
+      const review = await annualEnrollment.getRegistrarHandoffStatus(registrarId, annualId, CLEARANCE_FINGERPRINT);
+      return { clearanceFingerprint: CLEARANCE_FINGERPRINT,
+        prerequisiteFingerprint: review.currentPrerequisiteFingerprint, idempotencyKey };
+    }
+
+    async function commitReviewedFinanceDraft(draft, commitContext = {}, replayResult = null) {
+      const financeReviewActions = createFinanceReviewActionService({
+        getPool: async () => appPool, sql, annualEnrollmentService: annualEnrollment,
+        draftService: {
+          async commitReviewedDraft({ previewInTransaction, applyInTransaction, commitContext: savedContext }) {
+            if (replayResult) return { committed: true, replayed: true, result: structuredClone(replayResult) };
+            const result = await runSerializableTransaction({ getPool: async () => appPool, sql,
+              transactionFactory: (currentPool) => new Transaction(currentPool) }, async (transaction) => {
+              await previewInTransaction(transaction, draft);
+              return applyInTransaction(transaction, draft, { id: financeId, role: 'finance' }, savedContext);
+            });
+            return { committed: true, replayed: false, result };
+          },
+          async getDraft() { return draft; }
+        }
+      });
+      return financeReviewActions.commit(financeId, 'd'.repeat(64), draft.id, draft.revision || 1,
+        'e'.repeat(64), commitContext);
+    }
 
     await assert.rejects(annualFinance.annualAssessmentPreview(financeId, annualId), { status: 409 },
       'missing active fee setup is not interpreted as a zero assessment');
@@ -344,15 +393,31 @@ test('pending annual enrollment hands off assessment, voucher resolution, and ex
       VALUES (?, '2026-2027', 'Grade 11', 'PUB', 'pending', ?, 'new', 2, 1, ?)`,
     [Number(zeroStudent.insertId), registrarId, zeroPreEnrollmentId]);
     const zeroAnnualId = Number(zeroAnnual.insertId);
+    const zeroEnrollmentIds = [];
     for (let index = 0; index < termIds.length; index += 1) {
       const termNumber = index + 1;
       const applicable = termNumber >= 2;
-      await pool.execute(`INSERT INTO enrollments
+      const [placement] = await pool.execute(`INSERT INTO enrollments
         (student_id, academic_term_id, section_id, enrollment_status, annual_enrollment_id, annual_term_number, term_scope_status)
         VALUES (?, ?, ?, ?, ?, ?, ?)`, [Number(zeroStudent.insertId), termIds[index], sectionIds[index],
         applicable ? 'pending_payment' : 'not_applicable', zeroAnnualId, termNumber,
         applicable ? 'applicable' : 'not_applicable']);
+      zeroEnrollmentIds.push(Number(placement.insertId));
     }
+    const zeroHandoffKey = uuid();
+    const zeroHandoffInput = await registrarHandoffInput(zeroAnnualId, zeroHandoffKey);
+    await pool.execute('UPDATE enrollments SET section_id = ? WHERE id = ?', [alternateEntrySectionId, zeroEnrollmentIds[1]]);
+    await assert.rejects(annualEnrollment.submitRegistrarHandoff(registrarId, zeroAnnualId,
+      { ...zeroHandoffInput, idempotencyKey: uuid() }), { status: 409 },
+    'a section edit after the Registrar review page was rendered invalidates its composite handoff fingerprint');
+    await pool.execute('UPDATE enrollments SET section_id = ? WHERE id = ?', [sectionIds[1], zeroEnrollmentIds[1]]);
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_registrar_handoff_events WHERE annual_enrollment_id = ?',
+      [zeroAnnualId]))[0][0].count), 0, 'stale rendered review creates no handoff event');
+    const queuedHandoff = await annualEnrollment.submitRegistrarHandoff(registrarId, zeroAnnualId, zeroHandoffInput);
+    assert.equal(queuedHandoff.status, 'awaiting_finance', 'Registrar handoff is saved before Finance evidence is ready');
+    const repeatedQueuedHandoff = await annualEnrollment.submitRegistrarHandoff(registrarId, zeroAnnualId, zeroHandoffInput);
+    assert.equal(repeatedQueuedHandoff.handoffId, queuedHandoff.handoffId);
+    assert.equal(repeatedQueuedHandoff.alreadyHandedOff, true);
     const zeroLines = [1, 2, 3].flatMap((termNumber) => ['DP', 'Prelim', 'Midterm', 'Finals'].map((installment) => ({
       termNumber, feeCategory: 'tuition', lineName: 'Tuition', installment,
       amount: termNumber === 2 && installment === 'DP' ? '0.00' : '10.00', isOptional: false
@@ -370,24 +435,213 @@ test('pending annual enrollment hands off assessment, voucher resolution, and ex
     }), { status: 403 }, 'pending annual assessment requires an explicit Finance attestation');
     assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_assessments WHERE annual_enrollment_id = ?',
       [zeroAnnualId]))[0][0].count), 0, 'missing zero approval leaves no assessment or fake payment behind');
-    const approvedZero = await annualFinance.confirmAnnualAssessment(financeId, zeroAnnualId, [], {
-      scheduleId: String(zeroPreview.scheduleId), scheduleVersion: String(zeroPreview.scheduleVersion),
-      voucherCode: zeroPreview.voucherCode, idempotencyKey: uuid(), financeAttestation: true, zeroDpAttested: true
-    });
+    const financeDraft = {
+      id: uuid(), actionType: 'annual_assessment', idempotencyKey: uuid(),
+      entityContext: { annualId: zeroAnnualId, studentId: Number(zeroStudent.insertId) },
+      input: { scheduleId: String(zeroPreview.scheduleId), scheduleVersion: String(zeroPreview.scheduleVersion),
+        voucherCode: zeroPreview.voucherCode, optionalLineId: [] }
+    };
+    const financeCommit = await commitReviewedFinanceDraft(financeDraft,
+      { financeAssessmentAttestation: true, zeroDpApproval: true });
+    const approvedZero = financeCommit.result;
     assert.ok(approvedZero.assessmentId > 0);
+    const zeroActivation = approvedZero.enrollmentActivation[0];
+    assert.equal(zeroActivation.status, 'activated',
+      'the reviewed Finance commit automatically activates an already-handed-off zero-DP intake');
     const zeroReadiness = await assertReadyState(annualFinance, registrarId, zeroAnnualId, 'ready_for_registrar');
     assert.equal(zeroReadiness.zeroDownPaymentApproved, true);
-    const zeroFinal = await annualEnrollment.confirmAnnualEnrollment(registrarId, zeroAnnualId, {
-      clearanceSnapshotFingerprint: CLEARANCE_FINGERPRINT, idempotencyKey: uuid()
-    });
-    assert.equal(zeroFinal.assessmentId, approvedZero.assessmentId,
-      'explicitly reviewed zero DP permits final confirmation without a payment');
-    assert.equal((await pool.execute(`SELECT entry_dp_state_at_confirmation FROM annual_registrar_confirmations
-      WHERE annual_enrollment_id = ?`, [zeroAnnualId]))[0][0].entry_dp_state_at_confirmation, 'zero_due');
+    const confirmationEvidence = (await pool.execute(`SELECT id, confirmed_by, entry_dp_state_at_confirmation,
+      registrar_handoff_event_id, finance_review_id, assessment_id
+      FROM annual_registrar_confirmations WHERE annual_enrollment_id = ?`, [zeroAnnualId]))[0][0];
+    assert.equal(confirmationEvidence.entry_dp_state_at_confirmation, 'zero_due');
+    assert.equal(Number(confirmationEvidence.confirmed_by), registrarId,
+      'the compatibility confirmation preserves the Registrar handoff actor');
+    assert.equal(Number(confirmationEvidence.registrar_handoff_event_id), queuedHandoff.handoffId);
+    assert.equal(Number(confirmationEvidence.finance_review_id), Number(zeroActivation.financeReviewId));
+    assert.equal(Number(confirmationEvidence.assessment_id), Number(approvedZero.assessmentId));
+    const activationEvidence = (await pool.execute(`SELECT id, activation_trigger, activated_by, activated_by_role,
+      registrar_handoff_id, finance_review_id, assessment_id FROM annual_entry_activations
+      WHERE annual_enrollment_id = ?`, [zeroAnnualId]))[0][0];
+    assert.equal(activationEvidence.activation_trigger, 'finance_commit');
+    assert.equal(activationEvidence.activated_by_role, 'finance');
+    assert.equal(Number(activationEvidence.activated_by), financeId);
+    assert.equal(Number(activationEvidence.registrar_handoff_id), queuedHandoff.handoffId);
+    assert.equal(Number(activationEvidence.finance_review_id), Number(zeroActivation.financeReviewId));
+    assert.equal(Number(activationEvidence.assessment_id), Number(approvedZero.assessmentId));
+    assert.equal((await pool.execute('SELECT intake_status, account_activation_pending FROM annual_enrollments WHERE id = ?',
+      [zeroAnnualId]))[0][0].intake_status, 'enrolled');
+    assert.equal(Number((await pool.execute('SELECT account_activation_pending FROM annual_enrollments WHERE id = ?',
+      [zeroAnnualId]))[0][0].account_activation_pending), 1,
+    'automatic enrollment keeps first-login activation pending for Registrar');
+    assert.equal((await pool.execute('SELECT enrollment_status FROM enrollments WHERE id = ?',
+      [zeroEnrollmentIds[1]]))[0][0].enrollment_status, 'enrolled');
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_registrar_confirmations WHERE annual_enrollment_id = ?',
+      [zeroAnnualId]))[0][0].count), 1);
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_entry_activations WHERE annual_enrollment_id = ?',
+      [zeroAnnualId]))[0][0].count), 1, 'the activation row enforces exact-once enrollment');
     assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM finance_payments WHERE student_id = ?',
       [Number(zeroStudent.insertId)]))[0][0].count), 0, 'zero DP creates no artificial payment or receipt');
-    assert.equal(Number((await pool.execute('SELECT is_active FROM users WHERE id = ?', [zeroStudentUserId]))[0][0].is_active), 1,
-      'the zero-DP new student login activates only at final Registrar confirmation');
+    assert.equal(Number((await pool.execute('SELECT is_active FROM users WHERE id = ?', [zeroStudentUserId]))[0][0].is_active), 0,
+      'Finance enrollment activation does not issue a student password');
+    await assert.rejects(annualEnrollment.issueFirstLoginPassword(financeId, zeroAnnualId), { status: 403 },
+      'Finance cannot issue the Registrar-controlled first-login password');
+    const laterTerm = await annualEnrollment.finalizeAnnualTerm(registrarId, zeroEnrollmentIds[2], {
+      clearanceSnapshotFingerprint: CLEARANCE_FINGERPRINT, idempotencyKey: uuid()
+    });
+    assert.equal(laterTerm.temporaryPassword, null,
+      'later-term activation cannot create the legacy surname/date password on a new-flow record');
+    assert.equal(Number((await pool.execute('SELECT is_active FROM users WHERE id = ?', [zeroStudentUserId]))[0][0].is_active), 0);
+    const credential = await annualEnrollment.issueFirstLoginPassword(registrarId, zeroAnnualId);
+    assert.equal(credential.temporaryPassword, 'integration-only-password');
+    await assert.rejects(annualEnrollment.issueFirstLoginPassword(registrarId, zeroAnnualId), { status: 409 },
+      'Registrar cannot issue a second first-login password for the same enrollment');
+    assert.equal(Number((await pool.execute('SELECT must_change_password FROM users WHERE id = ?', [zeroStudentUserId]))[0][0].must_change_password), 1);
+    const printSheet = await annualFinance.getEntryEnrollmentPrintSheet(financeId, Number(zeroStudent.insertId), zeroAnnualId);
+    assert.equal(printSheet.annual_enrollment_id, zeroAnnualId);
+    assert.equal(printSheet.student_no, zeroStudentNumber);
+    await assert.rejects(annualFinance.getEntryEnrollmentPrintSheet(financeId, studentId, zeroAnnualId), { status: 404 },
+      'the print service binds the exact student and annual enrollment pair');
+    await assert.rejects(annualFinance.getEntryEnrollmentPrintSheet(registrarId, Number(zeroStudent.insertId), zeroAnnualId), { status: 403 },
+      'only Finance can open the private enrollment sheet');
+
+    const positiveLines = zeroLines.map((line) => ({ ...line,
+      amount: line.termNumber === 2 && line.installment === 'DP' ? '100.00' : line.amount }));
+    const positiveSchedule = await annualFinance.createSchedule(financeId, { schoolYear: '2026-2027', gradeLevel: 'Grade 11',
+      voucherCode: 'PUB', lines: positiveLines, idempotencyKey: uuid() });
+    const positiveUserId = await insertUser(pool, 'student', { active: false });
+    const positiveLrn = String(300000000000 + Math.floor(Math.random() * 69999999999));
+    const [positiveStudent] = await pool.execute(`INSERT INTO students
+      (user_id, student_no, lrn, first_name, last_name, birth_date, status)
+      VALUES (?, ?, ?, 'Pia', 'Paid', '2008-08-16', 'active')`,
+    [positiveUserId, `HANDOFF-PAID-${process.pid}-${crypto.randomBytes(3).toString('hex')}`, positiveLrn]);
+    const positiveStudentId = Number(positiveStudent.insertId);
+    const positivePreEnrollmentId = uuid();
+    await pool.execute(`INSERT INTO pre_enrollments
+      (id, idempotency_key, request_fingerprint, school_year, first_name, middle_name, last_name, lrn,
+        target_grade_level, email, status, created_by, updated_by, created_by_role, applicant_kind)
+      VALUES (?, ?, ?, '2026-2027', 'Pia', 'May', 'Paid', ?, 'Grade 11', ?, 'enrollment_started', ?, ?, 'front_desk', 'new')`,
+    [positivePreEnrollmentId, uuid(), 'f'.repeat(64), positiveLrn, `paid-${uuid()}@integration.invalid`, frontDeskId, frontDeskId]);
+    const [positiveAnnual] = await pool.execute(`INSERT INTO annual_enrollments
+      (student_id, school_year, grade_level, voucher_code, intake_status, created_by, intake_kind,
+        entry_term_number, account_activation_pending, pre_enrollment_id)
+      VALUES (?, '2026-2027', 'Grade 11', 'PUB', 'pending', ?, 'new', 2, 1, ?)`,
+    [positiveStudentId, registrarId, positivePreEnrollmentId]);
+    const positiveAnnualId = Number(positiveAnnual.insertId);
+    const positiveEnrollmentIds = [];
+    for (let index = 0; index < termIds.length; index += 1) {
+      const termNumber = index + 1;
+      const applicable = termNumber >= 2;
+      const [placement] = await pool.execute(`INSERT INTO enrollments
+        (student_id, academic_term_id, section_id, enrollment_status, annual_enrollment_id, annual_term_number, term_scope_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`, [positiveStudentId, termIds[index], sectionIds[index],
+        applicable ? 'pending_payment' : 'not_applicable', positiveAnnualId, termNumber,
+        applicable ? 'applicable' : 'not_applicable']);
+      positiveEnrollmentIds.push(Number(placement.insertId));
+    }
+    const positiveHandoff = await annualEnrollment.submitRegistrarHandoff(registrarId, positiveAnnualId,
+      await registrarHandoffInput(positiveAnnualId));
+    assert.equal(positiveHandoff.status, 'awaiting_finance');
+    await pool.execute('UPDATE enrollments SET section_id = ? WHERE id = ?', [alternateEntrySectionId, positiveEnrollmentIds[1]]);
+    const positivePreview = await annualFinance.annualAssessmentPreview(financeId, positiveAnnualId);
+    const assessmentDraft = {
+      id: uuid(), actionType: 'annual_assessment', idempotencyKey: uuid(),
+      entityContext: { annualId: positiveAnnualId, studentId: positiveStudentId },
+      input: { scheduleId: String(positivePreview.scheduleId), scheduleVersion: String(positivePreview.scheduleVersion),
+        voucherCode: positivePreview.voucherCode, optionalLineId: [] }
+    };
+    const assessedResult = await commitReviewedFinanceDraft(assessmentDraft, { financeAssessmentAttestation: true });
+    assert.equal(assessedResult.result.enrollmentActivation[0].status, 'academic_review_required',
+      'Finance assessment commits while a changed entry section requires a fresh Registrar handoff');
+    await pool.execute('UPDATE enrollments SET section_id = ? WHERE id = ?', [sectionIds[1], positiveEnrollmentIds[1]]);
+    const restoredRetry = await annualEnrollment.retryFinanceHandoffs(financeId, { annualEnrollmentId: positiveAnnualId });
+    assert.equal(restoredRetry[0].status, 'academic_review_required',
+      'restoring the old section fingerprint cannot unblock a handoff already marked for Registrar review');
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_entry_activations WHERE annual_enrollment_id = ?',
+      [positiveAnnualId]))[0][0].count), 0);
+    const refreshedPositiveHandoff = await annualEnrollment.submitRegistrarHandoff(registrarId, positiveAnnualId,
+      await registrarHandoffInput(positiveAnnualId));
+    assert.equal(refreshedPositiveHandoff.status, 'awaiting_finance',
+      'a fresh Registrar handoff supersedes a saved academic-review blocker');
+    const positiveAssessmentId = Number(assessedResult.result.assessmentId);
+    const dpCharges = (await pool.execute(`SELECT enrollment.annual_term_number, charge.id, CAST(charge.amount AS CHAR(40)) AS amount
+      FROM assessed_charges AS charge INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
+      WHERE charge.assessment_id = ? AND charge.fee_category = 'tuition' AND charge.installment = 'DP'
+        AND enrollment.annual_term_number IN (2, 3) ORDER BY enrollment.annual_term_number`, [positiveAssessmentId]))[0];
+    const entryDpCharge = dpCharges.find((charge) => Number(charge.annual_term_number) === 2);
+    const wrongTermDpCharge = dpCharges.find((charge) => Number(charge.annual_term_number) === 3);
+    assert.ok(entryDpCharge && wrongTermDpCharge);
+    const paymentDraft = (amount, allocation, reference) => ({
+      id: uuid(), actionType: 'annual_payment', idempotencyKey: uuid(),
+      entityContext: { studentId: positiveStudentId },
+      input: { amount, paymentDate: '2026-11-18', referenceNo: reference, receiptIssued: '0',
+        allocations: allocation ? [{ chargeId: String(allocation.chargeId), openingLiabilityId: null, amount: allocation.amount }] : [] }
+    });
+    const wrongTermDraft = paymentDraft('10.00', { chargeId: wrongTermDpCharge.id, amount: '10.00' }, 'WRONG-TERM-DP');
+    const wrongTermCommit = await commitReviewedFinanceDraft(wrongTermDraft);
+    assert.equal(wrongTermCommit.result.enrollmentActivation[0].status, 'awaiting_finance',
+      'a payment allocated to another term does not satisfy the entry-term DP');
+    assert.equal((await pool.execute('SELECT intake_status FROM annual_enrollments WHERE id = ?', [positiveAnnualId]))[0][0].intake_status,
+      'pending');
+    const paymentsBeforeReplay = Number((await pool.execute('SELECT COUNT(*) AS count FROM finance_payments WHERE student_id = ?',
+      [positiveStudentId]))[0][0].count);
+    const wrongTermReplay = await commitReviewedFinanceDraft(wrongTermDraft, {}, wrongTermCommit.result);
+    assert.equal(wrongTermReplay.result.paymentId, wrongTermCommit.result.paymentId);
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM finance_payments WHERE student_id = ?',
+      [positiveStudentId]))[0][0].count), paymentsBeforeReplay,
+    'replaying a committed Finance payment rechecks activation without posting the payment again');
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_entry_activations WHERE annual_enrollment_id = ?',
+      [positiveAnnualId]))[0][0].count), 0);
+    const partialDraft = paymentDraft('50.00', { chargeId: entryDpCharge.id, amount: '50.00' }, 'PARTIAL-ENTRY-DP');
+    const partialCommit = await commitReviewedFinanceDraft(partialDraft);
+    assert.equal(partialCommit.result.enrollmentActivation[0].status, 'awaiting_finance',
+      'a partial entry-term DP cannot activate enrollment');
+    const creditDraft = paymentDraft('50.00', null, 'UNALLOCATED-DP-CREDIT');
+    const creditCommit = await commitReviewedFinanceDraft(creditDraft);
+    assert.equal(creditCommit.result.enrollmentActivation[0].status, 'awaiting_finance',
+      'unallocated credit does not satisfy the exact entry-term DP');
+    const allocateCreditDraft = (amount) => ({
+      id: uuid(), actionType: 'annual_credit_allocation', idempotencyKey: uuid(),
+      entityContext: { studentId: positiveStudentId, paymentId: String(creditCommit.result.paymentId) },
+      input: { allocations: [{ chargeId: String(entryDpCharge.id), openingLiabilityId: null, amount }] }
+    });
+    const concurrentAllocations = await Promise.all([
+      commitReviewedFinanceDraft(allocateCreditDraft('25.00')),
+      commitReviewedFinanceDraft(allocateCreditDraft('25.00'))
+    ]);
+    const positiveActivation = concurrentAllocations.flatMap((result) => result.result.enrollmentActivation || [])
+      .find((activation) => activation.status === 'activated');
+    assert.ok(positiveActivation,
+      'concurrent reviewed credit allocations activate when the exact entry-term DP becomes fully settled');
+    assert.equal(positiveActivation.financeReviewId > 0, true);
+    assert.equal((await pool.execute('SELECT intake_status FROM annual_enrollments WHERE id = ?',
+      [positiveAnnualId]))[0][0].intake_status, 'enrolled');
+    assert.equal(Number((await pool.execute('SELECT account_activation_pending FROM annual_enrollments WHERE id = ?',
+      [positiveAnnualId]))[0][0].account_activation_pending), 1);
+    assert.equal((await pool.execute('SELECT enrollment_status FROM enrollments WHERE id = ?',
+      [positiveEnrollmentIds[1]]))[0][0].enrollment_status, 'enrolled');
+    const positiveActivationEvidence = (await pool.execute(`SELECT activation_trigger, activated_by_role,
+      entry_dp_state, finance_review_id FROM annual_entry_activations WHERE annual_enrollment_id = ?`,
+    [positiveAnnualId]))[0][0];
+    assert.equal(positiveActivationEvidence.activation_trigger, 'finance_commit');
+    assert.equal(positiveActivationEvidence.activated_by_role, 'finance');
+    assert.equal(positiveActivationEvidence.entry_dp_state, 'settled');
+    assert.equal(Number(positiveActivationEvidence.finance_review_id), Number(positiveActivation.financeReviewId));
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM finance_payments WHERE student_id = ?',
+      [positiveStudentId]))[0][0].count), 3, 'wrong-term, partial, and unallocated payments are each recorded once');
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_entry_activations WHERE annual_enrollment_id = ?',
+      [positiveAnnualId]))[0][0].count), 1);
+    const positiveAllocations = (await pool.execute(`SELECT enrollment.annual_term_number,
+      CAST(SUM(net.net_amount) AS CHAR(40)) AS allocated_amount
+      FROM v_finance_net_payment_allocations AS net
+      INNER JOIN assessed_charges AS charge ON charge.id = net.charge_id
+      INNER JOIN enrollments AS enrollment ON enrollment.id = charge.enrollment_id
+      WHERE charge.assessment_id = ? GROUP BY enrollment.annual_term_number ORDER BY enrollment.annual_term_number`,
+    [positiveAssessmentId]))[0];
+    assert.deepEqual(positiveAllocations.map((row) => [Number(row.annual_term_number), row.allocated_amount]),
+      [[2, '100.00'], [3, '10.00']], 'only exact entry DP is required; another term allocation stays separate');
+    const positiveSheet = await annualFinance.getEntryEnrollmentPrintSheet(financeId, positiveStudentId, positiveAnnualId);
+    assert.equal(positiveSheet.school_year, '2026-2027');
+    assert.equal(positiveSheet.entry_term_number, 2);
   } finally {
     if (pool) await pool.end();
     await adminPool.query(`DROP DATABASE IF EXISTS ${quoteDatabase(databaseName)}`).catch(() => {});

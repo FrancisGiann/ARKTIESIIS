@@ -265,7 +265,8 @@ function jsonHash(value) {
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defaultSql, draftService = null } = {}) {
+function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defaultSql, draftService = null,
+  annualEnrollmentService = null, logger = console } = {}) {
   const drafts = draftService || createFinanceReviewDraftService({ getPool, sql });
   const retakePreviewService = createRetakeReferralService({ getPool, sql });
 
@@ -1379,12 +1380,22 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     const studentId = safeIntegerId(context.studentId);
     const writer = ACTION_WRITERS[draft.actionType];
     if (!writer) throw new Error('The finance action is not registered for reviewed commit.');
-    const result = await writer({ services, actorId, studentId, context, input, commitContext });
-    return result || { saved: true };
+    const result = await writer({ services, actorId, studentId, context, input, commitContext }) || { saved: true };
+    if (typeof annualEnrollmentService?.activateFinanceHandoffsInTransaction === 'function') {
+      const selector = draft.actionType === 'annual_assessment'
+        ? { annualEnrollmentId: context.annualId }
+        : ['annual_payment', 'annual_credit_allocation', 'legacy_payment_reconciliation'].includes(draft.actionType)
+          ? { studentId: context.studentId } : null;
+      if (selector) {
+        const enrollmentActivation = await annualEnrollmentService.activateFinanceHandoffsInTransaction(tx, actorId, selector);
+        return { ...result, enrollmentActivation };
+      }
+    }
+    return result;
   }
 
   async function commit(actorId, sessionBindingHmac, draftId, revision, fingerprint, commitContext = {}) {
-    return drafts.commitReviewedDraft({
+    const outcome = await drafts.commitReviewedDraft({
       actorId, sessionBindingHmac, draftId, revision,
       review: { dependencyFingerprint: fingerprint, preview: {} },
       commitContext,
@@ -1394,6 +1405,29 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       },
       applyInTransaction: applyReviewedAction
     });
+    if (outcome.committed && outcome.replayed && typeof annualEnrollmentService?.retryFinanceHandoffs === 'function') {
+      try {
+        const draft = await drafts.getDraft(actorId, draftId);
+        const context = draft?.entityContext || {};
+        const selector = draft?.actionType === 'annual_assessment' ? { annualEnrollmentId: context.annualId }
+          : ['annual_payment', 'annual_credit_allocation', 'legacy_payment_reconciliation'].includes(draft?.actionType)
+            ? { studentId: context.studentId } : null;
+        if (selector) {
+          const enrollmentActivation = await annualEnrollmentService.retryFinanceHandoffs(actorId, selector);
+          const priorActivations = Array.isArray(outcome.result?.enrollmentActivation) ? outcome.result.enrollmentActivation : [];
+          const latestByAnnualId = new Map();
+          for (const activation of [...priorActivations, ...(Array.isArray(enrollmentActivation) ? enrollmentActivation : [])]) {
+            const annualId = safeIntegerId(activation?.annualEnrollmentId);
+            if (annualId) latestByAnnualId.set(annualId, activation);
+          }
+          outcome.result = { ...(outcome.result || {}), enrollmentActivation: [...latestByAnnualId.values()] };
+        }
+      } catch {
+        try { logger.error?.('A committed Finance action could not retry its pending enrollment activation.'); }
+        catch { /* A retry failure must not turn a saved Finance action into a reported failure. */ }
+      }
+    }
+    return outcome;
   }
 
   return {
@@ -1410,9 +1444,11 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
     isRetiredAction: (type) => RETIRED_ACTION_TYPES.has(type),
     actionLabel: (type) => SAFE_ACTIONS.find((action) => action.type === type)?.label
       || (RETIRED_ACTION_TYPES.has(type) ? 'Retired legacy account action' : 'Finance update'),
-    afterCommitPath: (draft) => {
+    afterCommitPath: (draft, commitOutcome = null) => {
       const studentId = safeIntegerId(draft.entityContext?.studentId);
-      const result = draft.committedResult || {};
+      const result = { ...(draft.committedResult || {}),
+        ...(Array.isArray(commitOutcome?.result?.enrollmentActivation)
+          ? { enrollmentActivation: commitOutcome.result.enrollmentActivation } : {}) };
       const returnParams = financeReturnQuery(draft.entityContext?.financeUiReturnContext);
       const appendReturnContext = (path) => {
         const suffix = returnParams.toString();
@@ -1430,9 +1466,17 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
           if (Number.isSafeInteger(Number(result.versionNo)) && Number(result.versionNo) > 0) params.set('savedVersion', String(result.versionNo));
           return `/finance/schedules?${params.toString()}`;
         }
-        case 'annual_payment': return studentId && Number.isSafeInteger(Number(result.paymentId))
-          ? appendReturnContext(`/finance/students/${studentId}/annual/payments/${Number(result.paymentId)}/confirmation`)
-          : accountPath('payments', 'paymentRecorded');
+        case 'annual_payment': {
+          if (!studentId || !Number.isSafeInteger(Number(result.paymentId))) return accountPath('payments', 'paymentRecorded');
+          const activatedAnnualIds = [...new Set((result.enrollmentActivation || [])
+            .filter((activation) => activation.status === 'activated')
+            .map((activation) => safeIntegerId(activation.annualEnrollmentId)).filter(Boolean))].slice(0, 20);
+          const params = new URLSearchParams();
+          for (const annualId of activatedAnnualIds) params.append('enrollmentAnnualId', String(annualId));
+          const sheetQuery = params.toString();
+          const path = `/finance/students/${studentId}/annual/payments/${Number(result.paymentId)}/confirmation${sheetQuery ? `?${sheetQuery}` : ''}`;
+          return appendReturnContext(path);
+        }
         case 'legacy_transaction':
           if (studentId && draft.input?.transactionType === 'payment' && Number.isSafeInteger(Number(result.transactionId))) {
             return `/finance/students/${studentId}/legacy/payments/${Number(result.transactionId)}/confirmation`;

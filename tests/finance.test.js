@@ -848,10 +848,15 @@ function makeAuthPool(role) {
   };
   return async () => ({
     request() {
+      const values = {};
       return {
-        input() { return this; },
+        input(name, _type, value) { values[name] = value; return this; },
         async query(statement) {
           if (statement.includes('WHERE email = @email')) return { recordset: [user] };
+          if (statement.startsWith('UPDATE users SET auth_session_version = @authSessionVersion')) {
+            user.auth_session_version = values.authSessionVersion;
+            return { rowsAffected: [1] };
+          }
           if (statement.includes('WHERE id = @userId')) return { recordset: [{ ...user }] };
           throw new Error(`Unexpected authentication query: ${statement}`);
         }
@@ -896,12 +901,19 @@ async function signIn(baseUrl, role) {
     method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ _csrf: token, email: `${role}@example.edu`, password: 'Correct-Horse-Battery-12' })
   });
-  assert.equal(response.status, 303);
+  assert.equal(response.status, 303, await response.clone().text());
   return cookieFrom(response);
 }
 
 test('annual finance correction routes stay student-bound, CSRF-protected, and reachable from the account workflow', async () => {
   const calls = [];
+  const activationRetries = [];
+  const annualEnrollmentService = {
+    async retryFinanceHandoffs(actorId, selector) {
+      activationRetries.push({ actorId, selector });
+      return [{ annualEnrollmentId: 23, status: 'activated' }];
+    }
+  };
   const studentId = 22;
   const annualFinanceService = {
     async listRoster() { return { rows: [], options: { schoolYears: [], terms: [], sections: [] } }; },
@@ -938,7 +950,7 @@ test('annual finance correction routes stay student-bound, CSRF-protected, and r
   };
   const idempotencyKey = '41111111-1111-4111-8111-111111111111';
   const reviewProbe = createReviewRouteProbe();
-  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService, annualFinanceService, financeCasesService, financeReviewActionService: reviewProbe }), async (baseUrl) => {
+  await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService, annualFinanceService, annualEnrollmentService, financeCasesService, financeReviewActionService: reviewProbe }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');
     const account = await fetch(`${baseUrl}/finance/students/${studentId}/annual`, { headers: { cookie } });
     const accountHtml = await account.text();
@@ -974,16 +986,35 @@ test('annual finance correction routes stay student-bound, CSRF-protected, and r
     assert.match(previewHtml, /name="expectedAmount" value="100\.00"/);
     await reviewed(`/finance/students/${studentId}/annual/legacy-opening/transfer`, { expectedAmount: '100.00', sourceLabel: 'Reviewed account', reason: 'Reviewed statement', idempotencyKey });
     await reviewed(`/finance/students/${studentId}/annual/23/exemptions`, { reason: 'Approved', idempotencyKey, ruleTerm: '1', ruleCategory: 'tuition', ruleAmount: '50.00' });
+    const activationRetry = await post(`/finance/students/${studentId}/annual/23/retry-enrollment-activation`, {});
+    assert.equal(activationRetry.status, 303);
+    assert.equal(activationRetry.headers.get('location'), `/finance/students/${studentId}/annual?view=payments&annualId=23&notice=enrollmentActivated#assessment-payment-handoff`);
+    const activationCsrfDenied = await fetch(`${baseUrl}/finance/students/${studentId}/annual/23/retry-enrollment-activation`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: ''
+    });
+    assert.equal(activationCsrfDenied.status, 403);
     const csrfDenied = await fetch(`${baseUrl}/finance/students/${studentId}/annual/allocations/101/release`, {
       method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: 'amount=5.00'
     });
     assert.equal(csrfDenied.status, 403);
   });
   assert.deepEqual(calls.map(([name]) => name), ['openingPreview'], 'only the registered read-only preview bypasses reviewed writes');
+  assert.equal(activationRetries.length, 1);
+  assert.deepEqual(activationRetries[0], { actorId: 7, selector: { studentId: 22, annualEnrollmentId: 23 } });
   assert.equal(reviewProbe.starts.length, 6);
   assert.ok(reviewProbe.starts.every((entry) => entry.actorId === 7));
   assert.ok(reviewProbe.starts.some((entry) => entry.pathname === `/students/${studentId}/annual/payments`));
   assert.equal(reviewProbe.starts.find((entry) => entry.pathname.endsWith('/payments')).input.transmittalReference, 'TRANSMIT-104');
+
+  await withServer(createApp({ databasePool: makeAuthPool('registrar'), environment, financeService, annualFinanceService,
+    annualEnrollmentService, financeCasesService, financeReviewActionService: reviewProbe }), async (baseUrl) => {
+    const cookie = await signIn(baseUrl, 'registrar');
+    const denied = await fetch(`${baseUrl}/finance/students/${studentId}/annual/23/retry-enrollment-activation`, {
+      method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' }, body: '_csrf=not-needed'
+    });
+    assert.equal(denied.status, 403, 'Registrar cannot run the Finance activation retry action');
+  });
+  assert.equal(activationRetries.length, 1, 'the unauthorized request never reaches the Finance activation service');
 
   await withServer(createApp({ databasePool: makeAuthPool('finance'), environment, financeService, annualFinanceService, financeCasesService, financeReviewActionService: reviewProbe }), async (baseUrl) => {
     const cookie = await signIn(baseUrl, 'finance');

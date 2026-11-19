@@ -36,7 +36,8 @@ function candidate(index, overrides = {}) {
     voucher_code: 'ESC', intake_status: 'pending', student_no: `SYN-${index}`,
     student_name: `Synthetic ${String(index).padStart(4, '0')}`,
     assessment_id: index + 1000, schedule_id: 3, schedule_version: 2, assessed_voucher_code: 'ESC',
-    has_finance_review: 1, voucher_review_required: 0, ...overrides };
+    has_finance_review: 1, registrar_handoff_id: index + 2000, registrar_handoff_status: 'awaiting_finance',
+    voucher_review_required: 0, ...overrides };
 }
 
 test('assessment queue defaults to pending and rejects malformed scope before snapshot access', async () => {
@@ -68,6 +69,23 @@ test('queue classifies pending reviewed candidates in one snapshot before counts
   assert.equal(fixture.queries.at(-1).params.schoolYear, '2026-2027');
   assert.match(fixture.queries.at(-1).statement, /FROM AssessmentQueue/);
   assert.doesNotMatch(fixture.queries.at(-1).statement, /payment_status|finance_payments/);
+});
+
+test('pending intakes enter the approval queue only after Registrar handoff while reviewed records stay visible', async () => {
+  const rows = [
+    candidate(1, { registrar_handoff_id: null, assessment_id: null, has_finance_review: 0 }),
+    candidate(2, { assessment_id: null, has_finance_review: 0 }),
+    candidate(3, { registrar_handoff_id: null }),
+    candidate(4, { intake_status: 'confirmed', registrar_handoff_id: null })
+  ];
+  const fixture = queueFixture(rows);
+  const pending = await fixture.queue.list(7);
+  assert.deepEqual(pending.counts, { pending: 1, approved: 2 });
+  assert.deepEqual(pending.rows.map((row) => row.annual_enrollment_id), [2]);
+  const approved = await fixture.queue.list(7, { view: 'approved' });
+  assert.deepEqual(approved.rows.map((row) => row.annual_enrollment_id), [3, 4]);
+  assert.deepEqual(fixture.classifications, [[], []]);
+  assert.match(fixture.queries.at(-1).statement, /LatestHandoff/);
 });
 
 test('stale review evidence moves pending rows back to the approval queue across filtered pages', async () => {

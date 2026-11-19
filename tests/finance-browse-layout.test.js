@@ -595,9 +595,9 @@ test('finance annual roster separates page data, classification, and balances in
   assert.doesNotMatch(record, /No review flag/);
   assert.match(html, /Pending activation/);
   assert.match(html, /value="needs_review"\s*>Payment status unavailable/);
-  assert.match(html, /Awaiting registrar confirmation/);
-  assert.match(html, /<dt>Payment status<\/dt><dd>Awaiting registrar confirmation<br><span class="muted-copy">The registrar must confirm enrollment using the current fee assessment\.<\/span><\/dd>/);
-  assert.match(html, /Earlier confirmation recorded/);
+  assert.match(html, /Assessment and confirmation mismatch/);
+  assert.match(html, /<dt>Payment status<\/dt><dd>Assessment and confirmation mismatch<br><span class="muted-copy">Review the saved Finance assessment against the historical Registrar confirmation\.<\/span><\/dd>/);
+  assert.match(html, /Earlier historical confirmation recorded/);
   assert.doesNotMatch(html, /Why unavailable/);
   assert.match(html, /Fully paid/);
   assert.doesNotMatch(html, /Term 1 · Term 1|pending payment/);
@@ -692,8 +692,8 @@ test('finance annual roster separates page data, classification, and balances in
     }
   });
   const mismatchedConfirmationHtml = await renderFinanceView('annual-student', mismatchedConfirmationLocals);
-  assert.match(mismatchedConfirmationHtml, /Payment status · Entire term:<\/strong> Awaiting registrar confirmation/);
-  assert.match(mismatchedConfirmationHtml, /Earlier confirmation recorded/);
+  assert.match(mismatchedConfirmationHtml, /Payment status · Entire term:<\/strong> Assessment and confirmation mismatch/);
+  assert.match(mismatchedConfirmationHtml, /Earlier historical confirmation recorded/);
   assert.doesNotMatch(mismatchedConfirmationHtml, /Confirmed by registrar/);
 
   const emptyAssessedAccountLocals = structuredClone(accountLocals);
@@ -829,7 +829,7 @@ test('finance annual roster separates page data, classification, and balances in
     assessmentPaymentHandoff: { annualId: 21, schoolYear: '2026-2027', entryTermNumber: 1,
       status: 'ready_for_registrar', reviewed: true, downPaymentDue: '0.00', targetChargeId: null }
   });
-  assert.match(readyHandoffHtml, /pending intake back to Registrar/);
+  assert.match(readyHandoffHtml, /The exact entry-term down payment is settled and the Registrar handoff is saved\. Enrollment activation will run on the Finance commit or explicit retry\./);
   assert.doesNotMatch(readyHandoffHtml, /Record down payment/);
   const existingAssessmentPreviewHtml = await renderFinanceView('annual-student', {
     ...pendingReviewLocals,
@@ -908,7 +908,7 @@ test('finance annual roster separates page data, classification, and balances in
     assert.match(archivedHtml, /Archived student financial history is read-only/);
     assert.doesNotMatch(archivedHtml, /<form\b[^>]*method="post"/i, `${accountView} does not offer mutation controls for archived accounts`);
     assert.match(archivedHtml, /Statement of Account/, 'historical statement remains available');
-    assert.doesNotMatch(archivedHtml, /Record an annual assessment to add this school year’s fees\.|The registrar must confirm enrollment using the current fee assessment\.|Open the account to check the fees and enrollment confirmation\.|Check the fee assessment and enrollment confirmation\./,
+    assert.doesNotMatch(archivedHtml, /Record an annual assessment to add this school year’s fees\.|Review the saved Finance assessment against the historical Registrar confirmation\.|Open the account to check the fees and enrollment confirmation\.|Check the fee assessment and enrollment confirmation\./,
       `${accountView} does not show action guidance for an archived account`);
     if (accountView === 'overview') assert.doesNotMatch(archivedHtml, />Record a payment<\/a>/);
     if (accountView === 'payments') assert.match(archivedHtml, /Payment records and applications are available in History/);
@@ -925,9 +925,9 @@ test('finance annual roster separates page data, classification, and balances in
     }
   });
   const archivedAssessmentHtml = await renderFinanceView('annual-student', archivedAssessmentLocals);
-  assert.match(archivedAssessmentHtml, /Payment status · Entire term:<\/strong> Awaiting registrar confirmation/);
-  assert.match(archivedAssessmentHtml, /Earlier confirmation recorded/);
-  assert.doesNotMatch(archivedAssessmentHtml, /The registrar must confirm enrollment using the current fee assessment\./);
+  assert.match(archivedAssessmentHtml, /Payment status · Entire term:<\/strong> Assessment and confirmation mismatch/);
+  assert.match(archivedAssessmentHtml, /Earlier historical confirmation recorded/);
+  assert.doesNotMatch(archivedAssessmentHtml, /Review the saved Finance assessment against the historical Registrar confirmation\./);
   assert.match(archivedAssessmentHtml, /Archived student financial history is read-only/);
   const transferredLocals = structuredClone(accountLocals);
   transferredLocals.accountView = 'clearance';

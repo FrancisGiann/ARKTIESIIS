@@ -144,7 +144,7 @@ test('term activation stays blocked with a clear message when clearance schema l
     const html = await response.text();
     assert.equal(response.status, 503);
     assert.match(html, /Paper-clearance prerequisite data is unavailable in the installed schema/);
-    assert.match(html, /Enrollment confirmation and term activation remain blocked/);
+    assert.match(html, /Registrar handoff and term activation remain blocked/);
     assert.match(html, /This term cannot be activated/);
     assert.doesNotMatch(html, /Activate term|action="\/registrar\/intake\/45\/finalize/);
   });
@@ -404,7 +404,7 @@ test('legacy intake URLs only redirect or reject; retained form views are not re
   });
 });
 
-test('registrar intake opens the guided annual form and links the roster to fee confirmation and paper records', async () => {
+test('registrar intake opens the guided annual form and links the roster to handoff and paper records', async () => {
   const app = express();
   const preEnrollmentId = 'a342bc01-2a68-4f19-a7fd-4d5bb1d83261';
   const preEnrollmentRecord = {
@@ -418,8 +418,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     prior_school: 'Lucena High School', student_signature_present: 1, student_signed_date: '2026-10-01',
     received_by: 'Front Desk Operator', received_date: '2026-10-02', receipts: []
   };
-  let confirmationCall = null;
-  let confirmationCalls = 0;
+  let handoffCall = null;
   let hasConfirmed = false;
   let financeStatus = 'awaiting_finance_assessment';
   const session = {};
@@ -460,13 +459,15 @@ test('registrar intake opens the guided annual form and links the roster to fee 
           term_scope_status: 'applicable', enrollment_status: 'pending_payment' }))
       };
     },
-    async confirmAnnualEnrollment(actorId, annualId, input) {
-      confirmationCall = { actorId, annualId, input };
-      hasConfirmed = true;
-      confirmationCalls += 1;
-      return { annualEnrollmentId: 71, studentId: 41, studentNo: 'SHS-2026-0321', firstName: 'Synthetic', lastName: 'Learner', schoolYear: '2026-2027', gradeLevel: 'Grade 11', term: 'Term 1', sectionName: 'Mabini', total: '1334.50',
-        temporaryPassword: confirmationCalls === 1 ? 'synthetic<&"credential' : null,
-        alreadyConfirmed: confirmationCalls > 1 };
+    async getRegistrarHandoffStatus(actorId, annualId, clearanceFingerprint) {
+      assert.equal(actorId, registrar.id);
+      assert.equal(String(annualId), '71');
+      assert.equal(clearanceFingerprint, 'clearance-review-fingerprint');
+      return { exists: false, currentPrerequisiteFingerprint: 'b'.repeat(64) };
+    },
+    async submitRegistrarHandoff(actorId, annualId, input) {
+      handoffCall = { actorId, annualId, input };
+      return { annualEnrollmentId: 71, handoffId: 901, status: 'awaiting_finance' };
     }
   };
   const feePreview = {
@@ -622,8 +623,8 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(pendingHtml, /Voucher PUB/);
     assert.match(pendingHtml, /Update voucher/);
     assert.doesNotMatch(pendingHtml, /Category D|name="voucherCategory"/);
-    assert.match(pendingHtml, /Enrollment confirmation/);
-    assert.match(pendingHtml, /Review and finalize enrollment/);
+    assert.match(pendingHtml, /Entry handoff and activation/);
+    assert.match(pendingHtml, /Open enrollment/);
     assert.match(pendingHtml, /Paper requirements checklist/);
     assert.match(pendingHtml, /Enrollment counts/);
     assert.match(pendingHtml, /data-label="Students"><strong>1/);
@@ -635,7 +636,7 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.match(waitingHtml, /<h1>Awaiting Finance readiness<\/h1>/);
     assert.match(waitingHtml, /<li aria-current="step"\s*><span class="intake-step-label--full">Finance assessment/);
     assert.match(waitingHtml, /Finance handoff is next/);
-    assert.match(waitingHtml, /Final review waits for Finance/);
+    assert.match(waitingHtml, /before final review can begin/);
     assert.doesNotMatch(waitingHtml, /type="submit"[^>]*>Confirm enrollment/);
     financeStatus = 'ready_for_registrar';
     const finalReview = await fetch(`${baseUrl}/registrar/intake/71/review`);
@@ -671,66 +672,22 @@ test('registrar intake opens the guided annual form and links the roster to fee 
     assert.equal(feePreviewCalls.length, 0);
     const idempotencyKey = reviewHtml.match(/name="idempotencyKey" value="([0-9a-f-]{36})"/)?.[1];
     assert.ok(idempotencyKey);
-    const confirmationForm = new URLSearchParams({ _csrf: csrfToken, idempotencyKey,
-      clearanceSnapshotFingerprint: 'clearance-review-fingerprint' });
-    const confirmResponse = await fetch(`${baseUrl}/registrar/intake/71/confirm`, {
-      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: confirmationForm
+    assert.match(reviewHtml, /name="clearanceFingerprint" value="clearance-review-fingerprint"/);
+    assert.match(reviewHtml, new RegExp(`name="prerequisiteFingerprint" value="${'b'.repeat(64)}"`));
+    const handoffForm = new URLSearchParams({ _csrf: csrfToken, idempotencyKey,
+      clearanceFingerprint: 'clearance-review-fingerprint', prerequisiteFingerprint: 'b'.repeat(64) });
+    const handoffResponse = await fetch(`${baseUrl}/registrar/intake/71/handoff`, {
+      method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: handoffForm
     });
-    const confirmedHtml = await confirmResponse.text();
-    assert.equal(confirmResponse.status, 200);
-    assert.match(confirmResponse.headers.get('cache-control'), /no-store/);
-    assert.match(confirmedHtml, /Enrollment confirmed/);
-    assert.match(confirmedHtml, /Amounts reflect the reviewed assessment after selected optional charges and approved coverage/);
-    assert.match(confirmedHtml, /₱1,334\.50/);
-    assert.match(confirmedHtml, /Confirmation ID <strong>101/);
-    assert.match(confirmedHtml, /Itemized assessment and approved coverage/);
-    assert.match(confirmedHtml, /Tour/);
-    assert.match(confirmedHtml, /synthetic&lt;&amp;&#34;credential/);
-    assert.doesNotMatch(confirmedHtml, /synthetic<&"credential/);
-    assert.match(confirmedHtml, /<header class="confirmation-document-header">[\s\S]*?<aside class="confirmation-secret"[\s\S]*?<\/aside>[\s\S]*?<\/header>/);
-    assert.equal((confirmedHtml.match(/<aside class="confirmation-secret"/g) || []).length, 1,
-      'the one-time credential appears once in the print header');
-    assert.match(confirmedHtml, /initial confirmation and is not emailed/);
-    assert.match(confirmedHtml, /complete email verification and change it at sign-in/);
-    assert.match(confirmedHtml, /Print \/ save as PDF/);
-    assert.match(confirmedHtml, /type="button" data-print-page/);
-    assert.match(confirmedHtml, /\/registrar\/intake\/71\/confirmation/);
-    assert.match(confirmedHtml, /Open paper requirements checklist/);
-    assert.deepEqual(confirmationCall, { actorId: registrar.id, annualId: '71', input: {
+    assert.equal(handoffResponse.status, 303);
+    assert.equal(handoffResponse.headers.get('location'), '/registrar/intake/71/review?notice=handoffSent');
+    assert.deepEqual(handoffCall, { actorId: registrar.id, annualId: '71', input: {
       _csrf: csrfToken, idempotencyKey,
-      clearanceSnapshotFingerprint: 'clearance-review-fingerprint'
+      clearanceFingerprint: 'clearance-review-fingerprint', prerequisiteFingerprint: 'b'.repeat(64)
     } });
+    assert.ok(handoffCall, 'digital handoff saves a Registrar decision without creating a confirmation or password');
 
-    const replayResponse = await fetch(`${baseUrl}/registrar/intake/71/confirm`, {
-      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: confirmationForm
-    });
-    const replayHtml = await replayResponse.text();
-    assert.equal(replayResponse.status, 200);
-    assert.match(replayResponse.headers.get('cache-control'), /no-store/);
-    assert.match(replayHtml, /data-print-page/);
-    assert.doesNotMatch(replayHtml, /synthetic&lt;&amp;&#34;credential|One-time temporary password/);
-    assert.equal(confirmationCalls, 2);
-
-    const reopened = await fetch(`${baseUrl}/registrar/intake/71/confirmation`);
-    const reopenedHtml = await reopened.text();
-    assert.equal(reopened.status, 200);
-    assert.match(reopened.headers.get('cache-control'), /no-store/);
-    assert.match(reopenedHtml, /Enrollment confirmed/);
-    assert.match(reopenedHtml, /Downpayment/);
-    assert.match(reopenedHtml, /Approved coverage/);
-    assert.match(reopenedHtml, /Confirmation ID <strong>101/);
-    assert.match(reopenedHtml, /Current term placements/);
-    assert.doesNotMatch(reopenedHtml, /synthetic&lt;&amp;&#34;credential|One-time temporary password/);
-    assert.match(reopenedHtml, /data-print-page/);
-    assert.equal(confirmationCall?.annualId, '71');
-    const confirmationCss = fs.readFileSync(path.join(__dirname, '..', 'public/css/app.css'), 'utf8');
-    assert.match(confirmationCss, /\.annual-confirmation-document \.confirmation-secret \{\s*display: block !important;/);
-    assert.match(confirmationCss, /\.annual-confirmation-document \.confirmation-secret \{[\s\S]*?break-inside: avoid;/);
-    assert.match(confirmationCss, /\.annual-confirmation-document \.admin-table thead \{ position: static !important; display: table-header-group !important;/,
-      'the shared tuition installment table is reset from the narrow-screen clipped header rules when printed');
-    assert.match(confirmationCss, /\.annual-confirmation-document \.admin-table td::before \{ display: none !important;/);
-    assert.match(confirmationCss, /\.fee-approved-tuition \.admin-table td:nth-child\(n\+2\) \{ text-align: right;/);
     preEnrollmentRecord.existingStudent = { id: 41, studentNo: 'SHS-2026-0321', profile: null };
     const linkedResponse = await fetch(`${baseUrl}/registrar/intake/new?preEnrollmentId=${preEnrollmentId}`);
     const linkedHtml = await linkedResponse.text();
@@ -855,11 +812,11 @@ test('continuity-source failures recover only the source form and reject a refre
     assert.doesNotMatch(failedSourceForm, /<script>alert\("source"\)<\/script>/);
     assert.equal(failedSourceForm.match(/name="idempotencyKey" value="([0-9a-f-]{36})"/)?.[1], sourceKey);
     assert.equal((failedHtml.match(/data-unsaved-initially-dirty="true"/g) || []).length, 1);
-    const siblingConfirmForm = failedHtml.match(/<form[^>]*action="\/registrar\/intake\/71\/confirm"[\s\S]*?<\/form>/)?.[0];
-    assert.ok(siblingConfirmForm);
-    assert.doesNotMatch(siblingConfirmForm, /data-unsaved-initially-dirty|Reviewed|sourceAnnualId/);
-    assert.notEqual(siblingConfirmForm.match(/name="idempotencyKey" value="([0-9a-f-]{36})"/)?.[1], sourceKey,
-      'the failed source-review token remains separate from the sibling confirmation token');
+    const siblingHandoffForm = failedHtml.match(/<form[^>]*action="\/registrar\/intake\/71\/handoff"[\s\S]*?<\/form>/)?.[0];
+    assert.ok(siblingHandoffForm);
+    assert.doesNotMatch(siblingHandoffForm, /data-unsaved-initially-dirty|Reviewed|sourceAnnualId/);
+    assert.notEqual(siblingHandoffForm.match(/name="idempotencyKey" value="([0-9a-f-]{36})"/)?.[1], sourceKey,
+      'the failed source-review token remains separate from the digital handoff token');
     assert.equal(calls[0].actorId, registrar.id);
     assert.equal(calls[0].sourceId, '410');
     assert.equal(calls[0].reason, reason);
@@ -1127,8 +1084,10 @@ test('credential-free confirmation GET uses the saved assessment, entry-term sco
     assert.equal(financePendingForm.status, 403, 'Finance does not access the Registrar pending copy route');
   });
   const managementTemplate = fs.readFileSync(path.join(__dirname, '..', 'views/records/annual-management.ejs'), 'utf8');
-  assert.match(managementTemplate, /if \(record\.parent\.registrar_confirmation_id\)[\s\S]*?\/confirmation/,
-    'staff can reopen the credential-free confirmation after leaving the initial response');
+  const legacyConfirmationGuard = managementTemplate.indexOf('if (record.parent.registrar_confirmation_id && !record.parent.entry_activation_id)');
+  const historicalConfirmationLink = managementTemplate.indexOf('View / print historical confirmation', legacyConfirmationGuard);
+  assert.ok(legacyConfirmationGuard >= 0 && historicalConfirmationLink > legacyConfirmationGuard,
+    'legacy records retain read-only access to their historical confirmation');
 });
 
 test('later-term activation sends its one-time credential in a private printable response', async () => {
@@ -1170,13 +1129,11 @@ test('later-term activation sends its one-time credential in a private printable
   assert.match(css, /\.enrollment-print__credential \{[\s\S]*?font-size: 8pt;[\s\S]*?break-inside: avoid;/);
 });
 
-test('a post-confirmation summary read failure still renders confirmed status and a retry link', async () => {
+test('routine Registrar confirmation POST is unavailable after the digital handoff workflow', async () => {
   const app = express();
-  let confirmed = false;
-  const errors = [];
+  let confirmationWrites = 0;
   app.set('views', path.join(__dirname, '..', 'views'));
   app.set('view engine', 'ejs');
-  app.locals.formatMoney = require('../src/utils/formatMoney').formatMoney;
   app.use(express.urlencoded({ extended: false }));
   app.use((req, _res, next) => {
     req.authUser = registrar;
@@ -1185,16 +1142,8 @@ test('a post-confirmation summary read failure still renders confirmed status an
   });
   app.use('/registrar/intake', createAnnualStudentIntakeRouter({
     annualEnrollmentService: {
-      async confirmAnnualEnrollment() {
-        confirmed = true;
-        return { annualEnrollmentId: 71, studentId: 41, studentNo: 'SHS-2026-0321', firstName: 'Synthetic',
-          lastName: 'Learner', schoolYear: '2026-2027', gradeLevel: 'Grade 11', total: '500.00',
-          temporaryPassword: 'synthetic-one-time-credential' };
-      },
-      async getAnnualManagementRecord() { throw new Error('SQL detail and private@example.test'); }
-    },
-    annualFinanceService: { async getAnnualEntryFinanceReadinessForRegistrar() { throw new Error('must not be reached'); } },
-    logger: { error(...args) { errors.push(args); } }
+      async confirmAnnualEnrollment() { confirmationWrites += 1; }
+    }
   }));
 
   await withServer(app, async (baseUrl) => {
@@ -1202,20 +1151,9 @@ test('a post-confirmation summary read failure still renders confirmed status an
       method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ _csrf: 'a'.repeat(64) })
     });
-    const html = await response.text();
-    assert.equal(response.status, 200);
-    assert.equal(confirmed, true);
-    assert.match(html, /Enrollment confirmed/);
-    assert.match(html, /Enrollment was confirmed, but its saved detail summary could not be loaded/);
-    assert.match(response.headers.get('cache-control'), /no-store/);
-    assert.match(html, /synthetic-one-time-credential/);
-    assert.match(html, /type="button" data-print-page/);
-    assert.match(html, /Print \/ save as PDF/);
-    assert.match(html, /\/registrar\/intake\/71\/confirmation/);
-    assert.match(html, /View \/ print saved confirmation/);
-    assert.doesNotMatch(html, /annual enrollment was not confirmed|SQL detail|private@example\.test/);
-    assert.equal(errors.length, 1);
-    assert.doesNotMatch(JSON.stringify(errors), /SQL detail|private@example\.test/);
+    assert.equal(response.status, 404);
+    assert.equal(confirmationWrites, 0, 'the routine endpoint cannot create a Registrar confirmation or credential');
+    assert.doesNotMatch(await response.text(), /temporary password|Enrollment confirmed/i);
   });
 });
 

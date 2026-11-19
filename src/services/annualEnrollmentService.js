@@ -281,10 +281,21 @@ function createAnnualEnrollmentService({
     return actor;
   }
 
+  async function requireFinanceActor(request, actorInput) {
+    const actorId = normalizeId(actorInput, 'user');
+    const result = await request.input('actorId', sql.Int, actorId)
+      .query(`SELECT id, role FROM users
+        WHERE id = @actorId AND is_active = 1 AND role IN ('finance', 'database_admin') FOR UPDATE`);
+    const actor = result.recordset?.[0];
+    if (!actor) throw new AnnualEnrollmentError('Your finance access is no longer active. Sign in again.', 403);
+    return actor;
+  }
+
   async function writeAudit(transaction, actor, action, entityId, details) {
+    const role = ['finance', 'database_admin'].includes(actor?.role) ? actor.role : 'registrar';
     await transaction.request()
       .input('actorId', sql.Int, actor.id)
-      .input('action', sql.NVarChar(100), `registrar.${action}`)
+      .input('action', sql.NVarChar(100), `${role}.${action}`)
       .input('entityType', sql.NVarChar(100), 'annual_enrollment')
       .input('entityId', sql.NVarChar(100), String(entityId))
       .input('detailsJson', sql.NVarChar(sql.MAX), JSON.stringify(details))
@@ -414,7 +425,8 @@ function createAnnualEnrollmentService({
     const parentResult = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
       .query(`SELECT annual.id AS annual_enrollment_id, annual.student_id, annual.school_year, annual.grade_level,
           annual.voucher_code, annual.voucher_category, annual.intake_status, annual.intake_kind,
-          annual.entry_term_number, annual.enrollment_start_date, student.student_no, student.lrn, student.sex,
+          annual.entry_term_number, annual.enrollment_start_date, annual.account_activation_pending,
+          student.student_no, student.lrn, student.sex,
           annual.esc_id, annual.eform_status, annual.eform_remarks, annual.lis_status, annual.lis_remarks,
           annual.vms_status, annual.vms_remarks, annual.acquaintance_waiver_status, annual.acquaintance_party,
           annual.educational_tour_status, annual.internal_agreement_remarks, annual.modules_claimed_date,
@@ -427,10 +439,26 @@ function createAnnualEnrollmentService({
           confirmation.schedule_id AS registrar_schedule_id,
           confirmation.schedule_version AS registrar_schedule_version,
           confirmation.voucher_code_snapshot AS registrar_voucher_code_snapshot,
-          confirmation.payable_total AS registrar_payable_total
+          confirmation.payable_total AS registrar_payable_total,
+          handoff.id AS registrar_handoff_id, handoff.handoff_version AS registrar_handoff_version,
+          handoff.prerequisite_fingerprint AS registrar_handoff_fingerprint,
+          handoff.clearance_fingerprint AS registrar_clearance_fingerprint,
+          handoff.activation_attempt_status AS registrar_handoff_status,
+          handoff.handed_off_at AS registrar_handed_off_at,
+          handoff.handed_off_by AS registrar_handed_off_by,
+          activation.id AS entry_activation_id, activation.activated_at AS entry_activated_at,
+          activation.entry_dp_state AS activated_entry_dp_state
         FROM annual_enrollments AS annual INNER JOIN students AS student ON student.id = annual.student_id
         LEFT JOIN users AS student_account ON student_account.id = student.user_id
         LEFT JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = annual.id
+        LEFT JOIN (
+          SELECT ranked.* FROM (
+            SELECT handoff.*, ROW_NUMBER() OVER (PARTITION BY handoff.annual_enrollment_id
+              ORDER BY handoff.handoff_version DESC, handoff.id DESC) AS handoff_rank
+            FROM annual_registrar_handoff_events AS handoff
+          ) AS ranked WHERE ranked.handoff_rank = 1
+        ) AS handoff ON handoff.annual_enrollment_id = annual.id
+        LEFT JOIN annual_entry_activations AS activation ON activation.annual_enrollment_id = annual.id
         WHERE annual.id = @annualEnrollmentId`);
     const parent = parentResult.recordset?.[0];
     if (!parent) throw new AnnualEnrollmentError('Annual enrollment not found.', 404);
@@ -1626,8 +1654,8 @@ function createAnnualEnrollmentService({
     if (filterVoucher && !['PUB', 'ESC', 'NV'].includes(filterVoucher)) throw new AnnualEnrollmentError('Choose PUB, ESC, or NV.');
     if (filterStatus && !['pending_payment', 'enrolled', 'cancelled', 'dropped', 'transferred'].includes(filterStatus)) throw new AnnualEnrollmentError('Choose a valid term placement status.');
     if (filterStudentStatus && filterStudentStatus !== 'active') throw new AnnualEnrollmentError('Choose active student records.');
-    if (filterConfirmationStatus && filterConfirmationStatus !== 'needs_confirmation') {
-      throw new AnnualEnrollmentError('Choose a valid annual confirmation status.');
+    if (filterConfirmationStatus && !['needs_confirmation', 'needs_handoff'].includes(filterConfirmationStatus)) {
+      throw new AnnualEnrollmentError('Choose a valid Registrar handoff status.');
     }
 
     const searchPattern = searchTerm ? `%${searchTerm.replace(/[~%_[\]]/g, (character) => `~${character}`)}%` : null;
@@ -1655,12 +1683,11 @@ function createAnnualEnrollmentService({
       AND (@voucherCode IS NULL OR annual.voucher_code = @voucherCode)
       AND (@status IS NULL OR enrollment.enrollment_status = @status)
       AND (@studentStatus IS NULL OR student.status = @studentStatus)
-      AND (@confirmationStatus IS NULL OR (@confirmationStatus = 'needs_confirmation'
+      AND (@confirmationStatus IS NULL OR (@confirmationStatus IN ('needs_confirmation', 'needs_handoff')
         AND annual.intake_status = 'pending' AND annual.pre_enrollment_id IS NOT NULL
         AND EXISTS (SELECT 1 FROM pre_enrollments AS source_intake
           WHERE source_intake.id = annual.pre_enrollment_id AND source_intake.status = 'enrollment_started')
-        AND NOT EXISTS (SELECT 1 FROM annual_registrar_confirmations AS saved_confirmation
-          WHERE saved_confirmation.annual_enrollment_id = annual.id)))`;
+        AND activation.id IS NULL))`;
 
     const actorResult = await pool.request().input('actorId', sql.Int, actorId)
       .query(`SELECT role FROM users WHERE id = @actorId AND is_active = 1 AND role IN ('registrar', 'database_admin')`);
@@ -1672,6 +1699,15 @@ function createAnnualEnrollmentService({
       LEFT JOIN enrollments AS enrollment ON enrollment.annual_enrollment_id = annual.id
       LEFT JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
       LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
+      LEFT JOIN (
+        SELECT ranked.annual_enrollment_id, ranked.id FROM (
+          SELECT handoff.annual_enrollment_id, handoff.id,
+            ROW_NUMBER() OVER (PARTITION BY handoff.annual_enrollment_id
+              ORDER BY handoff.handoff_version DESC, handoff.id DESC) AS handoff_rank
+          FROM annual_registrar_handoff_events AS handoff
+        ) AS ranked WHERE ranked.handoff_rank = 1
+      ) AS latest_handoff ON latest_handoff.annual_enrollment_id = annual.id
+      LEFT JOIN annual_entry_activations AS activation ON activation.annual_enrollment_id = annual.id
       WHERE ${filtersSql}`);
     const totalRecords = Math.max(0, Number(countResult.recordset?.[0]?.total_records) || 0);
     const pageSize = 20;
@@ -1690,6 +1726,7 @@ function createAnnualEnrollmentService({
           LEFT JOIN enrollments AS enrollment ON enrollment.annual_enrollment_id = annual.id
           LEFT JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
           LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
+          LEFT JOIN annual_entry_activations AS activation ON activation.annual_enrollment_id = annual.id
           WHERE ${filtersSql}
         ), PagedAnnualEnrollments AS (
           SELECT annual_enrollment_id
@@ -1707,6 +1744,9 @@ function createAnnualEnrollmentService({
           section.cluster, section.strand, section.adviser, section.modality, section.modular_subtype,
           assessment.voucher_code_snapshot AS assessed_voucher_code, assessment.schedule_version AS assessed_schedule_version,
           confirmation.id AS registrar_confirmation_id,
+          handoff.id AS registrar_handoff_id, handoff.handoff_version AS registrar_handoff_version,
+          handoff.activation_attempt_status AS registrar_handoff_status,
+          activation.id AS entry_activation_id,
           CASE WHEN voucher_event.event_type = 'voucher_review_flagged' THEN 1 ELSE 0 END AS voucher_review_required,
           voucher_event.reason AS voucher_review_reason,
           CASE WHEN clearance.event_type IS NULL THEN NULL WHEN clearance.event_type = 'signed' THEN 'signed' ELSE 'not signed' END AS signed_clearance_status
@@ -1718,6 +1758,14 @@ function createAnnualEnrollmentService({
         LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
         LEFT JOIN annual_assessments AS assessment ON assessment.annual_enrollment_id = annual.id
         LEFT JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = annual.id
+        LEFT JOIN (
+          SELECT ranked.* FROM (
+            SELECT handoff.*, ROW_NUMBER() OVER (PARTITION BY handoff.annual_enrollment_id
+              ORDER BY handoff.handoff_version DESC, handoff.id DESC) AS handoff_rank
+            FROM annual_registrar_handoff_events AS handoff
+          ) AS ranked WHERE ranked.handoff_rank = 1
+        ) AS handoff ON handoff.annual_enrollment_id = annual.id
+        LEFT JOIN annual_entry_activations AS activation ON activation.annual_enrollment_id = annual.id
         LEFT JOIN (
           SELECT latest.annual_enrollment_id, latest.event_type, latest.reason
           FROM (
@@ -1749,7 +1797,9 @@ function createAnnualEnrollmentService({
     };
   }
 
-  async function finalizePlacementInTransaction(transaction, actor, enrollmentId, { requireConfirmation = true } = {}) {
+  async function finalizePlacementInTransaction(transaction, actor, enrollmentId, {
+    requireConfirmation = true, activateStudentLogin = true
+  } = {}) {
     const selected = await transaction.request().input('enrollmentId', sql.Int, enrollmentId)
       .query(`SELECT enrollment.id AS enrollment_id, enrollment.enrollment_status, enrollment.finalized_at,
           enrollment.section_id, enrollment.term_scope_status, enrollment.annual_term_number,
@@ -1757,7 +1807,7 @@ function createAnnualEnrollmentService({
           student.id AS student_id, student.student_no, student.status AS student_status, student.user_id,
           student.first_name, student.middle_name, student.last_name, student.suffix, student.birth_date,
           account.email, account.is_active, account.invitation_required, parent.grade_level, term.school_year, term.term, section.name AS section_name,
-          confirmation.id AS registrar_confirmation_id
+          confirmation.id AS registrar_confirmation_id, activation.id AS entry_activation_id
         FROM enrollments AS enrollment
         INNER JOIN annual_enrollments AS parent ON parent.id = enrollment.annual_enrollment_id
         INNER JOIN students AS student ON student.id = enrollment.student_id
@@ -1765,11 +1815,14 @@ function createAnnualEnrollmentService({
         INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
         LEFT JOIN sections AS section ON section.id = enrollment.section_id AND section.academic_term_id = enrollment.academic_term_id
         LEFT JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = parent.id
+        LEFT JOIN annual_entry_activations AS activation ON activation.annual_enrollment_id = parent.id
         WHERE enrollment.id = @enrollmentId FOR UPDATE`);
     const row = selected.recordset?.[0];
     if (!row) throw new AnnualEnrollmentError('Annual term placement not found.', 404);
     if (row.intake_status === 'legacy') throw new AnnualEnrollmentError('Legacy term history is read-only. Use the explicit reviewed legacy activation workflow.', 409);
-    if (requireConfirmation && !row.registrar_confirmation_id) throw new AnnualEnrollmentError('Confirm the annual enrollment and fee assessment before activating a term.', 409);
+    if (requireConfirmation && !row.registrar_confirmation_id && !row.entry_activation_id) {
+      throw new AnnualEnrollmentError('Complete the Registrar handoff and Finance entry-term review before activating a term.', 409);
+    }
     if (row.term_scope_status !== 'applicable' || row.enrollment_status === 'not_applicable') {
       throw new AnnualEnrollmentError('This term is not applicable for the student’s entry term.', 409);
     }
@@ -1779,7 +1832,8 @@ function createAnnualEnrollmentService({
 
     let temporaryPassword = null;
     let activated = false;
-    if ((row.account_activation_pending === true || row.account_activation_pending === 1) && row.user_id
+    const mayActivateStudentLogin = activateStudentLogin && !row.entry_activation_id;
+    if (mayActivateStudentLogin && (row.account_activation_pending === true || row.account_activation_pending === 1) && row.user_id
       && !(row.is_active === true || row.is_active === 1)
       && !(row.invitation_required === true || row.invitation_required === 1)) {
       const generatedPassword = createStudentActivationPassword(row.last_name, row.birth_date);
@@ -1797,7 +1851,7 @@ function createAnnualEnrollmentService({
       if (!activated) throw new AnnualEnrollmentError('The new student login changed before enrollment confirmation. No credentials were issued.', 409);
       temporaryPassword = generatedPassword;
     }
-    if (row.account_activation_pending === true || row.account_activation_pending === 1) {
+    if (mayActivateStudentLogin && (row.account_activation_pending === true || row.account_activation_pending === 1)) {
       await transaction.request().input('annualEnrollmentId', sql.Int, row.annual_enrollment_id)
         .query(`UPDATE annual_enrollments SET account_activation_pending = 0, updated_at = UTC_TIMESTAMP(6)
           WHERE id = @annualEnrollmentId AND account_activation_pending = 1`);
@@ -2068,6 +2122,476 @@ function createAnnualEnrollmentService({
     });
   }
 
+  async function validateAnnualHandoffContext(transaction, annualEnrollmentId) {
+    const result = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+      .query(`SELECT annual.id, annual.student_id, annual.school_year, annual.grade_level,
+          annual.pre_enrollment_id, annual.readmission_evaluation_id, annual.readmission_evaluation_version,
+          annual.intake_kind, annual.intake_status, annual.entry_term_number,
+          annual.continuity_source_annual_enrollment_id,
+          annual.account_activation_pending, student.status AS student_status,
+          entry.id AS entry_enrollment_id, entry.enrollment_status AS entry_status,
+          entry.finalized_at AS entry_finalized_at, entry.term_scope_status, entry.section_id,
+          entry.academic_term_id AS entry_academic_term_id,
+          section.id AS valid_section_id, section.name AS entry_section_name,
+          section.cluster AS entry_section_cluster, section.strand AS entry_section_strand,
+          term.school_year AS entry_term_school_year, term.term AS entry_term_label
+        FROM annual_enrollments AS annual
+        INNER JOIN students AS student ON student.id = annual.student_id
+        INNER JOIN enrollments AS entry ON entry.annual_enrollment_id = annual.id
+          AND entry.annual_term_number = annual.entry_term_number
+        LEFT JOIN sections AS section ON section.id = entry.section_id
+          AND section.academic_term_id = entry.academic_term_id
+        INNER JOIN academic_terms AS term ON term.id = entry.academic_term_id
+        WHERE annual.id = @annualEnrollmentId AND annual.intake_status <> 'legacy' FOR UPDATE`);
+    const parent = result.recordset?.[0];
+    if (!parent) throw new AnnualEnrollmentError('Annual enrollment not found.', 404);
+    if (parent.student_status !== 'active') throw new AnnualEnrollmentError('Only an active student record can be handed off for enrollment.', 409);
+    if (parent.intake_status !== 'pending') throw new AnnualEnrollmentError('This annual enrollment is no longer awaiting Registrar handoff.', 409);
+    if (!parent.pre_enrollment_id) throw new AnnualEnrollmentError('A new annual enrollment must retain its front-desk paper source before handoff.', 409);
+    const sourceResult = await transaction.request().input('preEnrollmentId', sql.Char(36), parent.pre_enrollment_id)
+      .query(`SELECT source.id, source.lrn, source.school_year, source.target_grade_level, source.applicant_kind,
+          source.status, source.readmission_evaluation_id, source.readmission_evaluation_version,
+          source.created_by_role
+        FROM pre_enrollments AS source WHERE source.id = @preEnrollmentId FOR UPDATE`);
+    const source = sourceResult.recordset?.[0];
+    if (!source || source.status !== 'enrollment_started' || source.created_by_role !== 'front_desk'
+      || source.school_year !== parent.school_year || source.target_grade_level !== parent.grade_level
+      || !/^\d{12}$/.test(String(source.lrn || ''))) {
+      throw new AnnualEnrollmentError('The front-desk paper source is no longer valid for this annual enrollment.', 409);
+    }
+    if (parent.intake_kind === 'readmission') {
+      if (!parent.readmission_evaluation_id || String(parent.readmission_evaluation_id).toLowerCase() !== String(source.readmission_evaluation_id || '').toLowerCase()
+        || Number(parent.readmission_evaluation_version) !== Number(source.readmission_evaluation_version)) {
+        throw new AnnualEnrollmentError('The readmission evaluation binding changed after annual intake was opened.', 409);
+      }
+      const evaluationResult = await transaction.request().input('evaluationId', sql.Char(36), parent.readmission_evaluation_id)
+        .query(`SELECT id, applicant_lrn, student_id, school_year, target_grade_level, status, version
+          FROM readmission_evaluations WHERE id = @evaluationId FOR UPDATE`);
+      const evaluation = evaluationResult.recordset?.[0];
+      if (!evaluation || evaluation.status !== 'accepted' || Number(evaluation.version) !== Number(parent.readmission_evaluation_version)
+        || evaluation.applicant_lrn !== source.lrn || evaluation.school_year !== parent.school_year
+        || evaluation.target_grade_level !== parent.grade_level
+        || (evaluation.student_id != null && Number(evaluation.student_id) !== Number(parent.student_id))) {
+        throw new AnnualEnrollmentError('The return evaluation changed or is no longer accepted for this enrollment. Reopen it for Registrar review.', 409);
+      }
+    } else if (parent.intake_kind === 'continuing'
+      ? source.applicant_kind !== 'continuing' || source.readmission_evaluation_id
+      : source.applicant_kind === 'readmission' || source.readmission_evaluation_id) {
+      throw new AnnualEnrollmentError('The paper source classification no longer matches this enrollment.', 409);
+    }
+    if (parent.entry_status !== 'pending_payment' || parent.entry_finalized_at
+      || parent.term_scope_status !== 'applicable' || !parent.valid_section_id) {
+      throw new AnnualEnrollmentError('Assign a valid section to the entry term before Registrar handoff.', 409);
+    }
+    parent.sourceContext = {
+      id: String(source.id).toLowerCase(), lrn: source.lrn, schoolYear: source.school_year,
+      gradeLevel: source.target_grade_level, applicantKind: source.applicant_kind,
+      readmissionEvaluationId: source.readmission_evaluation_id == null ? null : String(source.readmission_evaluation_id).toLowerCase(),
+      readmissionEvaluationVersion: source.readmission_evaluation_version == null ? null : Number(source.readmission_evaluation_version)
+    };
+    return parent;
+  }
+
+  function handoffPrerequisiteFingerprint(parent, clearanceFingerprint) {
+    return crypto.createHash('sha256').update(JSON.stringify({
+      annualEnrollmentId: Number(parent.id), studentId: Number(parent.student_id),
+      schoolYear: parent.school_year, gradeLevel: parent.grade_level, intakeKind: parent.intake_kind,
+      entryTermNumber: Number(parent.entry_term_number), continuitySourceAnnualId: parent.continuity_source_annual_enrollment_id == null
+        ? null : Number(parent.continuity_source_annual_enrollment_id),
+      entryEnrollmentId: Number(parent.entry_enrollment_id), entryAcademicTermId: Number(parent.entry_academic_term_id),
+      entryTermSchoolYear: parent.entry_term_school_year, entryTermLabel: parent.entry_term_label,
+      entryTermScopeStatus: parent.term_scope_status, entryEnrollmentStatus: parent.entry_status,
+      sectionId: parent.section_id == null ? null : Number(parent.section_id),
+      sectionName: parent.entry_section_name, sectionCluster: parent.entry_section_cluster, sectionStrand: parent.entry_section_strand,
+      preEnrollmentId: parent.sourceContext?.id || String(parent.pre_enrollment_id || '').toLowerCase(),
+      sourceLrn: parent.sourceContext?.lrn || null, sourceSchoolYear: parent.sourceContext?.schoolYear || null,
+      sourceGradeLevel: parent.sourceContext?.gradeLevel || null, sourceApplicantKind: parent.sourceContext?.applicantKind || null,
+      sourceReadmissionEvaluationId: parent.sourceContext?.readmissionEvaluationId || null,
+      sourceReadmissionEvaluationVersion: parent.sourceContext?.readmissionEvaluationVersion ?? null,
+      clearanceFingerprint
+    })).digest('hex');
+  }
+
+  async function saveHandoffAttempt(transaction, handoffId, status, errorCode) {
+    await transaction.request().input('handoffId', sql.BigInt, handoffId)
+      .input('status', sql.VarChar(32), status).input('errorCode', sql.VarChar(40), errorCode || null)
+      .query(`UPDATE annual_registrar_handoff_events
+        SET activation_attempt_status = @status, last_activation_attempt_at = UTC_TIMESTAMP(6),
+          last_activation_error_code = @errorCode
+        WHERE id = @handoffId`);
+  }
+
+  async function activateHandoffInTransaction(transaction, actor, parent, handoff, activationTrigger) {
+    const existing = await transaction.request().input('annualEnrollmentId', sql.Int, parent.id)
+      .query(`SELECT id FROM annual_entry_activations
+        WHERE annual_enrollment_id = @annualEnrollmentId FOR UPDATE`);
+    if (existing.recordset?.[0]) return { status: 'already_activated', annualEnrollmentId: Number(parent.id), activationId: Number(existing.recordset[0].id) };
+
+    try {
+      await assertClearanceGate(transaction, 'revalidateAnnualEntryHandoffInTransaction', {
+        annualId: Number(parent.id), expectedFingerprint: handoff.clearance_fingerprint
+      });
+      const currentFingerprint = handoffPrerequisiteFingerprint(parent, handoff.clearance_fingerprint);
+      if (currentFingerprint !== handoff.prerequisite_fingerprint) {
+        await saveHandoffAttempt(transaction, handoff.id, 'academic_review_required', 'academic_prerequisites_changed');
+        return { status: 'academic_review_required', annualEnrollmentId: Number(parent.id) };
+      }
+    } catch (error) {
+      if (!(error instanceof AnnualEnrollmentError)) throw error;
+      if (error.status >= 500) {
+        await saveHandoffAttempt(transaction, handoff.id, 'retry_required', 'academic_review_unavailable');
+        return { status: 'retry_required', annualEnrollmentId: Number(parent.id) };
+      }
+      const status = /Academic prerequisites changed|prerequisites changed/i.test(error.message)
+        ? 'academic_review_required' : 'registrar_review_required';
+      await saveHandoffAttempt(transaction, handoff.id, status,
+        status === 'academic_review_required' ? 'academic_prerequisites_changed' : 'registrar_review_required');
+      return { status, annualEnrollmentId: Number(parent.id) };
+    }
+
+    let financeEvidence;
+    try {
+      financeEvidence = await annualFinanceService.assertAnnualEntryDownPaymentReadyInTransaction(transaction, Number(parent.id));
+    } catch (error) {
+      if (error?.name !== 'AnnualFinanceError') throw error;
+      const status = Number(error.status || 0) >= 500 ? 'retry_required' : 'awaiting_finance';
+      await saveHandoffAttempt(transaction, handoff.id, status,
+        status === 'retry_required' ? 'finance_review_unavailable' : 'finance_not_ready');
+      return { status, annualEnrollmentId: Number(parent.id) };
+    }
+    if (!financeEvidence || !Number.isSafeInteger(Number(financeEvidence.financeReviewId))
+      || !Number.isSafeInteger(Number(financeEvidence.assessmentId))
+      || !Number.isSafeInteger(Number(financeEvidence.scheduleId))
+      || !Number.isSafeInteger(Number(financeEvidence.scheduleVersion))
+      || !['PUB', 'ESC', 'NV'].includes(financeEvidence.voucherCode)
+      || !['settled', 'zero_due'].includes(financeEvidence.entryDpState)
+      || typeof financeEvidence.payableTotal !== 'string' || !/^(?:0|[1-9]\d{0,9})\.\d{2}$/.test(financeEvidence.payableTotal)
+      || typeof financeEvidence.assessmentSnapshotFingerprint !== 'string'
+      || !/^[0-9a-f]{64}$/i.test(financeEvidence.assessmentSnapshotFingerprint)
+      || !Array.isArray(financeEvidence.optionalLineIds)) {
+      throw new AnnualEnrollmentError('The saved Finance evidence could not be verified. Entry activation was not recorded.', 409);
+    }
+    if (!Number.isSafeInteger(Number(handoff.handed_off_by)) || !handoff.idempotency_key
+      || !/^[0-9a-f]{64}$/i.test(String(handoff.request_fingerprint || ''))) {
+      throw new AnnualEnrollmentError('The saved Registrar handoff evidence could not be verified. Entry activation was not recorded.', 409);
+    }
+    const priorConfirmation = await transaction.request().input('annualEnrollmentId', sql.Int, Number(parent.id))
+      .query(`SELECT id FROM annual_registrar_confirmations WHERE annual_enrollment_id = @annualEnrollmentId FOR UPDATE`);
+    if (priorConfirmation.recordset?.length) {
+      await saveHandoffAttempt(transaction, handoff.id, 'registrar_review_required', 'confirmation_record_conflict');
+      return { status: 'registrar_review_required', annualEnrollmentId: Number(parent.id) };
+    }
+    const selectionJson = JSON.stringify({ optionalLineIds: financeEvidence.optionalLineIds });
+    const confirmationInputFingerprint = crypto.createHash('sha256').update(JSON.stringify({
+      annualEnrollmentId: Number(parent.id), handoffId: Number(handoff.id),
+      prerequisiteFingerprint: handoff.prerequisite_fingerprint,
+      financeReviewId: Number(financeEvidence.financeReviewId), assessmentId: Number(financeEvidence.assessmentId),
+      assessmentSnapshotFingerprint: financeEvidence.assessmentSnapshotFingerprint.toLowerCase()
+    })).digest('hex');
+    const confirmationRequestFingerprint = crypto.createHash('sha256')
+      .update(JSON.stringify({ confirmationInputFingerprint, clearanceFingerprint: handoff.clearance_fingerprint })).digest('hex');
+    const confirmation = await transaction.request()
+      .input('annualEnrollmentId', sql.Int, Number(parent.id))
+      .input('studentId', sql.Int, Number(parent.student_id))
+      .input('schoolYear', sql.NVarChar(20), parent.school_year)
+      .input('gradeLevel', sql.NVarChar(50), parent.grade_level)
+      .input('entryEnrollmentId', sql.Int, Number(parent.entry_enrollment_id))
+      .input('assessmentId', sql.Int, Number(financeEvidence.assessmentId))
+      .input('financeReviewId', sql.BigInt, Number(financeEvidence.financeReviewId))
+      .input('scheduleId', sql.Int, Number(financeEvidence.scheduleId))
+      .input('scheduleVersion', sql.Int, Number(financeEvidence.scheduleVersion))
+      .input('voucherCode', sql.NVarChar(10), financeEvidence.voucherCode)
+      .input('payableTotal', sql.Decimal(12, 2), financeEvidence.payableTotal)
+      .input('selectionJson', sql.NVarChar(sql.MAX), selectionJson)
+      .input('assessmentSnapshotFingerprint', sql.Char(64), financeEvidence.assessmentSnapshotFingerprint.toLowerCase())
+      .input('actorId', sql.Int, Number(handoff.handed_off_by))
+      .input('idempotencyKey', sql.UniqueIdentifier, handoff.idempotency_key)
+      .input('requestFingerprint', sql.Char(64), confirmationRequestFingerprint)
+      .input('inputFingerprint', sql.Char(64), confirmationInputFingerprint)
+      .input('clearanceFingerprint', sql.Char(64), String(handoff.clearance_fingerprint).toLowerCase())
+      .input('handoffId', sql.BigInt, Number(handoff.id))
+      .input('entryDpState', sql.VarChar(24), financeEvidence.entryDpState)
+      .query(`INSERT INTO annual_registrar_confirmations
+        (annual_enrollment_id, student_id, school_year, grade_level, assessment_id, finance_review_id,
+          entry_dp_state_at_confirmation, registrar_handoff_event_id, schedule_id, schedule_version,
+          voucher_code_snapshot, payable_total, selection_json, assessment_snapshot_fingerprint,
+          confirmed_by, idempotency_key, request_fingerprint, entry_enrollment_id, input_fingerprint,
+          clearance_snapshot_fingerprint)
+        VALUES (@annualEnrollmentId, @studentId, @schoolYear, @gradeLevel, @assessmentId, @financeReviewId,
+          @entryDpState, @handoffId, @scheduleId, @scheduleVersion, @voucherCode, @payableTotal,
+          @selectionJson, @assessmentSnapshotFingerprint, @actorId, @idempotencyKey, @requestFingerprint,
+          @entryEnrollmentId, @inputFingerprint, @clearanceFingerprint)`);
+    if (!Number.isSafeInteger(Number(confirmation.insertId)) || Number(confirmation.insertId) < 1) {
+      throw new Error('Digital enrollment compatibility confirmation returned no identifier.');
+    }
+
+    const enrollment = await finalizePlacementInTransaction(transaction, actor, Number(parent.entry_enrollment_id), {
+      requireConfirmation: false, activateStudentLogin: false
+    });
+    const inserted = await transaction.request()
+      .input('annualEnrollmentId', sql.Int, Number(parent.id))
+      .input('studentId', sql.Int, Number(parent.student_id))
+      .input('schoolYear', sql.NVarChar(20), parent.school_year)
+      .input('gradeLevel', sql.NVarChar(50), parent.grade_level)
+      .input('entryEnrollmentId', sql.Int, Number(parent.entry_enrollment_id))
+      .input('handoffId', sql.BigInt, Number(handoff.id))
+      .input('financeReviewId', sql.BigInt, Number(financeEvidence.financeReviewId))
+      .input('assessmentId', sql.Int, Number(financeEvidence.assessmentId))
+      .input('entryDpState', sql.VarChar(24), financeEvidence.entryDpState)
+      .input('activationTrigger', sql.VarChar(24), activationTrigger)
+      .input('actorId', sql.Int, Number(actor.id))
+      .input('actorRole', sql.VarChar(20), actor.role)
+      .query(`INSERT INTO annual_entry_activations
+        (annual_enrollment_id, student_id, school_year, grade_level, entry_enrollment_id,
+          registrar_handoff_id, finance_review_id, assessment_id, entry_dp_state,
+          activation_trigger, activated_by, activated_by_role)
+        VALUES (@annualEnrollmentId, @studentId, @schoolYear, @gradeLevel, @entryEnrollmentId,
+          @handoffId, @financeReviewId, @assessmentId, @entryDpState,
+          @activationTrigger, @actorId, @actorRole)`);
+    if (!Number.isSafeInteger(inserted.insertId) || inserted.insertId < 1) throw new Error('Entry activation insert returned no identifier.');
+    await saveHandoffAttempt(transaction, handoff.id, 'activated', null);
+    await writeAudit(transaction, actor, 'annual_entry_activated', inserted.insertId, {
+      annualEnrollmentId: Number(parent.id), entryEnrollmentId: Number(parent.entry_enrollment_id),
+      handoffId: Number(handoff.id), financeReviewId: Number(financeEvidence.financeReviewId),
+      assessmentId: Number(financeEvidence.assessmentId), entryDpState: financeEvidence.entryDpState,
+      activationTrigger
+    });
+    return { status: 'activated', annualEnrollmentId: Number(parent.id), activationId: Number(inserted.insertId),
+      enrollment, financeReviewId: Number(financeEvidence.financeReviewId), assessmentId: Number(financeEvidence.assessmentId) };
+  }
+
+  async function submitRegistrarHandoff(actorInput, annualInput, input = {}) {
+    if (!annualFinanceService?.assertAnnualEntryDownPaymentReadyInTransaction) {
+      throw new AnnualEnrollmentError('Finance evidence is unavailable. Registrar handoff cannot be completed.', 503);
+    }
+    const annualEnrollmentId = normalizeId(annualInput, 'annual enrollment');
+    const idempotencyKey = normalizeUuid(input.idempotencyKey, 'Registrar handoff');
+    const clearanceFingerprint = typeof input.clearanceFingerprint === 'string'
+      && /^[0-9a-f]{64}$/i.test(input.clearanceFingerprint)
+      ? input.clearanceFingerprint.toLowerCase() : null;
+    const prerequisiteFingerprint = typeof input.prerequisiteFingerprint === 'string'
+      && /^[0-9a-f]{64}$/i.test(input.prerequisiteFingerprint)
+      ? input.prerequisiteFingerprint.toLowerCase() : null;
+    if (!clearanceFingerprint || !prerequisiteFingerprint) {
+      throw new AnnualEnrollmentError('Reload the Registrar prerequisite review before sending the Finance handoff.', 409);
+    }
+    const requestFingerprint = crypto.createHash('sha256')
+      .update(JSON.stringify({ annualEnrollmentId, clearanceFingerprint, prerequisiteFingerprint })).digest('hex');
+    return runTransaction(async (transaction) => {
+      const actor = await requireRegistrar(transaction.request(), actorInput);
+      const ownerResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .query('SELECT student_id FROM annual_enrollments WHERE id = @annualEnrollmentId');
+      const owner = ownerResult.recordset?.[0];
+      if (!owner) throw new AnnualEnrollmentError('Annual enrollment not found.', 404);
+      const student = await debtRevisions.lockStudent(transaction, Number(owner.student_id));
+      if (!student) throw new AnnualEnrollmentError('Student record not found.', 404);
+      const priorResult = await transaction.request().input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
+        .query(`SELECT handoff.id, handoff.annual_enrollment_id, handoff.clearance_fingerprint,
+            handoff.prerequisite_fingerprint,
+            handoff.request_fingerprint, handoff.activation_attempt_status
+          FROM annual_registrar_handoff_events AS handoff WHERE handoff.idempotency_key = @idempotencyKey FOR UPDATE`);
+      const prior = priorResult.recordset?.[0];
+      if (prior) {
+        if (Number(prior.annual_enrollment_id) !== annualEnrollmentId
+          || prior.clearance_fingerprint !== clearanceFingerprint || prior.request_fingerprint !== requestFingerprint) {
+          throw new AnnualEnrollmentError('This handoff token was already used for different prerequisite details.', 409);
+        }
+        return { annualEnrollmentId, handoffId: Number(prior.id), status: prior.activation_attempt_status, alreadyHandedOff: true };
+      }
+      const parent = await validateAnnualHandoffContext(transaction, annualEnrollmentId);
+      const review = await assertClearanceGate(transaction, 'assertAnnualEntryPrerequisitesInTransaction', {
+        actorId: actor.id, annualId: annualEnrollmentId, expectedFingerprint: clearanceFingerprint
+      });
+      const handoffFingerprint = handoffPrerequisiteFingerprint(parent, review.fingerprint);
+      if (handoffFingerprint !== prerequisiteFingerprint) {
+        throw new AnnualEnrollmentError('Academic prerequisites or the entry placement changed. Reload the Registrar review before sending the Finance handoff.', 409);
+      }
+      const latestResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .query(`SELECT id, handoff_version, clearance_fingerprint, prerequisite_fingerprint, activation_attempt_status
+          FROM annual_registrar_handoff_events WHERE annual_enrollment_id = @annualEnrollmentId
+          ORDER BY handoff_version DESC LIMIT 1 FOR UPDATE`);
+      const latest = latestResult.recordset?.[0];
+      if (latest && latest.prerequisite_fingerprint === handoffFingerprint
+        && latest.activation_attempt_status === 'awaiting_finance') {
+        return { annualEnrollmentId, handoffId: Number(latest.id), status: latest.activation_attempt_status, alreadyHandedOff: true };
+      }
+      const version = Number(latest?.handoff_version || 0) + 1;
+      const inserted = await transaction.request()
+        .input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .input('studentId', sql.Int, Number(parent.student_id))
+        .input('schoolYear', sql.NVarChar(20), parent.school_year)
+        .input('gradeLevel', sql.NVarChar(50), parent.grade_level)
+        .input('version', sql.Int, version)
+        .input('clearanceFingerprint', sql.Char(64), review.fingerprint)
+        .input('prerequisiteFingerprint', sql.Char(64), handoffFingerprint)
+        .input('idempotencyKey', sql.UniqueIdentifier, idempotencyKey)
+        .input('requestFingerprint', sql.Char(64), requestFingerprint)
+        .input('actorId', sql.Int, actor.id)
+        .query(`INSERT INTO annual_registrar_handoff_events
+          (annual_enrollment_id, student_id, school_year, grade_level, handoff_version,
+            clearance_fingerprint, prerequisite_fingerprint, idempotency_key, request_fingerprint, handed_off_by, handed_off_by_role)
+          VALUES (@annualEnrollmentId, @studentId, @schoolYear, @gradeLevel, @version,
+            @clearanceFingerprint, @prerequisiteFingerprint, @idempotencyKey, @requestFingerprint, @actorId, 'registrar')`);
+      if (!Number.isSafeInteger(inserted.insertId) || inserted.insertId < 1) throw new Error('Registrar handoff insert returned no identifier.');
+      const handoff = { id: Number(inserted.insertId), clearance_fingerprint: review.fingerprint,
+        prerequisite_fingerprint: handoffFingerprint, handed_off_by: actor.id,
+        idempotency_key: idempotencyKey, request_fingerprint: requestFingerprint };
+      await writeAudit(transaction, actor, 'annual_enrollment_handed_to_finance', annualEnrollmentId, {
+        handoffId: handoff.id, handoffVersion: version, prerequisiteFingerprint: handoffFingerprint
+      });
+      const activation = await activateHandoffInTransaction(transaction, actor, parent, handoff, 'registrar_handoff');
+      return { annualEnrollmentId, handoffId: handoff.id, status: activation.status,
+        activated: activation.status === 'activated', alreadyHandedOff: false };
+    });
+  }
+
+  async function getRegistrarHandoffStatus(actorInput, annualInput, clearanceFingerprintInput) {
+    const annualEnrollmentId = normalizeId(annualInput, 'annual enrollment');
+    const clearanceFingerprint = typeof clearanceFingerprintInput === 'string' && /^[0-9a-f]{64}$/i.test(clearanceFingerprintInput)
+      ? clearanceFingerprintInput.toLowerCase() : null;
+    if (!clearanceFingerprint) throw new AnnualEnrollmentError('Reload the Registrar prerequisite review.', 409);
+    return runTransaction(async (transaction) => {
+      await requireRegistrar(transaction.request(), actorInput);
+      const ownerResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .query('SELECT student_id FROM annual_enrollments WHERE id = @annualEnrollmentId');
+      const owner = ownerResult.recordset?.[0];
+      if (!owner) throw new AnnualEnrollmentError('Annual enrollment not found.', 404);
+      const student = await debtRevisions.lockStudent(transaction, Number(owner.student_id));
+      if (!student) throw new AnnualEnrollmentError('Student record not found.', 404);
+      const parent = await validateAnnualHandoffContext(transaction, annualEnrollmentId);
+      const latestResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .query(`SELECT id, handoff_version, clearance_fingerprint, prerequisite_fingerprint,
+            activation_attempt_status, handed_off_at
+          FROM annual_registrar_handoff_events WHERE annual_enrollment_id = @annualEnrollmentId
+          ORDER BY handoff_version DESC LIMIT 1`);
+      const latest = latestResult.recordset?.[0];
+      const currentFingerprint = handoffPrerequisiteFingerprint(parent, clearanceFingerprint);
+      if (!latest) return { exists: false, matchesPrerequisites: false, status: null,
+        currentPrerequisiteFingerprint: currentFingerprint };
+      const blocked = ['academic_review_required', 'registrar_review_required'].includes(latest.activation_attempt_status);
+      return { exists: true, handoffId: Number(latest.id), handoffVersion: Number(latest.handoff_version),
+        currentPrerequisiteFingerprint: currentFingerprint,
+        handedOffAt: latest.handed_off_at, status: latest.activation_attempt_status,
+        matchesPrerequisites: !blocked && latest.clearance_fingerprint === clearanceFingerprint
+          && latest.prerequisite_fingerprint === currentFingerprint };
+    });
+  }
+
+  async function financeHandoffsInTransaction(transaction, actorInput, { annualEnrollmentId = null, studentId = null } = {}) {
+    const actor = await requireFinanceActor(transaction.request(), actorInput);
+    const annualId = annualEnrollmentId == null ? null : normalizeId(String(annualEnrollmentId), 'annual enrollment');
+    const ownerStudentId = studentId == null ? null : normalizeId(String(studentId), 'student');
+    if (!annualId && !ownerStudentId) return [];
+    let lockStudentId = ownerStudentId;
+    if (annualId) {
+      const ownerResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualId)
+        .query('SELECT student_id FROM annual_enrollments WHERE id = @annualEnrollmentId');
+      const owner = ownerResult.recordset?.[0];
+      if (!owner) return [];
+      if (lockStudentId && Number(owner.student_id) !== lockStudentId) return [];
+      lockStudentId = Number(owner.student_id);
+    }
+    const lockedStudent = await debtRevisions.lockStudent(transaction, lockStudentId);
+    if (!lockedStudent) throw new AnnualEnrollmentError('Student record not found.', 404);
+    const candidateResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualId)
+      .input('studentId', sql.Int, ownerStudentId)
+      .query(`WITH latest_handoffs AS (
+          SELECT handoff.*, ROW_NUMBER() OVER (PARTITION BY handoff.annual_enrollment_id
+            ORDER BY handoff.handoff_version DESC, handoff.id DESC) AS handoff_rank
+          FROM annual_registrar_handoff_events AS handoff
+        )
+        SELECT annual.id AS annual_enrollment_id, annual.student_id, latest.id AS handoff_id,
+          latest.clearance_fingerprint, latest.prerequisite_fingerprint, latest.activation_attempt_status,
+          latest.handed_off_by, latest.idempotency_key, latest.request_fingerprint
+        FROM annual_enrollments AS annual
+        INNER JOIN latest_handoffs AS latest ON latest.annual_enrollment_id = annual.id AND latest.handoff_rank = 1
+        LEFT JOIN annual_entry_activations AS activation ON activation.annual_enrollment_id = annual.id
+        WHERE annual.intake_status = 'pending' AND activation.id IS NULL
+          AND (@annualEnrollmentId IS NULL OR annual.id = @annualEnrollmentId)
+          AND (@studentId IS NULL OR annual.student_id = @studentId)
+        ORDER BY annual.id FOR UPDATE`);
+    const activations = [];
+    for (const candidate of candidateResult.recordset || []) {
+      if (['academic_review_required', 'registrar_review_required'].includes(candidate.activation_attempt_status)) {
+        activations.push({ annualEnrollmentId: Number(candidate.annual_enrollment_id), status: candidate.activation_attempt_status });
+        continue;
+      }
+      let parent;
+      try {
+        parent = await validateAnnualHandoffContext(transaction, Number(candidate.annual_enrollment_id));
+      } catch (error) {
+        if (!(error instanceof AnnualEnrollmentError) || error.status !== 409) throw error;
+        await saveHandoffAttempt(transaction, Number(candidate.handoff_id), 'registrar_review_required', 'registrar_review_required');
+        activations.push({ annualEnrollmentId: Number(candidate.annual_enrollment_id), status: 'registrar_review_required' });
+        continue;
+      }
+      const activation = await activateHandoffInTransaction(transaction, actor, parent, {
+        id: Number(candidate.handoff_id), clearance_fingerprint: candidate.clearance_fingerprint,
+        prerequisite_fingerprint: candidate.prerequisite_fingerprint, handed_off_by: candidate.handed_off_by,
+        idempotency_key: candidate.idempotency_key, request_fingerprint: candidate.request_fingerprint
+      }, 'finance_commit');
+      activations.push(activation);
+    }
+    return activations;
+  }
+
+  async function retryFinanceHandoffs(actorInput, selector = {}) {
+    return runTransaction((transaction) => financeHandoffsInTransaction(transaction, actorInput, selector));
+  }
+
+  async function issueFirstLoginPassword(actorInput, annualInput) {
+    const annualEnrollmentId = normalizeId(annualInput, 'annual enrollment');
+    return runTransaction(async (transaction) => {
+      const actor = await requireRegistrar(transaction.request(), actorInput);
+      const ownerResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .query('SELECT student_id FROM annual_enrollments WHERE id = @annualEnrollmentId');
+      const owner = ownerResult.recordset?.[0];
+      if (!owner) throw new AnnualEnrollmentError('Annual enrollment not found.', 404);
+      const student = await debtRevisions.lockStudent(transaction, Number(owner.student_id));
+      if (!student) throw new AnnualEnrollmentError('Student record not found.', 404);
+      const result = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .input('studentId', sql.Int, Number(owner.student_id))
+        .query(`SELECT annual.id, annual.intake_status, annual.account_activation_pending,
+            student.id AS student_id, student.student_no, student.first_name, student.middle_name,
+            student.last_name, student.suffix, student.user_id,
+            account.email, account.is_active, account.invitation_required
+          FROM annual_enrollments AS annual
+          INNER JOIN students AS student ON student.id = annual.student_id
+          LEFT JOIN users AS account ON account.id = student.user_id AND account.role = 'student'
+          INNER JOIN annual_entry_activations AS activation ON activation.annual_enrollment_id = annual.id
+          WHERE annual.id = @annualEnrollmentId AND annual.student_id = @studentId FOR UPDATE`);
+      const row = result.recordset?.[0];
+      if (!row) throw new AnnualEnrollmentError('This student has no automatically activated entry enrollment.', 409);
+      if (row.intake_status !== 'enrolled' || !(row.account_activation_pending === true || row.account_activation_pending === 1)) {
+        throw new AnnualEnrollmentError('A first-login password is available only while the enrolled student login is pending.', 409);
+      }
+      if (!row.user_id || row.is_active === true || row.is_active === 1
+        || row.invitation_required === true || row.invitation_required === 1) {
+        throw new AnnualEnrollmentError('The student login is no longer eligible for first-login activation.', 409);
+      }
+      const temporaryPassword = createPassword();
+      if (typeof temporaryPassword !== 'string' || Buffer.byteLength(temporaryPassword, 'utf8') < 12
+        || Buffer.byteLength(temporaryPassword, 'utf8') > 72 || !/^[A-Za-z0-9_-]+$/.test(temporaryPassword)) {
+        throw new AnnualEnrollmentError('A valid one-time password could not be generated. Retry or use the password reset process.', 503);
+      }
+      const passwordHash = await hashPassword(temporaryPassword, BCRYPT_ROUNDS);
+      const activated = await transaction.request().input('userId', sql.Int, row.user_id)
+        .input('passwordHash', sql.NVarChar(255), passwordHash)
+        .query(`UPDATE users SET is_active = 1, must_change_password = 1, password_hash = @passwordHash,
+            auth_session_version = UUID(), updated_at = UTC_TIMESTAMP(6)
+          WHERE id = @userId AND role = 'student' AND is_active = 0 AND invitation_required = 0`);
+      if (activated.affectedRows !== 1) throw new AnnualEnrollmentError('The student login changed before the password was issued. No password was returned.', 409);
+      const cleared = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .query(`UPDATE annual_enrollments SET account_activation_pending = 0, updated_at = UTC_TIMESTAMP(6)
+          WHERE id = @annualEnrollmentId AND account_activation_pending = 1`);
+      if (cleared.affectedRows !== 1) throw new AnnualEnrollmentError('The first-login request changed before it was completed.', 409);
+      await writeAudit(transaction, actor, 'student_first_login_password_issued', annualEnrollmentId, { studentId: Number(row.student_id) });
+      return { annualEnrollmentId, studentId: Number(row.student_id), studentNo: row.student_no,
+        firstName: row.first_name, middleName: row.middle_name, lastName: row.last_name, suffix: row.suffix,
+        email: row.email, temporaryPassword };
+    });
+  }
+
   async function changeTermStatus(actorInput, enrollmentInput, statusInput, reasonInput) {
     const enrollmentId = normalizeId(enrollmentInput, 'enrollment');
     const status = typeof statusInput === 'string' ? statusInput : '';
@@ -2204,6 +2728,9 @@ function createAnnualEnrollmentService({
     createAnnualIntake, listAnnualEnrollments, listAnnualEnrollmentsPage, listAnnualEnrollmentCounts,
     getAnnualManagementRecord, updateAnnualAdministrationDetails, recordAnnualTag, addSpecialSubject,
     previewDeparture, createDepartureCase, finalizeAnnualTerm, confirmAnnualEnrollment,
+    submitRegistrarHandoff, getRegistrarHandoffStatus,
+    activateFinanceHandoffsInTransaction: financeHandoffsInTransaction,
+    retryFinanceHandoffs, issueFirstLoginPassword,
     changeTermStatus, updateVoucher, updateTermPlacement
   };
 }

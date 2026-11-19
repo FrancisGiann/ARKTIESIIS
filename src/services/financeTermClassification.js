@@ -80,15 +80,15 @@ const FINANCE_TERM_CLASSIFICATION_CTES = `FinanceChargeTotals AS (
       CAST(COALESCE(charges.finals_required, 0) AS DECIMAL(12,2)) AS finals_required,
       CAST(COALESCE(charges.finals_applied, 0) AS DECIMAL(12,2)) AS finals_applied,
       CAST(COALESCE(charges.finals_due, 0) AS DECIMAL(12,2)) AS finals_due,
-      CASE WHEN assessment.id IS NOT NULL AND confirmation.id IS NOT NULL
+      CASE WHEN assessment.id IS NOT NULL AND (annual.intake_status = 'pending' OR confirmation.id IS NOT NULL)
         AND COALESCE(charges.assessed_charge_count, 0) > 0 THEN 1 ELSE 0 END AS whole_tracking_available,
-      CASE WHEN assessment.id IS NOT NULL AND confirmation.id IS NOT NULL
+      CASE WHEN assessment.id IS NOT NULL AND (annual.intake_status = 'pending' OR confirmation.id IS NOT NULL)
         AND COALESCE(charges.tuition_line_count, 0) = 4 AND COALESCE(charges.canonical_tuition_count, 0) = 4
         AND COALESCE(charges.dp_count, 0) = 1 AND COALESCE(charges.prelim_count, 0) = 1
         AND COALESCE(charges.midterm_count, 0) = 1 AND COALESCE(charges.finals_count, 0) = 1
         THEN 1 ELSE 0 END AS installment_tracking_available,
       CASE
-        WHEN assessment.id IS NULL OR confirmation.id IS NULL
+        WHEN assessment.id IS NULL OR (annual.intake_status <> 'pending' AND confirmation.id IS NULL)
           OR COALESCE(charges.assessed_charge_count, 0) = 0
           THEN '${FINANCE_STATUS.NEEDS_REVIEW}'
         WHEN COALESCE(charges.required_amount, 0) <= 0 THEN '${FINANCE_STATUS.NO_PAYMENT_REQUIRED}'
@@ -96,7 +96,7 @@ const FINANCE_TERM_CLASSIFICATION_CTES = `FinanceChargeTotals AS (
         WHEN COALESCE(charges.amount_due, 0) > 0 THEN '${FINANCE_STATUS.PARTIAL}'
         ELSE '${FINANCE_STATUS.FULL}'
       END AS whole_status,
-      CASE WHEN assessment.id IS NULL OR confirmation.id IS NULL OR COALESCE(charges.tuition_line_count, 0) <> 4
+      CASE WHEN assessment.id IS NULL OR (annual.intake_status <> 'pending' AND confirmation.id IS NULL) OR COALESCE(charges.tuition_line_count, 0) <> 4
           OR COALESCE(charges.canonical_tuition_count, 0) <> 4
           OR COALESCE(charges.dp_count, 0) <> 1 OR COALESCE(charges.prelim_count, 0) <> 1
           OR COALESCE(charges.midterm_count, 0) <> 1 OR COALESCE(charges.finals_count, 0) <> 1
@@ -104,7 +104,7 @@ const FINANCE_TERM_CLASSIFICATION_CTES = `FinanceChargeTotals AS (
         WHEN COALESCE(charges.dp_required, 0) <= 0 THEN '${FINANCE_STATUS.NO_PAYMENT_REQUIRED}'
         WHEN COALESCE(charges.dp_applied, 0) <= 0 THEN '${FINANCE_STATUS.UNPAID}'
         WHEN COALESCE(charges.dp_due, 0) > 0 THEN '${FINANCE_STATUS.PARTIAL}' ELSE '${FINANCE_STATUS.FULL}' END AS dp_status,
-      CASE WHEN assessment.id IS NULL OR confirmation.id IS NULL OR COALESCE(charges.tuition_line_count, 0) <> 4
+      CASE WHEN assessment.id IS NULL OR (annual.intake_status <> 'pending' AND confirmation.id IS NULL) OR COALESCE(charges.tuition_line_count, 0) <> 4
           OR COALESCE(charges.canonical_tuition_count, 0) <> 4
           OR COALESCE(charges.dp_count, 0) <> 1 OR COALESCE(charges.prelim_count, 0) <> 1
           OR COALESCE(charges.midterm_count, 0) <> 1 OR COALESCE(charges.finals_count, 0) <> 1
@@ -112,7 +112,7 @@ const FINANCE_TERM_CLASSIFICATION_CTES = `FinanceChargeTotals AS (
         WHEN COALESCE(charges.prelim_required, 0) <= 0 THEN '${FINANCE_STATUS.NO_PAYMENT_REQUIRED}'
         WHEN COALESCE(charges.prelim_applied, 0) <= 0 THEN '${FINANCE_STATUS.UNPAID}'
         WHEN COALESCE(charges.prelim_due, 0) > 0 THEN '${FINANCE_STATUS.PARTIAL}' ELSE '${FINANCE_STATUS.FULL}' END AS prelim_status,
-      CASE WHEN assessment.id IS NULL OR confirmation.id IS NULL OR COALESCE(charges.tuition_line_count, 0) <> 4
+      CASE WHEN assessment.id IS NULL OR (annual.intake_status <> 'pending' AND confirmation.id IS NULL) OR COALESCE(charges.tuition_line_count, 0) <> 4
           OR COALESCE(charges.canonical_tuition_count, 0) <> 4
           OR COALESCE(charges.dp_count, 0) <> 1 OR COALESCE(charges.prelim_count, 0) <> 1
           OR COALESCE(charges.midterm_count, 0) <> 1 OR COALESCE(charges.finals_count, 0) <> 1
@@ -120,7 +120,7 @@ const FINANCE_TERM_CLASSIFICATION_CTES = `FinanceChargeTotals AS (
         WHEN COALESCE(charges.midterm_required, 0) <= 0 THEN '${FINANCE_STATUS.NO_PAYMENT_REQUIRED}'
         WHEN COALESCE(charges.midterm_applied, 0) <= 0 THEN '${FINANCE_STATUS.UNPAID}'
         WHEN COALESCE(charges.midterm_due, 0) > 0 THEN '${FINANCE_STATUS.PARTIAL}' ELSE '${FINANCE_STATUS.FULL}' END AS midterm_status,
-      CASE WHEN assessment.id IS NULL OR confirmation.id IS NULL OR COALESCE(charges.tuition_line_count, 0) <> 4
+      CASE WHEN assessment.id IS NULL OR (annual.intake_status <> 'pending' AND confirmation.id IS NULL) OR COALESCE(charges.tuition_line_count, 0) <> 4
           OR COALESCE(charges.canonical_tuition_count, 0) <> 4
           OR COALESCE(charges.dp_count, 0) <> 1 OR COALESCE(charges.prelim_count, 0) <> 1
           OR COALESCE(charges.midterm_count, 0) <> 1 OR COALESCE(charges.finals_count, 0) <> 1

@@ -28,6 +28,10 @@ function parseAssessmentQueueFilters(input = {}) {
 
 const ASSESSMENT_QUEUE_CTE = `WITH LatestAssessment AS (
     SELECT annual_enrollment_id, MAX(id) AS assessment_id FROM annual_assessments GROUP BY annual_enrollment_id
+  ), LatestHandoff AS (
+    SELECT annual_enrollment_id, id, activation_attempt_status,
+      ROW_NUMBER() OVER (PARTITION BY annual_enrollment_id ORDER BY handoff_version DESC, id DESC) AS handoff_rank
+    FROM annual_registrar_handoff_events
   ), LatestVoucherEvent AS (
     SELECT annual_enrollment_id, event_type,
       ROW_NUMBER() OVER (PARTITION BY annual_enrollment_id ORDER BY created_at DESC, id DESC) AS event_rank
@@ -39,6 +43,7 @@ const ASSESSMENT_QUEUE_CTE = `WITH LatestAssessment AS (
       assessment.id AS assessment_id, assessment.schedule_id, assessment.schedule_version,
       assessment.voucher_code_snapshot AS assessed_voucher_code,
       CASE WHEN review.id IS NULL THEN 0 ELSE 1 END AS has_finance_review,
+      handoff.id AS registrar_handoff_id, handoff.activation_attempt_status AS registrar_handoff_status,
       CASE WHEN voucher_event.event_type = 'voucher_review_flagged' THEN 1 ELSE 0 END AS voucher_review_required,
       CASE WHEN annual.intake_status = 'pending' AND (assessment.id IS NULL OR review.id IS NULL
         OR voucher_event.event_type = 'voucher_review_flagged') THEN 1 ELSE 0 END AS pending_approval,
@@ -48,6 +53,7 @@ const ASSESSMENT_QUEUE_CTE = `WITH LatestAssessment AS (
     INNER JOIN students AS student ON student.id = annual.student_id
     LEFT JOIN LatestAssessment AS latest_assessment ON latest_assessment.annual_enrollment_id = annual.id
     LEFT JOIN annual_assessments AS assessment ON assessment.id = latest_assessment.assessment_id
+    LEFT JOIN LatestHandoff AS handoff ON handoff.annual_enrollment_id = annual.id AND handoff.handoff_rank = 1
     LEFT JOIN annual_finance_assessment_reviews AS review ON review.id = (
       SELECT MAX(current_review.id) FROM annual_finance_assessment_reviews AS current_review
       WHERE current_review.annual_enrollment_id = annual.id AND current_review.assessment_id = assessment.id)
@@ -77,17 +83,17 @@ function createFinanceAssessmentQueueService({
       const candidates = await transaction.request().input('schoolYear', sql.NVarChar(20), filters.schoolYear)
         .query(`${ASSESSMENT_QUEUE_CTE} SELECT annual_enrollment_id, student_id, school_year, grade_level,
           voucher_code, intake_status, student_no, student_name, assessment_id, schedule_id, schedule_version,
-          assessed_voucher_code, has_finance_review, voucher_review_required
+          assessed_voucher_code, has_finance_review, voucher_review_required, registrar_handoff_id, registrar_handoff_status
           FROM AssessmentQueue WHERE (@schoolYear = '' OR school_year = @schoolYear)
           ORDER BY school_year DESC, student_name, student_no, annual_enrollment_id`);
       const allRows = candidates.recordset || [];
-      const readinessRows = allRows.filter((row) => row.intake_status === 'pending' && row.assessment_id
-        && Number(row.has_finance_review) === 1 && !row.voucher_review_required);
+      const readinessRows = allRows.filter((row) => row.intake_status === 'pending' && row.registrar_handoff_id
+        && row.assessment_id && Number(row.has_finance_review) === 1 && !row.voucher_review_required);
       const reviewedById = await classifyReadiness(readinessRows);
       for (const row of readinessRows) {
         row.has_finance_review = reviewedById.get(Number(row.annual_enrollment_id)) ? 1 : 0;
       }
-      const pendingRows = allRows.filter((row) => row.intake_status === 'pending'
+      const pendingRows = allRows.filter((row) => row.intake_status === 'pending' && row.registrar_handoff_id
         && (!row.assessment_id || !row.has_finance_review || row.voucher_review_required));
       const approvedRows = allRows.filter((row) => row.assessment_id && row.has_finance_review
         && !row.voucher_review_required);

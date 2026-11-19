@@ -3039,6 +3039,10 @@ function createAnnualFinanceService({
           SELECT enrollment_id, event_type,
             ROW_NUMBER() OVER (PARTITION BY enrollment_id ORDER BY created_at DESC, id DESC) AS event_rank
           FROM term_clearance_events
+        ), latest_registrar_handoff AS (
+          SELECT annual_enrollment_id, id, activation_attempt_status,
+            ROW_NUMBER() OVER (PARTITION BY annual_enrollment_id ORDER BY handoff_version DESC, id DESC) AS handoff_rank
+          FROM annual_registrar_handoff_events
         )
         SELECT enrollment.id AS enrollment_id,
           enrollment.academic_term_id, annual.id AS annual_enrollment_id, annual.school_year, annual.grade_level,
@@ -3048,6 +3052,10 @@ function createAnnualFinanceService({
           section.name AS section_name, section.cluster, section.strand, section.adviser, section.modality, section.modular_subtype,
           CAST(COALESCE(due_by_enrollment.total, 0) AS CHAR(40)) AS outstanding,
           confirmation.id AS registrar_confirmation_id,
+          CASE WHEN @isStudent = 1 THEN NULL ELSE handoff.id END AS registrar_handoff_id,
+          CASE WHEN @isStudent = 1 THEN NULL ELSE handoff.activation_attempt_status END AS registrar_handoff_status,
+          CASE WHEN @isStudent = 1 THEN NULL ELSE activation.id END AS entry_activation_id,
+          CASE WHEN @isStudent = 1 THEN NULL ELSE activation.entry_enrollment_id END AS entry_activation_enrollment_id,
           assessment.voucher_code_snapshot AS assessed_voucher_code, assessment.schedule_version AS assessed_schedule_version,
           CASE WHEN voucher_event.event_type = 'voucher_review_flagged'
             OR (@isStudent = 0 AND annual.intake_status = 'pending' AND assessment.voucher_code_snapshot IS NOT NULL
@@ -3069,6 +3077,8 @@ function createAnnualFinanceService({
           WHERE due_annual.student_id = @studentId GROUP BY due.enrollment_id
         ) AS due_by_enrollment ON due_by_enrollment.enrollment_id = enrollment.id
         LEFT JOIN annual_registrar_confirmations AS confirmation ON confirmation.annual_enrollment_id = annual.id
+        LEFT JOIN latest_registrar_handoff AS handoff ON handoff.annual_enrollment_id = annual.id AND handoff.handoff_rank = 1
+        LEFT JOIN annual_entry_activations AS activation ON activation.annual_enrollment_id = annual.id
         LEFT JOIN latest_voucher_event AS voucher_event ON voucher_event.annual_enrollment_id = annual.id
           AND voucher_event.event_rank = 1
         LEFT JOIN latest_clearance_event AS clearance ON clearance.enrollment_id = enrollment.id AND clearance.event_rank = 1
@@ -3395,6 +3405,54 @@ function createAnnualFinanceService({
       financeHandbookHistory: handbookHistoryResult.recordset || [],
       feeComments: feeCommentResult.recordset || []
     };
+    });
+  }
+
+  async function getEntryEnrollmentPrintSheet(actorInput, studentInput, annualInput) {
+    const studentId = id(studentInput, 'student');
+    const annualEnrollmentId = id(annualInput, 'annual enrollment');
+    return runTransaction(async (transaction) => {
+      await requireFinanceActor(transaction.request(), actorInput);
+      const result = await transaction.request().input('studentId', sql.Int, studentId)
+        .input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .query(`SELECT activation.id AS activation_id, annual.id AS annual_enrollment_id,
+            student.student_id AS student_id, student.student_no, student.first_name, student.middle_name,
+            student.last_name, student.suffix, annual.school_year, annual.grade_level,
+            annual.entry_term_number, DATE_FORMAT(annual.enrollment_start_date, '%Y-%m-%d') AS enrollment_date,
+            term.term AS entry_term, section.name AS section_name
+          FROM annual_entry_activations AS activation
+          INNER JOIN annual_enrollments AS annual ON annual.id = activation.annual_enrollment_id
+          INNER JOIN (SELECT id AS student_id, student_no, first_name, middle_name, last_name, suffix
+            FROM students WHERE id = @studentId) AS student ON student.student_id = annual.student_id
+          INNER JOIN enrollments AS entry ON entry.id = activation.entry_enrollment_id
+            AND entry.annual_enrollment_id = annual.id AND entry.student_id = student.student_id
+            AND entry.annual_term_number = annual.entry_term_number
+          INNER JOIN academic_terms AS term ON term.id = entry.academic_term_id
+          LEFT JOIN sections AS section ON section.id = entry.section_id AND section.academic_term_id = entry.academic_term_id
+          WHERE annual.id = @annualEnrollmentId AND annual.student_id = @studentId
+            AND annual.intake_status = 'enrolled' AND entry.enrollment_status = 'enrolled' AND entry.finalized_at IS NOT NULL`);
+      const row = result.recordset?.[0];
+      if (!row) throw new AnnualFinanceError('The requested enrollment sheet is not available for this student.', 404);
+      return { ...row, reference: `ENR-${Number(row.activation_id)}` };
+    });
+  }
+
+  async function listEntryEnrollmentPrintSheets(actorInput, studentInput) {
+    const studentId = id(studentInput, 'student');
+    return runTransaction(async (transaction) => {
+      await requireFinanceActor(transaction.request(), actorInput);
+      const result = await transaction.request().input('studentId', sql.Int, studentId)
+        .query(`SELECT activation.id AS activation_id, annual.id AS annual_enrollment_id,
+            annual.school_year, annual.grade_level
+          FROM annual_entry_activations AS activation
+          INNER JOIN annual_enrollments AS annual ON annual.id = activation.annual_enrollment_id
+          INNER JOIN enrollments AS entry ON entry.id = activation.entry_enrollment_id
+            AND entry.annual_enrollment_id = annual.id AND entry.student_id = annual.student_id
+            AND entry.annual_term_number = annual.entry_term_number
+          WHERE annual.student_id = @studentId AND annual.intake_status = 'enrolled'
+            AND entry.enrollment_status = 'enrolled' AND entry.finalized_at IS NOT NULL
+          ORDER BY annual.school_year DESC, annual.id DESC`);
+      return (result.recordset || []).map((row) => ({ ...row, reference: `ENR-${Number(row.activation_id)}` }));
     });
   }
 
@@ -3957,6 +4015,7 @@ function createAnnualFinanceService({
             annual_term_number: row.annual_term_number,
             enrollment_status: row.enrollment_status,
             term_scope_status: row.term_scope_status,
+            intake_status: row.intake_status,
             term_id: row.term_id,
             term: row.term,
             section_id: row.section_id,
@@ -4040,7 +4099,8 @@ function createAnnualFinanceService({
     recordChargeAdjustment, reverseAdjustment,
     updateFinanceHandbookNumber, addFeeComment,
     reversePayment, reconcileLegacyPayment, approveTerm, signTermClearance,
-    resolveVoucherReview, getStudentLedger, getAnnualPaymentConfirmation, getLegacyPaymentConfirmation, listRoster, listRosterPage
+    resolveVoucherReview, getStudentLedger, getAnnualPaymentConfirmation, getLegacyPaymentConfirmation,
+    getEntryEnrollmentPrintSheet, listEntryEnrollmentPrintSheets, listRoster, listRosterPage
   };
 }
 

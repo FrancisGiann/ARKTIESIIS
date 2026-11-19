@@ -90,7 +90,7 @@ test('isolated MariaDB upgrades v2.024 history and verifies enrollment exports a
   try {
     await executeStatements(setup, readSqlFile(path.join(projectRoot, 'database/mariadb/schema.sql')));
     const migrations = readForwardMigrations();
-    assert.equal(migrations.at(-1).version, 'v2.027');
+    assert.equal(migrations.at(-1).version, 'v2.028');
     for (const migration of migrations.filter(({ version }) => version < 'v2.025')) {
       await executeStatements(setup, migration.statements);
       await setup.execute('INSERT INTO schema_migrations (version) VALUES (?)', [migration.version]);

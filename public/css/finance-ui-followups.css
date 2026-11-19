@@ -209,3 +209,28 @@ body.finance-assessment-dialog-open { overflow: hidden; }
   .annual-confirmation-document .confirmation-itemized-fees .confirmation-fee-term-start:not(:first-child) td { border-top: 0.9pt solid #777; }
   .annual-confirmation-document .confirmation-itemized-fees tfoot tr { break-inside: avoid; }
 }
+
+
+.enrollment-sheet-document { page: enrollment-sheet; }
+.enrollment-sheet-document .enrollment-sheet-stamp {
+  min-height: 2.8in;
+  padding: 0.3in;
+  margin-top: 2rem;
+  border: 1px solid #555;
+  break-inside: avoid;
+}
+.enrollment-sheet-document .enrollment-sheet-stamp h2 { margin: 0; font-size: 1rem; }
+.enrollment-sheet-document .enrollment-sheet-stamp > div { min-height: 2.2in; }
+
+@page enrollment-sheet { size: A4; margin: 12mm; }
+
+@media print {
+  .enrollment-sheet-document .enrollment-sheet-stamp {
+    min-height: 2.8in;
+    padding: 0.25in;
+    margin-top: 0.35in;
+    border: 1pt solid #555;
+    break-inside: avoid;
+  }
+  .enrollment-sheet-document .enrollment-sheet-stamp > div { min-height: 2.2in; }
+}

@@ -79,7 +79,7 @@ test('annual roster pages whole annual records with a bounded SQL offset and cla
   assert.equal(observed.at(-1).values.offset, 0, 'invalid page input safely returns to the first page');
 });
 
-test('sourced annual confirmation filter is validated and shared by count and page queries without requiring a term', async () => {
+test('sourced annual handoff filter is validated and shared by count and page queries without requiring a term', async () => {
   const observed = [];
   const getPool = async () => ({ request() {
     const values = {};
@@ -95,16 +95,16 @@ test('sourced annual confirmation filter is validated and shared by count and pa
   } });
   const service = createAnnualEnrollmentService({ getPool, sql });
 
-  const page = await service.listAnnualEnrollmentsPage(7, { confirmationStatus: 'needs_confirmation' });
+  const page = await service.listAnnualEnrollmentsPage(7, { confirmationStatus: 'needs_handoff' });
 
   assert.equal(page.pagination.totalRecords, 1);
   const matchingQueries = observed.filter(({ statement }) => statement.includes('@confirmationStatus IS NULL'));
   assert.equal(matchingQueries.length, 2, 'count and page use the same matching predicate');
   for (const query of matchingQueries) {
-    assert.equal(query.values.confirmationStatus, 'needs_confirmation');
+    assert.equal(query.values.confirmationStatus, 'needs_handoff');
     assert.match(query.statement, /annual\.intake_status = 'pending'/);
     assert.match(query.statement, /source_intake\.status = 'enrollment_started'/);
-    assert.match(query.statement, /saved_confirmation\.annual_enrollment_id = annual\.id/);
+    assert.match(query.statement, /activation\.id IS NULL/);
     assert.doesNotMatch(query.statement, /INNER JOIN (?:enrollments|academic_terms)/);
   }
 

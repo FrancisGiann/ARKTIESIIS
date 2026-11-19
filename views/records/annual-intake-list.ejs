@@ -43,7 +43,7 @@
           <div class="field"><label for="annual-filter-cluster">Cluster</label><input id="annual-filter-cluster" name="cluster" maxlength="80" value="<%= filters.cluster %>"></div>
           <div class="field"><label for="annual-filter-strand">Strand</label><input id="annual-filter-strand" name="strand" maxlength="80" value="<%= filters.strand %>"></div>
           <div class="field"><label for="annual-filter-status">Term placement status</label><select id="annual-filter-status" name="status"><option value="">All statuses</option><% for (const [value, label] of [['pending_payment', 'Pending activation'], ['enrolled', 'Enrolled'], ['cancelled', 'Cancelled'], ['dropped', 'Stopped studying'], ['transferred', 'Transferred']]) { %><option value="<%= value %>" <%= filters.status === value ? 'selected' : '' %>><%= label %></option><% } %></select></div>
-          <div class="field"><label for="annual-filter-confirmation">Annual confirmation</label><select id="annual-filter-confirmation" name="confirmationStatus"><option value="">All confirmation statuses</option><option value="needs_confirmation" <%= filters.confirmationStatus === 'needs_confirmation' ? 'selected' : '' %>>Needs confirmation from sourced intake</option></select></div>
+          <div class="field"><label for="annual-filter-confirmation">Registrar handoff</label><select id="annual-filter-confirmation" name="confirmationStatus"><option value="">All enrollment statuses</option><option value="needs_handoff" <%= ['needs_handoff', 'needs_confirmation'].includes(filters.confirmationStatus) ? 'selected' : '' %>>Needs enrollment handoff or activation follow-up</option></select></div>
         </div>
       </details>
       <div class="admin-form-actions annual-search-actions"><a class="button button--secondary" href="/registrar/intake">Clear filters</a></div>
@@ -66,12 +66,12 @@
       <% const annualGroups = new Map(); %>
       <% for (const row of rows) { const key = String(row.annual_enrollment_id); if (!annualGroups.has(key)) annualGroups.set(key, []); annualGroups.get(key).push(row); } %>
       <div class="annual-record-list">
-        <% for (const annualRows of annualGroups.values()) { const record = annualRows[0]; const fullName = [record.first_name, record.middle_name, record.last_name, record.suffix].filter(Boolean).join(' '); const entryPlacement = annualRows.find((row) => Number(row.annual_term_number) === Number(row.entry_term_number) && row.term_scope_status !== 'not_applicable'); const confirmationLabel = entryPlacement ? (entryPlacement.registrar_confirmation_id ? 'Confirmed' : 'Needs confirmation') : (annualRows.some((row) => row.registrar_confirmation_id) ? 'Confirmed' : 'Review term records'); %>
+        <% for (const annualRows of annualGroups.values()) { const record = annualRows[0]; const fullName = [record.first_name, record.middle_name, record.last_name, record.suffix].filter(Boolean).join(' '); const entryPlacement = annualRows.find((row) => Number(row.annual_term_number) === Number(row.entry_term_number) && row.term_scope_status !== 'not_applicable'); const confirmationLabel = entryPlacement ? (entryPlacement.entry_activation_id ? 'Enrolled' : ({ awaiting_finance: 'Sent to Finance · awaiting readiness', academic_review_required: 'Fresh Registrar handoff required', registrar_review_required: 'Registrar review required', retry_required: 'Finance activation retry required' })[entryPlacement.registrar_handoff_status] || (entryPlacement.registrar_handoff_id ? 'Sent to Finance' : 'Needs Registrar handoff')) : (annualRows.some((row) => row.entry_activation_id || row.registrar_confirmation_id) ? 'Enrolled' : 'Review term records'); %>
           <article class="annual-record" aria-labelledby="annual-record-title-<%= record.annual_enrollment_id %>">
             <div class="annual-record__main">
               <div class="annual-record__identity"><h3 id="annual-record-title-<%= record.annual_enrollment_id %>"><%= fullName %></h3><p>Student no. <%= record.student_no %> · LRN <%= record.lrn || 'Not recorded' %></p></div>
               <div class="annual-record__context"><strong><%= record.school_year %> · <%= record.grade_level %></strong><span>Voucher <%= record.voucher_code %></span></div>
-              <div class="annual-record__confirmation"><span>Enrollment confirmation</span><strong><%= confirmationLabel %></strong></div>
+              <div class="annual-record__confirmation"><span>Entry handoff and activation</span><strong><%= confirmationLabel %></strong></div>
               <a class="annual-record__open-link" href="/registrar/intake/<%= record.annual_enrollment_id %>/manage">Open enrollment</a>
             </div>
             <details class="annual-record-details">
@@ -90,13 +90,13 @@
                   </details>
                 </div>
                 <ol class="annual-placement-list" aria-label="Term placements for <%= fullName %>">
-              <% for (const row of annualRows) { const displayTerm = termLabel(row); const statusLabel = ({ pending_payment: 'Pending activation', enrolled: 'Enrolled', cancelled: 'Cancelled', dropped: 'Stopped studying', transferred: 'Transferred' })[row.enrollment_status] || row.enrollment_status; %>
+              <% for (const row of annualRows) { const displayTerm = termLabel(row); const entryActivated = Boolean(row.entry_activation_id); const legacyConfirmed = Boolean(row.registrar_confirmation_id); const hasEntryConfirmation = entryActivated || legacyConfirmed; const statusLabel = ({ pending_payment: 'Pending activation', enrolled: 'Enrolled', cancelled: 'Cancelled', dropped: 'Stopped studying', transferred: 'Transferred' })[row.enrollment_status] || row.enrollment_status; %>
                 <li class="annual-placement" id="annual-placement-<%= row.enrollment_id %>">
                   <div class="annual-placement__overview">
                     <div><h4><%= displayTerm %></h4><p><%= [row.section_name || 'No section assigned', row.cluster ? `Cluster ${row.cluster}` : '', row.strand, row.adviser ? `Adviser ${row.adviser}` : '', row.modality, row.modular_subtype].filter(Boolean).join(' · ') %></p></div>
                     <dl class="annual-placement__status">
                       <div><dt>Status</dt><dd><%= statusLabel %></dd></div>
-                      <div><dt>Enrollment</dt><dd><%= row.term_scope_status === 'not_applicable' ? 'Not applicable before entry' : row.registrar_confirmation_id ? 'Confirmed' : Number(row.annual_term_number) === Number(row.entry_term_number) ? 'Awaiting Finance and DP readiness' : 'Waiting for entry confirmation' %></dd></div>
+                      <div><dt>Enrollment</dt><dd><%= row.term_scope_status === 'not_applicable' ? 'Not applicable before entry' : entryActivated ? 'Entry enrollment activated' : legacyConfirmed ? 'Historical confirmation recorded' : Number(row.annual_term_number) === Number(row.entry_term_number) ? ({ awaiting_finance: 'Handoff sent · awaiting Finance', academic_review_required: 'Fresh Registrar handoff required', registrar_review_required: 'Registrar review required', retry_required: 'Finance activation retry required' })[row.registrar_handoff_status] || (row.registrar_handoff_id ? 'Handoff sent to Finance' : 'Needs Registrar handoff') : 'Waiting for entry activation' %></dd></div>
                       <div><dt>Term account clearance</dt><dd><%= row.signed_clearance_status === 'signed' ? 'Recorded' : 'Not recorded' %></dd></div>
                     </dl>
                   </div>
@@ -126,12 +126,12 @@
                         <% } else { %><p class="muted-copy">Status: <%= statusLabel %></p><% } %>
                       </div>
                       <div class="annual-placement__action annual-placement__action--activation">
-                        <% if (row.enrollment_status === 'pending_payment' && row.term_scope_status === 'applicable' && row.section_id && !row.registrar_confirmation_id && Number(row.annual_term_number) === Number(row.entry_term_number)) { %>
-                          <a class="button button--primary" href="/registrar/intake/<%= row.annual_enrollment_id %>/review">Review and finalize enrollment</a>
-                        <% } else if (row.enrollment_status === 'pending_payment' && row.term_scope_status === 'applicable' && row.section_id && row.registrar_confirmation_id) { %>
+                        <% if (row.enrollment_status === 'pending_payment' && row.term_scope_status === 'applicable' && row.section_id && !hasEntryConfirmation && Number(row.annual_term_number) === Number(row.entry_term_number)) { %>
+                          <a class="button button--primary" href="/registrar/intake/<%= row.annual_enrollment_id %>/review"><%= row.registrar_handoff_id ? 'Review or refresh handoff' : 'Review and send Finance handoff' %></a>
+                        <% } else if (row.enrollment_status === 'pending_payment' && row.term_scope_status === 'applicable' && row.section_id && hasEntryConfirmation) { %>
                           <a class="button button--primary" href="/registrar/intake/<%= row.enrollment_id %>/activation-review">Review prerequisites and activate</a>
-                        <% } else if (row.enrollment_status === 'pending_payment' && row.term_scope_status === 'applicable' && !row.section_id) { %><p class="muted-copy"><%= row.registrar_confirmation_id ? 'Assign a section before activation' : Number(row.annual_term_number) === Number(row.entry_term_number) ? 'Assign an entry section before final confirmation' : 'Assign a section after entry confirmation' %></p>
-                        <% } else if (row.enrollment_status === 'pending_payment' && !row.registrar_confirmation_id) { %><p class="muted-copy">Confirm the entry term first.</p><% } else { %><p class="muted-copy">No activation action is available.</p><% } %>
+                        <% } else if (row.enrollment_status === 'pending_payment' && row.term_scope_status === 'applicable' && !row.section_id) { %><p class="muted-copy"><%= hasEntryConfirmation ? 'Assign a section before activation' : Number(row.annual_term_number) === Number(row.entry_term_number) ? 'Assign an entry section before handoff' : 'Assign a section after entry activation' %></p>
+                        <% } else if (row.enrollment_status === 'pending_payment' && !hasEntryConfirmation) { %><p class="muted-copy">Send the Registrar handoff for the entry term first.</p><% } else { %><p class="muted-copy">No activation action is available.</p><% } %>
                       </div>
                     </div>
                   </details>

@@ -1415,13 +1415,13 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     return { ready: blockers.length === 0, blockers };
   }
 
-  async function annualReviewInTransaction(transaction, actorId, annualInput) {
+  async function annualReviewInTransaction(transaction, actorId, annualInput, { trustedInternal = false } = {}) {
     const annualId = idValue(annualInput, 'annual enrollment');
     const ownerResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualId)
       .query('SELECT student_id FROM annual_enrollments WHERE id = @annualEnrollmentId');
     const owner = ownerResult.recordset?.[0];
     if (!owner) throw new TermClearanceError('Annual enrollment not found.', 404);
-    await requireStaff(transaction.request(), actorId);
+    if (!trustedInternal) await requireStaff(transaction.request(), actorId);
     const student = await lockStudent(transaction, Number(owner.student_id));
     if (!student) throw new TermClearanceError('Student record not found.', 404);
     const annualResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualId)
@@ -1484,6 +1484,15 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
       throw new TermClearanceError('The reviewed term-clearance prerequisites changed after the annual review. Reload the final review before confirming.', 409);
     }
     if (!review.ready) throw new TermClearanceError(review.blockers[0] || 'Prior-year paper clearance must be reviewed before final confirmation.', 409);
+    return review;
+  }
+
+  async function revalidateAnnualEntryHandoffInTransaction(transaction, { annualId, expectedFingerprint } = {}) {
+    const review = await withClearanceSchemaCompatibility(() => annualReviewInTransaction(transaction, null, annualId, { trustedInternal: true }));
+    if (expectedFingerprint && review.fingerprint !== expectedFingerprint) {
+      throw new TermClearanceError('Academic prerequisites changed after Registrar handoff. A fresh Registrar review is required.', 409);
+    }
+    if (!review.ready) throw new TermClearanceError(review.blockers[0] || 'Academic prerequisites need Registrar review.', 409);
     return review;
   }
 
@@ -1930,6 +1939,7 @@ function createTermClearanceService({ getPool = defaultGetPool, sql = defaultSql
     updateTermClearance: allowLegacyWrites ? updateTermClearance : retiredLegacyWrite, recordTermCompletion, recordTermNotAttended,
     getStudentClearance, getClearanceDashboard, getStudentClearanceOverview,
     getAnnualPrerequisiteReview, assertAnnualEntryPrerequisitesInTransaction,
+    revalidateAnnualEntryHandoffInTransaction,
     getTermActivationReview, assertTermPrerequisitesInTransaction, getContinuitySourceOptions,
     bindContinuitySource, getOwnStudentProgress };
 }

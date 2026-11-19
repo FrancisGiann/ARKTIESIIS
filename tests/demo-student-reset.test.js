@@ -49,6 +49,9 @@ test('reset scope covers student operations while preserving every listed school
   assert.ok(RESET_TABLES.indexOf('student_term_clearances') < RESET_TABLES.indexOf('enrollments'));
   assert.ok(RESET_TABLES.indexOf('annual_term_finalizations') < RESET_TABLES.indexOf('enrollments'));
   assert.ok(RESET_TABLES.indexOf('annual_continuity_source_events') < RESET_TABLES.indexOf('annual_enrollments'));
+  assert.ok(RESET_TABLES.indexOf('annual_entry_activations') < RESET_TABLES.indexOf('annual_registrar_handoff_events'));
+  assert.ok(RESET_TABLES.indexOf('annual_registrar_handoff_events') < RESET_TABLES.indexOf('annual_registrar_confirmations'));
+  assert.ok(RESET_TABLES.indexOf('annual_entry_activations') < RESET_TABLES.indexOf('annual_finance_assessment_reviews'));
   assert.ok(RESET_TABLES.indexOf('annual_registrar_confirmations') < RESET_TABLES.indexOf('annual_finance_assessment_reviews'));
   assert.ok(RESET_TABLES.indexOf('annual_finance_assessment_reviews') < RESET_TABLES.indexOf('annual_enrollment_events'));
   assert.ok(RESET_TABLES.indexOf('annual_enrollment_events') < RESET_TABLES.indexOf('annual_assessments'));

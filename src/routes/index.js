@@ -279,6 +279,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
   router.use('/finance', requireAuth, requireRole('finance', 'database_admin'), createFinanceRouter({ getPool, sql,
     annualFinanceService: annualFinancesService, financeCasesService: annualFinanceCases,
     financeReportsService: annualFinanceReports, financeDashboardService: financeDashboard, financeMasterlistService: financeMasterlist, financeReviewActionService,
+    annualEnrollmentService: annualEnrollmentsService,
     documentClearanceService: studentDocumentClearance, sessionSecret: environment.sessionSecret,
     retakeReferralService: retakeReferralsService }));
   router.use('/admin', requireAuth, requireRole('database_admin'), createAdminRouter({
@@ -686,7 +687,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       const workloadRequests = [
         () => preEnrollmentsService.list(req.authUser.id, { status: 'ready_for_registrar', page: '1' })
           .then((result) => Number(result.pagination?.totalRecords || 0)),
-        () => annualEnrollmentsService.listAnnualEnrollmentsPage(req.authUser.id, { confirmationStatus: 'needs_confirmation', page: '1' })
+        () => annualEnrollmentsService.listAnnualEnrollmentsPage(req.authUser.id, { confirmationStatus: 'needs_handoff', page: '1' })
           .then((result) => Number(result.pagination?.totalRecords || 0)),
         () => documentsService.countAwaitingStaffReview(req.authUser.id),
         () => teacherSubmissions.listReviewQueue(req.authUser.id).then((rows) => rows.length)
@@ -702,7 +703,7 @@ function createRouter({ getPool = defaultGetPool, sql = defaultSql, environment 
       }
       const queueDefinitions = [
         { key: 'paperIntake', label: 'Paper intakes ready for registrar review', href: '/pre-enrollments?status=ready_for_registrar', description: 'Front-desk forms saved as ready for registrar review.' },
-        { key: 'annualConfirmation', label: 'Enrollments awaiting confirmation', href: '/registrar/intake?confirmationStatus=needs_confirmation', description: 'Annual records linked to front-desk paper forms and awaiting entry confirmation.' },
+        { key: 'annualConfirmation', label: 'Enrollment handoffs and activation follow-up', href: '/registrar/intake?confirmationStatus=needs_handoff', description: 'Pending annual records that need a Registrar handoff or a fresh academic review.' },
         { key: 'digitalDocuments', label: 'Digital submissions needing review', href: '/documents?status=awaiting_review', description: 'Latest permitted Good Moral, PSA, or student-uploaded report-card submissions.' },
         { key: 'gradeSubmissions', label: 'Teacher grade submissions awaiting review', href: '/registrar/grade-submissions', description: 'Saved teacher submissions awaiting registrar review.' }
       ];

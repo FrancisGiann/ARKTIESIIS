@@ -12,6 +12,7 @@
     <ol><li><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li><li><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li><li><span class="intake-step-label--full">Paper document review</span><span class="intake-step-label--short">Papers</span></li><li<% if (awaitingFinance) { %> aria-current="step"<% } %>><span class="intake-step-label--full">Finance assessment</span><span class="intake-step-label--short">Finance</span></li><li<% if (!awaitingFinance) { %> aria-current="step"<% } %>><span class="intake-step-label--full">Review details</span><span class="intake-step-label--short">Review</span></li></ol>
   </nav>
   <% if (error) { %><p class="form-alert" role="alert"><%= error %></p><% } %>
+  <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
   <% if (sourceReviewRecovery?.formUnavailable) { %>
     <section class="admin-section" aria-label="Source review recovery">
       <p class="form-alert" role="alert">The source-review form is unavailable in the refreshed enrollment state. The save did not return confirmation; check the current state before retrying.</p>
@@ -67,19 +68,16 @@
           </tr><% } %></tbody>
         </table>
       </div>
-      <% if (!record.parent.registrar_confirmation_id && parent.intake_status === 'pending') { %>
-        <p><a class="button button--secondary" href="/registrar/intake/<%= annualId %>/pending-form">Print saved pending school e-form</a></p>
-      <% } %>
       <p><a class="table-action" href="/registrar/records/students/<%= parent.student_id %>/edit">Edit profile or term placements</a></p>
     </section>
 
     <section class="admin-section" aria-labelledby="paper-clearance-review-title">
       <div class="admin-section__heading"><div><h2 id="paper-clearance-review-title">Earlier-term paper forms</h2><p>A registrar must record completion for each required earlier attended term after inspecting the returned paper form before this enrollment is finalized. Finance payments and document checklists are separate records.</p></div></div>
-      <% if (!prerequisiteReview) { %><p class="form-alert" role="alert">Earlier-term paper review is unavailable. Enrollment confirmation is blocked.</p>
+      <% if (!prerequisiteReview) { %><p class="form-alert" role="alert">Earlier-term paper review is unavailable. Registrar handoff is blocked.</p>
       <% } else if (prerequisiteReview.kind === 'exempt') { %>
         <p>This is a <%= prerequisiteReview.intakeKind === 'readmission' ? 'readmission' : 'new-student' %> entry. There is no internal preceding-year clearance gate for this first enrollment.</p>
-      <% } else if (prerequisiteReview.kind === 'already_confirmed') { %>
-        <p>This annual enrollment was already confirmed. Its original confirmation remains on record; paper clearance status is shown separately in the Clearance workspace.</p>
+      <% } else if (prerequisiteReview.kind === 'already_confirmed' || prerequisiteReview.kind === 'already_activated') { %>
+        <p>This annual enrollment was already activated. Paper clearance status is shown separately in the Clearance workspace.</p>
       <% } else { %>
         <% if (prerequisiteReview.kind === 'continuing_source') { %><p>Preceding school year: <%= prerequisiteReview.sourceSchoolYear || 'not yet selected from school records' %></p><% } %>
         <% if (prerequisiteReview.terms?.length) { %>
@@ -126,8 +124,10 @@
 
     <section class="admin-section" aria-labelledby="review-finance-title">
       <div class="admin-section__heading"><div><h2 id="review-finance-title">Finance readiness</h2><p>Entry term: Term <%= financeReadiness.entryTermNumber %>. Fee amounts and optional selections are managed by Finance.</p></div></div>
-      <% if (record.parent.registrar_confirmation_id) { %>
-        <p class="form-success" role="status">This annual enrollment already has a Registrar confirmation on record. Later Finance activity does not undo that confirmation.</p>
+      <% if (entryActivated) { %>
+        <p class="form-success" role="status">The entry placement has been activated. Later financial changes do not undo enrollment.</p>
+      <% } else if (record.parent.registrar_confirmation_id) { %>
+        <p class="form-success" role="status">This legacy annual enrollment has a Registrar confirmation on record. Later Finance activity does not undo that confirmation.</p>
       <% } else { const readinessLabels = {
         awaiting_finance_assessment: 'Awaiting Finance assessment', finance_review_required: 'Finance review or DP setup required',
         awaiting_down_payment: 'Awaiting entry-term DP settlement', ready_for_registrar: 'Ready for Registrar'
@@ -138,7 +138,7 @@
         <% } else if (financeReadiness.status === 'awaiting_down_payment') { %>
           <p>The full scheduled tuition DP for this exact entry term must be settled through eligible allocations. Unallocated or unrelated credit and the remaining annual balance do not change this check.</p>
         <% } else if (financeReadiness.status === 'ready_for_registrar') { %>
-          <p>Finance reviewed the current assessment and the full entry-term tuition DP is settled. Complete the Registrar review below to finalize enrollment.</p>
+          <p>Finance reviewed the current assessment and the full entry-term tuition DP is settled. The saved Registrar handoff can now activate enrollment.</p>
         <% } else { %>
           <p>Finance must review the current assessment and confirm the scheduled entry-term DP setup. A missing DP schedule cannot be treated as zero.</p>
         <% } %>
@@ -146,19 +146,32 @@
     </section>
 
     <section class="admin-section fee-confirmation" aria-labelledby="review-confirm-title">
-      <% if (confirmationComplete) { %>
-        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Enrollment already confirmed</h2><p>This annual enrollment has a registrar confirmation on record.</p></div></div>
+      <% if (entryActivated || confirmationComplete) { %>
+        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Enrollment activated</h2><p>The entry placement is active. Its saved Registrar handoff and Finance review are recorded separately.</p></div></div>
+        <% if (entryActivated && (parent.account_activation_pending === 1 || parent.account_activation_pending === true)) { %>
+          <form method="post" action="/registrar/intake/<%= annualId %>/first-login-password" class="form-stack">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+            <p>The student login is still pending. Issue a one-time random password only when you are ready to give it to the student privately.</p>
+            <button class="button button--primary" type="submit">Issue first-login password</button>
+          </form>
+        <% } %>
         <a class="button button--secondary" href="/registrar/intake/<%= annualId %>/manage">Open student record</a>
-      <% } else if (awaitingFinance) { %>
-        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Final review waits for Finance</h2><p>Finance readiness is shown above. No Registrar confirmation is available until the required assessment and entry-term DP checks pass.</p></div></div>
+      <% } else if (handoffMatchesPrerequisites) { %>
+        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Registrar handoff saved</h2><p>The current academic prerequisites match the saved handoff.</p></div></div>
+        <% if (handoffStatus?.status === 'awaiting_finance') { %><p>Finance is completing the reviewed assessment and exact entry-term tuition DP check.</p>
+        <% } else if (handoffStatus?.status === 'academic_review_required' || handoffStatus?.status === 'registrar_review_required') { %><p class="form-alert" role="alert">Academic prerequisites or the entry placement changed. Review the current records and send a fresh handoff.</p>
+        <% } else if (handoffStatus?.status === 'retry_required') { %><p class="form-alert" role="alert">Finance saved its update, but automatic activation needs another Finance commit attempt. No payment needs to be re-entered.</p>
+        <% } %>
+        <a class="button button--secondary" href="/registrar/intake/<%= annualId %>/manage">Open student record</a>
       <% } else { %>
-        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Finalize enrollment</h2><p>Confirming reuses Finance’s reviewed assessment and activates the entry term after its full tuition DP is settled.</p></div></div>
-        <% if (!prerequisiteReview?.ready) { %><p class="form-alert" role="alert">Resolve each earlier-term paper form item above before confirming enrollment.</p><% } %>
-        <form method="post" action="/registrar/intake/<%= annualId %>/confirm" class="fee-confirmation__form">
+        <div class="admin-section__heading"><div><h2 id="review-confirm-title">Send digital handoff to Finance</h2><p>This saves your current academic and intake prerequisite review. Finance activates the entry placement after its exact entry-term DP is settled or an approved zero DP is recorded.</p></div></div>
+        <% if (!prerequisiteReview?.ready) { %><p class="form-alert" role="alert">Resolve the Registrar prerequisites above before sending the handoff.</p><% } %>
+        <form method="post" action="/registrar/intake/<%= annualId %>/handoff" class="fee-confirmation__form">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>">
           <input type="hidden" name="idempotencyKey" value="<%= values.idempotencyKey %>">
-          <input type="hidden" name="clearanceSnapshotFingerprint" value="<%= prerequisiteReview?.fingerprint || '' %>">
-          <button class="button button--primary" type="submit" <%= prerequisiteReview?.ready && financeReadiness.status === 'ready_for_registrar' ? '' : 'disabled' %>>Confirm enrollment</button>
+          <input type="hidden" name="clearanceFingerprint" value="<%= prerequisiteReview?.fingerprint || '' %>">
+          <input type="hidden" name="prerequisiteFingerprint" value="<%= handoffStatus?.currentPrerequisiteFingerprint || '' %>">
+          <button class="button button--primary" type="submit" <%= prerequisiteReview?.ready ? '' : 'disabled' %>>Send handoff</button>
           <a class="button button--secondary" href="/registrar/intake/<%= annualId %>/manage">Back to student record</a>
         </form>
       <% } %>

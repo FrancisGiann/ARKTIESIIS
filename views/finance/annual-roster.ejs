@@ -101,7 +101,7 @@
                         <% const paymentStatus = paymentStatusPresentation({ ...placement, finance_status: placement.finance_status, matching_assessment_confirmation_id: placement.matching_assessment_confirmation_id }, filters.installment || 'whole'); %>
                         <div><dt>Payment status</dt><dd><%= paymentStatus.reason || paymentStatus.label %><% if (paymentStatus.guidance) { %><br><span class="muted-copy"><%= paymentStatus.guidance %></span><% } %></dd></div>
                         <% const earlierConfirmation = placement.matching_assessment_confirmation_id === null && placement.registrar_confirmation_id != null; %>
-                        <div><dt>Registrar enrollment</dt><dd><%= placement.term_scope_status === 'not_applicable' ? 'Not applicable before entry term' : earlierConfirmation ? 'Earlier confirmation recorded' : placement.registrar_confirmation_id ? 'Confirmed by registrar' : 'Needs registrar confirmation' %></dd></div>
+                        <div><dt>Registrar enrollment</dt><dd><%= placement.term_scope_status === 'not_applicable' ? 'Not applicable before entry term' : earlierConfirmation ? 'Earlier historical confirmation recorded' : placement.registrar_confirmation_id ? 'Historical Registrar confirmation recorded' : placement.intake_status === 'pending' ? 'Needs Registrar digital handoff or activation' : 'Historical confirmation not recorded' %></dd></div>
                         <div><dt>Term account clearance</dt><dd><%= placement.signed_clearance_status === 'signed' ? 'Recorded' : 'Not recorded' %></dd></div>
                       </dl>
                     </li>

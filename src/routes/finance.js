@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
 const { normalizeId } = require('../services/financeService');
 const { AnnualFinanceError, FINANCE_ROSTER_QUERY_PHASES, createAnnualFinanceService } = require('../services/annualFinanceService');
+const { AnnualEnrollmentError } = require('../services/annualEnrollmentService');
 const { FinanceCasesError, createAnnualFinanceCasesService } = require('../services/annualFinanceCasesService');
 const {
   FinanceReportsError, FINANCE_REPORT_QUERY_PHASES, createAnnualFinanceReportsService
@@ -88,7 +89,7 @@ function recoveryFields(input = {}) {
     .filter((field) => field.value !== '');
 }
 
-function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, financeAssessmentQueueService, documentClearanceService, financeReviewActionService, retakeReferralService, sessionSecret = '', logger = console } = {}) {
+function createFinanceRouter({ getPool, sql, annualFinanceService, annualEnrollmentService, financeCasesService, financeReportsService, financeDashboardService, financeMasterlistService, financeAssessmentQueueService, documentClearanceService, financeReviewActionService, retakeReferralService, sessionSecret = '', logger = console } = {}) {
   const router = express.Router();
   const annual = annualFinanceService || createAnnualFinanceService({ getPool, sql });
   const cases = financeCasesService || createAnnualFinanceCasesService({ getPool, sql });
@@ -99,7 +100,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     sql, withFinanceQueueSnapshot: (actorId, callback) => annual.withFinanceAssessmentQueueSnapshot(actorId, callback)
   });
   const documentClearance = documentClearanceService || createStudentDocumentFinanceClearanceService({ getPool, sql });
-  const reviewActions = financeReviewActionService || createFinanceReviewActionService({ getPool, sql });
+  const reviewActions = financeReviewActionService || createFinanceReviewActionService({ getPool, sql, annualEnrollmentService, logger });
   const retakeReferrals = retakeReferralService || createRetakeReferralService({ getPool, sql, annualFinanceService: annual });
 
   function sessionBinding(req) {
@@ -440,7 +441,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
         });
       if (result.stale) return res.redirect(303, `/finance/review-drafts/${encodeURIComponent(req.params.draftId)}?stale=1`);
       const draft = await reviewActions.getDraft(req.authUser.id, req.params.draftId);
-      return res.redirect(303, reviewActions.afterCommitPath(draft));
+      return res.redirect(303, reviewActions.afterCommitPath(draft, result));
     } catch (error) {
       if (isRecoverableFinanceValidation(error)) {
         try {
@@ -468,6 +469,35 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     } catch (error) {
       if (error instanceof FinanceReviewDraftError) return res.status(error.status).render('error', { title: 'Discard finance review', message: error.message });
       return res.status(503).render('error', { title: 'Service Unavailable', message: 'The finance review could not be discarded.' });
+    }
+  });
+
+  router.post('/students/:studentId/annual/:annualId/retry-enrollment-activation', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).set('Cache-Control', 'private, no-store').render('error', {
+      title: 'Forbidden', message: 'The form session expired. Reload the page and try again.'
+    });
+    const studentId = normalizeId(req.params.studentId);
+    const annualId = normalizeId(req.params.annualId);
+    if (!studentId || !annualId) return res.status(404).render('error', {
+      title: 'Enrollment activation', message: 'Annual enrollment not found.'
+    });
+    if (typeof annualEnrollmentService?.retryFinanceHandoffs !== 'function') {
+      return res.status(503).render('error', { title: 'Enrollment activation', message: 'The activation retry is unavailable.' });
+    }
+    try {
+      const results = await annualEnrollmentService.retryFinanceHandoffs(req.authUser.id, {
+        studentId, annualEnrollmentId: annualId
+      });
+      const result = results.find((item) => Number(item.annualEnrollmentId) === annualId);
+      const notice = result?.status === 'activated' ? 'enrollmentActivated' : 'activationRetryComplete';
+      return res.redirect(303, `/finance/students/${studentId}/annual?view=payments&annualId=${annualId}&notice=${notice}#assessment-payment-handoff`);
+    } catch (error) {
+      if (error instanceof AnnualEnrollmentError) return res.status(error.status).set('Cache-Control', 'private, no-store').render('error', {
+        title: 'Enrollment activation', message: error.status < 500 ? error.message : 'The enrollment activation could not be retried.'
+      });
+      return res.status(503).set('Cache-Control', 'private, no-store').render('error', {
+        title: 'Enrollment activation', message: 'The enrollment activation could not be retried.'
+      });
     }
   });
 
@@ -1070,13 +1100,36 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, financeCasesS
     }
   });
 
+  router.get('/students/:id/annual/:annualId/enrollment-sheet', async (req, res) => {
+    const studentId = normalizeId(req.params.id);
+    const annualId = normalizeId(req.params.annualId);
+    if (!studentId || !annualId) return res.status(404).render('error', { title: 'Not Found', message: 'Enrollment sheet not found.' });
+    try {
+      const sheet = await annual.getEntryEnrollmentPrintSheet(req.authUser.id, studentId, annualId);
+      return res.set('Cache-Control', 'private, no-store').render('finance/enrollment-sheet', {
+        title: 'Enrollment sheet', currentUser: req.authUser, sheet
+      });
+    } catch (error) {
+      const status = error instanceof AnnualFinanceError ? error.status : 503;
+      return res.status(status).set('Cache-Control', 'private, no-store').render('error', {
+        title: 'Enrollment sheet unavailable', message: status < 500 ? error.message : 'The enrollment sheet could not be loaded.'
+      });
+    }
+  });
+
   router.get('/students/:id/annual/payments/:paymentId/confirmation', async (req, res) => {
     const studentId = normalizeId(req.params.id);
     if (!studentId) return res.status(404).render('error', { title: 'Not Found', message: 'Student record not found.' });
     try {
       const confirmation = await annual.getAnnualPaymentConfirmation(req.authUser.id, studentId, req.params.paymentId, 'finance');
+      const rawAnnualIds = req.query.enrollmentAnnualId == null ? []
+        : Array.isArray(req.query.enrollmentAnnualId) ? req.query.enrollmentAnnualId : [req.query.enrollmentAnnualId];
+      const annualIds = [...new Set(rawAnnualIds.slice(0, 20).map(normalizeId).filter(Boolean))];
+      const enrollmentSheetResults = await Promise.allSettled(annualIds.map((annualId) =>
+        annual.getEntryEnrollmentPrintSheet(req.authUser.id, studentId, annualId)));
+      const enrollmentSheets = enrollmentSheetResults.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
       return res.set('Cache-Control', 'private, no-store').render('finance/payment-confirmation', {
-        title: 'Payment confirmation', currentUser: req.authUser, confirmation, kind: 'annual', formatFinanceDateTime,
+        title: 'Payment confirmation', currentUser: req.authUser, confirmation, kind: 'annual', formatFinanceDateTime, enrollmentSheets,
         backHref: financeBackHref(req.query)
       });
     } catch (error) {
