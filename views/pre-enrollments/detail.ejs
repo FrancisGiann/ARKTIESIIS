@@ -81,7 +81,7 @@
     </div>
     <div class="pre-enrollment-detail-actions">
       <% if (['front_desk', 'registrar'].includes(currentUser.role) && record.status !== 'enrollment_started') { %>
-        <a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(record.id) %>/edit">Correct paper record</a>
+        <a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(record.id) %>/edit">Edit paper record</a>
       <% } %>
       <% if (currentUser.role === 'registrar' && record.status === 'ready_for_registrar' && !needsFirstLoginIdentity) { %>
         <a class="button button--primary" href="/registrar/intake/new?preEnrollmentId=<%= encodeURIComponent(record.id) %>">Start enrollment</a>
@@ -93,7 +93,7 @@
   </header>
 
   <% if (notice) { %><p class="form-success" role="status"><%= notice %></p><% } %>
-  <% if (needsFirstLoginIdentity) { %><div class="notice-panel" role="status"><strong>Correct this paper record before starting enrollment.</strong> A saved surname and valid past birth date are needed for the student’s first login. The paper record is Ready for registrar review, but it cannot start a new or continuing enrollment until those details are saved. <% if (['front_desk', 'registrar'].includes(currentUser.role)) { %><a href="/pre-enrollments/<%= encodeURIComponent(record.id) %>/edit">Correct paper record</a><% } %></div><% } %>
+  <% if (needsFirstLoginIdentity) { %><div class="notice-panel" role="status"><strong>Edit this paper record before starting enrollment.</strong> A saved surname and valid past birth date are needed for the student’s first login. The paper record is Ready for registrar review, but it cannot start a new or continuing enrollment until those details are saved. <% if (['front_desk', 'registrar'].includes(currentUser.role)) { %><a href="/pre-enrollments/<%= encodeURIComponent(record.id) %>/edit">Edit paper record</a><% } %></div><% } %>
 
   <% if (syntheticDemoFixture) { %>
     <p class="form-alert" role="note"><strong>Synthetic demo intake record.</strong> Contact, preference, previous-school, signature, and date fields are fixture values. No paper form, actual signature, received receipt, or paper clearance was inspected or recorded. The student profile and posted finance history were preserved.</p>
@@ -202,7 +202,7 @@
       <section class="pre-enrollment-detail-group" aria-labelledby="pre-paper-office-heading">
         <h3 id="pre-paper-office-heading">Signature and office record</h3>
         <dl class="pre-enrollment-summary">
-          <div><dt>Student signature present</dt><dd><%= record.student_signature_present ? 'Yes' : 'No' %></dd></div>
+          <div><dt>Student signature present</dt><dd><span aria-hidden="true"><%= record.student_signature_present ? '✓' : '—' %> </span><%= record.student_signature_present ? 'Yes' : 'No' %></dd></div>
           <div><dt>Student signature date</dt><dd><%= displayDate(record.student_signed_date) %></dd></div>
           <div><dt>Paper received by</dt><dd><%= record.received_by || '—' %></dd></div>
           <div><dt>Paper received date</dt><dd><%= displayDate(record.received_date) %></dd></div>

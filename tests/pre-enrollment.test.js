@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ejs = require('ejs');
 const express = require('express');
-const { normalizeDate, manilaDate, normalizeRecord, RECEIPT_REQUIREMENTS, PreEnrollmentError, createPreEnrollmentService } = require('../src/services/preEnrollmentService');
+const { normalizeDate, manilaDate, normalizeRecord, RECEIPT_REQUIREMENTS, PRIOR_GRADE_LEVELS, PreEnrollmentError, createPreEnrollmentService } = require('../src/services/preEnrollmentService');
 const { createPreEnrollmentRouter } = require('../src/routes/preEnrollments');
 const { requireRole } = require('../src/middleware/roles');
 const { applyAddressInput, latestBirthDate, validateStudent } = require('../src/services/studentRecordsService');
@@ -267,6 +267,24 @@ test('optional pre-enrollment dates reject letters and impossible days while all
   assert.equal(normalizeDate('2024-01-01', 'Date received'), '2024-01-01');
   assert.equal(normalizeDate('2024-12-31', 'Date received'), '2024-12-31');
   assert.throws(() => normalizeDate('2026-02-30', 'Date received'), /valid calendar date/);
+});
+
+test('pre-enrollment validates prior grades, preserves unchanged legacy values, and limits review dates to today in Manila', () => {
+  assert.deepEqual(PRIOR_GRADE_LEVELS, [...Array.from({ length: 12 }, (_, index) => `Grade ${index + 1}`), 'ALS']);
+  for (const grade of PRIOR_GRADE_LEVELS) assert.equal(normalizeRecord(readyInput({ priorGradeLevel: grade })).priorGradeLevel, grade);
+  assert.throws(() => normalizeRecord(readyInput({ priorGradeLevel: 'Kindergarten' })), /Choose a prior grade/);
+
+  const current = { prior_grade_level: 'Grade 13 (legacy)' };
+  assert.equal(normalizeRecord(readyInput({ priorGradeLevel: 'Grade 13 (legacy)' }), { current }).priorGradeLevel, current.prior_grade_level);
+  assert.equal(normalizeRecord(readyInput({ priorGradeLevel: undefined }), { current }).priorGradeLevel, current.prior_grade_level,
+    'an omitted legacy field is preserved during an unrelated edit');
+  assert.throws(() => normalizeRecord(readyInput({ priorGradeLevel: 'Grade 14 (changed)' }), { current }), /Choose a prior grade/);
+
+  const today = '2026-11-20';
+  assert.equal(normalizeDate(today, 'Student signature date', false, today), today);
+  assert.equal(normalizeDate(today, 'Date received', false, today), today);
+  assert.throws(() => normalizeDate('2026-11-21', 'Student signature date', false, today), /cannot be in the future/);
+  assert.throws(() => normalizeDate('2026-11-21', 'Date received', false, today), /cannot be in the future/);
 });
 
 test('pre-enrollment date UI blocks native bad input and range overflow while preserving optional blanks', () => {
@@ -964,6 +982,11 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
       'removed voucher category is absent from active paper forms');
     assert.doesNotMatch(newFormHtml, /Historical value \(preserve\)/,
       'new forms never relabel rejected POST text as a saved historical value');
+    assert.match(newFormHtml, /<select id="pre-prior-grade" name="priorGradeLevel">/);
+    for (const grade of PRIOR_GRADE_LEVELS) assert.match(newFormHtml, new RegExp(`<option value="${grade}"`));
+    assert.doesNotMatch(newFormHtml, /<input id="pre-prior-grade"/);
+    assert.match(newFormHtml, new RegExp(`id="pre-signed-date"[^>]*max="${manilaDate()}"`));
+    assert.match(newFormHtml, new RegExp(`id="pre-received-date"[^>]*max="${manilaDate()}"`));
     for (const cluster of Object.values(PROGRAM_CATALOG).flat()) assert.ok(newFormHtml.includes(cluster.replaceAll('&', '&amp;')),
       `paper cluster option ${cluster} is present for dynamic track selection`);
     assert.match(newFormHtml, /src="\/js\/paper-program-fields\.js" defer/);
@@ -1138,14 +1161,15 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
     assert.match(detailHtml, /confirmed from a longer handwritten paper note/);
     assert.doesNotMatch(detailHtml, /ready_for_registrar|submitted_ready/);
     assert.doesNotMatch(detailHtml, /Start enrollment/, 'front desk can correct a ready record but cannot start enrollment');
-    assert.match(detailHtml, /Correct paper record/);
+    assert.match(detailHtml, /Edit paper record/);
+    assert.match(detailHtml, /aria-hidden="true">✓ /, 'signature review uses a decorative check while retaining the accessible Yes text');
     assert.match(detailHtml, /pre-enrollment-status--ready/);
     const incompleteReadyHtml = await (await fetch(`${origin}/pre-enrollments/c342bc01-2a68-4f19-a7fd-4d5bb1d83261`, {
       headers: { 'x-test-role': 'registrar' }
     })).text();
-    assert.match(incompleteReadyHtml, /Correct this paper record before starting enrollment/);
+    assert.match(incompleteReadyHtml, /Edit this paper record before starting enrollment/);
     assert.match(incompleteReadyHtml, /valid past birth date/);
-    assert.match(incompleteReadyHtml, /href="\/pre-enrollments\/c342bc01-2a68-4f19-a7fd-4d5bb1d83261\/edit">Correct paper record/);
+    assert.match(incompleteReadyHtml, /href="\/pre-enrollments\/c342bc01-2a68-4f19-a7fd-4d5bb1d83261\/edit">Edit paper record/);
     assert.doesNotMatch(incompleteReadyHtml, /Start enrollment/);
     assert.doesNotMatch(detailHtml, /Synthetic demo intake record/);
 

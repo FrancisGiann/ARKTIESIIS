@@ -14,6 +14,10 @@ const CREATE_ROLES = new Set(['front_desk']);
 const READ_ACCEPTED_EVALUATION_ROLES = new Set(['front_desk', 'registrar']);
 const READ_ROLES = new Set([...EDIT_ROLES, 'database_admin']);
 const PAGE_SIZE = 20;
+const PRIOR_GRADE_LEVELS = Object.freeze([
+  ...Array.from({ length: 12 }, (_, index) => `Grade ${index + 1}`),
+  'ALS'
+]);
 const RECEIPT_REQUIREMENTS = Object.freeze([
   ['report_card', 'Report Card (Grade 10 / ALS-AF5)'],
   ['birth_certificate', 'Birth Certificate (PSA / NSO / OLD)'],
@@ -128,6 +132,9 @@ function normalizeDate(value, label, required = false, today = manilaDate()) {
     throw new PreEnrollmentError(`${label} must be a valid calendar date.`);
   }
   if (label === 'Birth date' && text >= today) throw new PreEnrollmentError('Birth date must be before today.');
+  if (['Student signature date', 'Date received'].includes(label) && text > today) {
+    throw new PreEnrollmentError(`${label} cannot be in the future.`);
+  }
   return text;
 }
 
@@ -223,6 +230,10 @@ function normalizeRecord(input = {}, { actorName = '', current = null, currentRe
       result[name] = current?.voucher_category_text ?? null;
       continue;
     }
+    if (name === 'priorGradeLevel' && normalizedInput[name] === undefined && current) {
+      result[name] = current.prior_grade_level ?? null;
+      continue;
+    }
     result[name] = withField(name, () => column.endsWith('_date')
       ? normalizeDate(normalizedInput[name], name === 'studentSignedDate' ? 'Student signature date' : name === 'birthDate' ? 'Birth date' : 'Date received')
       : printable(normalizedInput[name], name.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`), length,
@@ -270,6 +281,16 @@ function normalizeRecord(input = {}, { actorName = '', current = null, currentRe
   }
   if (result.targetGradeLevel && !['Grade 11', 'Grade 12'].includes(result.targetGradeLevel)) {
     throw new PreEnrollmentError('Choose Grade 11 or Grade 12.', 400, 'targetGradeLevel');
+  }
+  if (result.priorGradeLevel && !PRIOR_GRADE_LEVELS.includes(result.priorGradeLevel)) {
+    const unchangedLegacyValue = current
+      && (normalizedInput.priorGradeLevel === undefined
+        || (typeof normalizedInput.priorGradeLevel === 'string'
+          && normalizedInput.priorGradeLevel === current.prior_grade_level));
+    if (!unchangedLegacyValue) {
+      throw new PreEnrollmentError('Choose a prior grade from Grade 1 through Grade 12 or ALS.', 400, 'priorGradeLevel');
+    }
+    result.priorGradeLevel = current.prior_grade_level;
   }
   let evaluationId = input.readmissionEvaluationId;
   let evaluationVersion = input.readmissionEvaluationVersion;
@@ -881,4 +902,4 @@ function createPreEnrollmentService({ getPool = defaultGetPool, sql = defaultSql
     openConversion, getForConversion, RECEIPT_REQUIREMENTS };
 }
 
-module.exports = { PreEnrollmentError, RECEIPT_REQUIREMENTS, normalizeDate, manilaDate, normalizeRecord, createPreEnrollmentService };
+module.exports = { PreEnrollmentError, RECEIPT_REQUIREMENTS, PRIOR_GRADE_LEVELS, normalizeDate, manilaDate, normalizeRecord, createPreEnrollmentService };

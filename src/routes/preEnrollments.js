@@ -3,7 +3,7 @@
 const express = require('express');
 const crypto = require('node:crypto');
 const { ensureCsrfToken, hasValidCsrfToken } = require('../middleware/auth');
-const { PreEnrollmentError, RECEIPT_REQUIREMENTS, createPreEnrollmentService } = require('../services/preEnrollmentService');
+const { PreEnrollmentError, RECEIPT_REQUIREMENTS, PRIOR_GRADE_LEVELS, manilaDate, createPreEnrollmentService } = require('../services/preEnrollmentService');
 const { latestBirthDate } = require('../services/studentRecordsService');
 const { validStudentActivationIdentity } = require('../utils/temporaryPassword');
 const { PROGRAM_CATALOG, TRACKS } = require('../utils/paperProgramCatalog');
@@ -128,7 +128,7 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
       catch { /* An unavailable count hint must not block correcting or saving the paper form. */ }
     }
     return privateHeaders(res).status(status).render('pre-enrollments/form', {
-      title: record ? 'Correct pre-enrollment record' : 'Record paper form',
+      title: record ? 'Edit pre-enrollment record' : 'Record paper form',
       currentUser: req.authUser, csrfToken: ensureCsrfToken(req), record,
       values: {
         schoolYear: DEFAULT_SCHOOL_YEAR, status: 'draft', applicantKind: 'new', studentSignaturePresent: '',
@@ -137,7 +137,8 @@ function createPreEnrollmentRouter({ getPool, sql, preEnrollmentService } = {}) 
         receipt_long_brown_envelopes_received: envelopeCheckboxDefault,
         envelopeReceiptMode: record ? 'preserve' : 'replace', ...values
       },
-      requirements: RECEIPT_REQUIREMENTS, receiptCountDefaults, acceptedReadmissionChoices, latestBirthDate: latestBirthDate(),
+      requirements: RECEIPT_REQUIREMENTS, receiptCountDefaults, acceptedReadmissionChoices,
+      priorGradeLevels: PRIOR_GRADE_LEVELS, latestBirthDate: latestBirthDate(), todayManila: manilaDate(),
       programCatalog: PROGRAM_CATALOG, programTracks: TRACKS, envelopeState, error,
       errorFieldLinks: errorFieldLinks({ fields: errorFields }), hasRecoveredValues: Boolean(error && values && Object.keys(values).length), staleVersion
     });

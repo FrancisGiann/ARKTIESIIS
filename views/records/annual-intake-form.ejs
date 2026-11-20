@@ -15,7 +15,7 @@
       <p><%= preEnrollmentSource ? 'Review the saved profile and applicant history, choose annual placement and voucher from the school documents, then save the pending intake for Finance review.' : 'Review the student information, placement, and voucher from the school documents, record papers received, then save the pending intake for Finance review.' %></p></div>
   </header>
   <% if (error) { %><p class="form-alert" role="alert" tabindex="-1" data-wizard-error><%= error %></p><% } %>
-  <% if (preEnrollmentNeedsFirstLoginIdentity && !error) { %><p class="notice-panel" role="status">Before saving this intake, correct the saved paper record: a surname and valid past birth date are required for the student’s first login. The values must be saved on the paper record, not only entered in this enrollment form. <a href="/pre-enrollments/<%= encodeURIComponent(preEnrollmentSource.id) %>/edit">Correct paper record</a></p><% } %>
+  <% if (preEnrollmentNeedsFirstLoginIdentity && !error) { %><p class="notice-panel" role="status">Before saving this intake, edit the saved paper record: a surname and valid past birth date are required for the student’s first login. The values must be saved on the paper record, not only entered in this enrollment form. <a href="/pre-enrollments/<%= encodeURIComponent(preEnrollmentSource.id) %>/edit">Edit paper record</a></p><% } %>
   <ol class="intake-steps" aria-label="Enrollment steps">
     <li data-step-indicator="1" aria-label="Step 1 of 5: Student"><span class="intake-step-label--full">Student</span><span class="intake-step-label--short">Student</span></li>
     <li data-step-indicator="2" aria-label="Step 2 of 5: Enrollment"><span class="intake-step-label--full">Enrollment</span><span class="intake-step-label--short">Enroll</span></li>
@@ -43,7 +43,7 @@
           <% if (preEnrollmentSource.status === 'enrollment_started') { %>
             <a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(preEnrollmentSource.id) %>">View paper record</a>
           <% } else { %>
-            <a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(preEnrollmentSource.id) %>/edit">Correct paper record</a>
+            <a class="button button--secondary" href="/pre-enrollments/<%= encodeURIComponent(preEnrollmentSource.id) %>/edit">Edit paper record</a>
           <% } %>
         </div>
         <details class="pre-enrollment-handoff__details" data-pre-enrollment-profile-details <%= Number(activeStep || 1) === 1 ? 'open' : '' %>>
@@ -64,7 +64,7 @@
           </dl>
           <h3>Applicant and school history</h3>
           <dl class="pre-enrollment-summary">
-            <% for (const [label,value] of [['Applicant status',applicantKindLabel],['School year',preEnrollmentSource.school_year],['Target grade',preEnrollmentSource.target_grade_level],['Voucher type as written',preEnrollmentSource.voucher_type_text],['Preferred track',preEnrollmentSource.preferred_track],['Preferred cluster',preEnrollmentSource.preferred_cluster],['Last grade level',preEnrollmentSource.prior_grade_level],['School attended',preEnrollmentSource.prior_school],['Student signature present',preEnrollmentSource.student_signature_present ? 'Yes' : 'No'],['Student signature date',preEnrollmentSource.student_signed_date],['Paper received by',preEnrollmentSource.received_by],['Paper received date',preEnrollmentSource.received_date]]) { %><div><dt><%= label %></dt><dd><%= value || '—' %></dd></div><% } %>
+            <% for (const [label,value] of [['Applicant status',applicantKindLabel],['School year',preEnrollmentSource.school_year],['Target grade',preEnrollmentSource.target_grade_level],['Voucher type as written',preEnrollmentSource.voucher_type_text],['Preferred track',preEnrollmentSource.preferred_track],['Preferred cluster',preEnrollmentSource.preferred_cluster],['Last grade level',preEnrollmentSource.prior_grade_level],['School attended',preEnrollmentSource.prior_school],['Student signature present',preEnrollmentSource.student_signature_present ? 'Yes' : 'No'],['Student signature date',preEnrollmentSource.student_signed_date],['Paper received by',preEnrollmentSource.received_by],['Paper received date',preEnrollmentSource.received_date]]) { %><div><dt><%= label %></dt><dd><% if (label === 'Student signature present') { %><span aria-hidden="true"><%= preEnrollmentSource.student_signature_present ? '✓' : '—' %> </span><%= preEnrollmentSource.student_signature_present ? 'Yes' : 'No' %><% } else { %><%= value || '—' %><% } %></dd></div><% } %>
           </dl>
           <% if (preEnrollmentSource.applicant_kind === 'readmission') { %><p class="pre-enrollment-handoff__evaluation">Return evaluation: <%= preEnrollmentSource.readmission_evaluation?.status === 'accepted' ? 'Accepted' : 'Needs registrar review' %> · bound to revision <%= preEnrollmentSource.readmission_evaluation_version %> for <%= preEnrollmentSource.school_year %>, <%= preEnrollmentSource.target_grade_level %>.</p><% } %>
         </details>
