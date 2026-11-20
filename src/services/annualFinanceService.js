@@ -1515,11 +1515,15 @@ function createAnnualFinanceService({
       snapshotFingerprint: snapshot.fingerprint };
   }
 
-  async function annualConfirmationAssessmentSnapshotForStaff(actorInput, annualEnrollmentInput) {
+  async function annualConfirmationAssessmentSnapshotForStaff(actorInput, annualEnrollmentInput, { studentId: expectedStudentInput = null, financeOnly = false } = {}) {
     const annualEnrollmentId = id(annualEnrollmentInput, 'annual enrollment');
+    const expectedStudentId = expectedStudentInput == null ? null : id(expectedStudentInput, 'student');
     const pool = await getPool();
-    await requireConfirmationStaffActor(pool.request(), actorInput);
-    const confirmationResult = await pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+    if (financeOnly) await requireFinanceActor(pool.request(), actorInput);
+    else await requireConfirmationStaffActor(pool.request(), actorInput);
+    const confirmationRequest = pool.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId);
+    if (expectedStudentId != null) confirmationRequest.input('expectedStudentId', sql.Int, expectedStudentId);
+    const confirmationResult = await confirmationRequest
       .query(`SELECT confirmation.id AS confirmation_id, confirmation.annual_enrollment_id,
           confirmation.assessment_id, confirmation.schedule_id, confirmation.schedule_version,
           confirmation.voucher_code_snapshot, CAST(confirmation.payable_total AS CHAR(40)) AS payable_total,
@@ -1529,7 +1533,8 @@ function createAnnualFinanceService({
         FROM annual_registrar_confirmations AS confirmation
         INNER JOIN annual_enrollments AS annual ON annual.id = confirmation.annual_enrollment_id
         INNER JOIN students AS student ON student.id = confirmation.student_id
-        WHERE confirmation.annual_enrollment_id = @annualEnrollmentId AND annual.intake_status <> 'legacy'`);
+        WHERE confirmation.annual_enrollment_id = @annualEnrollmentId AND annual.intake_status <> 'legacy'
+          ${expectedStudentId == null ? '' : 'AND annual.student_id = @expectedStudentId'}`);
     const confirmation = confirmationResult.recordset?.[0];
     if (!confirmation) throw new AnnualFinanceError('Enrollment confirmation not found.', 404);
 
@@ -1620,6 +1625,8 @@ function createAnnualFinanceService({
 
     const entryTermNumber = Number(confirmation.entry_term_number || 1);
     const tuitionBreakdown = tuitionInstallmentBreakdown(lines, entryTermNumber);
+    const grossCents = lines.reduce((sum, line) => sum + parseMoneyCents(line.grossAmount, { allowZero: true }), 0n);
+    const coverageCents = lines.reduce((sum, line) => sum + parseMoneyCents(line.waivedAmount, { allowZero: true }), 0n);
     return {
       parent: {
         student_id: Number(confirmation.student_id), student_no: confirmation.student_no,
@@ -1631,6 +1638,7 @@ function createAnnualFinanceService({
       scheduleId: Number(confirmation.schedule_id), scheduleVersion: Number(confirmation.schedule_version),
       voucherCode: confirmation.voucher_code_snapshot, assessmentId: Number(confirmation.assessment_id),
       existingAssessment: true, optionalLineIds, lines, total: snapshot.total,
+      grossTotal: formatMoneyCents(grossCents), coverageTotal: formatMoneyCents(coverageCents),
       totalCents: payableCents, optionalLines: [],
       termTotals: assessmentTermTotals(lines, entryTermNumber),
       tuitionTermTotals: tuitionTermTotals(lines, entryTermNumber),
@@ -2873,9 +2881,14 @@ function createAnnualFinanceService({
     }
     const eventsRequest = transaction.request().input('studentId', sql.Int, studentId).input('isStudent', sql.Bit, access === 'student');
     const studentResult = await transaction.request().input('studentId', sql.Int, studentId).input('isStudent', sql.Bit, access === 'student')
-      .query(`SELECT id, student_no, CASE WHEN @isStudent = 1 THEN NULL ELSE lrn END AS lrn,
-          first_name, middle_name, last_name, suffix, status
-        FROM students WHERE id = @studentId`);
+      .query(`SELECT student.id, student.student_no, CASE WHEN @isStudent = 1 THEN NULL ELSE student.lrn END AS lrn,
+          student.first_name, student.middle_name, student.last_name, student.suffix, student.status,
+          CASE WHEN @isStudent = 1 THEN NULL ELSE account.email END AS account_email,
+          CASE WHEN @isStudent = 1 THEN NULL ELSE account.is_active END AS account_is_active,
+          CASE WHEN @isStudent = 1 THEN NULL ELSE account.email_verified_at END AS account_email_verified_at,
+          CASE WHEN @isStudent = 1 THEN NULL ELSE account.must_change_password END AS account_must_change_password
+        FROM students AS student LEFT JOIN users AS account ON account.id = student.user_id
+        WHERE student.id = @studentId`);
     const summaryResult = await transaction.request().input('studentId', sql.Int, studentId)
       .query(STUDENT_LEDGER_SUMMARY_SQL);
     const chargesResult = await transaction.request().input('studentId', sql.Int, studentId).query(`SELECT charge.id AS charge_id, charge.annual_enrollment_id, charge.enrollment_id,
@@ -3047,8 +3060,9 @@ function createAnnualFinanceService({
         )
         SELECT enrollment.id AS enrollment_id,
           enrollment.academic_term_id, annual.id AS annual_enrollment_id, annual.school_year, annual.grade_level,
-          annual.voucher_code, annual.voucher_category, annual.intake_status, annual.entry_term_number,
-          assessment.id AS assessment_id, assessment.schedule_id, assessment.schedule_version,
+          annual.voucher_code, annual.voucher_category, annual.intake_status, annual.intake_kind,
+          CASE WHEN @isStudent = 1 THEN NULL ELSE annual.account_activation_pending END AS account_activation_pending,
+          annual.entry_term_number, assessment.id AS assessment_id, assessment.schedule_id, assessment.schedule_version,
           enrollment.annual_term_number, enrollment.term_scope_status, enrollment.enrollment_status, term.term, term.is_current,
           section.name AS section_name, section.cluster, section.strand, section.adviser, section.modality, section.modular_subtype,
           CAST(COALESCE(due_by_enrollment.total, 0) AS CHAR(40)) AS outstanding,
@@ -3286,8 +3300,19 @@ function createAnnualFinanceService({
         INNER JOIN annual_enrollments AS annual ON annual.id = charge.annual_enrollment_id
         LEFT JOIN staff_profiles AS actor ON actor.user_id = event.actor_id
         WHERE annual.student_id = @studentId ORDER BY event.created_at DESC, event.id DESC`);
-    const student = studentResult.recordset?.[0];
-    if (!student) throw new AnnualFinanceError('Student record not found.', 404);
+    const studentRow = studentResult.recordset?.[0];
+    if (!studentRow) throw new AnnualFinanceError('Student record not found.', 404);
+    const student = {
+      id: studentRow.id, student_no: studentRow.student_no, lrn: studentRow.lrn,
+      first_name: studentRow.first_name, middle_name: studentRow.middle_name, last_name: studentRow.last_name,
+      suffix: studentRow.suffix, status: studentRow.status,
+      ...(access === 'student' ? {} : {
+        account_email: studentRow.account_email,
+        account_is_active: studentRow.account_is_active,
+        account_email_verified_at: studentRow.account_email_verified_at,
+        account_must_change_password: studentRow.account_must_change_password
+      })
+    };
     const summary = summaryResult.recordset?.[0] || {};
     const legacyCents = parseMoneyCents(String(summary.unattributed_legacy_balance || '0.00'), { allowNegative: true, allowZero: true });
     const openingDueCents = parseMoneyCents(String(summary.opening_liability_due || '0.00'), { allowNegative: true, allowZero: true });
@@ -3412,21 +3437,24 @@ function createAnnualFinanceService({
   async function getEntryEnrollmentPrintSheet(actorInput, studentInput, annualInput) {
     const studentId = id(studentInput, 'student');
     const annualEnrollmentId = id(annualInput, 'annual enrollment');
-    return runTransaction(async (transaction) => {
+    const sheet = await runTransaction(async (transaction) => {
       await requireFinanceActor(transaction.request(), actorInput);
       const result = await transaction.request().input('studentId', sql.Int, studentId)
         .input('annualEnrollmentId', sql.Int, annualEnrollmentId)
         .query(`SELECT activation.id AS activation_id, annual.id AS annual_enrollment_id,
-            student.student_id AS student_id, student.student_no, student.first_name, student.middle_name,
-            student.last_name, student.suffix, annual.school_year, annual.grade_level,
+            annual.account_activation_pending, student.id AS student_id, student.user_id, account.id AS account_id,
+            account.is_active AS account_is_active,
+            student.student_no, student.lrn, student.first_name, student.middle_name,
+            student.last_name, student.suffix, student.birth_date, student.sex, student.address, student.phone,
+            account.email, annual.school_year, annual.grade_level, annual.voucher_code, annual.intake_kind,
             annual.entry_term_number, DATE_FORMAT(annual.enrollment_start_date, '%Y-%m-%d') AS enrollment_date,
             term.term AS entry_term, section.name AS section_name
           FROM annual_entry_activations AS activation
           INNER JOIN annual_enrollments AS annual ON annual.id = activation.annual_enrollment_id
-          INNER JOIN (SELECT id AS student_id, student_no, first_name, middle_name, last_name, suffix
-            FROM students WHERE id = @studentId) AS student ON student.student_id = annual.student_id
+          INNER JOIN students AS student ON student.id = annual.student_id
+          LEFT JOIN users AS account ON account.id = student.user_id AND account.role = 'student'
           INNER JOIN enrollments AS entry ON entry.id = activation.entry_enrollment_id
-            AND entry.annual_enrollment_id = annual.id AND entry.student_id = student.student_id
+            AND entry.annual_enrollment_id = annual.id AND entry.student_id = student.id
             AND entry.annual_term_number = annual.entry_term_number
           INNER JOIN academic_terms AS term ON term.id = entry.academic_term_id
           LEFT JOIN sections AS section ON section.id = entry.section_id AND section.academic_term_id = entry.academic_term_id
@@ -3434,8 +3462,27 @@ function createAnnualFinanceService({
             AND annual.intake_status = 'enrolled' AND entry.enrollment_status = 'enrolled' AND entry.finalized_at IS NOT NULL`);
       const row = result.recordset?.[0];
       if (!row) throw new AnnualFinanceError('The requested enrollment sheet is not available for this student.', 404);
-      return { ...row, reference: `ENR-${Number(row.activation_id)}` };
+      const placementsResult = await transaction.request().input('studentId', sql.Int, studentId)
+        .input('annualEnrollmentId', sql.Int, annualEnrollmentId)
+        .query(`SELECT enrollment.id AS enrollment_id, enrollment.annual_term_number,
+            enrollment.term_scope_status, enrollment.enrollment_status, term.term, section.name AS section_name
+          FROM enrollments AS enrollment
+          INNER JOIN academic_terms AS term ON term.id = enrollment.academic_term_id
+          LEFT JOIN sections AS section ON section.id = enrollment.section_id
+            AND section.academic_term_id = enrollment.academic_term_id
+          WHERE enrollment.annual_enrollment_id = @annualEnrollmentId AND enrollment.student_id = @studentId
+          ORDER BY enrollment.annual_term_number, enrollment.id`);
+      return { ...row, placements: placementsResult.recordset || [], reference: `ENR-${Number(row.activation_id)}` };
     });
+    const assessment = await annualConfirmationAssessmentSnapshotForStaff(actorInput, annualEnrollmentId,
+      { studentId, financeOnly: true });
+    if (Number(assessment.parent.student_id) !== studentId) {
+      throw new AnnualFinanceError('The assessment does not belong to this student account.', 404);
+    }
+    return { ...sheet, voucher_code: assessment.voucherCode, assessment,
+      first_login_pending: Boolean(sheet.user_id && sheet.account_id
+        && (sheet.account_activation_pending === true || sheet.account_activation_pending === 1)
+        && !(sheet.account_is_active === true || sheet.account_is_active === 1)) };
   }
 
   async function listEntryEnrollmentPrintSheets(actorInput, studentInput) {

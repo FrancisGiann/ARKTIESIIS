@@ -226,11 +226,68 @@ body.finance-assessment-dialog-open { overflow: hidden; }
 
 @media print {
   .enrollment-sheet-document .enrollment-sheet-stamp {
-    min-height: 2.8in;
-    padding: 0.25in;
-    margin-top: 0.35in;
+    box-sizing: border-box;
+    width: 2.3in;
+    max-width: 100%;
+    height: 1.1in;
+    min-height: 1.1in;
+    padding: 0.1in 0.12in;
+    margin: 0.2in 0 0 auto;
     border: 1pt solid #555;
     break-inside: avoid;
   }
-  .enrollment-sheet-document .enrollment-sheet-stamp > div { min-height: 2.2in; }
+  .enrollment-sheet-document .enrollment-sheet-stamp h2 { font-size: 8.5pt; }
+  .enrollment-sheet-document .enrollment-sheet-stamp > div { min-height: 0; }
+  .enrollment-sheet-document .enrollment-sheet-fields {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 0 0.18in !important;
+  }
+  .enrollment-sheet-document .enrollment-sheet-fields > div {
+    display: flex;
+    align-items: baseline;
+    gap: 0.06in;
+    min-width: 0;
+    padding: 0.07in 0 !important;
+    break-inside: avoid;
+  }
+  .enrollment-sheet-document .enrollment-sheet-fields dt {
+    flex: 0 1 auto;
+    max-width: 52%;
+    font-size: 7.5pt !important;
+    line-height: 1.12;
+    overflow-wrap: anywhere;
+  }
+  .enrollment-sheet-document .enrollment-sheet-fields dd {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0 !important;
+    font-size: 9pt !important;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+}
+
+.enrollment-sheet-credential { padding: 0.45rem 0.6rem; margin: 0.4rem 0; border: 1px solid #555; break-inside: avoid; }
+.enrollment-sheet-credential h2 { margin: 0 0 0.2rem; font-size: 0.95rem; }
+.enrollment-sheet-credential p { margin: 0.15rem 0; }
+.enrollment-sheet-login-note { margin: 0.35rem 0 0.65rem; font-size: 0.88rem; }
+
+@media print {
+  .enrollment-sheet-login-note { margin: 0.08in 0 0.12in; font-size: 8pt; line-height: 1.18; }
+  .enrollment-sheet-credential { padding: 0.06in 0.14in; margin: 0.08in 0; border-width: 0.7pt; font-size: 8pt; line-height: 1.18; }
+  .enrollment-sheet-credential h2 { margin-bottom: 0.03in; font-size: 8.5pt; }
+  .enrollment-sheet-credential p { margin: 0.02in 0; }
+  .enrollment-sheet-credential code { font-size: 9pt; font-weight: 700; overflow-wrap: anywhere; }
+  .enrollment-sheet-document .statement-heading { margin-bottom: 0.2rem !important; }
+  .enrollment-sheet-document .statement-heading p { margin: 0.08rem 0; }
+  .enrollment-sheet-document .finance-panel {
+    margin: 0 0 0.18rem !important;
+    padding: 0.12rem 0 !important;
+  }
+  .enrollment-sheet-document .finance-panel h2 { margin: 0 0 0.12rem; }
+  .enrollment-sheet-document .enrollment-sheet-fields > div { padding: 0.035in 0 !important; }
+  .enrollment-sheet-document .enrollment-sheet-assessment th,
+  .enrollment-sheet-document .enrollment-sheet-assessment td { padding: 0.09rem 0.12rem; }
+  .enrollment-sheet-document .enrollment-sheet-assessment-panel > p { margin: 0.12rem 0; }
+  .enrollment-sheet-document .enrollment-sheet-stamp { margin-top: 0.08in; }
 }

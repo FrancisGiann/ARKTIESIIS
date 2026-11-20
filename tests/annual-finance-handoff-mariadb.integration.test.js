@@ -483,22 +483,30 @@ test('pending annual enrollment hands off assessment, voucher resolution, and ex
       [Number(zeroStudent.insertId)]))[0][0].count), 0, 'zero DP creates no artificial payment or receipt');
     assert.equal(Number((await pool.execute('SELECT is_active FROM users WHERE id = ?', [zeroStudentUserId]))[0][0].is_active), 0,
       'Finance enrollment activation does not issue a student password');
-    await assert.rejects(annualEnrollment.issueFirstLoginPassword(financeId, zeroAnnualId), { status: 403 },
-      'Finance cannot issue the Registrar-controlled first-login password');
     const laterTerm = await annualEnrollment.finalizeAnnualTerm(registrarId, zeroEnrollmentIds[2], {
       clearanceSnapshotFingerprint: CLEARANCE_FINGERPRINT, idempotencyKey: uuid()
     });
     assert.equal(laterTerm.temporaryPassword, null,
       'later-term activation cannot create the legacy surname/date password on a new-flow record');
     assert.equal(Number((await pool.execute('SELECT is_active FROM users WHERE id = ?', [zeroStudentUserId]))[0][0].is_active), 0);
-    const credential = await annualEnrollment.issueFirstLoginPassword(registrarId, zeroAnnualId);
+    const credential = await annualEnrollment.issueFirstLoginPasswordForFinance(financeId, zeroAnnualId, Number(zeroStudent.insertId));
     assert.equal(credential.temporaryPassword, 'integration-only-password');
+    await assert.rejects(annualEnrollment.issueFirstLoginPasswordForFinance(financeId, zeroAnnualId, Number(zeroStudent.insertId)), { status: 409 },
+      'Finance cannot issue a second first-login password for the same enrollment');
     await assert.rejects(annualEnrollment.issueFirstLoginPassword(registrarId, zeroAnnualId), { status: 409 },
-      'Registrar cannot issue a second first-login password for the same enrollment');
+      'the retained Registrar compatibility action cannot issue a second password after Finance has issued it');
+    assert.equal(Number((await pool.execute('SELECT is_active FROM users WHERE id = ?', [zeroStudentUserId]))[0][0].is_active), 1);
     assert.equal(Number((await pool.execute('SELECT must_change_password FROM users WHERE id = ?', [zeroStudentUserId]))[0][0].must_change_password), 1);
     const printSheet = await annualFinance.getEntryEnrollmentPrintSheet(financeId, Number(zeroStudent.insertId), zeroAnnualId);
     assert.equal(printSheet.annual_enrollment_id, zeroAnnualId);
     assert.equal(printSheet.student_no, zeroStudentNumber);
+    assert.ok(printSheet.assessment.lines.length > 0, 'the private Finance sheet loads the verified immutable assessment snapshot');
+    assert.equal(printSheet.assessment.grossTotal, '70.00');
+    assert.equal(printSheet.assessment.coverageTotal, '0.00');
+    assert.equal(printSheet.email, credential.email, 'the printed credentials and enrollment sheet use the linked account email');
+    assert.equal(Number((await pool.execute('SELECT account_activation_pending FROM annual_enrollments WHERE id = ?', [zeroAnnualId]))[0][0].account_activation_pending), 0);
+    const printableSheets = await annualFinance.listEntryEnrollmentPrintSheets(financeId, Number(zeroStudent.insertId));
+    assert.ok(printableSheets.some((sheet) => Number(sheet.annual_enrollment_id) === zeroAnnualId));
     await assert.rejects(annualFinance.getEntryEnrollmentPrintSheet(financeId, studentId, zeroAnnualId), { status: 404 },
       'the print service binds the exact student and annual enrollment pair');
     await assert.rejects(annualFinance.getEntryEnrollmentPrintSheet(registrarId, Number(zeroStudent.insertId), zeroAnnualId), { status: 403 },
@@ -599,20 +607,22 @@ test('pending annual enrollment hands off assessment, voucher resolution, and ex
     const creditCommit = await commitReviewedFinanceDraft(creditDraft);
     assert.equal(creditCommit.result.enrollmentActivation[0].status, 'awaiting_finance',
       'unallocated credit does not satisfy the exact entry-term DP');
-    const allocateCreditDraft = (amount) => ({
-      id: uuid(), actionType: 'annual_credit_allocation', idempotencyKey: uuid(),
-      entityContext: { studentId: positiveStudentId, paymentId: String(creditCommit.result.paymentId) },
-      input: { allocations: [{ chargeId: String(entryDpCharge.id), openingLiabilityId: null, amount }] }
-    });
-    const concurrentAllocations = await Promise.all([
-      commitReviewedFinanceDraft(allocateCreditDraft('25.00')),
-      commitReviewedFinanceDraft(allocateCreditDraft('25.00'))
-    ]);
-    const positiveActivation = concurrentAllocations.flatMap((result) => result.result.enrollmentActivation || [])
-      .find((activation) => activation.status === 'activated');
+    const finalEntryPaymentDraft = paymentDraft('50.00', { chargeId: entryDpCharge.id, amount: '50.00' }, 'FINAL-ENTRY-TERM-DP');
+    const finalEntryPayment = await commitReviewedFinanceDraft(finalEntryPaymentDraft);
+    const positiveActivation = finalEntryPayment.result.enrollmentActivation.find((activation) => activation.status === 'activated');
     assert.ok(positiveActivation,
-      'concurrent reviewed credit allocations activate when the exact entry-term DP becomes fully settled');
+      'a real reviewed payment commit automatically activates when it settles the remaining exact entry-term DP');
     assert.equal(positiveActivation.financeReviewId > 0, true);
+    const directPaymentCount = Number((await pool.execute('SELECT COUNT(*) AS count FROM finance_payments WHERE student_id = ?',
+      [positiveStudentId]))[0][0].count);
+    const concurrentReplays = await Promise.all([
+      commitReviewedFinanceDraft(finalEntryPaymentDraft, {}, finalEntryPayment.result),
+      commitReviewedFinanceDraft(finalEntryPaymentDraft, {}, finalEntryPayment.result)
+    ]);
+    assert.ok(concurrentReplays.every((result) => result.committed && result.replayed));
+    assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM finance_payments WHERE student_id = ?',
+      [positiveStudentId]))[0][0].count), directPaymentCount,
+    'replayed concurrent Finance commits never record the payment twice');
     assert.equal((await pool.execute('SELECT intake_status FROM annual_enrollments WHERE id = ?',
       [positiveAnnualId]))[0][0].intake_status, 'enrolled');
     assert.equal(Number((await pool.execute('SELECT account_activation_pending FROM annual_enrollments WHERE id = ?',
@@ -627,7 +637,7 @@ test('pending annual enrollment hands off assessment, voucher resolution, and ex
     assert.equal(positiveActivationEvidence.entry_dp_state, 'settled');
     assert.equal(Number(positiveActivationEvidence.finance_review_id), Number(positiveActivation.financeReviewId));
     assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM finance_payments WHERE student_id = ?',
-      [positiveStudentId]))[0][0].count), 3, 'wrong-term, partial, and unallocated payments are each recorded once');
+      [positiveStudentId]))[0][0].count), 4, 'wrong-term, partial, unallocated, and final entry-term payments are each recorded once');
     assert.equal(Number((await pool.execute('SELECT COUNT(*) AS count FROM annual_entry_activations WHERE annual_enrollment_id = ?',
       [positiveAnnualId]))[0][0].count), 1);
     const positiveAllocations = (await pool.execute(`SELECT enrollment.annual_term_number,

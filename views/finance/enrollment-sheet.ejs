@@ -1,25 +1,13 @@
 <%- include('../partials/head', { title, pageStylesheet: '/css/finance-ui-followups.css' }) %>
-<main class="page-shell finance-statement enrollment-sheet-document" id="main-content">
-  <div class="statement-actions"><button class="button button--primary" type="button" data-print-statement>Print enrollment sheet</button></div>
-  <header class="statement-heading">
-    <div><p class="eyebrow">Ark Technological Institute Education System Inc. · Main Branch</p>
-      <h1>Enrollment sheet</h1><p>Reference <strong><%= sheet.reference %></strong></p></div>
-  </header>
-  <section class="finance-panel enrollment-sheet-fields" aria-label="Enrolled student and placement">
-    <dl class="finance-balance-summary">
-      <div><dt>Student name</dt><dd><%= [sheet.first_name, sheet.middle_name, sheet.last_name, sheet.suffix].filter(Boolean).join(' ') %></dd></div>
-      <div><dt>Student number</dt><dd><%= sheet.student_no %></dd></div>
-      <div><dt>School year</dt><dd><%= sheet.school_year %></dd></div>
-      <div><dt>Grade level</dt><dd><%= sheet.grade_level %></dd></div>
-      <div><dt>Entry term</dt><dd><%= sheet.entry_term || `Term ${sheet.entry_term_number}` %></dd></div>
-      <div><dt>Entry section</dt><dd><%= sheet.section_name || '' %></dd></div>
-      <div><dt>Enrollment date</dt><dd><%= sheet.enrollment_date || '' %></dd></div>
-    </dl>
-  </section>
-  <section class="enrollment-sheet-stamp" aria-label="Registrar stamp area">
-    <h2>Registrar stamp</h2>
-    <div aria-hidden="true"></div>
-  </section>
+<main class="page-shell finance-statement" id="main-content">
+  <div class="statement-actions">
+    <button class="button button--primary" type="button" data-print-statement>Print enrollment sheet</button>
+    <% if (sheet.first_login_pending) { %><form method="post" action="/finance/students/<%= encodeURIComponent(sheet.student_id) %>/annual/<%= encodeURIComponent(sheet.annual_enrollment_id) %>/first-login-password">
+      <input type="hidden" name="_csrf" value="<%= csrfToken %>">
+      <button class="button button--secondary" type="submit">Issue first-login password and print</button>
+    </form><% } %>
+  </div>
+  <%- include('_enrollment-sheet-content', { sheet, formatMoney }) %>
 </main>
 <script src="/js/statement-print.js" defer></script>
 <%- include('../partials/foot') %>

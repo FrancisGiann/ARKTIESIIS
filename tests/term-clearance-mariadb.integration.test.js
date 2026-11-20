@@ -270,8 +270,8 @@ test('v2.017 to v2.019 migration rehearsal and paper-clearance SQL, roles, snaps
     assert.equal(Number(freshFinanceEvidence[0].retroactive_links), 0, 'fresh v2.019 schema adds no historical Finance evidence');
 
     // Keep the v2.017–v2.019 migration rehearsal assertions above at their original checkpoints.
-    // The current service path below also reads the v2.022 departure application state.
-    for (const migration of readForwardMigrations().filter(({ version }) => ['v2.020', 'v2.021', 'v2.022'].includes(version))) {
+    // The service path below uses current finance views and must include all later forward migrations.
+    for (const migration of readForwardMigrations().filter(({ version }) => version > 'v2.019')) {
       await applyStatements(admin, migration.statements);
       await admin.execute(`INSERT INTO ${databaseQuote(freshName)}.schema_migrations (version) VALUES (?)`, [migration.version]);
     }
@@ -415,7 +415,7 @@ test('v2.017 to v2.019 migration rehearsal and paper-clearance SQL, roles, snaps
     const paperBeforePayment = await pool.execute('SELECT version, attested_by, attested_at, inspected_on FROM student_term_clearances WHERE id = ?',
       [firstClearance.clearanceId]);
     const payment = await annualFinance.recordPayment(financeId, studentId, {
-      amount: '5.00', paymentDate: '2026-10-01', idempotencyKey: uuid(), allocations: []
+      amount: '5.00', paymentDate: '2026-10-01', referenceNo: 'TERM-CLEARANCE-PAYMENT-5', idempotencyKey: uuid(), allocations: []
     });
     assert.ok(payment.paymentId, 'finance may independently record a payment while paper signatures remain incomplete');
     const paperAfterPayment = await pool.execute('SELECT version, attested_by, attested_at, inspected_on FROM student_term_clearances WHERE id = ?',

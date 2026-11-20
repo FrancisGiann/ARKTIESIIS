@@ -18,7 +18,7 @@ async function renderFinanceView(name, locals) {
     ? createStatementProjection(locals.ledger, { includeStaffFeeApplications: true }) : null;
   return ejs.renderFile(path.join(viewsDirectory, name + '.ejs'), {
     title: 'Finance test', formatMoney, failedAction: null, recovered: false, preservedValues: [], paymentValues: null,
-    clearanceValues: {}, transactionValues: {}, formValues: {}, paymentStatusPresentation,
+    clearanceValues: {}, transactionValues: {}, formValues: {}, paymentStatusPresentation, entryEnrollmentSheets: [],
     ...(accountProjection ? {
       feeBreakdownYears: accountProjection.feeBreakdownYears,
       feeApplicationsByCharge: accountProjection.staffFeeApplicationsByCharge
@@ -158,7 +158,7 @@ test('finance account and reports load failures return support references withou
   assert.equal(diagnostics[3][1].errorCode, 'ER_QUERY_FAILURE');
 
   const logged = JSON.stringify(diagnostics, (key, value) => key === 'supportReference' ? '[reference]' : value);
-  assert.doesNotMatch(logged, /sensitive|102|studentId|raw sql|query detail/i);
+  assert.doesNotMatch(logged, /sensitive|\b102\b|studentId|raw sql|query detail/i);
   assert.doesNotMatch(logged, /finance-browse-layout\.test\.js|\/home\//i);
   assert.match(logged, /ER_QUERY_FAILURE/);
 });
@@ -234,9 +234,9 @@ test('finance ledger returns authoritative student status for archived read-only
           statements.push(statement);
           if (statement.includes('SELECT id, role FROM users')) return { recordset: [{ id: 7, role: 'finance' }] };
           if (statement.includes('SELECT student.id FROM students AS student')) return { recordset: [{ id: 22 }] };
-          if (statement.includes('CASE WHEN @isStudent = 1 THEN NULL ELSE lrn END AS lrn')) {
+          if (statement.includes('CASE WHEN @isStudent = 1 THEN NULL ELSE student.lrn END AS lrn')) {
             studentIdentityQueries.push({ statement, isStudent: values.isStudent });
-            return { recordset: [{ id: 22, student_no: 'S-22', lrn: values.isStudent ? null : '001234567890', first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null, status: 'archived' }] };
+            return { recordset: [{ id: 22, student_no: 'S-22', lrn: values.isStudent ? null : '001234567890', first_name: 'Ari', middle_name: null, last_name: 'Kim', suffix: null, status: 'archived', account_email: 'learner@example.invalid', account_is_active: 1, account_email_verified_at: null, account_must_change_password: 0 }] };
           }
           if (statement.includes('AS available_credit')) return { recordset: [{
             unattributed_legacy_balance: '0.00', opening_liability_due: '0.00', assessed_charges: '0.00',
@@ -278,11 +278,12 @@ test('finance ledger returns authoritative student status for archived read-only
     'the existing registrar enrollment field retains its separate historical meaning');
   assert.ok(statements.some((statement) => statement.includes('FinanceTermClassification AS classification')),
     'Finance account details read the authoritative status evidence');
-  assert.ok(statements.some((statement) => /student_no, CASE WHEN @isStudent = 1 THEN NULL ELSE lrn END AS lrn,[\s\S]*suffix, status[\s\S]*FROM students WHERE id = @studentId/.test(statement)),
+  assert.ok(statements.some((statement) => /student\.student_no, CASE WHEN @isStudent = 1 THEN NULL ELSE student\.lrn END AS lrn,[\s\S]*student\.suffix, student\.status,[\s\S]*FROM students AS student LEFT JOIN users AS account/.test(statement)),
     'student identity and archive state come from the authoritative ledger query');
 
   const ownLedger = await service.getStudentLedger(7, 22, 'student');
   assert.equal(ownLedger.student.lrn, null, 'the shared student-safe ledger projection does not expose the Finance LRN field');
+  assert.equal(ownLedger.student.account_email, undefined, 'the student-safe ledger projection does not expose Finance login details');
   assert.equal(studentIdentityQueries.at(-1).isStudent, true);
 });
 
@@ -984,6 +985,8 @@ test('finance annual roster separates page data, classification, and balances in
   const paymentAllocations = accountHtml.match(/<section class="finance-payment-wizard__panel" data-payment-step="allocations"[\s\S]*?<\/section>/)?.[0] || '';
   assert.match(accountHtml, /data-payment-step="details"[\s\S]*?<\/section>\s*<section class="finance-payment-wizard__panel" data-payment-step="allocations"/);
   assert.match(paymentDetails, /name="amount"[^>]*required/);
+  assert.match(paymentDetails, /name="referenceNo"[^>]*pattern="\.\*\\S\.\*"[^>]*required/,
+    'the payment wizard blocks whitespace-only receipt/reference values before moving to the allocation step');
   assert.match(paymentDetails, /<details class="finance-payment-optional-details"\s*>[\s\S]*name="transmittalReference"[\s\S]*name="privateRemarks"/);
   assert.match(paymentDetails, /Optional transmittal reference and private note/);
   assert.match(paymentAllocations, /Suggest oldest balances/);

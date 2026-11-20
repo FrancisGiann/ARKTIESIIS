@@ -1,0 +1,68 @@
+<section class="finance-enrollment-sheet enrollment-sheet-document" aria-label="Finance enrollment sheet">
+  <header class="statement-heading">
+    <div>
+      <p class="eyebrow">Ark Technological Institute Education System Inc. · Main Branch</p>
+      <h1>Enrollment Sheet</h1>
+      <p>Finance record · Reference <strong><%= sheet.reference %></strong></p>
+      <p class="muted-copy">This sheet records the enrollment and saved assessment. It is not a payment receipt.</p>
+    </div>
+  </header>
+  <% if (typeof credential !== 'undefined' && credential) { %><section class="enrollment-sheet-credential" aria-labelledby="enrollment-first-login-title">
+    <h2 id="enrollment-first-login-title">One-time first-login password</h2>
+    <p><strong>Email:</strong> <%= credential.email || 'Not recorded' %> · <strong>Temporary password:</strong> <code><%= credential.temporaryPassword %></code></p>
+    <p>Give this password to the student privately. The student must complete the existing email sign-in verification and change this password at first login. If lost, use the existing password reset process.</p>
+  </section><% } else if (sheet.email) { %><p class="muted-copy enrollment-sheet-login-note"><strong>Student login:</strong> <%= sheet.email %>. <% if (sheet.first_login_pending) { %>Finance has not issued the first-login password; use the issue-and-print action before giving sign-in details.<% } else { %>Use existing email sign-in verification and password-change rules. If the password is lost, use the <a href="/password/forgot">password reset page</a>.<% } %></p><% } %>
+  <section class="finance-panel" aria-labelledby="enrollment-identity-title">
+    <h2 id="enrollment-identity-title">Student and intake</h2>
+    <dl class="finance-balance-summary enrollment-sheet-fields">
+      <% for (const [label, value] of [
+        ['Student name', [sheet.first_name, sheet.middle_name, sheet.last_name, sheet.suffix].filter(Boolean).join(' ')],
+        ['Student number', sheet.student_no], ['LRN', sheet.lrn], ['Birth date', sheet.birth_date], ['Gender', sheet.sex],
+        ['Email', sheet.email], ['Phone', sheet.phone], ['Address', sheet.address],
+        ['School year', sheet.school_year], ['Grade level', sheet.grade_level],
+        ['Voucher type assessed', sheet.voucher_code], ['Applicant status', ({ new: 'New applicant', continuing: 'Continuing student', transferee: 'Transferee', readmission: 'Returning after a break', standard: 'Standard intake' })[sheet.intake_kind] || sheet.intake_kind],
+        ['Entry term', sheet.entry_term || `Term ${sheet.entry_term_number}`], ['Entry section', sheet.section_name || 'Unassigned'],
+        ['Enrollment date', sheet.enrollment_date]
+      ]) { %><div><dt><%= label %></dt><dd><%= value || '—' %></dd></div><% } %>
+    </dl>
+  </section>
+  <section class="finance-panel" aria-labelledby="enrollment-placements-title">
+    <h2 id="enrollment-placements-title">Annual term placements</h2>
+    <div class="table-scroll" tabindex="0"><table class="admin-table">
+      <thead><tr><th>Term</th><th>Section</th><th>Placement status</th><th>Scope</th></tr></thead>
+      <tbody><% for (const placement of sheet.placements || []) { %>
+        <tr><td>Term <%= placement.annual_term_number %> · <%= placement.term %></td>
+          <td><%= placement.section_name || 'Unassigned' %></td>
+          <td><%= String(placement.enrollment_status || '').replaceAll('_', ' ') %></td>
+          <td><%= String(placement.term_scope_status || '').replaceAll('_', ' ') %></td></tr>
+      <% } %></tbody>
+    </table></div>
+  </section>
+  <section class="finance-panel enrollment-sheet-assessment-panel" aria-labelledby="enrollment-assessment-title">
+    <h2 id="enrollment-assessment-title">Saved itemized assessment · schedule version <%= sheet.assessment.scheduleVersion %></h2>
+    <p>Assessment reference <strong><%= sheet.assessment.assessmentId %></strong> · Voucher <%= sheet.assessment.voucherCode %></p>
+    <div class="table-scroll" tabindex="0"><table class="admin-table enrollment-sheet-assessment">
+      <thead><tr><th>Term</th><th>Fee</th><th>Category</th><th>Installment</th><th>Gross</th><th>Approved coverage</th><th>Payable</th></tr></thead>
+      <tbody><% for (const line of sheet.assessment.lines) { %>
+        <tr><td>Term <%= line.termNumber %></td><td><%= line.lineName %><% if (line.isOptional) { %><br><small>Optional selection</small><% } %></td>
+          <td><%= line.category %></td><td><%= line.installment %></td>
+          <td>₱<%= formatMoney(line.grossAmount) %></td><td>₱<%= formatMoney(line.waivedAmount) %></td>
+          <td>₱<%= formatMoney(line.amount) %></td></tr>
+      <% } %></tbody>
+      <tfoot><tr><th colspan="4">Assessed totals</th><td>₱<%= formatMoney(sheet.assessment.grossTotal) %></td>
+        <td>₱<%= formatMoney(sheet.assessment.coverageTotal) %></td>
+        <td><strong>₱<%= formatMoney(sheet.assessment.total) %></strong></td></tr></tfoot>
+    </table></div>
+    <p><strong>Total payable assessment:</strong> ₱<%= formatMoney(sheet.assessment.total) %></p>
+    <div class="table-scroll" tabindex="0"><table class="admin-table">
+      <thead><tr><th>Term</th><th>Tuition payable</th><th>Other fees payable</th><th>Total payable</th></tr></thead>
+      <tbody><% for (const total of sheet.assessment.termTotals) { const tuition = sheet.assessment.tuitionTermTotals.find((item) => item.termNumber === total.termNumber); const other = sheet.assessment.nonTuitionTermTotals.find((item) => item.termNumber === total.termNumber); %>
+        <tr><td>Term <%= total.termNumber %></td><td>₱<%= formatMoney(tuition?.amount || '0.00') %></td><td>₱<%= formatMoney(other?.amount || '0.00') %></td><td>₱<%= formatMoney(total.amount) %></td></tr>
+      <% } %></tbody>
+    </table></div>
+  </section>
+  <section class="enrollment-sheet-stamp" aria-label="Blank Registrar stamp area">
+    <h2>Registrar stamp</h2>
+    <div aria-hidden="true"></div>
+  </section>
+</section>

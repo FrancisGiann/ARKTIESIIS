@@ -30,6 +30,9 @@ const { createFinanceRetakeReferralRouter } = require('./retakeReferrals');
 const FINANCE_ROSTER_QUERY_PHASE_SET = new Set(FINANCE_ROSTER_QUERY_PHASES);
 const FINANCE_REPORT_QUERY_PHASE_SET = new Set(FINANCE_REPORT_QUERY_PHASES);
 const RETIRED_LEGACY_ACCOUNT_POST = /^\/students\/\d{1,10}\/(?:account|transactions|enrollment-clearance)$/;
+const FINANCE_DIRECT_POSTS = Object.freeze([
+  /^\/students\/\d{1,10}\/annual\/\d{1,10}\/first-login-password$/
+]);
 
 function submittedText(input, name, maxLength) {
   return typeof input?.[name] === 'string' ? input[name].slice(0, maxLength).replace(/[\u0000-\u001f\u007f]/g, '') : '';
@@ -509,7 +512,7 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, annualEnrollm
     if (!hasValidCsrfToken(req)) return res.status(403).set('Cache-Control', 'private, no-store').render('error', {
       title: 'Forbidden', message: 'The form session expired. Reload the page and try again.'
     });
-    if (reviewActions.isReadOnlyPost(req.path)) return next();
+    if (reviewActions.isReadOnlyPost(req.path) || FINANCE_DIRECT_POSTS.some((pattern) => pattern.test(req.path))) return next();
     if (!reviewActions.matchesMutation(req.path)) return res.status(404).set('Cache-Control', 'private, no-store').render('error', {
       title: 'Finance update unavailable', message: 'This finance action is not registered for reviewed saving.'
     });
@@ -763,10 +766,12 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, annualEnrollm
       throw loadError;
     });
     try {
-      const [ledger, schedules, financeCases] = await Promise.all([
+      const [ledger, schedules, financeCases, entryEnrollmentSheets] = await Promise.all([
         load('student_ledger', () => annual.getStudentLedger(req.authUser.id, studentId, 'finance')),
         load('fee_schedules', () => annual.listSchedules(req.authUser.id)),
-        load('finance_cases', () => cases.getStudentCases(req.authUser.id, studentId))
+        load('finance_cases', () => cases.getStudentCases(req.authUser.id, studentId)),
+        load('enrollment_sheets', () => typeof annual.listEntryEnrollmentPrintSheets === 'function'
+          ? annual.listEntryEnrollmentPrintSheets(req.authUser.id, studentId) : Promise.resolve([]))
       ]);
       const pendingAnnualIds = [...new Set(ledger.terms.filter((term) => term.intake_status === 'pending' && term.assessment_id != null)
         .map((term) => Number(term.annual_enrollment_id)))];
@@ -815,7 +820,8 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, annualEnrollm
         chargeBreakdown: accountProjection.charges, chargeGroups: accountProjection.chargeGroups,
         feeBreakdownYears: accountProjection.feeBreakdownYears,
         feeApplicationsByCharge: accountProjection.staffFeeApplicationsByCharge, schedules,
-        financeCases, financeReadiness, assessmentPaymentHandoff, preview, openingPreview, tokens, error, paymentValues, preservedValues, failedAction, notice: req.query.notice || null,
+        financeCases, financeReadiness, assessmentPaymentHandoff, entryEnrollmentSheets,
+        preview, openingPreview, tokens, error, paymentValues, preservedValues, failedAction, notice: req.query.notice || null,
         paymentStatusPresentation,
         accountView, accountTabs, backHref: `/finance${backParams.size ? `?${backParams.toString()}` : ''}`
       });
@@ -1100,14 +1106,43 @@ function createFinanceRouter({ getPool, sql, annualFinanceService, annualEnrollm
     }
   });
 
+  router.post('/students/:id/annual/:annualId/first-login-password', async (req, res) => {
+    if (!hasValidCsrfToken(req)) return res.status(403).set('Cache-Control', 'private, no-store').render('error', {
+      title: 'Forbidden', message: 'The form session expired. Reload the account and try again.'
+    });
+    const studentId = normalizeId(req.params.id);
+    const annualId = normalizeId(req.params.annualId);
+    if (!studentId || !annualId) return res.status(404).set('Cache-Control', 'private, no-store').render('error', {
+      title: 'Not Found', message: 'Student enrollment not found.'
+    });
+    try {
+      if (typeof annualEnrollmentService?.issueFirstLoginPasswordForFinance !== 'function') {
+        throw new AnnualEnrollmentError('Finance first-login activation is unavailable.', 503);
+      }
+      const sheet = await annual.getEntryEnrollmentPrintSheet(req.authUser.id, studentId, annualId);
+      if (Number(sheet.student_id) !== Number(studentId)) throw new AnnualFinanceError('The requested sheet does not belong to this student account.', 404);
+      const credential = await annualEnrollmentService.issueFirstLoginPasswordForFinance(req.authUser.id, annualId, studentId);
+      if (credential.email) sheet.email = credential.email;
+      return res.set('Cache-Control', 'private, no-store').render('finance/first-login-credential', {
+        title: 'First-login password and enrollment sheet', currentUser: req.authUser, credential, sheet
+      });
+    } catch (error) {
+      const status = error instanceof AnnualEnrollmentError || error instanceof AnnualFinanceError ? error.status : 503;
+      return res.status(status).set('Cache-Control', 'private, no-store').render('error', {
+        title: 'First-login password unavailable', message: status < 500 ? error.message : 'The first-login password could not be issued.'
+      });
+    }
+  });
+
   router.get('/students/:id/annual/:annualId/enrollment-sheet', async (req, res) => {
     const studentId = normalizeId(req.params.id);
     const annualId = normalizeId(req.params.annualId);
     if (!studentId || !annualId) return res.status(404).render('error', { title: 'Not Found', message: 'Enrollment sheet not found.' });
     try {
       const sheet = await annual.getEntryEnrollmentPrintSheet(req.authUser.id, studentId, annualId);
+      if (Number(sheet.student_id) !== Number(studentId)) throw new AnnualFinanceError('The requested sheet does not belong to this student account.', 404);
       return res.set('Cache-Control', 'private, no-store').render('finance/enrollment-sheet', {
-        title: 'Enrollment sheet', currentUser: req.authUser, sheet
+        title: 'Enrollment sheet', currentUser: req.authUser, csrfToken: ensureCsrfToken(req), sheet
       });
     } catch (error) {
       const status = error instanceof AnnualFinanceError ? error.status : 503;

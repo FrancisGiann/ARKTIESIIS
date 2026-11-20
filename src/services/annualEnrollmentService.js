@@ -2540,9 +2540,19 @@ function createAnnualEnrollmentService({
   }
 
   async function issueFirstLoginPassword(actorInput, annualInput) {
+    return issueFirstLoginPasswordForRole(actorInput, annualInput, 'registrar', null);
+  }
+
+  async function issueFirstLoginPasswordForFinance(actorInput, annualInput, studentInput) {
+    return issueFirstLoginPasswordForRole(actorInput, annualInput, 'finance', normalizeId(studentInput, 'student'));
+  }
+
+  async function issueFirstLoginPasswordForRole(actorInput, annualInput, role, expectedStudentId) {
     const annualEnrollmentId = normalizeId(annualInput, 'annual enrollment');
     return runTransaction(async (transaction) => {
-      const actor = await requireRegistrar(transaction.request(), actorInput);
+      const actor = role === 'finance'
+        ? await requireFinanceActor(transaction.request(), actorInput)
+        : await requireRegistrar(transaction.request(), actorInput);
       const ownerResult = await transaction.request().input('annualEnrollmentId', sql.Int, annualEnrollmentId)
         .query('SELECT student_id FROM annual_enrollments WHERE id = @annualEnrollmentId');
       const owner = ownerResult.recordset?.[0];
@@ -2559,9 +2569,16 @@ function createAnnualEnrollmentService({
           INNER JOIN students AS student ON student.id = annual.student_id
           LEFT JOIN users AS account ON account.id = student.user_id AND account.role = 'student'
           INNER JOIN annual_entry_activations AS activation ON activation.annual_enrollment_id = annual.id
-          WHERE annual.id = @annualEnrollmentId AND annual.student_id = @studentId FOR UPDATE`);
+          INNER JOIN enrollments AS entry ON entry.id = activation.entry_enrollment_id
+            AND entry.annual_enrollment_id = annual.id AND entry.student_id = student.id
+            AND entry.annual_term_number = annual.entry_term_number
+          WHERE annual.id = @annualEnrollmentId AND annual.student_id = @studentId
+            AND annual.intake_status = 'enrolled' AND entry.enrollment_status = 'enrolled'
+            AND entry.finalized_at IS NOT NULL FOR UPDATE`);
       const row = result.recordset?.[0];
-      if (!row) throw new AnnualEnrollmentError('This student has no automatically activated entry enrollment.', 409);
+      if (!row || (expectedStudentId != null && Number(row.student_id) !== expectedStudentId)) {
+        throw new AnnualEnrollmentError('This student has no automatically activated entry enrollment.', 404);
+      }
       if (row.intake_status !== 'enrolled' || !(row.account_activation_pending === true || row.account_activation_pending === 1)) {
         throw new AnnualEnrollmentError('A first-login password is available only while the enrolled student login is pending.', 409);
       }
@@ -2730,7 +2747,7 @@ function createAnnualEnrollmentService({
     previewDeparture, createDepartureCase, finalizeAnnualTerm, confirmAnnualEnrollment,
     submitRegistrarHandoff, getRegistrarHandoffStatus,
     activateFinanceHandoffsInTransaction: financeHandoffsInTransaction,
-    retryFinanceHandoffs, issueFirstLoginPassword,
+    retryFinanceHandoffs, issueFirstLoginPassword, issueFirstLoginPasswordForFinance,
     changeTermStatus, updateVoucher, updateTermPlacement
   };
 }
