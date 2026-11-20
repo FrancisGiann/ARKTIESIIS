@@ -232,11 +232,15 @@ test('printable payment confirmation renders allocation purpose and current bala
 
 test('Finance review renders a split payment with distinct saved school-year and term purposes', async () => {
   const template = path.join(__dirname, '..', 'views', 'finance', 'review-draft.ejs');
-  const html = await ejs.renderFile(template, {
+  const reviewLocals = {
     title: 'Review payment', actionLabel: 'Review payment', error: null, status: 200, previewUnavailable: false, recoveredForm: null,
     previewFields: [], editorFields: [], csrfToken: 'test-token',
     draft: { id: 'draft-1', revision: 1, dependencyFingerprint: 'fingerprint', requiresReview: false, preview: {
       student: { name: 'Rae Student', studentNumber: 'S-55' }, cashAmount: '5000.00', appliedAmount: '5000.00', unallocatedCredit: '0.00',
+      schedule: { version: 3, lines: [
+        { term: 1, fee: 'Tuition', installment: 'DP', amount: '3000.00', selected: true },
+        { term: 1, fee: 'Registration fee', installment: 'Whole term', amount: '500.00', selected: false }
+      ] },
       allocationRows: [
         { targetReference: '2026-2027 · Grade 11 · Term 2 · Tuition · Prelim', feeContext: '2026-2027 · Grade 11 · Term 2',
           dueBefore: '2500.00', amount: '2000.00', dueAfter: '500.00' },
@@ -244,8 +248,18 @@ test('Finance review renders a split payment with distinct saved school-year and
           dueBefore: '3000.00', amount: '3000.00', dueAfter: '0.00' }
       ]
     } }
-  });
+  };
+  const html = await ejs.renderFile(template, reviewLocals);
   assert.match(html, /Payment amount<\/dt><dd>₱5000\.00/);
   assert.match(html, /2026-2027 · Grade 11 · Term 2 · Tuition · Prelim[\s\S]*?Current fee balance[\s\S]*?₱2500\.00[\s\S]*?₱2000\.00[\s\S]*?₱500\.00/);
   assert.match(html, /2025-2026 · Grade 12 · Term 1 · Miscellaneous fee[\s\S]*?₱3000\.00[\s\S]*?₱3000\.00[\s\S]*?₱0\.00/);
+  assert.match(html, /Included fee lines · Approved schedule version 3/);
+  assert.match(html, /Term 1[\s\S]*?Tuition[\s\S]*?₱3000\.00/);
+  assert.doesNotMatch(html, /Registration fee|data-label="Included"|<th>Included<\/th>/);
+
+  const emptySelectionLocals = structuredClone(reviewLocals);
+  emptySelectionLocals.draft.preview.schedule.lines.forEach((line) => { line.selected = false; });
+  const emptySelectionHtml = await ejs.renderFile(template, emptySelectionLocals);
+  assert.match(emptySelectionHtml, /No fee lines are included in this annual assessment\./);
+  assert.doesNotMatch(emptySelectionHtml, /Included fee lines · Approved schedule version/);
 });

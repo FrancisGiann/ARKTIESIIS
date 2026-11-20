@@ -84,12 +84,15 @@
       <p class="finance-review-empty-note">No balance is selected. Any amount not applied remains as unused payment credit.</p>
     <% } %>
 
-    <% if (draft.preview.schedule?.lines?.length) { %>
-      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Fee lines in the active schedule">
-        <table class="admin-table"><caption>Approved fee schedule · Version <%= draft.preview.schedule.version %></caption><thead><tr><th>Term</th><th>Fee</th><th>Installment</th><th>Amount</th><th>Included</th></tr></thead>
-          <tbody><% for (const line of draft.preview.schedule.lines) { %><tr><td data-label="Term">Term <%= line.term %></td><td data-label="Fee"><%= line.fee %></td><td data-label="Installment"><%= line.installment %></td><td data-label="Amount">₱<%= line.amount %></td><td data-label="Included"><%= line.selected ? 'Yes' : 'No' %></td></tr><% } %></tbody>
+    <% const includedScheduleLines = draft.preview.schedule?.lines?.filter((line) => line.selected) || []; %>
+    <% if (draft.preview.schedule?.lines?.length && includedScheduleLines.length) { %>
+      <div class="table-scroll finance-review-table" tabindex="0" aria-label="Included fee lines in the active schedule">
+        <table class="admin-table"><caption>Included fee lines · Approved schedule version <%= draft.preview.schedule.version %></caption><thead><tr><th>Term</th><th>Fee</th><th>Installment</th><th>Amount</th></tr></thead>
+          <tbody><% for (const line of includedScheduleLines) { %><tr><td data-label="Term">Term <%= line.term %></td><td data-label="Fee"><%= line.fee %></td><td data-label="Installment"><%= line.installment %></td><td data-label="Amount">₱<%= line.amount %></td></tr><% } %></tbody>
         </table>
       </div>
+    <% } else if (draft.preview.schedule?.lines?.length) { %>
+      <p class="finance-review-empty-note">No fee lines are included in this annual assessment.</p>
     <% } %>
     <% if (draft.actionType === 'annual_assessment' && draft.preview.annualHandoffRequired) { %>
       <section class="finance-review-fields" aria-label="Annual enrollment payment handoff">
@@ -103,7 +106,7 @@
     <% if (draft.preview.scheduleLines?.length) { %>
       <div class="table-scroll finance-review-table" tabindex="0" aria-label="Fee schedule version being created">
         <table class="admin-table"><caption>Student-payable amounts in this new version</caption><thead><tr><th>Term</th><th>Fee</th><th>Installment</th><th>Amount</th><th>Optional</th></tr></thead>
-          <tbody><% for (const line of draft.preview.scheduleLines) { %><tr><td data-label="Term">Term <%= line.term %></td><td data-label="Fee"><%= line.fee %></td><td data-label="Installment"><%= line.installment %></td><td data-label="Amount">₱<%= line.amount %></td><td data-label="Optional"><%= line.optional ? 'Yes' : 'No' %></td></tr><% } %></tbody>
+          <tbody><% for (const line of draft.preview.scheduleLines) { %><tr><td data-label="Term">Term <%= line.term %></td><td data-label="Fee"><%= line.fee %></td><td data-label="Installment"><%= line.installment %></td><td data-label="Amount">₱<%= line.amount %></td><td data-label="Optional"><span aria-hidden="true"><%= line.optional ? '✓' : '—' %> </span><%= line.optional ? 'Yes' : 'No' %></td></tr><% } %></tbody>
         </table>
       </div>
     <% } %>
