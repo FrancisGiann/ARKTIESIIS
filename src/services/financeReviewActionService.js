@@ -1401,6 +1401,7 @@ function createFinanceReviewActionService({ getPool = defaultGetPool, sql = defa
       commitContext,
       previewInTransaction: async (tx, draft) => {
         const action = actionForDraft(draft.actionType);
+        validatePositivePaymentAmount(draft.actionType, draft.input);
         return calculateReview(tx, action, draft.entityContext, draft.input, true);
       },
       applyInTransaction: applyReviewedAction

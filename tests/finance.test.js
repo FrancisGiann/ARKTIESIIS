@@ -415,7 +415,10 @@ test('payment review drafts require a positive amount before preview or persiste
   for (const amount of invalidAmounts) {
     assert.throws(() => validatePositivePaymentAmount('annual_payment', { amount }), FinanceReviewDraftError);
   }
-  assert.doesNotThrow(() => validatePositivePaymentAmount('annual_payment', { amount: '20.05' }));
+  assert.throws(() => validatePositivePaymentAmount('annual_payment', { amount: '20.05', referenceNo: '   ' }), /receipt or Finance reference/);
+  assert.throws(() => validatePositivePaymentAmount('annual_payment', { amount: '20.05', referenceNo: `OR-${'x'.repeat(100)}` }), /100 printable characters/);
+  assert.throws(() => validatePositivePaymentAmount('annual_payment', { amount: '20.05', referenceNo: 'OR\n123' }), /100 printable characters/);
+  assert.doesNotThrow(() => validatePositivePaymentAmount('annual_payment', { amount: '20.05', referenceNo: ' OR-123 ' }));
   assert.doesNotThrow(() => validatePositivePaymentAmount('annual_adjustment', { amount: '-20.05' }),
     'school-policy-dependent adjustment signs remain outside payment validation');
 
@@ -424,7 +427,7 @@ test('payment review drafts require a positive amount before preview or persiste
   let poolCalls = 0;
   let createCalls = 0;
   let updateCalls = 0;
-  const existing = { id: draftId, actionType: 'annual_payment', status: 'pending', entityContext: { studentId: 22 }, input: { amount: '20.00' } };
+  const existing = { id: draftId, actionType: 'annual_payment', status: 'pending', entityContext: { studentId: 22 }, input: { amount: '20.00', referenceNo: 'OR-1' } };
   const actions = createFinanceReviewActionService({
     getPool: async () => { poolCalls += 1; throw new Error('invalid amounts must fail before database preview'); },
     draftService: {
@@ -439,6 +442,10 @@ test('payment review drafts require a positive amount before preview or persiste
     await assert.rejects(actions.updateDraft(7, binding, draftId, { amount }),
       (error) => error instanceof FinanceReviewDraftError && /positive payment amount/.test(error.message));
   }
+  await assert.rejects(actions.startDraft(7, binding, '/students/22/annual/payments', { amount: '20.00', paymentDate: '2026-10-01' }),
+    (error) => error instanceof FinanceReviewDraftError && /receipt or Finance reference/.test(error.message));
+  await assert.rejects(actions.updateDraft(7, binding, draftId, { amount: '20.00' }),
+    (error) => error instanceof FinanceReviewDraftError && /receipt or Finance reference/.test(error.message));
   assert.equal(poolCalls, 0);
   assert.equal(createCalls, 0, 'an invalid new payment is not inserted as a review draft');
   assert.equal(updateCalls, 0, 'an invalid edit is not saved over the existing draft');
@@ -473,8 +480,8 @@ test('payment review drafts require a positive amount before preview or persiste
   assert.equal(rolledBack, true);
   assert.ok(!statements.some((statement) => /INSERT INTO finance_review_drafts|UPDATE finance_review_drafts/.test(statement)),
     'the persistence boundary never inserts or updates an invalid payment draft');
-  await draftStore.createDraft(7, binding, 'annual_payment', { studentId: 22 }, { amount: '20.05' }, review);
-  await draftStore.updateDraftInput(7, draftId, binding, { amount: '20.05' }, review);
+  await draftStore.createDraft(7, binding, 'annual_payment', { studentId: 22 }, { amount: '20.05', referenceNo: 'OR-123' }, review);
+  await draftStore.updateDraftInput(7, draftId, binding, { amount: '20.05', referenceNo: 'OR-123' }, review);
   assert.ok(statements.some((statement) => /INSERT INTO finance_review_drafts/.test(statement)),
     'a valid positive payment draft can still be created');
   assert.ok(statements.some((statement) => /UPDATE finance_review_drafts/.test(statement)),

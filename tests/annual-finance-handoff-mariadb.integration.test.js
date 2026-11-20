@@ -221,7 +221,7 @@ test('pending annual enrollment hands off assessment, voucher resolution, and ex
       WHERE charge.assessment_id = ? AND enrollment.annual_term_number = 2 AND charge.fee_category = 'tuition' AND charge.installment = 'DP'`,
     [post.assessmentId]))[0][0];
     const payment = await annualFinance.recordPayment(financeId, studentId, {
-      amount: '100.00', paymentDate: '2026-10-15', idempotencyKey: uuid(), allocations: []
+      amount: '100.00', paymentDate: '2026-10-15', referenceNo: 'HANDOFF-CREDIT-100', idempotencyKey: uuid(), allocations: []
     });
     await assertReadyState(annualFinance, registrarId, annualId, 'awaiting_down_payment',
       'unallocated account credit does not settle the entry-term DP');
@@ -238,7 +238,7 @@ test('pending annual enrollment hands off assessment, voucher resolution, and ex
       'released allocations no longer settle DP');
 
     const reversalPayment = await annualFinance.recordPayment(financeId, studentId, {
-      amount: '100.00', paymentDate: '2026-10-15', idempotencyKey: uuid(),
+      amount: '100.00', paymentDate: '2026-10-15', referenceNo: 'HANDOFF-REVERSAL-100', idempotencyKey: uuid(),
       allocations: [{ chargeId: Number(dpCharge.id), amount: '100.00' }]
     });
     await assertReadyState(annualFinance, registrarId, annualId, 'ready_for_registrar');
@@ -249,7 +249,7 @@ test('pending annual enrollment hands off assessment, voucher resolution, and ex
       'reversed payments no longer settle DP');
 
     const settledPayment = await annualFinance.recordPayment(financeId, studentId, {
-      amount: '100.00', paymentDate: '2026-10-15', idempotencyKey: uuid(),
+      amount: '100.00', paymentDate: '2026-10-15', referenceNo: 'HANDOFF-SETTLED-100', idempotencyKey: uuid(),
       allocations: [{ chargeId: Number(dpCharge.id), amount: '100.00' }]
     });
     await assertReadyState(annualFinance, registrarId, annualId, 'ready_for_registrar');
@@ -271,7 +271,7 @@ test('pending annual enrollment hands off assessment, voucher resolution, and ex
     await assertReadyState(annualFinance, registrarId, annualId, 'awaiting_down_payment',
       'Finance re-review preserves charges and separately exposes the additional adjusted DP');
     const topUp = await annualFinance.recordPayment(financeId, studentId, {
-      amount: '1.00', paymentDate: '2026-10-15', idempotencyKey: uuid(),
+      amount: '1.00', paymentDate: '2026-10-15', referenceNo: 'HANDOFF-TOPUP-1', idempotencyKey: uuid(),
       allocations: [{ chargeId: Number(dpCharge.id), amount: '1.00' }]
     });
     await assertReadyState(annualFinance, registrarId, annualId, 'ready_for_registrar');

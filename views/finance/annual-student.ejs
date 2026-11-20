@@ -309,7 +309,7 @@
         <div class="admin-form-grid">
           <label class="field"><span>Total payment received (PHP)</span><input name="amount" data-suggestion-amount inputmode="decimal" maxlength="14" value="<%= paymentValues?.amount || '' %>" required></label>
           <label class="field"><span>Actual payment date</span><input name="paymentDate" type="date" value="<%= paymentValues?.paymentDate || new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date()) %>" required></label>
-          <label class="field"><span>Receipt/reference number</span><input name="referenceNo" maxlength="100" value="<%= paymentValues?.referenceNo || '' %>"></label>
+          <label class="field"><span>Receipt/reference number <span class="field__required">(required)</span></span><input name="referenceNo" maxlength="100" pattern=".*\S.*" title="Enter at least one non-space character." value="<%= paymentValues?.referenceNo || '' %>" required><small>Enter the receipt or other Finance reference for this payment.</small></label>
           <label class="field"><span>Receipt-issued status</span><select name="receiptIssued"><option value="0" <%= paymentValues?.receiptIssued !== '1' ? 'selected' : '' %>>Not marked as issued</option><option value="1" <%= paymentValues?.receiptIssued === '1' ? 'selected' : '' %>>Receipt marked issued</option></select></label>
         </div>
         <details class="finance-payment-optional-details" <%= error || paymentValues?.transmittalReference || paymentValues?.privateRemarks ? 'open' : '' %>>

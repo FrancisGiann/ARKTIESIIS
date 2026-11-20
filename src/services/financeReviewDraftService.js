@@ -58,6 +58,12 @@ function validatePositivePaymentAmount(actionType, input) {
       : 'Enter a positive payment amount with up to 10 whole digits and 2 decimal places.';
     throw new FinanceReviewDraftError(message, error.status);
   }
+  if (typeof input?.referenceNo !== 'string' || !input.referenceNo.trim()) {
+    throw new FinanceReviewDraftError('Enter a receipt or Finance reference number for this payment.');
+  }
+  if (input.referenceNo.trim().length > 100 || /[\u0000-\u001f\u007f]/.test(input.referenceNo.trim())) {
+    throw new FinanceReviewDraftError('The receipt or Finance reference must be 100 printable characters or fewer.');
+  }
 }
 
 function createFinanceReviewDraftService({

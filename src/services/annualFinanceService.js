@@ -1912,7 +1912,7 @@ function createAnnualFinanceService({
     const amountCents = parseMoneyCents(String(input.amount || ''));
     const amount = formatMoneyCents(amountCents);
     const paymentDate = parsePaymentDate(input.paymentDate);
-    const referenceNo = input.referenceNo == null || input.referenceNo === '' ? null : cleanText(input.referenceNo, 'Receipt/reference number', 100);
+    const referenceNo = input.referenceNo == null ? null : cleanText(input.referenceNo, 'Receipt/reference number', 100);
     const transmittalReference = input.transmittalReference == null || input.transmittalReference === '' ? null : cleanText(input.transmittalReference, 'Transmittal reference', 100);
     const privateRemarks = input.privateRemarks == null || input.privateRemarks === '' ? null : cleanText(input.privateRemarks, 'Private payment remarks', 1000);
     const receiptIssued = flag(input.receiptIssued);
@@ -1936,6 +1936,7 @@ function createAnnualFinanceService({
         }
         return { paymentId: generatedId(prior.id, 'Payment'), amount: formatMoneyCents(parseMoneyCents(String(prior.amount))), allocatedAmount: formatMoneyCents(allocatedCents), alreadyRecorded: true };
       }
+      if (!referenceNo) throw new AnnualFinanceError('Enter a receipt or Finance reference number for this payment.', 400);
       const inserted = await transaction.request()
         .input('studentId', sql.Int, studentId)
         .input('amount', sql.Decimal(12, 2), amount)
