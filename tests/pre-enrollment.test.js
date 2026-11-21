@@ -270,15 +270,19 @@ test('optional pre-enrollment dates reject letters and impossible days while all
 });
 
 test('pre-enrollment validates prior grades, preserves unchanged legacy values, and limits review dates to today in Manila', () => {
-  assert.deepEqual(PRIOR_GRADE_LEVELS, [...Array.from({ length: 12 }, (_, index) => `Grade ${index + 1}`), 'ALS']);
+  assert.deepEqual(PRIOR_GRADE_LEVELS, ['Grade 10', 'Grade 11', 'Grade 12', 'ALS']);
   for (const grade of PRIOR_GRADE_LEVELS) assert.equal(normalizeRecord(readyInput({ priorGradeLevel: grade })).priorGradeLevel, grade);
-  assert.throws(() => normalizeRecord(readyInput({ priorGradeLevel: 'Kindergarten' })), /Choose a prior grade/);
+  assert.throws(() => normalizeRecord(readyInput({ priorGradeLevel: 'Grade 9' })), /Choose Grade 10, Grade 11, Grade 12, or ALS/);
+  assert.throws(() => normalizeRecord(readyInput({ priorGradeLevel: 'Kindergarten' })), /Choose Grade 10, Grade 11, Grade 12, or ALS/);
 
   const current = { prior_grade_level: 'Grade 13 (legacy)' };
   assert.equal(normalizeRecord(readyInput({ priorGradeLevel: 'Grade 13 (legacy)' }), { current }).priorGradeLevel, current.prior_grade_level);
   assert.equal(normalizeRecord(readyInput({ priorGradeLevel: undefined }), { current }).priorGradeLevel, current.prior_grade_level,
     'an omitted legacy field is preserved during an unrelated edit');
-  assert.throws(() => normalizeRecord(readyInput({ priorGradeLevel: 'Grade 14 (changed)' }), { current }), /Choose a prior grade/);
+  const earlierSavedGrade = { prior_grade_level: 'Grade 9' };
+  assert.equal(normalizeRecord(readyInput({ priorGradeLevel: 'Grade 9' }), { current: earlierSavedGrade }).priorGradeLevel, 'Grade 9',
+    'an unchanged value outside the narrowed choices remains saveable on edit');
+  assert.throws(() => normalizeRecord(readyInput({ priorGradeLevel: 'Grade 14 (changed)' }), { current }), /Choose Grade 10, Grade 11, Grade 12, or ALS/);
 
   const today = '2026-11-20';
   assert.equal(normalizeDate(today, 'Student signature date', false, today), today);
@@ -984,6 +988,8 @@ test('pre-enrollment routes keep database administrators read-only and deny unre
       'new forms never relabel rejected POST text as a saved historical value');
     assert.match(newFormHtml, /<select id="pre-prior-grade" name="priorGradeLevel">/);
     for (const grade of PRIOR_GRADE_LEVELS) assert.match(newFormHtml, new RegExp(`<option value="${grade}"`));
+    assert.doesNotMatch(newFormHtml, /<option value="Grade [1-9]"/,
+      'new prior-grade choices are limited to Grade 10 through Grade 12 and ALS');
     assert.doesNotMatch(newFormHtml, /<input id="pre-prior-grade"/);
     assert.match(newFormHtml, new RegExp(`id="pre-signed-date"[^>]*max="${manilaDate()}"`));
     assert.match(newFormHtml, new RegExp(`id="pre-received-date"[^>]*max="${manilaDate()}"`));

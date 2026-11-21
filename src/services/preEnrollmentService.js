@@ -14,10 +14,7 @@ const CREATE_ROLES = new Set(['front_desk']);
 const READ_ACCEPTED_EVALUATION_ROLES = new Set(['front_desk', 'registrar']);
 const READ_ROLES = new Set([...EDIT_ROLES, 'database_admin']);
 const PAGE_SIZE = 20;
-const PRIOR_GRADE_LEVELS = Object.freeze([
-  ...Array.from({ length: 12 }, (_, index) => `Grade ${index + 1}`),
-  'ALS'
-]);
+const PRIOR_GRADE_LEVELS = Object.freeze(['Grade 10', 'Grade 11', 'Grade 12', 'ALS']);
 const RECEIPT_REQUIREMENTS = Object.freeze([
   ['report_card', 'Report Card (Grade 10 / ALS-AF5)'],
   ['birth_certificate', 'Birth Certificate (PSA / NSO / OLD)'],
@@ -288,7 +285,7 @@ function normalizeRecord(input = {}, { actorName = '', current = null, currentRe
         || (typeof normalizedInput.priorGradeLevel === 'string'
           && normalizedInput.priorGradeLevel === current.prior_grade_level));
     if (!unchangedLegacyValue) {
-      throw new PreEnrollmentError('Choose a prior grade from Grade 1 through Grade 12 or ALS.', 400, 'priorGradeLevel');
+      throw new PreEnrollmentError('Choose Grade 10, Grade 11, Grade 12, or ALS for the prior grade level.', 400, 'priorGradeLevel');
     }
     result.priorGradeLevel = current.prior_grade_level;
   }
